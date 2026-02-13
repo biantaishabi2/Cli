@@ -1,15 +1,15 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
   build-and-release:
+    permissions:
+      contents: write
     name: Package (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     strategy:
