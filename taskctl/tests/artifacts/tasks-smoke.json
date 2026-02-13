@@ -1,0 +1,46 @@
+{
+  "version": 0,
+  "tasks": {
+    "14f2f265-37b6-465f-ad74-a7abb0f5548f": {
+      "id": "14f2f265-37b6-465f-ad74-a7abb0f5548f",
+      "subject": "Run integration test",
+      "description": "validate flow",
+      "metadata": {},
+      "status": "pending",
+      "blocks": [],
+      "blocked_by": [
+        "3a20d0c3-a684-48ee-bee4-082cae1f01d9"
+      ],
+      "created_at_epoch_ms": 1770985549541,
+      "updated_at_epoch_ms": 1770985549854
+    },
+    "3a20d0c3-a684-48ee-bee4-082cae1f01d9": {
+      "id": "3a20d0c3-a684-48ee-bee4-082cae1f01d9",
+      "subject": "Implement app service",
+      "description": "wire domain + repo",
+      "metadata": {},
+      "status": "pending",
+      "blocks": [
+        "14f2f265-37b6-465f-ad74-a7abb0f5548f"
+      ],
+      "blocked_by": [
+        "b743d4d8-0bda-4d20-a816-7966d3785221"
+      ],
+      "created_at_epoch_ms": 1770985549367,
+      "updated_at_epoch_ms": 1770985549854
+    },
+    "b743d4d8-0bda-4d20-a816-7966d3785221": {
+      "id": "b743d4d8-0bda-4d20-a816-7966d3785221",
+      "subject": "Setup domain",
+      "description": "prepare domain service",
+      "metadata": {},
+      "status": "completed",
+      "blocks": [
+        "3a20d0c3-a684-48ee-bee4-082cae1f01d9"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770985549198,
+      "updated_at_epoch_ms": 1770985550334
+    }
+  }
+}

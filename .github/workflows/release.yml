@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Package (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-latest
+          - target: darwin-x86_64
+            runner: macos-13
+          - target: darwin-arm64
+            runner: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: taskctl
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path taskctl/Cargo.toml
+
+      - name: Prepare package variables
+        id: vars
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          BINARY="taskctl"
+          TARGET="${{ matrix.target }}"
+          ASSET="${BINARY}-${VERSION}-${TARGET}.tar.gz"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Create tarball
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp taskctl/target/release/taskctl dist/taskctl
+          chmod +x dist/taskctl
+          tar -C dist -czf "dist/${{ steps.vars.outputs.asset }}" taskctl
+
+      - name: Create checksum
+        shell: bash
+        run: |
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ steps.vars.outputs.asset }}" > "${{ steps.vars.outputs.asset }}.sha256"
+          else
+            shasum -a 256 "${{ steps.vars.outputs.asset }}" > "${{ steps.vars.outputs.asset }}.sha256"
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ steps.vars.outputs.asset }}
+            dist/${{ steps.vars.outputs.asset }}.sha256

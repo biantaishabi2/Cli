@@ -1,0 +1,309 @@
+{
+  "version": 0,
+  "tasks": {
+    "20772a8d-ba3c-4f22-8794-f38a8e052cd1": {
+      "id": "20772a8d-ba3c-4f22-8794-f38a8e052cd1",
+      "subject": "Define Ubiquitous Language",
+      "description": "Align domain terms for order/settlement/invoice aggregates",
+      "active_form": "Aligning domain vocabulary",
+      "owner": "architect@team",
+      "metadata": {
+        "acceptance": "glossary approved",
+        "estimate_points": 3,
+        "module": "domain",
+        "priority": "P0",
+        "risk": "medium"
+      },
+      "status": "completed",
+      "blocks": [
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770986592002,
+      "updated_at_epoch_ms": 1770986592140
+    },
+    "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7": {
+      "id": "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+      "subject": "Wire BFF Contract Adapter",
+      "description": "Map BFF contract to application service calls",
+      "active_form": "Wiring bff adapter",
+      "owner": "bff@team",
+      "metadata": {
+        "acceptance": "contract tests passing",
+        "estimate_points": 5,
+        "module": "adapter",
+        "priority": "P1",
+        "risk": "medium"
+      },
+      "status": "pending",
+      "blocks": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ],
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "created_at_epoch_ms": 1770986592051,
+      "updated_at_epoch_ms": 1770986592131
+    },
+    "3f830efe-090e-488f-b49c-d291e2590bee": {
+      "id": "3f830efe-090e-488f-b49c-d291e2590bee",
+      "subject": "Draft BFF API Contract",
+      "description": "Freeze request/response DTOs and error envelope",
+      "active_form": "Drafting API contract",
+      "owner": "api@team",
+      "metadata": {
+        "acceptance": "openapi + examples",
+        "estimate_points": 5,
+        "module": "contract",
+        "priority": "P0",
+        "risk": "high"
+      },
+      "status": "completed",
+      "blocks": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770986592007,
+      "updated_at_epoch_ms": 1770986592145
+    },
+    "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe": {
+      "id": "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+      "subject": "Implement Ecto Repository Adapter",
+      "description": "Map domain entities to database schema with minimal conversion",
+      "active_form": "Implementing repository adapter",
+      "owner": "infra@team",
+      "metadata": {
+        "acceptance": "repo adapter passes integration tests",
+        "estimate_points": 8,
+        "module": "infrastructure",
+        "priority": "P1",
+        "risk": "high"
+      },
+      "status": "pending",
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ],
+      "blocked_by": [
+        "708d203d-247f-42e2-8867-ee3bc735e8c2",
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ],
+      "created_at_epoch_ms": 1770986592032,
+      "updated_at_epoch_ms": 1770986592125
+    },
+    "5579cd2f-1a48-4273-b8b9-3ca16ff25de6": {
+      "id": "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+      "subject": "Define Domain Events",
+      "description": "Define event names, payload versions and idempotency keys",
+      "active_form": "Defining domain events",
+      "owner": "platform@team",
+      "metadata": {
+        "acceptance": "event catalog published",
+        "estimate_points": 3,
+        "module": "eventing",
+        "priority": "P1",
+        "risk": "medium"
+      },
+      "status": "completed",
+      "blocks": [
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770986592018,
+      "updated_at_epoch_ms": 1770986592154
+    },
+    "65a6db69-514b-43b8-af9f-46487524d541": {
+      "id": "65a6db69-514b-43b8-af9f-46487524d541",
+      "subject": "Generate BDD Scenario Pack",
+      "description": "Compile intent+constraints into executable scenarios",
+      "active_form": "Generating BDD scenarios",
+      "owner": "qa@team",
+      "metadata": {
+        "acceptance": "scenarios runnable in CI",
+        "estimate_points": 5,
+        "module": "quality",
+        "priority": "P1",
+        "risk": "low"
+      },
+      "status": "pending",
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ],
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "5579cd2f-1a48-4273-b8b9-3ca16ff25de6"
+      ],
+      "created_at_epoch_ms": 1770986592042,
+      "updated_at_epoch_ms": 1770986592125
+    },
+    "708d203d-247f-42e2-8867-ee3bc735e8c2": {
+      "id": "708d203d-247f-42e2-8867-ee3bc735e8c2",
+      "subject": "Design Postgres Schema",
+      "description": "Create normalized schema and migration strategy",
+      "active_form": "Designing database schema",
+      "owner": "data@team",
+      "metadata": {
+        "acceptance": "migration dry-run",
+        "estimate_points": 5,
+        "module": "persistence",
+        "priority": "P0",
+        "risk": "medium"
+      },
+      "status": "in_progress",
+      "blocks": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770986592013,
+      "updated_at_epoch_ms": 1770986592148
+    },
+    "834d6884-c974-4d36-b7e4-caf9fb612703": {
+      "id": "834d6884-c974-4d36-b7e4-caf9fb612703",
+      "subject": "Implement Application Service Orchestrator",
+      "description": "Wire use-case orchestration and transaction boundaries",
+      "active_form": "Implementing app service orchestration",
+      "owner": "app@team",
+      "metadata": {
+        "acceptance": "service contract stable",
+        "estimate_points": 8,
+        "module": "application",
+        "priority": "P0",
+        "risk": "high"
+      },
+      "status": "pending",
+      "blocks": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ],
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ],
+      "created_at_epoch_ms": 1770986592027,
+      "updated_at_epoch_ms": 1770986592127
+    },
+    "8df4091c-4b2a-41f6-baa1-cee444c1b54c": {
+      "id": "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+      "subject": "Implement Domain Model Core",
+      "description": "Implement pure domain functions and invariants",
+      "active_form": "Implementing domain core",
+      "owner": "domain@team",
+      "metadata": {
+        "acceptance": "all domain invariants tested",
+        "estimate_points": 8,
+        "module": "domain",
+        "priority": "P0",
+        "risk": "high"
+      },
+      "status": "completed",
+      "blocks": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "blocked_by": [
+        "20772a8d-ba3c-4f22-8794-f38a8e052cd1"
+      ],
+      "created_at_epoch_ms": 1770986592023,
+      "updated_at_epoch_ms": 1770986592161
+    },
+    "9a3f3163-13f1-42ff-8545-4436159518ac": {
+      "id": "9a3f3163-13f1-42ff-8545-4436159518ac",
+      "subject": "Release Readiness Review",
+      "description": "Final readiness checklist including rollback and observability",
+      "active_form": "Reviewing release readiness",
+      "owner": "release@team",
+      "metadata": {
+        "acceptance": "go-live checklist signed",
+        "estimate_points": 2,
+        "module": "release",
+        "priority": "P1",
+        "risk": "medium"
+      },
+      "status": "pending",
+      "blocks": [],
+      "blocked_by": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ],
+      "created_at_epoch_ms": 1770986592060,
+      "updated_at_epoch_ms": 1770986592134
+    },
+    "b9093a2f-2e53-4795-8697-8d1c5c5f63f9": {
+      "id": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+      "subject": "Build Integration Test Harness",
+      "description": "Compose app service, repo, event bus and BDD checks",
+      "active_form": "Building integration harness",
+      "owner": "qa@team",
+      "metadata": {
+        "acceptance": "end-to-end pipeline green",
+        "estimate_points": 8,
+        "module": "quality",
+        "priority": "P0",
+        "risk": "high"
+      },
+      "status": "pending",
+      "blocks": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ],
+      "blocked_by": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "834d6884-c974-4d36-b7e4-caf9fb612703",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ],
+      "created_at_epoch_ms": 1770986592046,
+      "updated_at_epoch_ms": 1770986592131
+    },
+    "c30c6f0f-9dad-4731-ac20-45c0432232a7": {
+      "id": "c30c6f0f-9dad-4731-ac20-45c0432232a7",
+      "subject": "Implement Event Bus Publisher",
+      "description": "Publish domain events with deduplication and retries",
+      "active_form": "Implementing event publisher",
+      "owner": "infra@team",
+      "metadata": {
+        "acceptance": "at-least-once verified",
+        "estimate_points": 5,
+        "module": "infrastructure",
+        "priority": "P1",
+        "risk": "medium"
+      },
+      "status": "pending",
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ],
+      "blocked_by": [
+        "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "created_at_epoch_ms": 1770986592037,
+      "updated_at_epoch_ms": 1770986592125
+    },
+    "d4bfab42-e5bb-400d-b24b-5e875438bb72": {
+      "id": "d4bfab42-e5bb-400d-b24b-5e875438bb72",
+      "subject": "CI Quality Gate Pipeline",
+      "description": "Gate merge on unit/integration/bdd quality thresholds",
+      "active_form": "Configuring CI quality gate",
+      "owner": "devops@team",
+      "metadata": {
+        "acceptance": "branch protection enabled",
+        "estimate_points": 3,
+        "module": "delivery",
+        "priority": "P0",
+        "risk": "medium"
+      },
+      "status": "pending",
+      "blocks": [
+        "9a3f3163-13f1-42ff-8545-4436159518ac"
+      ],
+      "blocked_by": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ],
+      "created_at_epoch_ms": 1770986592056,
+      "updated_at_epoch_ms": 1770986592134
+    }
+  }
+}

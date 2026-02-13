@@ -1,0 +1,8 @@
+*.DS_Store
+
+# Rust build artifacts
+taskctl/target/
+dist/
+
+# Local runtime state
+taskctl/tasks.json

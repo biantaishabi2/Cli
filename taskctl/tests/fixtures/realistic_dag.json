@@ -1,0 +1,283 @@
+{
+  "topo_order": [
+    "20772a8d-ba3c-4f22-8794-f38a8e052cd1",
+    "3f830efe-090e-488f-b49c-d291e2590bee",
+    "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+    "708d203d-247f-42e2-8867-ee3bc735e8c2",
+    "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+    "65a6db69-514b-43b8-af9f-46487524d541",
+    "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+    "834d6884-c974-4d36-b7e4-caf9fb612703",
+    "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+    "c30c6f0f-9dad-4731-ac20-45c0432232a7",
+    "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+    "d4bfab42-e5bb-400d-b24b-5e875438bb72",
+    "9a3f3163-13f1-42ff-8545-4436159518ac"
+  ],
+  "layers": [
+    [
+      "20772a8d-ba3c-4f22-8794-f38a8e052cd1",
+      "3f830efe-090e-488f-b49c-d291e2590bee",
+      "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+      "708d203d-247f-42e2-8867-ee3bc735e8c2"
+    ],
+    [
+      "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+      "65a6db69-514b-43b8-af9f-46487524d541"
+    ],
+    [
+      "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+      "834d6884-c974-4d36-b7e4-caf9fb612703"
+    ],
+    [
+      "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+      "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+    ],
+    [
+      "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+    ],
+    [
+      "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+    ],
+    [
+      "9a3f3163-13f1-42ff-8545-4436159518ac"
+    ]
+  ],
+  "nodes": [
+    {
+      "id": "20772a8d-ba3c-4f22-8794-f38a8e052cd1",
+      "subject": "Define Ubiquitous Language",
+      "status": "completed",
+      "depth": 0,
+      "blocked_by": [],
+      "blocks": [
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ]
+    },
+    {
+      "id": "3f830efe-090e-488f-b49c-d291e2590bee",
+      "subject": "Draft BFF API Contract",
+      "status": "completed",
+      "depth": 0,
+      "blocked_by": [],
+      "blocks": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ]
+    },
+    {
+      "id": "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+      "subject": "Define Domain Events",
+      "status": "completed",
+      "depth": 0,
+      "blocked_by": [],
+      "blocks": [
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ]
+    },
+    {
+      "id": "708d203d-247f-42e2-8867-ee3bc735e8c2",
+      "subject": "Design Postgres Schema",
+      "status": "in_progress",
+      "depth": 0,
+      "blocked_by": [],
+      "blocks": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe"
+      ]
+    },
+    {
+      "id": "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+      "subject": "Implement Domain Model Core",
+      "status": "completed",
+      "depth": 1,
+      "blocked_by": [
+        "20772a8d-ba3c-4f22-8794-f38a8e052cd1"
+      ],
+      "blocks": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ]
+    },
+    {
+      "id": "65a6db69-514b-43b8-af9f-46487524d541",
+      "subject": "Generate BDD Scenario Pack",
+      "status": "pending",
+      "depth": 1,
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "5579cd2f-1a48-4273-b8b9-3ca16ff25de6"
+      ],
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ]
+    },
+    {
+      "id": "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+      "subject": "Implement Ecto Repository Adapter",
+      "status": "pending",
+      "depth": 2,
+      "blocked_by": [
+        "708d203d-247f-42e2-8867-ee3bc735e8c2",
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ],
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ]
+    },
+    {
+      "id": "834d6884-c974-4d36-b7e4-caf9fb612703",
+      "subject": "Implement Application Service Orchestrator",
+      "status": "pending",
+      "depth": 2,
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+      ],
+      "blocks": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ]
+    },
+    {
+      "id": "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+      "subject": "Wire BFF Contract Adapter",
+      "status": "pending",
+      "depth": 3,
+      "blocked_by": [
+        "3f830efe-090e-488f-b49c-d291e2590bee",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "blocks": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ]
+    },
+    {
+      "id": "c30c6f0f-9dad-4731-ac20-45c0432232a7",
+      "subject": "Implement Event Bus Publisher",
+      "status": "pending",
+      "depth": 3,
+      "blocked_by": [
+        "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+        "834d6884-c974-4d36-b7e4-caf9fb612703"
+      ],
+      "blocks": [
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ]
+    },
+    {
+      "id": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+      "subject": "Build Integration Test Harness",
+      "status": "pending",
+      "depth": 4,
+      "blocked_by": [
+        "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+        "65a6db69-514b-43b8-af9f-46487524d541",
+        "834d6884-c974-4d36-b7e4-caf9fb612703",
+        "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+      ],
+      "blocks": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ]
+    },
+    {
+      "id": "d4bfab42-e5bb-400d-b24b-5e875438bb72",
+      "subject": "CI Quality Gate Pipeline",
+      "status": "pending",
+      "depth": 5,
+      "blocked_by": [
+        "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+        "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+      ],
+      "blocks": [
+        "9a3f3163-13f1-42ff-8545-4436159518ac"
+      ]
+    },
+    {
+      "id": "9a3f3163-13f1-42ff-8545-4436159518ac",
+      "subject": "Release Readiness Review",
+      "status": "pending",
+      "depth": 6,
+      "blocked_by": [
+        "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+      ],
+      "blocks": []
+    }
+  ],
+  "edges": [
+    {
+      "from": "3f830efe-090e-488f-b49c-d291e2590bee",
+      "to": "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7"
+    },
+    {
+      "from": "834d6884-c974-4d36-b7e4-caf9fb612703",
+      "to": "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7"
+    },
+    {
+      "from": "708d203d-247f-42e2-8867-ee3bc735e8c2",
+      "to": "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe"
+    },
+    {
+      "from": "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+      "to": "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe"
+    },
+    {
+      "from": "3f830efe-090e-488f-b49c-d291e2590bee",
+      "to": "65a6db69-514b-43b8-af9f-46487524d541"
+    },
+    {
+      "from": "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+      "to": "65a6db69-514b-43b8-af9f-46487524d541"
+    },
+    {
+      "from": "3f830efe-090e-488f-b49c-d291e2590bee",
+      "to": "834d6884-c974-4d36-b7e4-caf9fb612703"
+    },
+    {
+      "from": "8df4091c-4b2a-41f6-baa1-cee444c1b54c",
+      "to": "834d6884-c974-4d36-b7e4-caf9fb612703"
+    },
+    {
+      "from": "20772a8d-ba3c-4f22-8794-f38a8e052cd1",
+      "to": "8df4091c-4b2a-41f6-baa1-cee444c1b54c"
+    },
+    {
+      "from": "d4bfab42-e5bb-400d-b24b-5e875438bb72",
+      "to": "9a3f3163-13f1-42ff-8545-4436159518ac"
+    },
+    {
+      "from": "45d9fe3a-3c6e-4f05-b8dc-dfd908d4cdbe",
+      "to": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+    },
+    {
+      "from": "65a6db69-514b-43b8-af9f-46487524d541",
+      "to": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+    },
+    {
+      "from": "834d6884-c974-4d36-b7e4-caf9fb612703",
+      "to": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+    },
+    {
+      "from": "c30c6f0f-9dad-4731-ac20-45c0432232a7",
+      "to": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9"
+    },
+    {
+      "from": "5579cd2f-1a48-4273-b8b9-3ca16ff25de6",
+      "to": "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+    },
+    {
+      "from": "834d6884-c974-4d36-b7e4-caf9fb612703",
+      "to": "c30c6f0f-9dad-4731-ac20-45c0432232a7"
+    },
+    {
+      "from": "30d2e9d1-e081-4e3c-b684-ffc1b0fdfde7",
+      "to": "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+    },
+    {
+      "from": "b9093a2f-2e53-4795-8697-8d1c5c5f63f9",
+      "to": "d4bfab42-e5bb-400d-b24b-5e875438bb72"
+    }
+  ]
+}

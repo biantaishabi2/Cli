@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: taskctl
+
+      - name: Run tests
+        run: cargo test --manifest-path taskctl/Cargo.toml
+
+  build-matrix:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-latest
+          - label: darwin-x86_64
+            runner: macos-13
+          - label: darwin-arm64
+            runner: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: taskctl
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path taskctl/Cargo.toml
+
+      - name: Verify binary help
+        run: ./taskctl/target/release/taskctl --help

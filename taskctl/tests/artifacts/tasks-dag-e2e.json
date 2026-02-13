@@ -1,0 +1,46 @@
+{
+  "version": 0,
+  "tasks": {
+    "1d92522c-63e1-4984-bff3-0c8027b2c2f5": {
+      "id": "1d92522c-63e1-4984-bff3-0c8027b2c2f5",
+      "subject": "Task C",
+      "description": "depends on B",
+      "metadata": {},
+      "status": "pending",
+      "blocks": [],
+      "blocked_by": [
+        "97d63691-36b9-44e7-b816-00ed5f92dcdc"
+      ],
+      "created_at_epoch_ms": 1770986211369,
+      "updated_at_epoch_ms": 1770986211689
+    },
+    "97d63691-36b9-44e7-b816-00ed5f92dcdc": {
+      "id": "97d63691-36b9-44e7-b816-00ed5f92dcdc",
+      "subject": "Task B",
+      "description": "depends on A",
+      "metadata": {},
+      "status": "pending",
+      "blocks": [
+        "1d92522c-63e1-4984-bff3-0c8027b2c2f5"
+      ],
+      "blocked_by": [
+        "e497ea97-4a99-427b-8033-6083f820f2e9"
+      ],
+      "created_at_epoch_ms": 1770986211216,
+      "updated_at_epoch_ms": 1770986211689
+    },
+    "e497ea97-4a99-427b-8033-6083f820f2e9": {
+      "id": "e497ea97-4a99-427b-8033-6083f820f2e9",
+      "subject": "Task A",
+      "description": "root",
+      "metadata": {},
+      "status": "pending",
+      "blocks": [
+        "97d63691-36b9-44e7-b816-00ed5f92dcdc"
+      ],
+      "blocked_by": [],
+      "created_at_epoch_ms": 1770986211014,
+      "updated_at_epoch_ms": 1770986211524
+    }
+  }
+}
