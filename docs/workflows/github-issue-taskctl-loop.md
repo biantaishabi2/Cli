@@ -22,7 +22,7 @@
 
 ## 任务生命周期
 1. 人员创建 Issue（title/description/acceptance）。
-2. 本地/脚本拉取待处理 Issue。
+2. 通过技能流程拉取待处理 Issue（按需触发，不要求额外常驻服务）。
 3. 创建/更新 `taskctl` 任务，写入元数据。
 4. 维护 `blocked_by` 依赖，形成 DAG。
 5. 调用 `taskctl ready` 获取可执行任务。
@@ -80,3 +80,5 @@ gh issue comment <number> --body "任务完成：<task-id>，BDD 通过（附件
 ## 备注
 - 所有外部协作与可追溯证据建议以 `taskctl` 的 `tasks.json` 与 Issue 时间线为准。
 - 该文档是可迭代草案，目标是先闭环：`issue -> taskctl -> bddc -> issue`。
+
+本流程是“Skill 驱动的编排定义”，默认不依赖外部调度平台；不要求多建工具服务，只要调用 `taskctl`、`gh`、`bddc` 即可。

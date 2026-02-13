@@ -9,6 +9,11 @@ description: Use this skill to operate the `taskctl` CLI for task orchestration 
 
 Use `taskctl` from PATH.
 
+Required toolchain for this skill:
+- `taskctl` (required)
+- `gh` (optional): Issue-driven state updates/comments
+- `bddc` (optional): behavior verification before `completed`
+
 Core constraints:
 
 - status flow: `pending -> in_progress -> completed`
@@ -26,6 +31,7 @@ Core constraints:
 4. Run `ready` to identify executable tasks.
 5. Run `dag` or `dag-ascii` for graph review.
 6. Run `validate` before accepting task plan changes.
+7. If issue-driven, sync concise status to Issue via `gh issue comment`.
 
 ## Command Patterns
 
