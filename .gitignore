@@ -19,6 +19,11 @@ compiler/bddc/test/fixtures/mock_project/test/support/bdd/factories_generated/
 compiler/bddc/test/fixtures/mock_project/test/support/bdd/semantic_givens/
 compiler/bddc/test/fixtures/mock_project/tmp/
 
-# BCC empty dirs (placeholder until implementation)
+# BCC build artifacts
 compiler/bcc/src/
-compiler/bcc/scripts/
+compiler/bcc/target/
+
+# BCC audit artifacts (generated, large)
+compiler/bcc/docs/openclaw-backend-trace/artifacts/backend-docs-ast.json
+compiler/bcc/docs/openclaw-backend-trace/artifacts/backend-docs-audit.json
+compiler/bcc/docs/openclaw-backend-trace/files/

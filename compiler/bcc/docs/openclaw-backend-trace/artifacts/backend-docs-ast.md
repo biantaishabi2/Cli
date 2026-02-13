@@ -1,0 +1,209 @@
+# AST 反推快照（静态结构）
+
+- 生成时间：2026-02-13T16:37:44.172Z
+- 源文件数：1685
+- 含默认导出文件：6
+- 含 async 标记：556
+- 含 await：469
+- 含顶层 return：0
+- 含网络调用痕迹：6
+- 含进程调用痕迹：3
+
+## 局部依赖数 TopN
+- `src/plugin-sdk/index.ts`（100）
+  - src/agents/identity.ts
+  - src/agents/schema/typebox.ts
+  - src/agents/tools/common.ts
+  - src/auto-reply/chunk.ts
+  - src/auto-reply/reply/history.ts
+  - src/auto-reply/tokens.ts
+  - src/auto-reply/types.ts
+  - src/channels/ack-reactions.ts
+  - src/channels/allowlists/resolve-utils.ts
+  - src/channels/chat-type.ts
+  - src/channels/command-gating.ts
+  - src/channels/dock.ts
+  - src/channels/location.ts
+  - src/channels/logging.ts
+  - src/channels/mention-gating.ts
+  - src/channels/plugins/allowlist-match.ts
+  - src/channels/plugins/bluebubbles-actions.ts
+  - src/channels/plugins/channel-config.ts
+  - src/channels/plugins/config-helpers.ts
+  - src/channels/plugins/config-schema.ts
+- `src/plugins/runtime/index.ts`（82）
+  - src/agents/identity.ts
+  - src/agents/tools/memory-tool.ts
+  - src/agents/tools/slack-actions.ts
+  - src/agents/tools/whatsapp-actions.ts
+  - src/auto-reply/chunk.ts
+  - src/auto-reply/command-detection.ts
+  - src/auto-reply/commands-registry.ts
+  - src/auto-reply/envelope.ts
+  - src/auto-reply/inbound-debounce.ts
+  - src/auto-reply/reply/dispatch-from-config.ts
+  - src/auto-reply/reply/inbound-context.ts
+  - src/auto-reply/reply/mentions.ts
+  - src/auto-reply/reply/provider-dispatcher.ts
+  - src/auto-reply/reply/reply-dispatcher.ts
+  - src/channels/ack-reactions.ts
+  - src/channels/command-gating.ts
+  - src/channels/plugins/actions/discord.ts
+  - src/channels/plugins/actions/signal.ts
+  - src/channels/plugins/actions/telegram.ts
+  - src/channels/plugins/agent-tools/whatsapp-login.ts
+- `src/agents/pi-embedded-runner/run/attempt.ts`（57）
+  - src/agents/agent-paths.ts
+  - src/agents/agent-scope.ts
+  - src/agents/anthropic-payload-log.ts
+  - src/agents/bootstrap-files.ts
+  - src/agents/cache-trace.ts
+  - src/agents/channel-tools.ts
+  - src/agents/docs-path.ts
+  - src/agents/failover-error.ts
+  - src/agents/model-auth.ts
+  - src/agents/model-selection.ts
+  - src/agents/pi-embedded-helpers.ts
+  - src/agents/pi-embedded-runner/abort.ts
+  - src/agents/pi-embedded-runner/cache-ttl.ts
+  - src/agents/pi-embedded-runner/extensions.ts
+  - src/agents/pi-embedded-runner/extra-params.ts
+  - src/agents/pi-embedded-runner/google.ts
+  - src/agents/pi-embedded-runner/history.ts
+  - src/agents/pi-embedded-runner/logger.ts
+  - src/agents/pi-embedded-runner/model.ts
+  - src/agents/pi-embedded-runner/run/images.ts
+- `src/gateway/server.impl.ts`（57）
+  - src/agents/agent-scope.ts
+  - src/agents/skills/refresh.ts
+  - src/agents/subagent-registry.ts
+  - src/canvas-host/server.ts
+  - src/channels/plugins/index.ts
+  - src/cli/command-format.ts
+  - src/cli/deps.ts
+  - src/config/config.ts
+  - src/config/plugin-auto-enable.ts
+  - src/gateway/config-reload.ts
+  - src/gateway/control-ui.ts
+  - src/gateway/exec-approval-manager.ts
+  - src/gateway/node-registry.ts
+  - src/gateway/server-browser.ts
+  - src/gateway/server-channels.ts
+  - src/gateway/server-chat.ts
+  - src/gateway/server-close.ts
+  - src/gateway/server-cron.ts
+  - src/gateway/server-discovery-runtime.ts
+  - src/gateway/server-lanes.ts
+- `src/agents/pi-embedded-runner/compact.ts`（47）
+  - src/agents/agent-paths.ts
+  - src/agents/agent-scope.ts
+  - src/agents/bash-tools.ts
+  - src/agents/bootstrap-files.ts
+  - src/agents/channel-tools.ts
+  - src/agents/date-time.ts
+  - src/agents/defaults.ts
+  - src/agents/docs-path.ts
+  - src/agents/model-auth.ts
+  - src/agents/models-config.ts
+  - src/agents/pi-embedded-helpers.ts
+  - src/agents/pi-embedded-runner/extensions.ts
+  - src/agents/pi-embedded-runner/google.ts
+  - src/agents/pi-embedded-runner/history.ts
+  - src/agents/pi-embedded-runner/lanes.ts
+  - src/agents/pi-embedded-runner/logger.ts
+  - src/agents/pi-embedded-runner/model.ts
+  - src/agents/pi-embedded-runner/sandbox-info.ts
+  - src/agents/pi-embedded-runner/session-manager-cache.ts
+  - src/agents/pi-embedded-runner/system-prompt.ts
+- `src/slack/monitor/message-handler/prepare.ts`（35）
+  - src/agents/identity.ts
+  - src/auto-reply/command-detection.ts
+  - src/auto-reply/commands-registry.ts
+  - src/auto-reply/envelope.ts
+  - src/auto-reply/reply/history.ts
+  - src/auto-reply/reply/inbound-context.ts
+  - src/auto-reply/reply/mentions.ts
+  - src/auto-reply/templating.ts
+  - src/channels/ack-reactions.ts
+  - src/channels/allowlist-match.ts
+  - src/channels/command-gating.ts
+  - src/channels/conversation-label.ts
+  - src/channels/logging.ts
+  - src/channels/mention-gating.ts
+  - src/channels/session.ts
+  - src/config/sessions.ts
+  - src/globals.ts
+  - src/infra/system-events.ts
+  - src/pairing/pairing-messages.ts
+  - src/pairing/pairing-store.ts
+- `src/commands/doctor.ts`（34）
+  - src/agents/agent-scope.ts
+  - src/agents/defaults.ts
+  - src/agents/model-catalog.ts
+  - src/agents/model-selection.ts
+  - src/cli/command-format.ts
+  - src/commands/doctor-auth.ts
+  - src/commands/doctor-completion.ts
+  - src/commands/doctor-config-flow.ts
+  - src/commands/doctor-gateway-daemon-flow.ts
+  - src/commands/doctor-gateway-health.ts
+  - src/commands/doctor-gateway-services.ts
+  - src/commands/doctor-install.ts
+  - src/commands/doctor-platform-notes.ts
+  - src/commands/doctor-prompter.ts
+  - src/commands/doctor-sandbox.ts
+  - src/commands/doctor-security.ts
+  - src/commands/doctor-state-integrity.ts
+  - src/commands/doctor-state-migrations.ts
+  - src/commands/doctor-ui.ts
+  - src/commands/doctor-update.ts
+- `src/cron/isolated-agent/run.ts`（33）
+  - src/agents/agent-scope.ts
+  - src/agents/cli-runner.ts
+  - src/agents/cli-session.ts
+  - src/agents/context.ts
+  - src/agents/current-time.ts
+  - src/agents/defaults.ts
+  - src/agents/model-catalog.ts
+  - src/agents/model-fallback.ts
+  - src/agents/model-selection.ts
+  - src/agents/pi-embedded-messaging.ts
+  - src/agents/pi-embedded.ts
+  - src/agents/skills.ts
+  - src/agents/skills/refresh.ts
+  - src/agents/subagent-announce.ts
+  - src/agents/timeout.ts
+  - src/agents/usage.ts
+  - src/agents/workspace.ts
+  - src/auto-reply/thinking.ts
+  - src/cli/outbound-send-deps.ts
+  - src/config/config.ts
+
+## 无导出文件（先补文档）
+- `src/agents/test-helpers/fast-coding-tools.ts`
+- `src/agents/test-helpers/fast-core-tools.ts`
+- `src/browser/client-actions.ts`
+- `src/browser/pw-tools-core.ts`
+- `src/commands/agents.ts`
+- `src/commands/models/list.ts`
+- `src/commands/onboarding/types.ts`
+- `src/config/sessions.ts`
+- `src/config/types.ts`
+- `src/entry.ts`
+- `src/gateway/protocol/schema.ts`
+- `src/gateway/test-helpers.ts`
+- `src/macos/gateway-daemon.ts`
+- `src/macos/relay.ts`
+- `src/memory/openai-batch.ts`
+- `src/slack/http/index.ts`
+- `src/web/auto-reply.ts`
+
+## 大文件 TopN（按行）
+- `src/memory/manager.ts` 2303
+- `src/agents/bash-tools.exec.ts` 1636
+- `src/tts/tts.ts` 1584
+- `src/infra/exec-approvals.ts` 1542
+- `src/line/flex-templates.ts` 1512
+- `src/cli/update-cli.ts` 1356
+- `src/media-understanding/runner.ts` 1299
+- `src/node-host/runner.ts` 1289
