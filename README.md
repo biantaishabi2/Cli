@@ -48,4 +48,5 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh v0.1.0
 Repository includes a reusable skill definition for `taskctl`.
 
 - Guide: `docs/SKILLS.md`
-- Skill files: `skills/taskctl/`
+- Skill catalog: `skills/README.md`
+- Skill files: `skills/orchestration/taskctl/`
