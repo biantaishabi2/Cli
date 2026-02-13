@@ -1,0 +1,4 @@
+interface:
+  display_name: "Taskctl DAG"
+  short_description: "Model tasks and validate DAG with taskctl"
+  default_prompt: "Use taskctl CLI to create and update tasks, then validate and render dependency DAG outputs."

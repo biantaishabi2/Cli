@@ -42,3 +42,10 @@ Or install into a custom directory:
 ```bash
 INSTALL_DIR=/usr/local/bin ./scripts/install.sh v0.1.0
 ```
+
+## Codex Skill
+
+Repository includes a reusable skill definition for `taskctl`.
+
+- Guide: `docs/SKILLS.md`
+- Skill files: `skills/taskctl/`
