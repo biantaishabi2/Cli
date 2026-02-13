@@ -536,6 +536,10 @@ fn topo_order(store: &TaskStore) -> Result<Vec<String>, TaskError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn mk_create(subject: &str) -> TaskCreate {
         TaskCreate {
@@ -757,5 +761,184 @@ mod tests {
         delete_task(&mut store, &a.id).expect("delete a");
         let b_task = get_task(&store, &b.id).expect("b exists");
         assert!(b_task.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn bdd_ready_task_becomes_progressable_only_when_unblocked() {
+        // Given two tasks with a dependency: B blocked by A
+        let mut store = TaskStore::default();
+        let bootstrap = create_task(&mut store, mk_create("bootstrap infrastructure"))
+            .expect("create bootstrap");
+        let build_api = create_task(&mut store, mk_create("build api")).expect("create build api");
+        update_task(
+            &mut store,
+            &build_api.id,
+            TaskUpdate {
+                add_blocked_by: vec![bootstrap.id.clone()],
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("link build_api to bootstrap");
+
+        // When: query ready tasks before any progress
+        let ready_before = ready_tasks(&store).expect("ready tasks");
+        assert_eq!(ready_before.len(), 1);
+        assert!(ready_before.iter().any(|t| t.id == bootstrap.id));
+
+        // Then build_api is observable as blocked, and bootstrap is the only executable one
+        let blocked = update_task(
+            &mut store,
+            &build_api.id,
+            TaskUpdate {
+                status: Some(UpdateStatus::InProgress),
+                ..TaskUpdate::default()
+            },
+        );
+        assert!(
+            matches!(blocked, Err(TaskError::BlockedTransition(_, _))),
+            "expected build_api to be blocked before bootstrap completes"
+        );
+
+        // When: bootstrap reaches done
+        update_task(
+            &mut store,
+            &bootstrap.id,
+            TaskUpdate {
+                status: Some(UpdateStatus::InProgress),
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("start bootstrap");
+        update_task(
+            &mut store,
+            &bootstrap.id,
+            TaskUpdate {
+                status: Some(UpdateStatus::Completed),
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("complete bootstrap");
+
+        // Then build_api becomes ready and can start (observable behavior contract)
+        let ready_after = ready_tasks(&store).expect("ready tasks");
+        assert!(ready_after.iter().any(|t| t.id == build_api.id));
+        let now_running = update_task(
+            &mut store,
+            &build_api.id,
+            TaskUpdate {
+                status: Some(UpdateStatus::InProgress),
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("start build_api");
+        assert_eq!(
+            now_running.expect("updated task").status,
+            TaskStatus::InProgress
+        );
+    }
+
+    #[test]
+    fn bdd_multiple_ready_tasks_can_run_in_parallel() {
+        // Given 3 independent tasks with no blockers
+        let mut store = TaskStore::default();
+        let mut ids = HashSet::new();
+        for idx in 0..3 {
+            let task = create_task(
+                &mut store,
+                mk_create(&format!("parallel-task-{idx}")),
+            )
+            .expect("create task");
+            ids.insert(task.id);
+        }
+
+        // When: query ready tasks
+        let ready = ready_tasks(&store).expect("ready");
+
+        // Then all three are ready and can be started by different agents
+        let ready_ids: HashSet<_> = ready.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ready_ids.len(), ids.len());
+        assert_eq!(ready_ids, ids);
+    }
+
+    #[test]
+    fn bdd_state_is_observable_from_store_file() {
+        // Given: create dependency chain and write to disk
+        let mut store = TaskStore::default();
+        let mut meta = serde_json::Map::new();
+        meta.insert("priority".to_string(), serde_json::Value::String("P0".to_string()));
+
+        let design = create_task(
+            &mut store,
+            TaskCreate {
+                subject: "Design API".to_string(),
+                description: "define interfaces".to_string(),
+                active_form: None,
+                metadata: meta,
+            },
+        )
+        .expect("create design");
+        let implement = create_task(
+            &mut store,
+            mk_create("Implement API"),
+        )
+        .expect("create implement");
+        update_task(
+            &mut store,
+            &implement.id,
+            TaskUpdate {
+                add_blocked_by: vec![design.id.clone()],
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("link implement");
+
+        let path = PathBuf::from(env::temp_dir()).join(format!(
+            "taskctl-bdd-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+                .as_nanos()
+        ));
+        save_store(&path, &store).expect("save store");
+
+        // When: loading the persisted store from disk
+        let raw = fs::read_to_string(&path).expect("read persisted");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse persisted");
+        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["tasks"].as_object().expect("tasks obj").len(), 2);
+        assert_eq!(
+            parsed["tasks"][&design.id]["status"],
+            serde_json::Value::String("pending".to_string())
+        );
+        assert_eq!(parsed["tasks"][&implement.id]["blocked_by"][0], design.id.clone());
+
+        let loaded = load_store(&path).expect("load");
+        let ready = ready_tasks(&loaded).expect("ready");
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, design.id);
+
+        // Then observability is complete: file contains full intent plus concrete behavior output
+        let patch = serde_json::Map::from_iter([
+            (
+                "status".to_string(),
+                serde_json::Value::String("in_progress".to_string()),
+            ),
+            ("module".to_string(), serde_json::Value::String("api".to_string())),
+        ]);
+        let maybe_err = update_task(
+            &mut store,
+            &design.id,
+            TaskUpdate {
+                status: Some(UpdateStatus::InProgress),
+                metadata: Some(patch),
+                ..TaskUpdate::default()
+            },
+        )
+        .expect("update metadata+status");
+        let design = maybe_err.expect("updated design");
+        assert_eq!(design.metadata["module"], "api");
+
+        let _ = fs::remove_file(&path);
     }
 }
