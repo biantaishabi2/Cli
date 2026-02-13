@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Issue/PR + Taskctl"
+  short_description: "Use gh for issue/PR operations and sync progress via taskctl"
+  default_prompt: "Use gh to manage GitHub issues/PRs and keep taskctl states/comments synchronized in one workflow."

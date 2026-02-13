@@ -17,6 +17,9 @@ Each CLI tool should map to exactly one skill folder under a category.
   - Tool `taskctl`
     - Path: `skills/orchestration/taskctl/`
     - Purpose: task orchestration + DAG validation + graph views
+  - Tool `github-issue-taskctl`
+    - Path: `skills/orchestration/github-issue-taskctl/`
+    - Purpose: GitHub Issue/PR operation and synchronization with taskctl task states
 
 ## Category Guidelines
 

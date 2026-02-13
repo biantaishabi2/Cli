@@ -16,6 +16,7 @@ Skills are grouped by category and tool name:
 Current catalog:
 
 - `skills/orchestration/taskctl/`
+- `skills/orchestration/github-issue-taskctl/`
 
 See full catalog and conventions in `skills/README.md`.
 
@@ -30,6 +31,7 @@ Operational workflows for agent collaboration:
 ```bash
 mkdir -p ~/.codex/skills
 cp -R skills/orchestration/taskctl ~/.codex/skills/taskctl
+cp -R skills/orchestration/github-issue-taskctl ~/.codex/skills/github-issue-taskctl
 ```
 
 For active development, use a symlink:
@@ -37,6 +39,7 @@ For active development, use a symlink:
 ```bash
 mkdir -p ~/.codex/skills
 ln -sfn "$(pwd)/skills/orchestration/taskctl" ~/.codex/skills/taskctl
+ln -sfn "$(pwd)/skills/orchestration/github-issue-taskctl" ~/.codex/skills/github-issue-taskctl
 ```
 
 ## Use
