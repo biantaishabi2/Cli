@@ -3,21 +3,34 @@
 [![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
 [![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
 
-这是一个承载多个命令行工具的仓库。  
-当前先放 `taskctl`，后续在同一仓库持续新增其他工具并按分类管理。
+承载多个命令行工具的 monorepo，按职责分类管理。
 
 ## 目录：工具总览
 
 ### `orchestration/`
-- `taskctl/`（已就绪）  
+- **`taskctl/`**（Rust，已就绪）
   任务编排 CLI：支持任务增删改查、依赖关系（blockedBy/blocks）、校验、DAG 生成与导出，适配 Agent 工作流。
+
+### `compiler/`
+- **`bddc/`**（Elixir escript，已就绪）
+  BDD 编译器：DSL 解析 → 指令集生成 → 运行时覆盖校验 → 测试代码生成。从 shop 项目迁入。
+
+- **`bcc/`**（Rust + Elixir emit，设计中）
+  后端编译器：YAML 技术设计 → Elixir Quoted AST → Pass Pipeline（最佳实践注入）→ `.ex` 模块骨架。
 
 ## 快速上手
 
 ```bash
-cd taskctl
+# taskctl
+cd orchestration/taskctl
 cargo test
 cargo run -- --help
+
+# bddc
+cd compiler/bddc
+mix deps.get
+mix escript.build
+./bdd_compiler --help
 ```
 
 ## Build Release Artifact
