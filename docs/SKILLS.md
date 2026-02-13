@@ -19,6 +19,12 @@ Current catalog:
 
 See full catalog and conventions in `skills/README.md`.
 
+## Workflows
+
+Operational workflows for agent collaboration:
+
+- `docs/workflows/github-issue-taskctl-loop.md`
+
 ## Install A Skill To Local Codex
 
 ```bash

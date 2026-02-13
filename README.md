@@ -56,3 +56,7 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh v0.1.0
 - Guide: `docs/SKILLS.md`
 - Skill catalog: `skills/README.md`
 - Skill files: `skills/orchestration/taskctl/`
+
+## Agent Workflow
+
+- `docs/workflows/github-issue-taskctl-loop.md`
