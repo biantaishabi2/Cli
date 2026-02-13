@@ -1,8 +1,24 @@
 *.DS_Store
 
 # Rust build artifacts
-taskctl/target/
+orchestration/taskctl/target/
 dist/
 
 # Local runtime state
-taskctl/tasks.json
+orchestration/taskctl/tasks.json
+
+# Elixir build artifacts
+compiler/bddc/_build/
+compiler/bddc/deps/
+compiler/bddc/bdd_compiler
+
+# bddc test fixtures build artifacts
+compiler/bddc/test/fixtures/mock_project/_build/
+compiler/bddc/test/fixtures/mock_project/docs/bdd/_generated/
+compiler/bddc/test/fixtures/mock_project/test/support/bdd/factories_generated/
+compiler/bddc/test/fixtures/mock_project/test/support/bdd/semantic_givens/
+compiler/bddc/test/fixtures/mock_project/tmp/
+
+# BCC empty dirs (placeholder until implementation)
+compiler/bcc/src/
+compiler/bcc/scripts/
