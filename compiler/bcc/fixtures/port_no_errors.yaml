@@ -1,0 +1,7 @@
+module:
+  name: SimpleService
+ports:
+  - name: do_something
+    kind: command
+    input: { id: uuid }
+    output: { ok: boolean }

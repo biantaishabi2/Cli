@@ -1,0 +1,11 @@
+module:
+  name: TestService
+ports:
+  - name: do_work
+    kind: command
+    input: { id: uuid }
+    output: { ok: boolean }
+    errors: [TEST-001]
+relations:
+  - callee: UnknownService
+    mode: sync

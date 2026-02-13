@@ -1,0 +1,24 @@
+module:
+  name: SessionService
+  responsibility: 会话上下文管理
+ports:
+  - name: load_context
+    kind: query
+    input: { session_id: uuid }
+    output: { context: map }
+    errors: [SESSION-IO-001, SESSION-STATE-001]
+  - name: persist_turn
+    kind: command
+    input: { session_id: uuid, turn: map }
+    output: { ack: boolean }
+    errors: [SESSION-IO-001]
+  - name: compact_context
+    kind: command
+    input: { session_id: uuid, threshold: integer }
+    output: { compacted: boolean }
+    errors: [SESSION-STATE-001]
+relations:
+  - callee: CompactionService
+    mode: sync
+  - callee: EventBusPort
+    mode: async

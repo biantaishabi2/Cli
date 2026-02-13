@@ -1,0 +1,6 @@
+module:
+  name: BadService
+ports:
+  - name: do_something
+    input: { id: uuid }
+    output: { ok: boolean }

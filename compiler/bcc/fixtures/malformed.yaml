@@ -1,0 +1,7 @@
+module:
+  name: Broken
+ports:
+  - name: foo
+    kind: command
+    input: { id: uuid
+    output: { ok: boolean }

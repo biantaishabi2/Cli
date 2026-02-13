@@ -20,8 +20,8 @@ compiler/bddc/test/fixtures/mock_project/test/support/bdd/semantic_givens/
 compiler/bddc/test/fixtures/mock_project/tmp/
 
 # BCC build artifacts
-compiler/bcc/src/
 compiler/bcc/target/
+target/
 
 # BCC audit artifacts (generated, large)
 compiler/bcc/docs/openclaw-backend-trace/artifacts/backend-docs-ast.json
