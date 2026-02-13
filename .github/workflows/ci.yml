@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Test (ubuntu)
+  taskctl:
+    name: taskctl test (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,13 +19,59 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: taskctl
+          workspaces: orchestration/taskctl
 
       - name: Run tests
-        run: cargo test --manifest-path taskctl/Cargo.toml
+        run: cargo test --manifest-path orchestration/taskctl/Cargo.toml
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
+
+      - name: Verify binary help
+        run: ./orchestration/taskctl/target/release/taskctl --help
+
+  bddc:
+    name: bddc test (ubuntu)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compiler/bddc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.17'
+          otp-version: '27'
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            compiler/bddc/deps
+            compiler/bddc/_build
+          key: bddc-${{ runner.os }}-mix-${{ hashFiles('compiler/bddc/mix.exs') }}
+          restore-keys: bddc-${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+      - name: Build escript
+        run: mix escript.build
+
+      - name: Verify escript help
+        run: ./bdd_compiler --help
 
   build-matrix:
-    name: Build (${{ matrix.label }})
+    name: taskctl build (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -45,10 +91,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: taskctl
+          workspaces: orchestration/taskctl
 
       - name: Build release binary
-        run: cargo build --release --manifest-path taskctl/Cargo.toml
+        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
 
       - name: Verify binary help
-        run: ./taskctl/target/release/taskctl --help
+        run: ./orchestration/taskctl/target/release/taskctl --help

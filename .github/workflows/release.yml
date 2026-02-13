@@ -33,10 +33,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: taskctl
+          workspaces: orchestration/taskctl
 
       - name: Build release binary
-        run: cargo build --release --manifest-path taskctl/Cargo.toml
+        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
 
       - name: Prepare package variables
         id: vars
@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp taskctl/target/release/taskctl dist/taskctl
+          cp orchestration/taskctl/target/release/taskctl dist/taskctl
           chmod +x dist/taskctl
           tar -C dist -czf "dist/${{ steps.vars.outputs.asset }}" taskctl
 
