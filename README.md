@@ -1,5 +1,8 @@
 # Cli
 
+[![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
+[![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
+
 这是一个承载多个命令行工具的仓库。  
 当前先放 `taskctl`，后续在同一仓库持续新增其他工具并按分类管理。
 
