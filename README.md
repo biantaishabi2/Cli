@@ -1,12 +1,15 @@
 # Cli
 
-Monorepo for standalone CLI tools.
+这是一个承载多个命令行工具的仓库。  
+当前先放 `taskctl`，后续在同一仓库持续新增其他工具并按分类管理。
 
-## Included Tool
+## 目录：工具总览
 
-- `taskctl/`: task orchestration CLI with dependency DAG support
+### `orchestration/`
+- `taskctl/`（已就绪）  
+  任务编排 CLI：支持任务增删改查、依赖关系（blockedBy/blocks）、校验、DAG 生成与导出，适配 Agent 工作流。
 
-## Local Development
+## 快速上手
 
 ```bash
 cd taskctl
@@ -45,7 +48,7 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh v0.1.0
 
 ## Codex Skill
 
-Repository includes a reusable skill definition for `taskctl`.
+仓库内提供给 Codex/Agent 使用的技能定义（Skill）：
 
 - Guide: `docs/SKILLS.md`
 - Skill catalog: `skills/README.md`
