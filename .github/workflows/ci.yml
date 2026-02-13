@@ -33,8 +33,6 @@ jobs:
         include:
           - label: linux-x86_64
             runner: ubuntu-latest
-          - label: darwin-x86_64
-            runner: macos-13
           - label: darwin-arm64
             runner: macos-14
     steps:
