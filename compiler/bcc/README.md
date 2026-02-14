@@ -128,20 +128,6 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 `--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
 `-s check` 会产出 `quality-check.json`，有不合格场景时返回非零；`-s fix` 会尝试修复并产出 `quality-fix.json`。
 
-### TS/Rust Parity（脚本）
-
-```bash
-# 1) 安装脚本依赖（一次）
-npm --prefix compiler/bcc/scripts install
-
-# 2) 对某个 TypeScript 项目做 TS ↔ Rust 指标对比
-node compiler/bcc/scripts/parity_ts_rust.mjs \
-  --project-root /path/to/ts-project \
-  --bcc-bin ./target/release/bcc \
-  --out /path/to/ts-project/docs/backend-trace/artifacts/ts-rust-parity.json \
-  --strict
-```
-
 ## 支持语言
 
 | 语言 | extract | bugfix | tree-sitter |
@@ -172,4 +158,4 @@ cargo run -- bdd --help
 
 - [技术设计文档](docs/技术设计文档-后端编译器.md) — 完整设计、BDD 场景、里程碑
 - [BDD 场景提取方案](docs/BDD场景提取方案.md) — bugfix 子命令详细设计
-- [架构闭环迁移计划](docs/架构闭环迁移计划.md) — TS 过渡到 Rust 的闭环落地路径与待实现清单
+- [架构闭环迁移计划](docs/架构闭环迁移计划.md) — Rust 闭环与架构对齐路径

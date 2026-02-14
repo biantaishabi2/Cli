@@ -61,6 +61,9 @@ jobs:
         run: |
           ./target/release/bcc trace status compiler/bcc/fixtures/trace_project/src compiler/bcc/fixtures/trace_project/docs/backend-trace/files/src | grep "总文件: 3"
 
+      - name: Run bcc smoke integration tests
+        run: cargo test -p bcc --test cli_arch_bdd
+
   bddc:
     name: bddc test (ubuntu)
     runs-on: ubuntu-latest
