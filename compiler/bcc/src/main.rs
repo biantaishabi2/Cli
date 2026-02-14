@@ -68,11 +68,18 @@ enum Commands {
 
     /// 从 git bugfix 历史中提取 BDD 场景
     ///
-    /// 四步流水线：collect → context → generate → organize
-    ///   collect(c)  扫描 git log，按变更行数分级(A/B/C)，自动打标签
-    ///   context(x)  提取每个 commit 的 diff 和修改函数的 before/after 代码
-    ///   generate(g) 调用 codex exec 将上下文转为 bddc DSL 场景
-    ///   organize(o) 按模块归类，标记疑似重复，生成覆盖率报告
+    /// 四步流水线及产出：
+    ///
+    ///   collect(c)  扫描 git log → inventory.json（commit 列表、分级、标签）
+    ///   context(x)  提取 diff + 函数 before/after → contexts/*.json
+    ///   generate(g) 调用 codex exec 生成 bddc DSL → scenarios/*.dsl
+    ///               需要安装 codex CLI（npm i -g @anthropic/codex）
+    ///               未安装时降级：输出 prompts/*.prompt.txt 供手动处理
+    ///   organize(o) 按模块归类 → features/*.dsl + coverage.md
+    ///
+    /// 最终产出 features/*.dsl 可直接喂给 bddc：
+    ///   bddc compile features/order.dsl    # DSL → 指令集
+    ///   bddc gen features/order.dsl        # DSL → ExUnit 测试代码
     #[command(
         name = "bugfix",
         after_help = r#"示例:
@@ -81,7 +88,25 @@ enum Commands {
   bcc bugfix /path/to/repo -o output/ --path app/controllers/  # 按文件路径扫描
   bcc bugfix /path/to/repo -o output/ -s c               # 只扫描，输出 inventory.json
   bcc bugfix /path/to/repo -o output/ -s g --limit 20    # 前 20 个 commit 跑到生成
-  bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix"#
+  bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix
+
+产出目录结构:
+  output/
+  ├── inventory.json          # collect: commit 清单（hash/grade/module/tags）
+  ├── contexts/               # context: 每个 commit 的 diff + 函数上下文
+  │   └── <hash>.json
+  ├── scenarios/              # generate: 每个 commit 生成的 DSL 场景
+  │   └── <hash>.dsl
+  ├── prompts/                # generate 降级: 未安装 codex 时输出 prompt 文件
+  │   └── <hash>.prompt.txt
+  ├── features/               # organize: 按模块归类合并的 DSL
+  │   └── <module>.dsl
+  └── coverage.md             # organize: 模块覆盖率报告
+
+下游使用:
+  bddc compile features/order.dsl              # 编译 DSL → 指令集
+  bddc gen features/order.dsl -o test/         # 生成 ExUnit 测试代码
+  bddc check features/ --project /path/to/app  # 运行时覆盖校验"#
     )]
     Bugfix {
         /// Git 仓库路径
