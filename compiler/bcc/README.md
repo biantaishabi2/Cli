@@ -88,7 +88,7 @@ cargo run -- extract fixtures/sample_controller.php --mode ast  # PHP 端到端
 
 | 阶段 | 状态 | 说明 |
 |------|------|------|
-| M4 PoC | ✅ | compile/extract/trace 三命令闭环，51 场景通过 |
+| M4 核心 | ✅ | compile/extract/trace 三命令闭环，51 场景通过 |
 | M5 扩展 | ✅ | +bugfix 四步流水线 + PHP extract + 多语言，69 场景通过 |
 | M6 推广 | 待启动 | CI 集成 + 升级/回滚手册 |
 
