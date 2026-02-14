@@ -113,7 +113,7 @@ pub fn run(
     if target == Step::Context { return; }
 
     // generate
-    generate(output, prompt_template, force);
+    generate(output, prompt_template, force, limit);
     if target == Step::Generate { return; }
 
     // organize
@@ -656,7 +656,7 @@ fn parse_diff_hunks(
 
 // ─── generate ──────────────────────────────────────────
 
-fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
+fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Option<usize>) {
     let contexts_dir = format!("{}/contexts", output);
     let scenarios_dir = format!("{}/scenarios", output);
     fs::create_dir_all(&scenarios_dir).ok();
@@ -707,6 +707,14 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
             continue;
         }
 
+        // limit 检查（只计数实际处理的，不计 skip 的）
+        if let Some(max) = limit {
+            if processed + failed >= max {
+                eprintln!("[generate] reached limit: {}", max);
+                break;
+            }
+        }
+
         // 读取 context JSON
         let context_str = match fs::read_to_string(&path) {
             Ok(s) => s,
@@ -721,7 +729,15 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
         let prompt = template.replace("{context_json}", &context_str);
 
         if codex_available {
-            // 调用 codex exec
+            // prompt 写入临时文件，避免命令行参数超过 ARG_MAX
+            let prompt_file = format!("{}/{}.prompt.tmp", scenarios_dir, stem);
+            if let Err(e) = fs::write(&prompt_file, &prompt) {
+                eprintln!("[generate] cannot write prompt file for {}: {}", stem, e);
+                failed += 1;
+                continue;
+            }
+
+            // 通过 stdin 传入 prompt（避免大 JSON 超 ARG_MAX）
             let tmp_out = format!("{}/{}.tmp", scenarios_dir, stem);
             let result = Command::new("codex")
                 .args([
@@ -729,9 +745,18 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
                     "--full-auto",
                     "--ephemeral",
                     "-o", &tmp_out,
-                    &prompt,
                 ])
-                .output();
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        stdin.write_all(prompt.as_bytes()).ok();
+                    }
+                    child.wait_with_output()
+                });
 
             match result {
                 Ok(o) if o.status.success() => {
@@ -752,16 +777,19 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
                     }
                     // 清理临时文件
                     fs::remove_file(&tmp_out).ok();
+                    fs::remove_file(&prompt_file).ok();
                     processed += 1;
                 }
                 Ok(o) => {
                     let stderr = String::from_utf8_lossy(&o.stderr);
                     eprintln!("[generate] codex failed for {}: {}", stem, stderr.trim());
                     fs::remove_file(&tmp_out).ok();
+                    fs::remove_file(&prompt_file).ok();
                     failed += 1;
                 }
                 Err(e) => {
                     eprintln!("[generate] codex exec error for {}: {}", stem, e);
+                    fs::remove_file(&prompt_file).ok();
                     failed += 1;
                 }
             }
