@@ -360,8 +360,64 @@ fn resolve_module(path: &str, module_map: &Option<ModuleMap>) -> String {
             }
         }
     }
-    // 默认用路径的第一级目录
-    path.split('/').nth(1).unwrap_or("unknown").to_string()
+    // 默认策略：从文件名推导模块名
+    // 例如 OrderController.php → order, PayService.php → pay
+    // lib/shop/order/cart.ex → order, src/order/service.ts → order
+    module_from_filename(path)
+}
+
+/// 从文件路径推导模块名（无 module_map 时的智能默认）
+fn module_from_filename(path: &str) -> String {
+    // 取文件名（不含扩展名）
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let stem = filename.split('.').next().unwrap_or(filename);
+
+    // 去掉常见后缀（Controller, Service, Trait, Model, Handler, Command, Query, Helper, Test）
+    let suffixes = ["Controller", "Service", "Trait", "Model", "Handler",
+                    "Command", "Query", "Helper", "Test", "Spec", "Factory",
+                    "_controller", "_service", "_test", "_handler", "_model"];
+    let mut name = stem.to_string();
+    for suffix in &suffixes {
+        if name.ends_with(suffix) && name.len() > suffix.len() {
+            name = name[..name.len() - suffix.len()].to_string();
+            break;
+        }
+    }
+
+    // 转为 snake_case（驼峰 → 下划线小写）
+    let snake = camel_to_snake(&name);
+
+    // 如果结果太短或太通用，用路径中的上下文补充
+    if snake.is_empty() || snake == "base" || snake == "index" || snake == "app" || snake == "main" {
+        // 尝试从路径中取有意义的目录名
+        // 例如 lib/shop/order/cart.ex → order, app/controllers/OrderController.php → order
+        let parts: Vec<&str> = path.split('/').collect();
+        // 跳过通用目录名
+        let skip = ["lib", "app", "src", "controllers", "models", "services",
+                     "traits", "handlers", "commands", "queries", "helpers",
+                     "test", "tests", "spec", "shop", "web"];
+        for part in parts.iter().rev().skip(1) {
+            let lower = part.to_lowercase();
+            if !skip.contains(&lower.as_str()) && !lower.is_empty() {
+                return lower;
+            }
+        }
+        return snake;
+    }
+
+    snake
+}
+
+/// 驼峰转下划线小写：OrderItem → order_item
+fn camel_to_snake(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('_');
+        }
+        result.push(c.to_ascii_lowercase());
+    }
+    result
 }
 
 fn chrono_now() -> String {
@@ -479,9 +535,35 @@ fn extract_file_diff(full_diff: &str, file_path: &str) -> String {
     result
 }
 
+/// 从 file diff 中提取改动行号（after 侧）
+fn parse_changed_line_numbers(file_diff: &str) -> Vec<usize> {
+    let mut changed = Vec::new();
+    let mut current_line: usize = 0;
+
+    for line in file_diff.lines() {
+        if line.starts_with("@@ ") {
+            // 解析 @@ -a,b +c,d @@ 中的 +c
+            if let Some(plus_part) = line.split('+').nth(1) {
+                let num_str = plus_part.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("0");
+                current_line = num_str.parse::<usize>().unwrap_or(0);
+            }
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            // 新增行
+            changed.push(current_line);
+            current_line += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            // 删除行不计入 after 行号
+        } else {
+            // 上下文行
+            current_line += 1;
+        }
+    }
+    changed
+}
+
 /// 解析 diff hunks，定位改动行所在的函数
 fn parse_diff_hunks(
-    _full_diff: &str,
+    full_diff: &str,
     file_path: &str,
     before_content: &str,
     after_content: &str,
@@ -490,6 +572,10 @@ fn parse_diff_hunks(
     let mut hunks = Vec::new();
 
     if after_content.is_empty() { return hunks; }
+
+    // 提取本文件的 diff 并解析改动行号
+    let file_diff = extract_file_diff(full_diff, file_path);
+    let all_changed_lines = parse_changed_line_numbers(&file_diff);
 
     // 根据语言调度到对应的 extract 模块获取函数列表
     let after_record = match lang {
@@ -508,10 +594,18 @@ fn parse_diff_hunks(
         let after_func = extract_function_body(after_content, &export.name);
 
         if before_func != after_func && !after_func.is_empty() {
+            // 计算函数范围内的改动行号
+            let func_start = export.line;
+            let func_end = func_start + after_func.lines().count();
+            let func_changed: Vec<usize> = all_changed_lines.iter()
+                .filter(|&&ln| ln >= func_start && ln < func_end)
+                .copied()
+                .collect();
+
             hunks.push(serde_json::json!({
                 "function_name": export.name,
                 "function_line": export.line,
-                "changed_lines": [],
+                "changed_lines": func_changed,
                 "before_function": before_func,
                 "after_function": after_func,
             }));
@@ -1183,5 +1277,100 @@ THEN some_assertion"#;
         let c = commits.get("bbb").unwrap();
         assert_eq!(c.changed_files.len(), 2);
         assert_eq!(c.total_lines, 10); // 5+2+3+0
+    }
+
+    // ─── parse_changed_line_numbers ───────────────────
+
+    #[test]
+    fn changed_lines_simple_add() {
+        let diff = "@@ -10,3 +10,5 @@ function foo()\n context\n+added line 1\n+added line 2\n context\n";
+        let lines = parse_changed_line_numbers(diff);
+        assert_eq!(lines, vec![11, 12]); // 行 11 和 12 是新增的
+    }
+
+    #[test]
+    fn changed_lines_mixed() {
+        let diff = "@@ -5,4 +5,4 @@ function bar()\n context\n-old line\n+new line\n context\n";
+        let lines = parse_changed_line_numbers(diff);
+        assert_eq!(lines, vec![6]); // 行 6 是修改后的新行
+    }
+
+    #[test]
+    fn changed_lines_multiple_hunks() {
+        let diff = "@@ -1,3 +1,4 @@\n context\n+line2\n context\n@@ -10,3 +11,4 @@\n context\n+line12\n context\n";
+        let lines = parse_changed_line_numbers(diff);
+        assert_eq!(lines, vec![2, 12]);
+    }
+
+    #[test]
+    fn changed_lines_empty_diff() {
+        assert!(parse_changed_line_numbers("").is_empty());
+    }
+
+    // ─── module_from_filename ─────────────────────────
+
+    #[test]
+    fn module_php_controller() {
+        // OrderController.php → order
+        assert_eq!(module_from_filename("app/controllers/OrderController.php"), "order");
+    }
+
+    #[test]
+    fn module_php_service() {
+        // PayService.php → pay
+        assert_eq!(module_from_filename("app/services/PayService.php"), "pay");
+    }
+
+    #[test]
+    fn module_php_model() {
+        // UserModel.php → user
+        assert_eq!(module_from_filename("app/models/UserModel.php"), "user");
+    }
+
+    #[test]
+    fn module_php_trait() {
+        // AuthTrait.php → auth
+        assert_eq!(module_from_filename("app/traits/AuthTrait.php"), "auth");
+    }
+
+    #[test]
+    fn module_elixir_context() {
+        // lib/shop/order/cart.ex → order（cart 不是通用名，但 order 是更有意义的上下文）
+        assert_eq!(module_from_filename("lib/shop/order/cart.ex"), "cart");
+    }
+
+    #[test]
+    fn module_elixir_generic_name() {
+        // lib/shop/order/index.ex → order（index 是通用名，回退到目录）
+        assert_eq!(module_from_filename("lib/shop/order/index.ex"), "order");
+    }
+
+    #[test]
+    fn module_camel_to_snake() {
+        assert_eq!(camel_to_snake("OrderItem"), "order_item");
+        assert_eq!(camel_to_snake("HTTPClient"), "h_t_t_p_client");
+        assert_eq!(camel_to_snake("foo"), "foo");
+        assert_eq!(camel_to_snake("A"), "a");
+    }
+
+    #[test]
+    fn module_complex_php_name() {
+        // MembershipCardController.php → membership_card
+        assert_eq!(module_from_filename("app/controllers/MembershipCardController.php"), "membership_card");
+    }
+
+    #[test]
+    fn resolve_module_with_map() {
+        let mm = ModuleMap {
+            mapping: [("app/controllers/Order".to_string(), "A-order".to_string())].into(),
+            module_names: [("A-order".to_string(), "订单模块".to_string())].into(),
+        };
+        assert_eq!(resolve_module("app/controllers/OrderController.php", &Some(mm)), "A-order");
+    }
+
+    #[test]
+    fn resolve_module_without_map() {
+        // 无 module_map 时走 module_from_filename
+        assert_eq!(resolve_module("app/controllers/OrderController.php", &None), "order");
     }
 }
