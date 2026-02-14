@@ -1,6 +1,6 @@
 # Git Bugfix → BDD 场景提取方案
 
-> 子文档，隶属于 [技术设计文档-后端编译器.md](./技术设计文档-后端编译器.md) §18.2 M5 扩展。
+> 子文档，隶属于 [技术设计文档-后端编译器.md](./技术设计文档-后端编译器.md) §18.3 M5 扩展。
 
 ## 一、背景与目标
 
@@ -78,38 +78,39 @@ bcc trace     — 文档覆盖审计（status/report/seed）
 ### 3.2 新增能力
 
 ```
-bcc extract（扩展）         — 新增 PHP 语言支持（tree-sitter-php）
-bcc bugfix collect          — git log 扫描 → 分级清单 JSON
-bcc bugfix context          — 清单 → diff + 函数上下文 JSON 包
-bcc bugfix generate         — context 包 → bddc DSL 场景（调用本地 codex exec）
-bcc bugfix organize         — 场景归类去重 → 最终 .dsl 文件
-bcc bugfix pipeline         — 一键串联 collect → organize
+bcc extract（扩展）  — 新增 PHP 语言支持（tree-sitter-php）
+bcc bugfix           — git bugfix 历史 → bddc DSL 场景（单命令，--step 控制阶段）
 ```
 
-### 3.3 整体流程
+### 3.3 `bcc bugfix` 的四个 step
 
 ```
-                    bcc 内部
-┌──────────────────────────────────────────────────┐
-│                                                  │
-│  bugfix collect   bugfix context   bugfix generate  bugfix organize
-│  ┌───────────┐   ┌────────────┐   ┌────────────┐  ┌────────────┐
-│  │ git log   │   │ git diff   │   │ prompt构造  │  │ 归类去重   │
-│  │ 扫描过滤  │──→│ + extract  │──→│ codex exec │─→│ → .dsl     │
-│  │ 分级标签  │   │ PHP解析    │   │ → bddc DSL │  │ 覆盖率报告 │
-│  └───────────┘   └────────────┘   └────────────┘  └─────┬──────┘
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-                                                          │
-                    bddc 现有能力                           ▼
-┌──────────────────────────────────────────────────┐
-│  bddc compile → ExUnit 测试                       │
-│  bddc lint    → 静态检查                          │
-│  bddc check   → 运行时覆盖门禁                    │
-└──────────────────────────────────────────────────┘
+step        别名    功能                    输入 → 输出
+──────────────────────────────────────────────────────────────
+collect     c       git log 扫描分级打标签   repo → inventory.json
+context     x       diff + 函数上下文提取    inventory.json → contexts/
+generate    g       codex exec 生成 DSL     contexts/ → scenarios/
+organize    o       归类去重 + 覆盖率报告    scenarios/ → features/
 ```
 
-## 四、子命令详细设计
+不指定 `--step` 时，默认全部串联执行（collect → context → generate → organize）。
+
+### 3.4 整体流程
+
+```
+bcc bugfix /repo -o output/
+  │
+  ├─ [collect]  git log 扫描 → output/inventory.json
+  ├─ [context]  git diff + PHP extract → output/contexts/*.json
+  ├─ [generate] codex exec → output/scenarios/*.dsl
+  └─ [organize] 归类合并 → output/features/*.dsl + coverage.md
+                    │
+                    ▼
+              bddc compile → ExUnit 测试
+              bddc lint    → 静态检查
+```
+
+## 四、命令行接口
 
 ### 4.1 `bcc extract` 扩展：PHP 支持
 
@@ -149,16 +150,56 @@ PHP 特殊处理：
 tree-sitter-php = "0.24"
 ```
 
-### 4.2 `bcc bugfix collect`
+### 4.2 `bcc bugfix` — 单命令设计
 
 ```
-bcc bugfix collect /path/to/repo \
-    --keywords "修复,fix,bug" \
-    --output bugfix_inventory.json \
-    --module-map /path/to/module_map.json
+bcc bugfix <REPO> [OPTIONS]
 ```
 
-功能：
+**用法示例**：
+```bash
+# 全量执行（默认 --step 全跑）
+bcc bugfix /path/to/repo -o output/ --grade A,B
+
+# 只跑 collect
+bcc bugfix /path/to/repo -o output/ --step collect
+bcc bugfix /path/to/repo -o output/ -s c          # 别名
+
+# 只跑到 context（含 collect）
+bcc bugfix /path/to/repo -o output/ --step context
+bcc bugfix /path/to/repo -o output/ -s x
+
+# 只跑 generate（需要 contexts/ 已存在）
+bcc bugfix /path/to/repo -o output/ --step generate
+bcc bugfix /path/to/repo -o output/ -s g
+
+# 只跑 organize（需要 scenarios/ 已存在）
+bcc bugfix /path/to/repo -o output/ --step organize
+bcc bugfix /path/to/repo -o output/ -s o
+```
+
+**参数**：
+```
+ARGS:
+  <REPO>                    Git repo 路径
+
+OPTIONS:
+  -o, --output <DIR>        输出目录（必填）
+  -s, --step <STEP>         执行到哪一步停（collect|c, context|x, generate|g, organize|o）
+                            不指定则全部执行
+      --grade <GRADES>      筛选级别，逗号分隔 [默认: A,B]
+      --keywords <KW>       扫描关键字 [默认: "修复,fix,bug"]
+      --module-map <FILE>   模块映射表 JSON
+      --prompt-template <FILE>  自定义 prompt 模板
+      --limit <N>           限制处理的 commit 数
+      --force               强制重做已有输出
+      --coverage-report <FILE>  覆盖率报告输出路径
+```
+
+### 4.3 各 step 详细逻辑
+
+#### collect（别名 c）
+
 1. `git log --all --no-merges --grep=<keyword> --numstat --format` 扫描
 2. 多关键字结果按 commit hash 去重
 3. 过滤噪声（只保留改了 `.php` 且含 controllers/models/traits 的）
@@ -166,7 +207,7 @@ bcc bugfix collect /path/to/repo \
 5. 按 module_map 映射到业务模块
 6. 自动打标签（匹配 commit message）
 
-输出 `bugfix_inventory.json`：
+输出 `{output}/inventory.json`：
 ```json
 {
   "meta": {
@@ -221,19 +262,10 @@ xss|漏洞|注入|安全|越权|任意访问  → security
 并发|锁|重复|concurrent           → concurrency
 ```
 
-### 4.3 `bcc bugfix context`
+#### context（别名 x）
 
-```
-bcc bugfix context bugfix_inventory.json \
-    --repo /path/to/repo \
-    --output bugfix_contexts/ \
-    --grade A,B \
-    --limit 100
-```
+对清单中每个 commit 提取完整上下文包。
 
-功能：对清单中每个 commit 提取完整上下文包。
-
-核心流程：
 1. `git diff HASH^..HASH` 获取 raw diff
 2. 解析 diff hunk header 定位改动行
 3. `git show HASH:path` / `git show HASH^:path` 获取修复前后完整文件
@@ -242,7 +274,7 @@ bcc bugfix context bugfix_inventory.json \
 
 断点续传：已存在 `{hash}.json` 的跳过，`--force` 强制重做。
 
-输出：每个 commit 一个 JSON 文件：
+输出 `{output}/contexts/{hash}.json`：
 ```json
 {
   "hash": "014743023209",
@@ -268,24 +300,15 @@ bcc bugfix context bugfix_inventory.json \
 }
 ```
 
-内部实现：`bugfix/context.rs` 里 `use crate::extract::php;` 复用函数定位能力。
+#### generate（别名 g）
 
-### 4.4 `bcc bugfix generate`
+调用本地 `codex exec`，将 context 包转为 bddc DSL 场景。
 
-```
-bcc bugfix generate bugfix_contexts/ \
-    --output bugfix_scenarios/ \
-    --prompt-template prompts/bugfix_generate.txt
-```
-
-功能：调用本地 `codex exec`，将 context 包转为 bddc DSL 场景。
-
-核心流程：
-1. 扫描 `bugfix_contexts/` 下所有 JSON
+1. 扫描 `{output}/contexts/` 下所有 JSON
 2. 对每个 context JSON，读取 prompt 模板，拼接 context 内容
 3. `std::process::Command::new("codex").args(["exec", "--full-auto", "-o", &out_path])` + stdin pipe prompt
 4. 从输出中提取 DSL 块
-5. 写入 `bugfix_scenarios/{module}/{hash}.dsl`
+5. 写入 `{output}/scenarios/{module}/{hash}.dsl`
 
 断点续传：已存在 `{hash}.dsl` 的跳过，`--force` 强制重做。
 
@@ -310,24 +333,17 @@ THEN {断言指令} {参数}
 {context_json}
 ```
 
-降级：若 `codex` 不可用，输出 prompt 文件供手动处理。
+降级：若 `codex` 不可用，输出 prompt 文件到 `{output}/prompts/` 供手动处理。
 
-### 4.5 `bcc bugfix organize`
+#### organize（别名 o）
 
-```
-bcc bugfix organize bugfix_scenarios/ \
-    --output bdd/features/ \
-    --coverage-report bdd/coverage.md
-```
-
-功能：
-1. 扫描所有 `.dsl` 文件
+1. 扫描 `{output}/scenarios/` 下所有 `.dsl` 文件
 2. 按模块归类到目录
 3. 同一 Controller 的场景合并到一个文件
 4. 标记疑似重复（同函数 + 同标签），不自动删除，由人工决定
 5. 生成覆盖率报告
 
-覆盖率报告（`coverage.md`）：
+输出 `{output}/features/` + `coverage.md`：
 ```markdown
 # BDD Bugfix 场景覆盖率
 
@@ -336,17 +352,6 @@ bcc bugfix organize bugfix_scenarios/ \
 | A.审批系统 | 15 | 8 | 23 | 53% |
 | B.活动服务 | 32 | 18 | 67 | 56% |
 ```
-
-### 4.6 `bcc bugfix pipeline`
-
-```
-bcc bugfix pipeline /path/to/repo \
-    --output bdd/ \
-    --module-map module_map.json \
-    --grade A,B
-```
-
-一键串联 collect → context → generate → organize，等价于依次执行四个子命令。
 
 ## 五、Cargo.toml 变更
 
@@ -364,7 +369,7 @@ tree-sitter-php = "0.24"              # 新增：PHP 解析
 
 不引入 `reqwest`/`ureq`——AI 调用通过 `std::process::Command` 调本地 `codex exec`。
 
-## 六、源码目录结构
+## 六、源码结构
 
 ```
 compiler/bcc/src/
@@ -381,15 +386,13 @@ compiler/bcc/src/
 │   ├── typescript.rs
 │   └── php.rs           # 新增：PHP tree-sitter 解析
 ├── trace.rs
-├── bugfix/              # 新增：整个模块
-│   ├── mod.rs           # bugfix 子命令分发
-│   ├── collect.rs       # git log 扫描、分级、标签
-│   ├── context.rs       # diff 提取 + 函数上下文（复用 extract::php）
-│   ├── generate.rs      # codex exec 调用、prompt 构造、DSL 提取
-│   ├── organize.rs      # 归类、疑似去重标记、覆盖率报告
-│   └── pipeline.rs      # 一键串联
-└── prompts/
-    └── bugfix_generate.txt  # prompt 模板（外置，可迭代无需重编译）
+└── bugfix.rs             # 新增：bugfix 全部逻辑（collect/context/generate/organize）
+```
+
+prompt 模板外置：
+```
+compiler/bcc/prompts/
+└── bugfix_generate.txt
 ```
 
 ## 七、CLI 接口设计（main.rs 扩展）
@@ -402,155 +405,130 @@ enum Commands {
     Trace { ... },         // 现有
     /// Mine BDD scenarios from git bugfix history
     Bugfix {
-        #[command(subcommand)]
-        action: BugfixAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum BugfixAction {
-    /// Scan git history for bugfix commits, classify and tag
-    Collect {
         /// Git repo path
         repo: String,
+        /// Output directory
         #[arg(short, long)]
         output: String,
+        /// Run up to this step: collect(c), context(x), generate(g), organize(o)
+        /// Default: run all steps
+        #[arg(short, long)]
+        step: Option<String>,
+        /// Filter by grade (comma-separated)
+        #[arg(long, default_value = "A,B")]
+        grade: String,
+        /// Scan keywords (comma-separated)
         #[arg(long, default_value = "修复,fix,bug")]
         keywords: String,
+        /// Module mapping JSON file
         #[arg(long)]
         module_map: Option<String>,
-    },
-    /// Extract diff + function context for each bugfix
-    Context {
-        /// bugfix_inventory.json path
-        inventory: String,
-        #[arg(long)]
-        repo: String,
-        #[arg(short, long)]
-        output: String,
-        #[arg(long, default_value = "A,B,C")]
-        grade: String,
-        #[arg(long)]
-        limit: Option<usize>,
-        #[arg(long)]
-        force: bool,
-    },
-    /// Generate bddc DSL scenarios from contexts via local codex
-    Generate {
-        /// bugfix_contexts/ directory
-        contexts_dir: String,
-        #[arg(short, long)]
-        output: String,
+        /// Custom prompt template for generate step
         #[arg(long)]
         prompt_template: Option<String>,
+        /// Max commits to process
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Force re-process existing outputs
         #[arg(long)]
         force: bool,
-    },
-    /// Organize scenarios into module directories, mark duplicates
-    Organize {
-        /// bugfix_scenarios/ directory
-        scenarios_dir: String,
-        #[arg(short, long)]
-        output: String,
+        /// Coverage report output path
         #[arg(long)]
         coverage_report: Option<String>,
     },
-    /// Run full pipeline: collect → context → generate → organize
-    Pipeline {
-        /// Git repo path
-        repo: String,
-        #[arg(short, long)]
-        output: String,
-        #[arg(long)]
-        module_map: Option<String>,
-        #[arg(long, default_value = "A,B")]
-        grade: String,
-        #[arg(long)]
-        prompt_template: Option<String>,
-    },
+}
+```
+
+`bugfix.rs` 中的分发逻辑：
+```rust
+pub fn run(repo: &str, output: &str, step: Option<&str>, /* ... */) {
+    let target = match step {
+        Some("collect") | Some("c") => Step::Collect,
+        Some("context") | Some("x") => Step::Context,
+        Some("generate") | Some("g") => Step::Generate,
+        Some("organize") | Some("o") => Step::Organize,
+        None => Step::Organize,  // 默认全跑
+        Some(s) => { eprintln!("unknown step: {}", s); return; }
+    };
+
+    // 按顺序执行，到 target 为止
+    collect(repo, output, ...);
+    if target == Step::Collect { return; }
+
+    context(output, repo, ...);
+    if target == Step::Context { return; }
+
+    generate(output, ...);
+    if target == Step::Generate { return; }
+
+    organize(output, ...);
 }
 ```
 
 ## 八、执行计划
 
-### Phase 1：基础能力（P1 + P2 并行）
+### Phase 1：基础能力
 1. `extract/php.rs` — PHP tree-sitter 解析，输出 FileRecord
-2. `bugfix/collect.rs` — git log 扫描分级
+2. `bugfix.rs` collect 部分 — git log 扫描分级
 3. 跑全量 collect，验证清单质量
 
-### Phase 2：上下文提取（P3）
-4. `bugfix/context.rs` — diff + 函数上下文
+### Phase 2：上下文提取
+4. `bugfix.rs` context 部分 — diff + 函数上下文
 5. 对 OaactiveController 42 个 bugfix 跑 context，验证输出
 
-### Phase 3：生成 + 整理（P4 + P5）
-6. `bugfix/generate.rs` — codex exec 生成 bddc DSL
-7. `bugfix/organize.rs` — 归类 + 疑似重复标记
+### Phase 3：生成 + 整理
+6. `bugfix.rs` generate 部分 — codex exec 生成 bddc DSL
+7. `bugfix.rs` organize 部分 — 归类 + 疑似重复标记
 8. 小批量验证：42 个 → bddc compile → ExUnit
 
 ### Phase 4：全量 + 门禁
-9. `bugfix/pipeline.rs` — 一键串联
-10. 全量 A 级（~1500），B 级（~600）
-11. bddc lint + check 门禁接入
+9. 全量 A 级（~1500），B 级（~600）
+10. bddc lint + check 门禁接入
 
 ### 5 人分工
 
 | 人员 | 负责 | 依赖 | 可立即开始 |
 |------|------|------|-----------|
 | P1 | `extract/php.rs` + fixtures + BDD 场景 | 无 | 是 |
-| P2 | `bugfix/mod.rs` + `collect.rs` + BDD 场景 | 无 | 是 |
-| P3 | `bugfix/context.rs` + BDD 场景 | P1（可 mock 先启动） | 是 |
-| P4 | `bugfix/generate.rs` + prompt 模板 + BDD 场景 | context JSON schema | 是 |
-| P5 | `bugfix/organize.rs` + `pipeline.rs` + 集成测试 | P2/P3/P4（可 mock） | 是 |
+| P2 | `bugfix.rs` collect + CLI 接线 + BDD 场景 | 无 | 是 |
+| P3 | `bugfix.rs` context + BDD 场景 | P1（可 mock 先启动） | 是 |
+| P4 | `bugfix.rs` generate + prompt 模板 + BDD 场景 | context JSON schema | 是 |
+| P5 | `bugfix.rs` organize + 集成测试 + BDD 场景 | P2/P3/P4（可 mock） | 是 |
 
 关键路径：P1 → P3 → P4 → P5
 
-## 九、示例：端到端演示
+## 九、示例
+
+### 端到端演示
 
 ```bash
-# 1. 扫描全量 bugfix
-bcc bugfix collect /home/wangbo/document/upfit \
-    -o /tmp/bdd/inventory.json \
-    --module-map scripts/module_map.json
-
-# 2. 提取 A 级上下文
-bcc bugfix context /tmp/bdd/inventory.json \
-    --repo /home/wangbo/document/upfit \
-    -o /tmp/bdd/contexts/ \
-    --grade A
-
-# 3. 用 codex 生成 DSL
-bcc bugfix generate /tmp/bdd/contexts/ \
-    -o /tmp/bdd/scenarios/
-
-# 4. 整理输出
-bcc bugfix organize /tmp/bdd/scenarios/ \
-    -o bdd/features/ \
-    --coverage-report bdd/coverage.md
-
-# 5. 或一键搞定
-bcc bugfix pipeline /home/wangbo/document/upfit \
-    -o bdd/ \
+# 全量执行
+bcc bugfix /home/wangbo/document/upfit \
+    -o /tmp/bdd/ \
     --module-map scripts/module_map.json \
     --grade A,B
 
-# 6. 用 bddc 编译成 ExUnit 测试
-bddc compile --in bdd/features/ --out test/bdd_generated/
-bddc lint --in bdd/features/
+# 分步调试
+bcc bugfix /home/wangbo/document/upfit -o /tmp/bdd/ -s c        # 只扫描
+bcc bugfix /home/wangbo/document/upfit -o /tmp/bdd/ -s x        # 扫描+上下文
+bcc bugfix /home/wangbo/document/upfit -o /tmp/bdd/ -s g        # 到生成DSL
+bcc bugfix /home/wangbo/document/upfit -o /tmp/bdd/              # 全部跑完
+
+# 用 bddc 编译成 ExUnit 测试
+bddc compile --in /tmp/bdd/features/ --out test/bdd_generated/
+bddc lint --in /tmp/bdd/features/
 ```
 
-## 十、示例：从 diff 到 bddc DSL
+### 从 diff 到 bddc DSL
 
-### 示例 1：时区 Bug（A 级）
+**示例 1：时区 Bug（A 级）**
 
-**Commit**: `a2c4538418` — 修复获取跑步步数
-
-**Diff**:
+Commit `a2c4538418` — 修复获取跑步步数
 ```diff
 - and `inserted_at` between ? and ?
 + and DATE_ADD(`inserted_at`, INTERVAL 8 HOUR) between ? and ?
 ```
-
-**生成的 bddc DSL**:
+生成：
 ```
 # Source: a2c4538418
 # Bug: inserted_at 存储 UTC，查询用北京时间导致跨日统计错误
@@ -560,17 +538,14 @@ WHEN query_today_distance user_id=$user_id activity_id=$activity_id query_time="
 THEN assert_distance expected=3.5
 ```
 
-### 示例 2：安全漏洞（A 级）
+**示例 2：安全漏洞（A 级）**
 
-**Commit**: `014743023209` — 修复评论 xss 漏洞
-
-**Diff**:
+Commit `014743023209` — 修复评论 xss 漏洞
 ```diff
 - $rtn["content"] = $content;
 + $rtn["content"] = !empty($content) ? htmlspecialchars($content, ENT_QUOTES, 'UTF-8') : $content;
 ```
-
-**生成的 bddc DSL**:
+生成：
 ```
 # Source: 014743023209
 # Bug: 圈子评论内容未做 HTML 转义，存在存储型 XSS
@@ -580,18 +555,15 @@ WHEN submit_comment post_id=$post_id content="<script>alert('xss')</script>"
 THEN assert_comment_escaped content_not_contains="<script>"
 ```
 
-### 示例 3：事务遗漏（B 级）
+**示例 3：事务遗漏（B 级）**
 
-**Commit**: `387031738f` — 修复盘点驳回
-
-**Diff**:
+Commit `387031738f` — 修复盘点驳回
 ```diff
 - return;
 + DB::connection()->commit();
 + return $this->successWithMessage('操作成功');
 ```
-
-**生成的 bddc DSL**:
+生成：
 ```
 # Source: 387031738f
 # Bug: 盘点审批驳回未提交事务，数据库状态未持久化
@@ -602,7 +574,7 @@ THEN assert_apply_status apply_id=$apply_id expected_status="no_pass"
 THEN assert_response status="success" message="操作成功"
 ```
 
-## 十一、预期产出
+## 十、预期产出
 
 | 指标 | 估算值 |
 |------|--------|
