@@ -658,8 +658,8 @@ fn parse_diff_hunks(
 
 fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Option<usize>) {
     let contexts_dir = format!("{}/contexts", output);
-    let scenarios_dir = format!("{}/scenarios", output);
-    fs::create_dir_all(&scenarios_dir).ok();
+    let specs_dir = format!("{}/specs", output);
+    fs::create_dir_all(&specs_dir).ok();
 
     // 加载 prompt 模板
     let template = load_prompt_template(prompt_template);
@@ -700,7 +700,7 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
         }
 
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let out_path = format!("{}/{}.dsl", scenarios_dir, stem);
+        let out_path = format!("{}/{}.json", specs_dir, stem);
 
         if !force && std::path::Path::new(&out_path).exists() {
             skipped += 1;
@@ -729,16 +729,8 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
         let prompt = template.replace("{context_json}", &context_str);
 
         if codex_available {
-            // prompt 写入临时文件，避免命令行参数超过 ARG_MAX
-            let prompt_file = format!("{}/{}.prompt.tmp", scenarios_dir, stem);
-            if let Err(e) = fs::write(&prompt_file, &prompt) {
-                eprintln!("[generate] cannot write prompt file for {}: {}", stem, e);
-                failed += 1;
-                continue;
-            }
-
             // 通过 stdin 传入 prompt（避免大 JSON 超 ARG_MAX）
-            let tmp_out = format!("{}/{}.tmp", scenarios_dir, stem);
+            let tmp_out = format!("{}/{}.tmp", specs_dir, stem);
             let result = Command::new("codex")
                 .args([
                     "exec",
@@ -760,36 +752,45 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
 
             match result {
                 Ok(o) if o.status.success() => {
-                    // 读取 codex 输出
+                    // 读取 codex 输出，提取 JSON
                     let content = fs::read_to_string(&tmp_out).unwrap_or_default();
-                    if content.is_empty() {
-                        // codex 可能直接输出到 stdout
-                        let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-                        if !stdout.trim().is_empty() {
-                            fs::write(&out_path, extract_dsl_block(&stdout)).ok();
-                        } else {
-                            eprintln!("[generate] empty output for {}", stem);
-                            failed += 1;
-                            continue;
-                        }
+                    let raw = if content.is_empty() {
+                        String::from_utf8_lossy(&o.stdout).to_string()
                     } else {
-                        fs::write(&out_path, extract_dsl_block(&content)).ok();
+                        content
+                    };
+
+                    let json_str = extract_json_block(&raw);
+                    if json_str.trim().is_empty() {
+                        eprintln!("[generate] empty output for {}", stem);
+                        failed += 1;
+                    } else {
+                        // 校验 JSON 格式
+                        match serde_json::from_str::<serde_json::Value>(&json_str) {
+                            Ok(val) => {
+                                let pretty = serde_json::to_string_pretty(&val).unwrap();
+                                fs::write(&out_path, &pretty).ok();
+                                processed += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("[generate] invalid JSON for {}: {}", stem, e);
+                                // 保存原始输出供调试
+                                let raw_path = format!("{}/{}.raw.txt", specs_dir, stem);
+                                fs::write(&raw_path, &json_str).ok();
+                                failed += 1;
+                            }
+                        }
                     }
-                    // 清理临时文件
                     fs::remove_file(&tmp_out).ok();
-                    fs::remove_file(&prompt_file).ok();
-                    processed += 1;
                 }
                 Ok(o) => {
                     let stderr = String::from_utf8_lossy(&o.stderr);
                     eprintln!("[generate] codex failed for {}: {}", stem, stderr.trim());
                     fs::remove_file(&tmp_out).ok();
-                    fs::remove_file(&prompt_file).ok();
                     failed += 1;
                 }
                 Err(e) => {
                     eprintln!("[generate] codex exec error for {}: {}", stem, e);
-                    fs::remove_file(&prompt_file).ok();
                     failed += 1;
                 }
             }
@@ -804,9 +805,9 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
     }
 
     if codex_available {
-        eprintln!("[generate] processed: {}, skipped: {}, failed: {}", processed, skipped, failed);
+        eprintln!("[generate] specs: {}, skipped: {}, failed: {}", processed, skipped, failed);
     } else {
-        eprintln!("[generate] prompts written: {}, skipped: {} (use codex manually)", processed, skipped);
+        eprintln!("[generate] prompts written: {}, skipped: {} (feed to LLM manually)", processed, skipped);
     }
 }
 
@@ -834,204 +835,182 @@ fn load_prompt_template(custom_path: Option<&str>) -> String {
     DEFAULT_PROMPT_TEMPLATE.to_string()
 }
 
-const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是BDD测试专家。请将以下PHP bugfix记录转为bddc DSL场景。
+const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是后端测试分析专家。分析以下 git bugfix 记录，输出结构化的测试规格书 JSON。
 
-## bddc DSL 语法
+## 输出格式（严格 JSON，不要包裹在 markdown 代码块中）
 
-```
-# Source: {hash}
-# Bug: {一句话根因}
-[SCENARIO: BDD-{MODULE}-BUGFIX-{HASH_SHORT}] TITLE: {标题} TAGS: regression {tags}
-GIVEN {前置条件指令} {参数}
-WHEN {触发操作指令} {参数}
-THEN {断言指令} {参数}
-```
+{
+  "source_commit": "完整commit hash",
+  "bug_summary": "一句话描述bug根因",
+  "module": "模块名（从文件路径推导）",
+  "action": "被修改的函数/方法名",
+  "fix_summary": "修复做了什么（一句话）",
+  "test_type": "regression|boundary|null_safety|security|concurrency",
+  "test_spec": {
+    "preconditions": [
+      {"what": "前置条件描述", "involves": "db|redis|session|config|file", "key_params": ["参数名"]}
+    ],
+    "trigger": {
+      "type": "controller_action|service_call|event_handler|cron_job",
+      "target": "类名或模块名",
+      "method": "方法名",
+      "key_params": ["触发时的关键参数"]
+    },
+    "assertions": [
+      {"what": "断言描述", "type": "return_value|db_state|redis_state|event_emitted|exception|http_status", "expected": "期望值"}
+    ]
+  },
+  "wrong_behavior": "修复前的错误行为",
+  "correct_behavior": "修复后的正确行为",
+  "data_dependencies": ["db", "redis", "api", "file"]
+}
 
-## 规则
+## 分析规则
 
-1. diff中被替换的旧代码 = bug的根因，新代码 = 正确行为
-2. GIVEN 描述触发bug的数据条件（使用 $变量名 作为参数）
-3. WHEN 描述用户/系统操作
-4. THEN 描述修复后的期望行为
-5. 每个场景头部加注释：# Source: {hash} 和 # Bug: {一句话根因}
-6. SCENARIO ID 格式：BDD-{模块}-BUGFIX-{commit前6位}
-7. 只输出DSL文本，不要包裹在markdown代码块中
+1. diff 中被替换的旧代码 = bug 根因（wrong_behavior），新代码 = 正确行为（correct_behavior）
+2. preconditions 描述触发 bug 需要的数据/状态条件
+3. trigger 描述用户/系统的操作入口
+4. assertions 描述修复后应通过的检查点
+5. 如果 commit 不是 bugfix（纯 feature/refactor/config），输出: {"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
+6. test_type 根据 bug 类型选择：空值检查→null_safety，安全漏洞→security，并发问题→concurrency，边界条件→boundary，其他→regression
 
-## Bugfix记录
+## Bugfix 记录
 
 {context_json}"#;
 
-/// 从 codex 输出中提取 DSL 块（去掉 markdown 代码块包裹）
-fn extract_dsl_block(text: &str) -> String {
-    let mut lines = Vec::new();
-    let mut in_code_block = false;
+/// 从 LLM 输出中提取 JSON（去掉 markdown 包裹和非 JSON 文本）
+fn extract_json_block(text: &str) -> String {
+    let trimmed = text.trim();
 
+    // 如果整体就是合法 JSON，直接返回
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        return trimmed.to_string();
+    }
+
+    // 尝试从 markdown 代码块中提取
+    let mut code_block = String::new();
+    let mut in_block = false;
     for line in text.lines() {
         if line.trim().starts_with("```") {
-            if in_code_block {
-                in_code_block = false;
-                continue;
+            if in_block {
+                break; // 结束第一个代码块
             }
-            in_code_block = true;
+            in_block = true;
             continue;
         }
+        if in_block {
+            code_block.push_str(line);
+            code_block.push('\n');
+        }
+    }
+    if !code_block.trim().is_empty() {
+        return code_block.trim().to_string();
+    }
 
-        // DSL 特征行：注释/场景声明/步骤关键字
-        let is_dsl_line = line.contains("[SCENARIO:")
-            || line.starts_with("# Source:") || line.starts_with("# Bug:")
-            || line.starts_with("# WARNING:")
-            || line.starts_with("GIVEN ") || line.starts_with("WHEN ") || line.starts_with("THEN ");
-
-        if in_code_block || is_dsl_line {
-            lines.push(line);
+    // 最后尝试：找第一个 { 到最后一个 } 之间的内容
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start < end {
+            return trimmed[start..=end].to_string();
         }
     }
 
-    if lines.is_empty() {
-        text.to_string()
-    } else {
-        lines.join("\n")
-    }
+    trimmed.to_string()
 }
 
 // ─── organize ──────────────────────────────────────────
 
 fn organize(output: &str, coverage_report: Option<&str>) {
-    let scenarios_dir = format!("{}/scenarios", output);
-    let features_dir = format!("{}/features", output);
+    let specs_dir = format!("{}/specs", output);
+    let by_module_dir = format!("{}/by_module", output);
     let inventory_path = format!("{}/inventory.json", output);
-    fs::create_dir_all(&features_dir).ok();
+    fs::create_dir_all(&by_module_dir).ok();
 
-    // 读取 inventory 用于模块信息
+    // 读取 inventory 用于模块信息兜底
     let inventory: Option<Inventory> = fs::read_to_string(&inventory_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
-    // 构建 hash → commit 查找表
     let mut commit_map: HashMap<String, &BugfixCommit> = HashMap::new();
     if let Some(ref inv) = inventory {
         for c in &inv.commits {
             commit_map.insert(c.hash.clone(), c);
-            // 也用短 hash 建索引
             if c.hash.len() >= 6 {
                 commit_map.insert(c.hash[..6].to_string(), c);
             }
         }
     }
 
-    // 扫描所有 .dsl 文件
-    let entries = match fs::read_dir(&scenarios_dir) {
+    // 扫描 specs/*.json
+    let entries = match fs::read_dir(&specs_dir) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("[organize] cannot read {}: {}", scenarios_dir, e);
+            eprintln!("[organize] cannot read {}: {}", specs_dir, e);
             std::process::exit(1);
         }
     };
 
     // 按模块分组
-    let mut by_module: HashMap<String, Vec<(String, String)>> = HashMap::new(); // module → [(filename, content)]
-    let mut total_scenarios = 0;
+    let mut by_module: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut total_specs = 0;
+    let mut skipped = 0;
 
     for entry in entries {
         let entry = match entry { Ok(e) => e, Err(_) => continue };
         let path = entry.path();
-        if path.extension().map_or(true, |ext| ext != "dsl") { continue; }
+        if path.extension().map_or(true, |ext| ext != "json") { continue; }
 
-        let filename = path.file_name().unwrap().to_string_lossy().to_string();
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
         let content = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => continue,
         };
 
-        // 从 commit_map 查找模块
-        let module = commit_map.get(&stem)
-            .map(|c| c.module.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+        let spec: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
 
-        // 统计场景数
-        let scenario_count = content.matches("[SCENARIO:").count();
-        total_scenarios += scenario_count;
+        // 跳过非 bugfix（skip: true）
+        if spec.get("skip").and_then(|v| v.as_bool()).unwrap_or(false) {
+            skipped += 1;
+            continue;
+        }
 
-        by_module.entry(module).or_default().push((filename, content));
+        // 取 module：优先用 spec 里的，否则从 inventory 兜底
+        let module = spec.get("module")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                commit_map.get(&stem)
+                    .map(|c| c.module.clone())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+
+        total_specs += 1;
+        by_module.entry(module).or_default().push(spec);
     }
 
-    // 写出按模块合并的 feature 文件
-    let mut module_stats: Vec<(String, usize, usize)> = Vec::new(); // (module, file_count, scenario_count)
+    // 写出按模块合并的 JSON 数组
+    let mut module_stats: Vec<(String, usize)> = Vec::new();
 
-    for (module, files) in &by_module {
-        let mut merged = String::new();
-        merged.push_str(&format!("# Module: {}\n", module));
-        merged.push_str(&format!("# Generated by: bcc bugfix --step organize\n"));
-        merged.push_str(&format!("# Files: {}\n\n", files.len()));
+    for (module, specs) in &by_module {
+        let module_json = serde_json::json!({
+            "module": module,
+            "generated_at": chrono_now(),
+            "spec_count": specs.len(),
+            "specs": specs,
+        });
 
-        let mut scenario_count = 0;
-        let mut seen_scenarios: Vec<(String, Vec<String>)> = Vec::new(); // (function_name, tags)
+        let module_path = format!("{}/{}.json", by_module_dir, module);
+        let pretty = serde_json::to_string_pretty(&module_json).unwrap();
+        fs::write(&module_path, &pretty).ok();
 
-        for (filename, content) in files {
-            merged.push_str(&format!("# --- {} ---\n", filename));
-            merged.push_str(content);
-            if !content.ends_with('\n') {
-                merged.push('\n');
-            }
-            merged.push('\n');
-
-            // 提取场景信息用于重复检测
-            for line in content.lines() {
-                if line.contains("[SCENARIO:") {
-                    scenario_count += 1;
-                    // 提取 TITLE 后的函数名线索
-                    let func_hint = line.split("TITLE:").nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .split_whitespace()
-                        .take(3)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let tags: Vec<String> = line.split("TAGS:")
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect();
-                    seen_scenarios.push((func_hint, tags));
-                }
-            }
-        }
-
-        // 检测疑似重复（标题前3词相同 + tags 相同）
-        let mut dup_warnings = Vec::new();
-        for i in 0..seen_scenarios.len() {
-            for j in (i+1)..seen_scenarios.len() {
-                if seen_scenarios[i].0 == seen_scenarios[j].0
-                    && seen_scenarios[i].1 == seen_scenarios[j].1
-                    && !seen_scenarios[i].0.is_empty()
-                {
-                    dup_warnings.push(format!(
-                        "# WARNING: 疑似重复 — '{}' tags={:?}",
-                        seen_scenarios[i].0, seen_scenarios[i].1
-                    ));
-                }
-            }
-        }
-
-        if !dup_warnings.is_empty() {
-            merged.push_str("\n# === 重复检测 ===\n");
-            for w in &dup_warnings {
-                merged.push_str(w);
-                merged.push('\n');
-            }
-        }
-
-        let feature_path = format!("{}/{}.dsl", features_dir, module);
-        fs::write(&feature_path, &merged).ok();
-
-        module_stats.push((module.clone(), files.len(), scenario_count));
+        module_stats.push((module.clone(), specs.len()));
     }
 
-    // 排序
-    module_stats.sort_by(|a, b| b.2.cmp(&a.2));
+    module_stats.sort_by(|a, b| b.1.cmp(&a.1));
 
     // 生成覆盖率报告
     let report_path = coverage_report
@@ -1039,21 +1018,29 @@ fn organize(output: &str, coverage_report: Option<&str>) {
         .unwrap_or_else(|| format!("{}/coverage.md", output));
 
     let mut report = String::new();
-    report.push_str("# BDD Bugfix 场景覆盖率\n\n");
+    report.push_str("# Bugfix 测试规格书覆盖率\n\n");
     report.push_str(&format!("生成时间：{}\n\n", chrono_now()));
-    report.push_str("| 模块 | commit 数 | 场景数 |\n");
-    report.push_str("|------|----------|--------|\n");
+    report.push_str("| 模块 | 规格书数 |\n");
+    report.push_str("|------|--------|\n");
 
-    for (module, file_count, scenario_count) in &module_stats {
-        report.push_str(&format!("| {} | {} | {} |\n", module, file_count, scenario_count));
+    for (module, count) in &module_stats {
+        report.push_str(&format!("| {} | {} |\n", module, count));
     }
 
-    let total_files: usize = module_stats.iter().map(|s| s.1).sum();
-    report.push_str(&format!("| **合计** | **{}** | **{}** |\n", total_files, total_scenarios));
+    report.push_str(&format!("| **合计** | **{}** |\n", total_specs));
+    if skipped > 0 {
+        report.push_str(&format!("\n跳过非 bugfix：{}\n", skipped));
+    }
+
+    report.push_str(&format!("\n## 下游使用\n\n"));
+    report.push_str("```bash\n");
+    report.push_str("# 将规格书喂给 bddc autochain 生成可执行测试\n");
+    report.push_str(&format!("bddc domain.autowire --specs {}/by_module/<module>.json\n", output));
+    report.push_str("```\n");
 
     fs::write(&report_path, &report).ok();
 
-    eprintln!("[organize] {} modules, {} scenarios → {}", module_stats.len(), total_scenarios, features_dir);
+    eprintln!("[organize] {} modules, {} specs (skipped {} non-bugfix) → {}", module_stats.len(), total_specs, skipped, by_module_dir);
     eprintln!("[organize] coverage report: {}", report_path);
 }
 
@@ -1279,37 +1266,6 @@ class Foo {
         assert!(body.is_empty());
     }
 
-    // ─── extract_dsl_block ─────────────────────────────
-
-    #[test]
-    fn dsl_block_plain_text() {
-        let input = r#"# Source: abc123
-# Bug: 空值未处理
-[SCENARIO: BDD-H-BUGFIX-abc123] TITLE: 测试 TAGS: regression
-GIVEN some_setup
-WHEN some_action
-THEN some_assertion"#;
-        let result = extract_dsl_block(input);
-        assert!(result.contains("[SCENARIO:"));
-        assert!(result.contains("GIVEN"));
-    }
-
-    #[test]
-    fn dsl_block_markdown_wrapped() {
-        let input = "Here is the scenario:\n```dsl\n# Source: abc\n[SCENARIO: BDD-H-001] TITLE: test TAGS: t\nGIVEN x\nWHEN y\nTHEN z\n```\nDone.";
-        let result = extract_dsl_block(input);
-        assert!(result.contains("[SCENARIO:"));
-        assert!(!result.contains("```"));
-        assert!(!result.contains("Done."));
-    }
-
-    #[test]
-    fn dsl_block_empty_returns_original() {
-        let input = "no dsl content here at all";
-        let result = extract_dsl_block(input);
-        assert_eq!(result, input);
-    }
-
     // ─── parse_git_log ─────────────────────────────────
 
     #[test]
@@ -1465,11 +1421,15 @@ THEN some_assertion"#;
         dir
     }
 
-    /// 统计 generate 产出文件数（codex 模式写 scenarios/*.dsl，降级模式写 prompts/*.prompt.txt）
+    /// 统计 generate 产出文件数（codex 模式写 specs/*.json，降级模式写 prompts/*.prompt.txt）
     fn count_generate_output(dir: &std::path::Path) -> usize {
-        let dsl_count = fs::read_dir(dir.join("scenarios"))
+        let spec_count = fs::read_dir(dir.join("specs"))
             .map(|e| e.filter_map(|f| f.ok())
-                .filter(|f| f.path().extension().map_or(false, |ext| ext == "dsl"))
+                .filter(|f| {
+                    let p = f.path();
+                    p.extension().map_or(false, |ext| ext == "json")
+                        && !p.to_string_lossy().ends_with(".raw.txt")
+                })
                 .count())
             .unwrap_or(0);
         let prompt_count = fs::read_dir(dir.join("prompts"))
@@ -1477,7 +1437,7 @@ THEN some_assertion"#;
                 .filter(|f| f.path().to_string_lossy().ends_with(".prompt.txt"))
                 .count())
             .unwrap_or(0);
-        dsl_count + prompt_count
+        spec_count + prompt_count
     }
 
     #[test]
@@ -1504,18 +1464,45 @@ THEN some_assertion"#;
 
     #[test]
     fn generate_skip_existing() {
-        // 准备 3 个 context，预先创建 1 个 .dsl，应跳过已有的
+        // 准备 3 个 context，预先创建 1 个已有 spec，应跳过
         let dir = setup_generate_test(3);
         let output = dir.path().to_str().unwrap();
-        let scenarios = dir.path().join("scenarios");
-        fs::create_dir_all(&scenarios).unwrap();
-        fs::write(scenarios.join("abc000.dsl"), "existing").unwrap();
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).unwrap();
+        fs::write(specs.join("abc000.json"), r#"{"existing": true}"#).unwrap();
 
         generate(output, None, false, None);
 
         let count = count_generate_output(dir.path());
-        // abc000 被 skip（已有 1 个 .dsl），另外 2 个被处理
+        // abc000 被 skip（已有 1 个 .json），另外 2 个被处理
         // 总产出 = 1 (预存) + 2 (新生成) = 3
         assert_eq!(count, 3, "should have 1 existing + 2 newly generated");
+    }
+
+    // ─── extract_json_block ───────────────────────────
+
+    #[test]
+    fn json_block_plain() {
+        let input = r#"{"source_commit": "abc", "bug_summary": "test"}"#;
+        let result = extract_json_block(input);
+        assert!(result.contains("source_commit"));
+    }
+
+    #[test]
+    fn json_block_markdown_wrapped() {
+        let input = "Here is the result:\n```json\n{\"skip\": true, \"reason\": \"feature\"}\n```\nDone.";
+        let result = extract_json_block(input);
+        assert!(result.contains("skip"));
+        assert!(!result.contains("```"));
+        assert!(!result.contains("Done"));
+    }
+
+    #[test]
+    fn json_block_with_surrounding_text() {
+        let input = "Analysis complete. Output:\n{\"module\": \"order\", \"action\": \"create\"}\nEnd of output.";
+        let result = extract_json_block(input);
+        assert!(result.starts_with('{'));
+        assert!(result.ends_with('}'));
+        assert!(result.contains("order"));
     }
 }

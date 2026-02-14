@@ -1,26 +1,42 @@
-你是BDD测试专家。请将以下PHP bugfix记录转为bddc DSL场景。
+你是后端测试分析专家。分析以下 git bugfix 记录，输出结构化的测试规格书 JSON。
 
-## bddc DSL 语法
+## 输出格式（严格 JSON，不要包裹在 markdown 代码块中）
 
-```
-# Source: {hash}
-# Bug: {一句话根因}
-[SCENARIO: BDD-{MODULE}-BUGFIX-{HASH_SHORT}] TITLE: {标题} TAGS: regression {tags}
-GIVEN {前置条件指令} {参数}
-WHEN {触发操作指令} {参数}
-THEN {断言指令} {参数}
-```
+{
+  "source_commit": "完整commit hash",
+  "bug_summary": "一句话描述bug根因",
+  "module": "模块名（从文件路径推导）",
+  "action": "被修改的函数/方法名",
+  "fix_summary": "修复做了什么（一句话）",
+  "test_type": "regression|boundary|null_safety|security|concurrency",
+  "test_spec": {
+    "preconditions": [
+      {"what": "前置条件描述", "involves": "db|redis|session|config|file", "key_params": ["参数名"]}
+    ],
+    "trigger": {
+      "type": "controller_action|service_call|event_handler|cron_job",
+      "target": "类名或模块名",
+      "method": "方法名",
+      "key_params": ["触发时的关键参数"]
+    },
+    "assertions": [
+      {"what": "断言描述", "type": "return_value|db_state|redis_state|event_emitted|exception|http_status", "expected": "期望值"}
+    ]
+  },
+  "wrong_behavior": "修复前的错误行为",
+  "correct_behavior": "修复后的正确行为",
+  "data_dependencies": ["db", "redis", "api", "file"]
+}
 
-## 规则
+## 分析规则
 
-1. diff中被替换的旧代码 = bug的根因，新代码 = 正确行为
-2. GIVEN 描述触发bug的数据条件（使用 $变量名 作为参数）
-3. WHEN 描述用户/系统操作
-4. THEN 描述修复后的期望行为
-5. 每个场景头部加注释：# Source: {hash} 和 # Bug: {一句话根因}
-6. SCENARIO ID 格式：BDD-{模块}-BUGFIX-{commit前6位}
-7. 只输出DSL文本，不要包裹在markdown代码块中
+1. diff 中被替换的旧代码 = bug 根因（wrong_behavior），新代码 = 正确行为（correct_behavior）
+2. preconditions 描述触发 bug 需要的数据/状态条件
+3. trigger 描述用户/系统的操作入口
+4. assertions 描述修复后应通过的检查点
+5. 如果 commit 不是 bugfix（纯 feature/refactor/config），输出: {"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
+6. test_type 根据 bug 类型选择：空值检查→null_safety，安全漏洞→security，并发问题→concurrency，边界条件→boundary，其他→regression
 
-## Bugfix记录
+## Bugfix 记录
 
 {context_json}

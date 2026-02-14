@@ -66,20 +66,20 @@ enum Commands {
         action: TraceAction,
     },
 
-    /// 从 git bugfix 历史中提取 BDD 场景
+    /// 从 git bugfix 历史提取测试规格书
     ///
     /// 四步流水线及产出：
     ///
     ///   collect(c)  扫描 git log → inventory.json（commit 列表、分级、标签）
     ///   context(x)  提取 diff + 函数 before/after → contexts/*.json
-    ///   generate(g) 调用 codex exec 生成 bddc DSL → scenarios/*.dsl
-    ///               需要安装 codex CLI（npm i -g @anthropic/codex）
-    ///               未安装时降级：输出 prompts/*.prompt.txt 供手动处理
-    ///   organize(o) 按模块归类 → features/*.dsl + coverage.md
+    ///   generate(g) 调用 LLM 生成测试规格书 → specs/*.json
+    ///               需要安装 codex CLI（npm i -g @openai/codex）
+    ///               未安装时降级：输出 prompts/*.prompt.txt 供手动喂给 LLM
+    ///   organize(o) 按模块归类 → by_module/*.json + coverage.md
     ///
-    /// 最终产出 features/*.dsl 可直接喂给 bddc：
-    ///   bddc compile features/order.dsl    # DSL → 指令集
-    ///   bddc gen features/order.dsl        # DSL → ExUnit 测试代码
+    /// 最终产出是结构化的测试规格书（JSON），作为 bddc autochain 的输入：
+    ///   bcc bugfix = "这些 bug 要测什么"（知识提取）
+    ///   bddc autochain = "怎么做测试"（指令设计 + DSL + 编译 + 运行）
     #[command(
         name = "bugfix",
         after_help = r#"示例:
@@ -95,18 +95,16 @@ enum Commands {
   ├── inventory.json          # collect: commit 清单（hash/grade/module/tags）
   ├── contexts/               # context: 每个 commit 的 diff + 函数上下文
   │   └── <hash>.json
-  ├── scenarios/              # generate: 每个 commit 生成的 DSL 场景
-  │   └── <hash>.dsl
+  ├── specs/                  # generate: 每个 commit 的测试规格书
+  │   └── <hash>.json
   ├── prompts/                # generate 降级: 未安装 codex 时输出 prompt 文件
   │   └── <hash>.prompt.txt
-  ├── features/               # organize: 按模块归类合并的 DSL
-  │   └── <module>.dsl
+  ├── by_module/              # organize: 按模块归类的规格书数组
+  │   └── <module>.json
   └── coverage.md             # organize: 模块覆盖率报告
 
-下游使用:
-  bddc compile features/order.dsl              # 编译 DSL → 指令集
-  bddc gen features/order.dsl -o test/         # 生成 ExUnit 测试代码
-  bddc check features/ --project /path/to/app  # 运行时覆盖校验"#
+下游使用（bddc autochain 消费规格书）:
+  bddc domain.autowire --specs output/by_module/order.json"#
     )]
     Bugfix {
         /// Git 仓库路径
