@@ -4,6 +4,7 @@ mod spec;
 mod compile;
 mod extract;
 mod trace;
+mod bugfix;
 
 /// BCC — Backend Compiler for YAML-driven Elixir skeleton generation
 #[derive(Parser)]
@@ -64,6 +65,48 @@ enum Commands {
         #[command(subcommand)]
         action: TraceAction,
     },
+
+    /// Mine BDD scenarios from git bugfix history
+    Bugfix {
+        /// Git repo path
+        repo: String,
+
+        /// Output directory
+        #[arg(short, long)]
+        output: String,
+
+        /// Run up to this step: collect(c), context(x), generate(g), organize(o)
+        #[arg(short, long)]
+        step: Option<String>,
+
+        /// Filter by grade, comma-separated
+        #[arg(long, default_value = "A,B")]
+        grade: String,
+
+        /// Scan keywords, comma-separated
+        #[arg(long, default_value = "修复,fix,bug")]
+        keywords: String,
+
+        /// Module mapping JSON file
+        #[arg(long)]
+        module_map: Option<String>,
+
+        /// Custom prompt template for generate step
+        #[arg(long)]
+        prompt_template: Option<String>,
+
+        /// Max commits to process
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Force re-process existing outputs
+        #[arg(long)]
+        force: bool,
+
+        /// Coverage report output path
+        #[arg(long)]
+        coverage_report: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -123,6 +166,20 @@ fn main() {
                 trace::seed(&source_dir, &docs_dir, write, max);
             }
         },
+        Some(Commands::Bugfix {
+            repo, output, step, grade, keywords,
+            module_map, prompt_template, limit, force, coverage_report,
+        }) => {
+            bugfix::run(
+                &repo, &output,
+                step.as_deref(),
+                &grade, &keywords,
+                module_map.as_deref(),
+                prompt_template.as_deref(),
+                limit, force,
+                coverage_report.as_deref(),
+            );
+        }
         None => {
             eprintln!("Usage: bcc <COMMAND>\n\nFor more information, try '--help'.");
             std::process::exit(2);
