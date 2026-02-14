@@ -84,12 +84,12 @@ enum Commands {
     )]
     Bugfix {
         /// Git 仓库路径
-        repo: String,
+        repo: Option<String>,
 
         /// 输出目录（collect 输出 inventory.json，context 输出 contexts/，
         /// generate 输出 scenarios/，organize 输出 features/ + coverage.md）
         #[arg(short, long)]
-        output: String,
+        output: Option<String>,
 
         /// 执行到哪一步停止，不指定则全部执行
         ///   collect(c)  — git log 扫描分级
@@ -194,6 +194,25 @@ fn main() {
             repo, output, step, lang, grade, keywords,
             module_map, prompt_template, limit, force, coverage_report,
         }) => {
+            let repo = match repo {
+                Some(r) if r != "help" => r,
+                _ => {
+                    // 没给 repo 或 repo="help"，打印帮助
+                    eprintln!("从 git bugfix 历史中提取 BDD 场景\n");
+                    eprintln!("用法: bcc bugfix <REPO> -o <OUTPUT> [OPTIONS]\n");
+                    eprintln!("详细帮助: bcc bugfix --help");
+                    std::process::exit(0);
+                }
+            };
+            let output = match output {
+                Some(o) => o,
+                None => {
+                    eprintln!("缺少 --output 参数\n");
+                    eprintln!("用法: bcc bugfix <REPO> -o <OUTPUT> [OPTIONS]\n");
+                    eprintln!("详细帮助: bcc bugfix --help");
+                    std::process::exit(1);
+                }
+            };
             bugfix::run(
                 &repo, &output,
                 step.as_deref(),
