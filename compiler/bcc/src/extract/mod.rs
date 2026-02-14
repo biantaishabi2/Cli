@@ -13,6 +13,8 @@ pub struct FileRecord {
     pub exports: Vec<ExportRecord>,
     pub imports: Vec<ImportRecord>,
     pub calls: Vec<CallRecord>,
+    #[serde(rename = "localCallTargets", default)]
+    pub local_call_targets: Vec<String>,
     pub side_effects: SideEffects,
     /// 源码总行数
     pub loc_lines: usize,

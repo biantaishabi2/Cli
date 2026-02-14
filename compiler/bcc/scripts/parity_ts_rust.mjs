@@ -125,8 +125,10 @@ function main() {
     rustSourceCount += 1;
     const imports = Array.isArray(parsed.imports) ? parsed.imports : [];
     const calls = Array.isArray(parsed.calls) ? parsed.calls : [];
+    const hasLocalCallTargets = Array.isArray(parsed.localCallTargets);
+    const localCallTargets = hasLocalCallTargets ? parsed.localCallTargets : [];
     rustImportEdges += imports.filter((im) => String(im.specifier ?? "").startsWith(".")).length;
-    rustCallEdges += calls.length;
+    rustCallEdges += hasLocalCallTargets ? localCallTargets.length : calls.length;
     if (parsed?.side_effects?.hasAsync) rustAsyncCount += 1;
     if (parsed?.side_effects?.hasHttp) rustHttpCount += 1;
   }
@@ -172,10 +174,10 @@ function main() {
       loc_lines_sum: sum(sample, "locLines"),
     },
     rust_metrics: {
-      source_count: rustSourceCount,
-      import_edges: rustImportEdges,
-      call_edges: rustCallEdges,
-      async_count: rustAsyncCount,
+        source_count: rustSourceCount,
+        import_edges: rustImportEdges,
+        call_edges: rustCallEdges,
+        async_count: rustAsyncCount,
       network_count: rustHttpCount,
       extract_failures: rustFailures,
     },
