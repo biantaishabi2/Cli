@@ -190,6 +190,93 @@ THEN then_seed_contract_should_hold module="{MODULE}"
 }
 
 #[test]
+fn bdd_seed_check_and_fix_cli_work() {
+    let root = temp_dir("bcc_cli_bdd_quality");
+    let source = root.join("source");
+    let output = root.join("output");
+    fs::create_dir_all(&source).expect("create source");
+
+    write(
+        &source.join("account.yaml"),
+        r#"module: ACCOUNT
+contract: create account
+"#,
+    );
+
+    let organize = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "bdd",
+            "seed",
+            "--source",
+            &source.to_string_lossy(),
+            "--output",
+            &output.to_string_lossy(),
+            "--step",
+            "organize",
+            "--force",
+        ])
+        .status()
+        .expect("run organize");
+    assert!(organize.success());
+
+    // Break scenario quality intentionally.
+    write(
+        &output.join("scenarios/account_account.dsl"),
+        "[SCENARIO: BDD-ACCOUNT-SEED-account_account] TITLE: broken TAGS: seed stable\nGIVEN x\n",
+    );
+
+    let check_bad = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "bdd",
+            "seed",
+            "--source",
+            &source.to_string_lossy(),
+            "--output",
+            &output.to_string_lossy(),
+            "--step",
+            "check",
+        ])
+        .status()
+        .expect("run check");
+    assert_eq!(check_bad.code(), Some(1));
+    assert!(output.join("quality-check.json").exists());
+
+    let fix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "bdd",
+            "seed",
+            "--source",
+            &source.to_string_lossy(),
+            "--output",
+            &output.to_string_lossy(),
+            "--step",
+            "fix",
+            "--force",
+        ])
+        .status()
+        .expect("run fix");
+    assert!(fix.success());
+    assert!(output.join("quality-fix.json").exists());
+
+    let check_good = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "bdd",
+            "seed",
+            "--source",
+            &source.to_string_lossy(),
+            "--output",
+            &output.to_string_lossy(),
+            "--step",
+            "check",
+        ])
+        .status()
+        .expect("run check again");
+    assert!(check_good.success());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn arch_matrix_validate_report_cli_smoke() {
     let root = temp_dir("bcc_cli_arch_chain");
     let seed = root.join("seed.yaml");
@@ -290,7 +377,9 @@ relations_expected:
             "arch",
             "report",
             "--scenario-validation",
-            &validate_out.join("scenario-validation.tsv").to_string_lossy(),
+            &validate_out
+                .join("scenario-validation.tsv")
+                .to_string_lossy(),
             "--gate-evaluation",
             &validate_out.join("gate-evaluation.tsv").to_string_lossy(),
             "--summary",

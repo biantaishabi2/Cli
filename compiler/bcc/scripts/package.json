@@ -1,0 +1,9 @@
+{
+  "name": "bcc-scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

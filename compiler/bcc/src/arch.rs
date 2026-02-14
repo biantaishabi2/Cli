@@ -283,10 +283,16 @@ fn glob_to_regex(glob: &str) -> Result<Regex, String> {
     Regex::new(&re_s).map_err(|e| format!("invalid glob '{}': {}", glob, e))
 }
 
-fn map_files_to_modules(seed: &SeedSpec, ast: &AstSnapshot) -> Result<HashMap<String, String>, String> {
+fn map_files_to_modules(
+    seed: &SeedSpec,
+    ast: &AstSnapshot,
+) -> Result<HashMap<String, String>, String> {
     let mut compiled = Vec::new();
     for m in &seed.modules {
-        let rules = m.path_rules.as_ref().ok_or_else(|| format!("module {} missing path_rules", m.module_id))?;
+        let rules = m
+            .path_rules
+            .as_ref()
+            .ok_or_else(|| format!("module {} missing path_rules", m.module_id))?;
         if rules.include.is_empty() {
             return Err(format!("module {} missing path_rules.include", m.module_id));
         }
@@ -338,7 +344,10 @@ fn map_files_to_modules(seed: &SeedSpec, ast: &AstSnapshot) -> Result<HashMap<St
     Ok(out)
 }
 
-fn derive_actual_relations(ast: &AstSnapshot, file_to_module: &HashMap<String, String>) -> Vec<RelationActual> {
+fn derive_actual_relations(
+    ast: &AstSnapshot,
+    file_to_module: &HashMap<String, String>,
+) -> Vec<RelationActual> {
     let mut agg: HashMap<(String, String), RelationActual> = HashMap::new();
 
     for rec in &ast.records {
@@ -393,19 +402,37 @@ fn derive_actual_relations(ast: &AstSnapshot, file_to_module: &HashMap<String, S
     rows
 }
 
-pub fn matrix(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, emit: &str, force: bool) {
+pub fn matrix(
+    seed_file: &str,
+    ast_file: &str,
+    out_dir: &str,
+    version: &str,
+    emit: &str,
+    force: bool,
+) {
     if let Err(e) = matrix_impl(seed_file, ast_file, out_dir, version, emit, force) {
         eprintln!("{}", e);
         std::process::exit(1);
     }
 }
 
-fn matrix_impl(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, emit: &str, force: bool) -> Result<(), String> {
-    let seed_raw = fs::read_to_string(seed_file).map_err(|e| format!("read seed_file failed: {}", e))?;
-    let ast_raw = fs::read_to_string(ast_file).map_err(|e| format!("read ast_file failed: {}", e))?;
+fn matrix_impl(
+    seed_file: &str,
+    ast_file: &str,
+    out_dir: &str,
+    version: &str,
+    emit: &str,
+    force: bool,
+) -> Result<(), String> {
+    let seed_raw =
+        fs::read_to_string(seed_file).map_err(|e| format!("read seed_file failed: {}", e))?;
+    let ast_raw =
+        fs::read_to_string(ast_file).map_err(|e| format!("read ast_file failed: {}", e))?;
 
-    let seed: SeedSpec = serde_yaml::from_str(&seed_raw).map_err(|e| format!("parse seed yaml failed: {}", e))?;
-    let ast: AstSnapshot = serde_json::from_str(&ast_raw).map_err(|e| format!("parse ast json failed: {}", e))?;
+    let seed: SeedSpec =
+        serde_yaml::from_str(&seed_raw).map_err(|e| format!("parse seed yaml failed: {}", e))?;
+    let ast: AstSnapshot =
+        serde_json::from_str(&ast_raw).map_err(|e| format!("parse ast json failed: {}", e))?;
 
     let file_to_module = map_files_to_modules(&seed, &ast)?;
     let actual = derive_actual_relations(&ast, &file_to_module);
@@ -446,10 +473,17 @@ fn matrix_impl(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, em
     }
 
     allow_edges.sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
-    forbid_edges.sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
+    forbid_edges
+        .sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
 
-    let allow_set: HashSet<String> = allow_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
-    let forbid_set: HashSet<String> = forbid_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+    let allow_set: HashSet<String> = allow_edges
+        .iter()
+        .map(|e| edge_key(&e.caller, &e.callee))
+        .collect();
+    let forbid_set: HashSet<String> = forbid_edges
+        .iter()
+        .map(|e| edge_key(&e.caller, &e.callee))
+        .collect();
 
     let mut temporary_allow_edges = Vec::new();
     for key in &actual_keys {
@@ -465,7 +499,8 @@ fn matrix_impl(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, em
             reason: "derived from actual but not in target".to_string(),
         });
     }
-    temporary_allow_edges.sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
+    temporary_allow_edges
+        .sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
 
     let mut blocked_edges = Vec::new();
     for edge in &forbid_edges {
@@ -502,7 +537,11 @@ fn matrix_impl(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, em
     let transition = TransitionContract {
         version: target.version.clone(),
         kind: "transition_contract".to_string(),
-        base: format!("{}/{}.target-matrix.yaml", out_dir.trim_end_matches('/'), version),
+        base: format!(
+            "{}/{}.target-matrix.yaml",
+            out_dir.trim_end_matches('/'),
+            version
+        ),
         intent: "Transition contract between current codebase and target".to_string(),
         notes: vec![
             "temporary_allow_edges are tolerated only during migration".to_string(),
@@ -545,22 +584,43 @@ fn matrix_impl(seed_file: &str, ast_file: &str, out_dir: &str, version: &str, em
 
     match emit {
         "all" => {
-            write_if_allowed(&target_path, &serde_yaml::to_string(&target).map_err(|e| e.to_string())?, force)?;
+            write_if_allowed(
+                &target_path,
+                &serde_yaml::to_string(&target).map_err(|e| e.to_string())?,
+                force,
+            )?;
             write_if_allowed(
                 &transition_path,
                 &serde_yaml::to_string(&transition).map_err(|e| e.to_string())?,
                 force,
             )?;
-            write_if_allowed(&gates_path, &serde_yaml::to_string(&gates).map_err(|e| e.to_string())?, force)?;
+            write_if_allowed(
+                &gates_path,
+                &serde_yaml::to_string(&gates).map_err(|e| e.to_string())?,
+                force,
+            )?;
         }
-        "target" => write_if_allowed(&target_path, &serde_yaml::to_string(&target).map_err(|e| e.to_string())?, force)?,
+        "target" => write_if_allowed(
+            &target_path,
+            &serde_yaml::to_string(&target).map_err(|e| e.to_string())?,
+            force,
+        )?,
         "transition" => write_if_allowed(
             &transition_path,
             &serde_yaml::to_string(&transition).map_err(|e| e.to_string())?,
             force,
         )?,
-        "gates" => write_if_allowed(&gates_path, &serde_yaml::to_string(&gates).map_err(|e| e.to_string())?, force)?,
-        other => return Err(format!("invalid --emit '{}': expected all|target|transition|gates", other)),
+        "gates" => write_if_allowed(
+            &gates_path,
+            &serde_yaml::to_string(&gates).map_err(|e| e.to_string())?,
+            force,
+        )?,
+        other => {
+            return Err(format!(
+                "invalid --emit '{}': expected all|target|transition|gates",
+                other
+            ))
+        }
     }
 
     println!("matrix_written_out_dir={}", out_dir);
@@ -648,7 +708,8 @@ fn compute_structure(actual_rows: &[RelationActual]) -> StructureStat {
     let directed_density_pct = if directed_edges_possible == 0 {
         0.0
     } else {
-        ((directed_edges_actual as f64) / (directed_edges_possible as f64) * 10000.0).round() / 100.0
+        ((directed_edges_actual as f64) / (directed_edges_possible as f64) * 10000.0).round()
+            / 100.0
     };
 
     let total_module_edge_weight = actual_rows.iter().map(|e| e.total_edges).sum();
@@ -686,7 +747,12 @@ fn compute_structure(actual_rows: &[RelationActual]) -> StructureStat {
     }
 }
 
-fn gate_check_rows(profile_name: &str, threshold: &GateThreshold, scenario: &EvalResult, structure: &StructureStat) -> (bool, Vec<GateCheckRow>) {
+fn gate_check_rows(
+    profile_name: &str,
+    threshold: &GateThreshold,
+    scenario: &EvalResult,
+    structure: &StructureStat,
+) -> (bool, Vec<GateCheckRow>) {
     let mut rows = Vec::new();
     rows.push(GateCheckRow {
         profile: profile_name.to_string(),
@@ -789,16 +855,23 @@ fn validate_impl(
     fail_on_gate: bool,
     fail_on_forbidden: bool,
 ) -> Result<i32, String> {
-    let target_raw = fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
-    let transition_raw = fs::read_to_string(transition_path).map_err(|e| format!("read transition failed: {}", e))?;
-    let gates_raw = fs::read_to_string(gates_path).map_err(|e| format!("read gates failed: {}", e))?;
-    let actual_raw = fs::read_to_string(actual_path).map_err(|e| format!("read actual failed: {}", e))?;
+    let target_raw =
+        fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
+    let transition_raw = fs::read_to_string(transition_path)
+        .map_err(|e| format!("read transition failed: {}", e))?;
+    let gates_raw =
+        fs::read_to_string(gates_path).map_err(|e| format!("read gates failed: {}", e))?;
+    let actual_raw =
+        fs::read_to_string(actual_path).map_err(|e| format!("read actual failed: {}", e))?;
 
-    let target: TargetContract = serde_yaml::from_str(&target_raw).map_err(|e| format!("parse target failed: {}", e))?;
-    let transition: TransitionContract =
-        serde_yaml::from_str(&transition_raw).map_err(|e| format!("parse transition failed: {}", e))?;
-    let gates: GateSpec = serde_yaml::from_str(&gates_raw).map_err(|e| format!("parse gates failed: {}", e))?;
-    let actual: Vec<RelationActual> = serde_json::from_str(&actual_raw).map_err(|e| format!("parse actual failed: {}", e))?;
+    let target: TargetContract =
+        serde_yaml::from_str(&target_raw).map_err(|e| format!("parse target failed: {}", e))?;
+    let transition: TransitionContract = serde_yaml::from_str(&transition_raw)
+        .map_err(|e| format!("parse transition failed: {}", e))?;
+    let gates: GateSpec =
+        serde_yaml::from_str(&gates_raw).map_err(|e| format!("parse gates failed: {}", e))?;
+    let actual: Vec<RelationActual> =
+        serde_json::from_str(&actual_raw).map_err(|e| format!("parse actual failed: {}", e))?;
 
     let target_allow: HashSet<String> = target
         .allow_edges
@@ -822,11 +895,21 @@ fn validate_impl(
 
     let structure = compute_structure(&actual);
     let target_eval = evaluate_scenario("v3_target", &target_allow, &target_forbid, &actual);
-    let transition_eval = evaluate_scenario("v3_transition", &transition_allow, &transition_forbid, &actual);
+    let transition_eval = evaluate_scenario(
+        "v3_transition",
+        &transition_allow,
+        &transition_forbid,
+        &actual,
+    );
 
-    let (target_pass, target_rows) = gate_check_rows("target", &gates.profiles.target, &target_eval, &structure);
-    let (transition_pass, transition_rows) =
-        gate_check_rows("transition", &gates.profiles.transition, &transition_eval, &structure);
+    let (target_pass, target_rows) =
+        gate_check_rows("target", &gates.profiles.target, &target_eval, &structure);
+    let (transition_pass, transition_rows) = gate_check_rows(
+        "transition",
+        &gates.profiles.transition,
+        &transition_eval,
+        &structure,
+    );
 
     let out_dir_path = PathBuf::from(out_dir);
     fs::create_dir_all(&out_dir_path).map_err(|e| format!("create out_dir failed: {}", e))?;
@@ -883,10 +966,17 @@ fn validate_impl(
             r.metric.clone(),
             r.actual.clone(),
             r.limit.clone(),
-            if r.pass { "pass".to_string() } else { "fail".to_string() },
+            if r.pass {
+                "pass".to_string()
+            } else {
+                "fail".to_string()
+            },
         ]);
     }
-    let gate_tsv = to_tsv(&["profile", "metric", "actual", "limit", "pass"], &gate_rows);
+    let gate_tsv = to_tsv(
+        &["profile", "metric", "actual", "limit", "pass"],
+        &gate_rows,
+    );
     fs::write(out_dir_path.join("gate-evaluation.tsv"), gate_tsv)
         .map_err(|e| format!("write gate-evaluation.tsv failed: {}", e))?;
 
@@ -894,10 +984,22 @@ fn validate_impl(
     report.push_str("# V3 Validation Report\n\n");
     report.push_str("## Structure Snapshot (actual code)\n");
     report.push_str(&format!("- modules: {}\n", structure.modules_count));
-    report.push_str(&format!("- directed_edges_possible: {}\n", structure.directed_edges_possible));
-    report.push_str(&format!("- directed_edges_actual: {}\n", structure.directed_edges_actual));
-    report.push_str(&format!("- directed_density_pct: {:.2}%\n", structure.directed_density_pct));
-    report.push_str(&format!("- bidirectional_pair_count: {}\n", structure.bidirectional_pair_count));
+    report.push_str(&format!(
+        "- directed_edges_possible: {}\n",
+        structure.directed_edges_possible
+    ));
+    report.push_str(&format!(
+        "- directed_edges_actual: {}\n",
+        structure.directed_edges_actual
+    ));
+    report.push_str(&format!(
+        "- directed_density_pct: {:.2}%\n",
+        structure.directed_density_pct
+    ));
+    report.push_str(&format!(
+        "- bidirectional_pair_count: {}\n",
+        structure.bidirectional_pair_count
+    ));
     report.push('\n');
 
     report.push_str("### Top Bidirectional Pairs\n");
@@ -910,12 +1012,30 @@ fn validate_impl(
         report.push_str(&format!("## {}\n", r.name));
         report.push_str(&format!("- allow_count: {}\n", r.allow_count));
         report.push_str(&format!("- forbid_count: {}\n", r.forbid_count));
-        report.push_str(&format!("- unexpected_edges_count: {}\n", r.unexpected_edges_count));
-        report.push_str(&format!("- unexpected_total_edges: {}\n", r.unexpected_total_edges));
-        report.push_str(&format!("- forbidden_edges_count: {}\n", r.forbidden_edges_count));
-        report.push_str(&format!("- forbidden_total_edges: {}\n", r.forbidden_total_edges));
-        report.push_str(&format!("- missing_edges_count: {}\n", r.missing_edges_count));
-        report.push_str(&format!("- gate_result: {}\n", if pass { "PASS" } else { "FAIL" }));
+        report.push_str(&format!(
+            "- unexpected_edges_count: {}\n",
+            r.unexpected_edges_count
+        ));
+        report.push_str(&format!(
+            "- unexpected_total_edges: {}\n",
+            r.unexpected_total_edges
+        ));
+        report.push_str(&format!(
+            "- forbidden_edges_count: {}\n",
+            r.forbidden_edges_count
+        ));
+        report.push_str(&format!(
+            "- forbidden_total_edges: {}\n",
+            r.forbidden_total_edges
+        ));
+        report.push_str(&format!(
+            "- missing_edges_count: {}\n",
+            r.missing_edges_count
+        ));
+        report.push_str(&format!(
+            "- gate_result: {}\n",
+            if pass { "PASS" } else { "FAIL" }
+        ));
         report.push('\n');
 
         if !r.forbidden_top.is_empty() {
@@ -974,16 +1094,27 @@ fn validate_impl(
     let summary = ValidateSummary {
         generated_at: now_iso(),
         outputs: vec![
-            to_posix(&out_dir_path.join("scenario-validation.tsv").to_string_lossy()),
+            to_posix(
+                &out_dir_path
+                    .join("scenario-validation.tsv")
+                    .to_string_lossy(),
+            ),
             to_posix(&out_dir_path.join("gate-evaluation.tsv").to_string_lossy()),
-            to_posix(&out_dir_path.join("v3-validation-report.md").to_string_lossy()),
+            to_posix(
+                &out_dir_path
+                    .join("v3-validation-report.md")
+                    .to_string_lossy(),
+            ),
         ],
         scenarios,
     };
 
     fs::write(
         out_dir_path.join("summary.json"),
-        format!("{}\n", serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?
+        ),
     )
     .map_err(|e| format!("write summary.json failed: {}", e))?;
 
@@ -992,7 +1123,10 @@ fn validate_impl(
     let enforce_transition = profile == "transition" || profile == "both";
 
     if profile != "target" && profile != "transition" && profile != "both" {
-        return Err(format!("invalid --profile '{}': expected target|transition|both", profile));
+        return Err(format!(
+            "invalid --profile '{}': expected target|transition|both",
+            profile
+        ));
     }
 
     if fail_on_forbidden {
@@ -1042,11 +1176,16 @@ fn export_module_map_impl(
     mapping_mode: &str,
     include_module_names: bool,
 ) -> Result<(), String> {
-    let raw = fs::read_to_string(module_map_path).map_err(|e| format!("read module_map failed: {}", e))?;
-    let tmm: TraceModuleMap = serde_json::from_str(&raw).map_err(|e| format!("parse module_map failed: {}", e))?;
+    let raw = fs::read_to_string(module_map_path)
+        .map_err(|e| format!("read module_map failed: {}", e))?;
+    let tmm: TraceModuleMap =
+        serde_json::from_str(&raw).map_err(|e| format!("parse module_map failed: {}", e))?;
 
     if mapping_mode != "file" && mapping_mode != "dir" {
-        return Err(format!("invalid --mapping-mode '{}': expected file|dir", mapping_mode));
+        return Err(format!(
+            "invalid --mapping-mode '{}': expected file|dir",
+            mapping_mode
+        ));
     }
 
     let mut mapping: BTreeMap<String, String> = BTreeMap::new();
@@ -1068,13 +1207,17 @@ fn export_module_map_impl(
     let mut module_names = BTreeMap::new();
     if include_module_names {
         if let Some(reg_path) = module_registry_path {
-            let reg_raw = fs::read_to_string(reg_path).map_err(|e| format!("read module_registry failed: {}", e))?;
+            let reg_raw = fs::read_to_string(reg_path)
+                .map_err(|e| format!("read module_registry failed: {}", e))?;
             // 支持 json 或 yaml
-            let registry: ModuleRegistry = if reg_path.ends_with(".yaml") || reg_path.ends_with(".yml") {
-                serde_yaml::from_str(&reg_raw).map_err(|e| format!("parse module_registry yaml failed: {}", e))?
-            } else {
-                serde_json::from_str(&reg_raw).map_err(|e| format!("parse module_registry json failed: {}", e))?
-            };
+            let registry: ModuleRegistry =
+                if reg_path.ends_with(".yaml") || reg_path.ends_with(".yml") {
+                    serde_yaml::from_str(&reg_raw)
+                        .map_err(|e| format!("parse module_registry yaml failed: {}", e))?
+                } else {
+                    serde_json::from_str(&reg_raw)
+                        .map_err(|e| format!("parse module_registry json failed: {}", e))?
+                };
             for m in registry.modules {
                 module_names.insert(m.module_id.clone(), m.display_name.unwrap_or(m.module_id));
             }
@@ -1086,12 +1229,18 @@ fn export_module_map_impl(
         }
     }
 
-    let out = BugfixModuleMap { mapping, module_names };
+    let out = BugfixModuleMap {
+        mapping,
+        module_names,
+    };
     let out_abs = Path::new(out_path);
     ensure_parent(out_abs)?;
     fs::write(
         out_abs,
-        format!("{}\n", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
+        ),
     )
     .map_err(|e| format!("write out failed: {}", e))?;
 
@@ -1107,7 +1256,14 @@ pub fn report(
     top: usize,
     format: &str,
 ) {
-    if let Err(e) = report_impl(scenario_validation, gate_evaluation, summary, out, top, format) {
+    if let Err(e) = report_impl(
+        scenario_validation,
+        gate_evaluation,
+        summary,
+        out,
+        top,
+        format,
+    ) {
         eprintln!("{}", e);
         std::process::exit(1);
     }
@@ -1143,11 +1299,13 @@ fn report_impl(
         .map_err(|e| format!("read scenario-validation failed: {}", e))?;
     let gate_raw = fs::read_to_string(gate_evaluation)
         .map_err(|e| format!("read gate-evaluation failed: {}", e))?;
-    let summary_raw = fs::read_to_string(summary).map_err(|e| format!("read summary failed: {}", e))?;
+    let summary_raw =
+        fs::read_to_string(summary).map_err(|e| format!("read summary failed: {}", e))?;
 
     let scenario_rows = parse_tsv(&scenario_raw);
     let gate_rows = parse_tsv(&gate_raw);
-    let summary_v: Value = serde_json::from_str(&summary_raw).map_err(|e| format!("parse summary failed: {}", e))?;
+    let summary_v: Value =
+        serde_json::from_str(&summary_raw).map_err(|e| format!("parse summary failed: {}", e))?;
 
     if format != "md" && format != "json" {
         return Err(format!("invalid --format '{}': expected md|json", format));
@@ -1164,8 +1322,14 @@ fn report_impl(
             "gate_rows": gate_rows,
             "top": top,
         });
-        fs::write(out_path, format!("{}\n", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?))
-            .map_err(|e| format!("write report json failed: {}", e))?;
+        fs::write(
+            out_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?
+            ),
+        )
+        .map_err(|e| format!("write report json failed: {}", e))?;
     } else {
         let mut md = String::new();
         md.push_str("# Architecture Debt Report\n\n");
@@ -1173,14 +1337,20 @@ fn report_impl(
         md.push_str(&format!("- source_summary: `{}`\n\n", summary));
 
         md.push_str("## Scenario Validation\n\n");
-        md.push_str("| name | unexpected_edges_count | forbidden_edges_count | missing_edges_count |\n");
+        md.push_str(
+            "| name | unexpected_edges_count | forbidden_edges_count | missing_edges_count |\n",
+        );
         md.push_str("|---|---:|---:|---:|\n");
         for row in scenario_rows.iter().take(top) {
             md.push_str(&format!(
                 "| {} | {} | {} | {} |\n",
                 row.get("name").cloned().unwrap_or_default(),
-                row.get("unexpected_edges_count").cloned().unwrap_or_default(),
-                row.get("forbidden_edges_count").cloned().unwrap_or_default(),
+                row.get("unexpected_edges_count")
+                    .cloned()
+                    .unwrap_or_default(),
+                row.get("forbidden_edges_count")
+                    .cloned()
+                    .unwrap_or_default(),
                 row.get("missing_edges_count").cloned().unwrap_or_default()
             ));
         }
@@ -1336,7 +1506,9 @@ relations_expected:
 
         let code = validate_impl(
             &matrix_out.join("v3.target-matrix.yaml").to_string_lossy(),
-            &matrix_out.join("v3.transition-matrix.yaml").to_string_lossy(),
+            &matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
             &matrix_out.join("v3.gates.yaml").to_string_lossy(),
             &actual.to_string_lossy(),
             &validate_out.to_string_lossy(),
@@ -1353,7 +1525,9 @@ relations_expected:
         assert!(validate_out.join("v3-validation-report.md").exists());
 
         report_impl(
-            &validate_out.join("scenario-validation.tsv").to_string_lossy(),
+            &validate_out
+                .join("scenario-validation.tsv")
+                .to_string_lossy(),
             &validate_out.join("gate-evaluation.tsv").to_string_lossy(),
             &validate_out.join("summary.json").to_string_lossy(),
             &report_out.to_string_lossy(),

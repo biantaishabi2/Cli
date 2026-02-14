@@ -119,9 +119,28 @@ bcc bdd seed \
 # 只跑到 context / generate
 bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s context
 bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s generate
+
+# 质量门禁与修复
+bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s check
+bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s fix
 ```
 
 `--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
+`-s check` 会产出 `quality-check.json`，有不合格场景时返回非零；`-s fix` 会尝试修复并产出 `quality-fix.json`。
+
+### TS/Rust Parity（脚本）
+
+```bash
+# 1) 安装脚本依赖（一次）
+npm --prefix compiler/bcc/scripts install
+
+# 2) 对某个 TypeScript 项目做 TS ↔ Rust 指标对比
+node compiler/bcc/scripts/parity_ts_rust.mjs \
+  --project-root /path/to/ts-project \
+  --bcc-bin ./target/release/bcc \
+  --out /path/to/ts-project/docs/backend-trace/artifacts/ts-rust-parity.json \
+  --strict
+```
 
 ## 支持语言
 

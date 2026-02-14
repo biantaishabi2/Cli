@@ -1,12 +1,12 @@
 use clap::{ArgAction, Parser, Subcommand};
 
-mod spec;
-mod compile;
-mod extract;
-mod trace;
-mod bugfix;
 mod arch;
 mod bdd_seed;
+mod bugfix;
+mod compile;
+mod extract;
+mod spec;
+mod trace;
 
 /// BCC — Backend Compiler for YAML-driven Elixir skeleton generation
 #[derive(Parser)]
@@ -220,7 +220,10 @@ enum ArchAction {
         gates: String,
         #[arg(long)]
         actual: String,
-        #[arg(long, default_value = "docs/backend-trace/artifacts/trace2contract/versions/v3-draft")]
+        #[arg(
+            long,
+            default_value = "docs/backend-trace/artifacts/trace2contract/versions/v3-draft"
+        )]
         out_dir: String,
         #[arg(long, default_value = "both")]
         profile: String,
@@ -236,7 +239,10 @@ enum ArchAction {
         module_map: String,
         #[arg(long)]
         module_registry: Option<String>,
-        #[arg(long, default_value = "docs/backend-trace/artifacts/module_map.bugfix.json")]
+        #[arg(
+            long,
+            default_value = "docs/backend-trace/artifacts/module_map.bugfix.json"
+        )]
         out: String,
         #[arg(long, default_value = "file")]
         mapping_mode: String,
@@ -269,7 +275,12 @@ enum BddAction {
         source: String,
         #[arg(short, long)]
         output: String,
-        #[arg(short, long, default_value = "organize")]
+        #[arg(
+            short,
+            long,
+            default_value = "organize",
+            help = "context|generate|organize|check|fix"
+        )]
         step: String,
         #[arg(long)]
         module: Option<String>,
@@ -290,26 +301,65 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Compile { path, dry_run, emit_ast, passes, output, force, verbose }) => {
-            compile::run(&path, dry_run, emit_ast, &passes, output.as_deref(), force, verbose);
+        Some(Commands::Compile {
+            path,
+            dry_run,
+            emit_ast,
+            passes,
+            output,
+            force,
+            verbose,
+        }) => {
+            compile::run(
+                &path,
+                dry_run,
+                emit_ast,
+                &passes,
+                output.as_deref(),
+                force,
+                verbose,
+            );
         }
         Some(Commands::Extract { path, mode, output }) => {
             extract::run(&path, &mode, output.as_deref());
         }
         Some(Commands::Trace { action }) => match action {
-            TraceAction::Status { source_dir, docs_dir } => {
+            TraceAction::Status {
+                source_dir,
+                docs_dir,
+            } => {
                 trace::status(&source_dir, &docs_dir);
             }
-            TraceAction::Report { source_dir, docs_dir, output } => {
+            TraceAction::Report {
+                source_dir,
+                docs_dir,
+                output,
+            } => {
                 trace::report(&source_dir, &docs_dir, &output);
             }
-            TraceAction::Seed { source_dir, docs_dir, write, max } => {
+            TraceAction::Seed {
+                source_dir,
+                docs_dir,
+                write,
+                max,
+            } => {
                 trace::seed(&source_dir, &docs_dir, write, max);
             }
         },
         Some(Commands::Bugfix {
-            repo, output, step, lang, branch, path, grade, keywords,
-            module_map, prompt_template, limit, force, coverage_report,
+            repo,
+            output,
+            step,
+            lang,
+            branch,
+            path,
+            grade,
+            keywords,
+            module_map,
+            prompt_template,
+            limit,
+            force,
+            coverage_report,
         }) => {
             let repo = match repo {
                 Some(r) if r != "help" => r,
@@ -331,31 +381,59 @@ fn main() {
                 }
             };
             bugfix::run(
-                &repo, &output,
+                &repo,
+                &output,
                 step.as_deref(),
                 &lang,
                 branch.as_deref(),
                 path.as_deref(),
-                &grade, &keywords,
+                &grade,
+                &keywords,
                 module_map.as_deref(),
                 prompt_template.as_deref(),
-                limit, force,
+                limit,
+                force,
                 coverage_report.as_deref(),
             );
         }
         Some(Commands::Arch { action }) => match action {
-            ArchAction::Matrix { seed_file, ast_file, out_dir, version, emit, force } => {
+            ArchAction::Matrix {
+                seed_file,
+                ast_file,
+                out_dir,
+                version,
+                emit,
+                force,
+            } => {
                 arch::matrix(&seed_file, &ast_file, &out_dir, &version, &emit, force);
             }
             ArchAction::Validate {
-                target, transition, gates, actual, out_dir, profile, fail_on_gate, fail_on_forbidden
+                target,
+                transition,
+                gates,
+                actual,
+                out_dir,
+                profile,
+                fail_on_gate,
+                fail_on_forbidden,
             } => {
                 arch::validate(
-                    &target, &transition, &gates, &actual, &out_dir, &profile, fail_on_gate, fail_on_forbidden
+                    &target,
+                    &transition,
+                    &gates,
+                    &actual,
+                    &out_dir,
+                    &profile,
+                    fail_on_gate,
+                    fail_on_forbidden,
                 );
             }
             ArchAction::ExportModuleMap {
-                module_map, module_registry, out, mapping_mode, include_module_names
+                module_map,
+                module_registry,
+                out,
+                mapping_mode,
+                include_module_names,
             } => {
                 arch::export_module_map(
                     &module_map,
@@ -365,17 +443,44 @@ fn main() {
                     include_module_names,
                 );
             }
-            ArchAction::Report { scenario_validation, gate_evaluation, summary, out, top, format } => {
-                arch::report(&scenario_validation, &gate_evaluation, &summary, &out, top, &format);
+            ArchAction::Report {
+                scenario_validation,
+                gate_evaluation,
+                summary,
+                out,
+                top,
+                format,
+            } => {
+                arch::report(
+                    &scenario_validation,
+                    &gate_evaluation,
+                    &summary,
+                    &out,
+                    top,
+                    &format,
+                );
             }
         },
         Some(Commands::Bdd { action }) => match action {
             BddAction::Seed {
-                source, output, step, module, edge_class, limit, prompt_template, coverage_report, force
+                source,
+                output,
+                step,
+                module,
+                edge_class,
+                limit,
+                prompt_template,
+                coverage_report,
+                force,
             } => {
                 let step_norm = step.to_ascii_lowercase();
-                if !["context", "generate", "organize"].contains(&step_norm.as_str()) {
-                    eprintln!("invalid --step '{}': expected context|generate|organize", step);
+                if !["context", "generate", "organize", "check", "fix"]
+                    .contains(&step_norm.as_str())
+                {
+                    eprintln!(
+                        "invalid --step '{}': expected context|generate|organize|check|fix",
+                        step
+                    );
                     std::process::exit(1);
                 }
                 bdd_seed::run(

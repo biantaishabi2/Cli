@@ -15,7 +15,13 @@ struct SeedContext {
 
 fn sanitize_id(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string()
@@ -25,7 +31,8 @@ fn read_source_entries(source: &Path) -> Result<Vec<PathBuf>, String> {
     let mut out = Vec::new();
     let mut stack = vec![source.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let rd = fs::read_dir(&dir).map_err(|e| format!("read_dir {} failed: {}", dir.display(), e))?;
+        let rd =
+            fs::read_dir(&dir).map_err(|e| format!("read_dir {} failed: {}", dir.display(), e))?;
         for ent in rd {
             let ent = ent.map_err(|e| format!("read_dir entry failed: {}", e))?;
             let p = ent.path();
@@ -33,7 +40,9 @@ fn read_source_entries(source: &Path) -> Result<Vec<PathBuf>, String> {
                 stack.push(p);
                 continue;
             }
-            let Some(ext) = p.extension().and_then(|x| x.to_str()) else { continue; };
+            let Some(ext) = p.extension().and_then(|x| x.to_str()) else {
+                continue;
+            };
             if ["yaml", "yml", "json"].contains(&ext) {
                 out.push(p);
             }
@@ -87,17 +96,37 @@ fn write_text(path: &Path, content: &str, force: bool) -> Result<(), String> {
 
 fn load_existing_contexts(context_dir: &Path) -> HashMap<String, SeedContext> {
     let mut map = HashMap::new();
-    let Ok(rd) = fs::read_dir(context_dir) else { return map; };
+    let Ok(rd) = fs::read_dir(context_dir) else {
+        return map;
+    };
     for ent in rd.flatten() {
         let p = ent.path();
         if p.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
-        let Ok(raw) = fs::read_to_string(&p) else { continue; };
-        let Ok(ctx) = serde_json::from_str::<SeedContext>(&raw) else { continue; };
+        let Ok(raw) = fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(ctx) = serde_json::from_str::<SeedContext>(&raw) else {
+            continue;
+        };
         map.insert(ctx.id.clone(), ctx);
     }
     map
+}
+
+#[derive(Debug, Serialize)]
+struct QualityIssue {
+    id: String,
+    file: String,
+    reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct QualityReport {
+    total_files: usize,
+    invalid_files: usize,
+    invalid: Vec<QualityIssue>,
 }
 
 fn run_context(
@@ -146,10 +175,7 @@ fn run_context(
             .unwrap_or(&file)
             .to_string_lossy()
             .to_string();
-        let stem = file
-            .file_stem()
-            .and_then(|x| x.to_str())
-            .unwrap_or("seed");
+        let stem = file.file_stem().and_then(|x| x.to_str()).unwrap_or("seed");
         let id = sanitize_id(&format!("{}_{}", module, stem));
 
         let summary = raw.lines().take(8).collect::<Vec<_>>().join("\\n");
@@ -196,15 +222,137 @@ fn run_generate(output: &str, prompt_template: Option<&str>, force: bool) -> Res
     };
 
     for ctx in contexts.values() {
-        let dsl = template
-            .replace("{ID}", &ctx.id)
-            .replace("{MODULE}", &ctx.module.to_ascii_uppercase())
-            .replace("{EDGE_CLASS}", &ctx.edge_class)
-            .replace("{TITLE}", &format!("{} contract seed scenario", ctx.module));
+        let dsl = render_scenario_template(&template, ctx);
         let out_file = scenarios_dir.join(format!("{}.dsl", ctx.id));
         write_text(&out_file, &dsl, force)?;
     }
 
+    Ok(())
+}
+
+fn render_scenario_template(template: &str, ctx: &SeedContext) -> String {
+    template
+        .replace("{ID}", &ctx.id)
+        .replace("{MODULE}", &ctx.module.to_ascii_uppercase())
+        .replace("{EDGE_CLASS}", &ctx.edge_class)
+        .replace("{TITLE}", &format!("{} contract seed scenario", ctx.module))
+}
+
+fn scenario_quality_reasons(raw: &str) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !raw.contains("[SCENARIO:") {
+        reasons.push("missing [SCENARIO:] header".to_string());
+    }
+    if !raw.lines().any(|l| l.starts_with("GIVEN ")) {
+        reasons.push("missing GIVEN step".to_string());
+    }
+    if !raw.lines().any(|l| l.starts_with("WHEN ")) {
+        reasons.push("missing WHEN step".to_string());
+    }
+    if !raw.lines().any(|l| l.starts_with("THEN ")) {
+        reasons.push("missing THEN step".to_string());
+    }
+    reasons
+}
+
+fn run_check(output: &str) -> Result<QualityReport, String> {
+    let out_dir = Path::new(output);
+    let scenarios_dir = out_dir.join("scenarios");
+    let rd = fs::read_dir(&scenarios_dir).map_err(|e| {
+        format!(
+            "read scenarios dir {} failed: {}",
+            scenarios_dir.display(),
+            e
+        )
+    })?;
+
+    let mut total_files = 0usize;
+    let mut invalid: Vec<QualityIssue> = Vec::new();
+
+    for ent in rd {
+        let ent = ent.map_err(|e| format!("scenario entry read failed: {}", e))?;
+        let p = ent.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("dsl") {
+            continue;
+        }
+        total_files += 1;
+        let raw = fs::read_to_string(&p)
+            .map_err(|e| format!("read scenario {} failed: {}", p.display(), e))?;
+        let reasons = scenario_quality_reasons(&raw);
+        if !reasons.is_empty() {
+            invalid.push(QualityIssue {
+                id: p
+                    .file_stem()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("")
+                    .to_string(),
+                file: p.to_string_lossy().to_string(),
+                reasons,
+            });
+        }
+    }
+
+    let report = QualityReport {
+        total_files,
+        invalid_files: invalid.len(),
+        invalid,
+    };
+
+    let report_path = out_dir.join("quality-check.json");
+    write_text(
+        &report_path,
+        &(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())? + "\n"),
+        true,
+    )?;
+    Ok(report)
+}
+
+fn run_fix(output: &str, prompt_template: Option<&str>, force: bool) -> Result<(), String> {
+    let out_dir = Path::new(output);
+    let contexts = load_existing_contexts(&out_dir.join("contexts"));
+    if contexts.is_empty() {
+        return Err("no contexts found; run context step first".to_string());
+    }
+
+    let template = if let Some(path) = prompt_template {
+        fs::read_to_string(path).unwrap_or_else(|_| {
+            "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+        })
+    } else {
+        "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+    };
+
+    let first_check = run_check(output)?;
+    let mut fixed = 0usize;
+    for issue in &first_check.invalid {
+        let Some(ctx) = contexts.get(&issue.id) else {
+            continue;
+        };
+        let dsl = render_scenario_template(&template, ctx);
+        let out_file = out_dir.join("scenarios").join(format!("{}.dsl", issue.id));
+        write_text(&out_file, &dsl, force)?;
+        fixed += 1;
+    }
+
+    run_organize(output, None, true)?;
+    let second_check = run_check(output)?;
+
+    let fix_summary = serde_json::json!({
+        "fixed_files": fixed,
+        "remaining_invalid_files": second_check.invalid_files,
+    });
+    write_text(
+        &out_dir.join("quality-fix.json"),
+        &(serde_json::to_string_pretty(&fix_summary).map_err(|e| e.to_string())? + "\n"),
+        true,
+    )?;
+
+    if second_check.invalid_files > 0 {
+        return Err(format!(
+            "quality fix incomplete: remaining_invalid_files={}",
+            second_check.invalid_files
+        ));
+    }
     Ok(())
 }
 
@@ -216,8 +364,13 @@ fn run_organize(output: &str, coverage_report: Option<&str>, force: bool) -> Res
 
     let contexts = load_existing_contexts(&out_dir.join("contexts"));
 
-    let rd = fs::read_dir(&scenarios_dir)
-        .map_err(|e| format!("read scenarios dir {} failed: {}", scenarios_dir.display(), e))?;
+    let rd = fs::read_dir(&scenarios_dir).map_err(|e| {
+        format!(
+            "read scenarios dir {} failed: {}",
+            scenarios_dir.display(),
+            e
+        )
+    })?;
 
     let mut by_module: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for ent in rd {
@@ -226,8 +379,13 @@ fn run_organize(output: &str, coverage_report: Option<&str>, force: bool) -> Res
         if p.extension().and_then(|x| x.to_str()) != Some("dsl") {
             continue;
         }
-        let stem = p.file_stem().and_then(|x| x.to_str()).unwrap_or("").to_string();
-        let raw = fs::read_to_string(&p).map_err(|e| format!("read scenario {} failed: {}", p.display(), e))?;
+        let stem = p
+            .file_stem()
+            .and_then(|x| x.to_str())
+            .unwrap_or("")
+            .to_string();
+        let raw = fs::read_to_string(&p)
+            .map_err(|e| format!("read scenario {} failed: {}", p.display(), e))?;
 
         let module = contexts
             .get(&stem)
@@ -238,7 +396,12 @@ fn run_organize(output: &str, coverage_report: Option<&str>, force: bool) -> Res
     }
 
     let mut total_scenarios = 0usize;
-    let mut lines = vec!["# BDD Seed Coverage".to_string(), "".to_string(), "| 模块 | 场景文件数 | 场景条数 |".to_string(), "|---|---:|---:|".to_string()];
+    let mut lines = vec![
+        "# BDD Seed Coverage".to_string(),
+        "".to_string(),
+        "| 模块 | 场景文件数 | 场景条数 |".to_string(),
+        "|---|---:|---:|".to_string(),
+    ];
 
     for (module, items) in &by_module {
         let mut merged = String::new();
@@ -255,13 +418,22 @@ fn run_organize(output: &str, coverage_report: Option<&str>, force: bool) -> Res
         }
 
         total_scenarios += scenario_count;
-        lines.push(format!("| {} | {} | {} |", module, items.len(), scenario_count));
+        lines.push(format!(
+            "| {} | {} | {} |",
+            module,
+            items.len(),
+            scenario_count
+        ));
 
         let out_file = features_dir.join(format!("{}.dsl", module));
         write_text(&out_file, &merged, force)?;
     }
 
-    lines.push(format!("| **合计** | **{}** | **{}** |", by_module.values().map(|v| v.len()).sum::<usize>(), total_scenarios));
+    lines.push(format!(
+        "| **合计** | **{}** | **{}** |",
+        by_module.values().map(|v| v.len()).sum::<usize>(),
+        total_scenarios
+    ));
     let report_path = coverage_report
         .map(PathBuf::from)
         .unwrap_or_else(|| out_dir.join("coverage.md"));
@@ -281,19 +453,40 @@ pub fn run(
     coverage_report: Option<&str>,
     force: bool,
 ) {
-    let result = (|| {
-        let _ = run_context(source, output, module_filter, edge_class, limit, force)?;
-        if step == "context" {
-            return Ok(());
+    let result = (|| match step {
+        "context" => {
+            let _ = run_context(source, output, module_filter, edge_class, limit, force)?;
+            Ok(())
         }
-
-        run_generate(output, prompt_template, force)?;
-        if step == "generate" {
-            return Ok(());
+        "generate" => {
+            let _ = run_context(source, output, module_filter, edge_class, limit, force)?;
+            run_generate(output, prompt_template, force)?;
+            Ok(())
         }
-
-        run_organize(output, coverage_report, force)?;
-        Ok::<(), String>(())
+        "organize" => {
+            let _ = run_context(source, output, module_filter, edge_class, limit, force)?;
+            run_generate(output, prompt_template, force)?;
+            run_organize(output, coverage_report, force)?;
+            Ok(())
+        }
+        "check" => {
+            let report = run_check(output)?;
+            if report.invalid_files > 0 {
+                return Err(format!(
+                    "quality check failed: invalid_files={}",
+                    report.invalid_files
+                ));
+            }
+            Ok(())
+        }
+        "fix" => {
+            run_fix(output, prompt_template, true)?;
+            Ok(())
+        }
+        other => Err(format!(
+            "invalid --step '{}': expected context|generate|organize|check|fix",
+            other
+        )),
     })();
 
     if let Err(e) = result {
@@ -378,7 +571,8 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         assert!(output.join("features/BILLING.dsl").exists());
         assert!(output.join("coverage.md").exists());
 
-        let feature = fs::read_to_string(output.join("features/ACCOUNT.dsl")).expect("read feature");
+        let feature =
+            fs::read_to_string(output.join("features/ACCOUNT.dsl")).expect("read feature");
         assert!(feature.contains("[SCENARIO: BDD-ACCOUNT-SEED-account_account]"));
         let coverage = fs::read_to_string(output.join("coverage.md")).expect("read coverage");
         assert!(coverage.contains("| ACCOUNT |"));
@@ -433,6 +627,48 @@ contract: billing contract
 
         let err = run_generate(&output.to_string_lossy(), None, true).expect_err("should fail");
         assert!(err.contains("no contexts found"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_check_and_fix_work() {
+        let root = temp_dir("bcc_bdd_check_fix");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("account.yaml"),
+            r#"module: ACCOUNT
+contract: create account
+"#,
+        );
+
+        let _ = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "stable",
+            None,
+            true,
+        )
+        .expect("context");
+        run_generate(&output.to_string_lossy(), None, true).expect("generate");
+
+        // Break scenario intentionally.
+        write(
+            &output.join("scenarios/account_account.dsl"),
+            "[SCENARIO: BDD-ACCOUNT-SEED-account_account] TITLE: broken TAGS: seed stable\nGIVEN x\n",
+        );
+
+        let bad = run_check(&output.to_string_lossy()).expect("check");
+        assert_eq!(bad.invalid_files, 1);
+
+        run_fix(&output.to_string_lossy(), None, true).expect("fix");
+        let good = run_check(&output.to_string_lossy()).expect("check after fix");
+        assert_eq!(good.invalid_files, 0);
+        assert!(output.join("quality-fix.json").exists());
 
         let _ = fs::remove_dir_all(&root);
     }
