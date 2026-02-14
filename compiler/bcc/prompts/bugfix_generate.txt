@@ -1,26 +1,45 @@
-你是BDD测试专家。请将以下PHP bugfix记录转为bddc DSL场景。
+你是后端测试分析专家。分析 git bugfix 记录，输出测试规格书 JSON。
 
-## bddc DSL 语法
+## 完整示例
 
-```
-# Source: {hash}
-# Bug: {一句话根因}
-[SCENARIO: BDD-{MODULE}-BUGFIX-{HASH_SHORT}] TITLE: {标题} TAGS: regression {tags}
-GIVEN {前置条件指令} {参数}
-WHEN {触发操作指令} {参数}
-THEN {断言指令} {参数}
-```
+输入是一个"$config_id 从 999 改为 1001"的 bugfix，正确输出如下：
 
-## 规则
+{"source_commit":"abc123","bug_summary":"配置ID错误导致查询命中错误数据","module":"activity","action":"showAction","fix_summary":"将 $config_id 从 999 修正为 1001","test_type":"regression","boundary":"http","test_spec":{"preconditions":[{"what":"用户已登录","involves":"session"},{"what":"数据库存在 config_id=1001 的记录","involves":"db"}],"trigger":{"type":"controller_action","target":"ActivityController","method":"showAction"},"args":{"config_id":{"type":"int","required":true,"allowed":null},"user_id":{"type":"uuid","required":true,"allowed":null}},"outputs":{"result_count":"int","title":"string"},"assertions":[{"what":"查询使用 config_id=1001","type":"db_state","expected":"config_id=1001"}]},"wrong_behavior":"使用 config_id=999 查询","correct_behavior":"使用 config_id=1001 查询","data_dependencies":["db"]}
 
-1. diff中被替换的旧代码 = bug的根因，新代码 = 正确行为
-2. GIVEN 描述触发bug的数据条件（使用 $变量名 作为参数）
-3. WHEN 描述用户/系统操作
-4. THEN 描述修复后的期望行为
-5. 每个场景头部加注释：# Source: {hash} 和 # Bug: {一句话根因}
-6. SCENARIO ID 格式：BDD-{模块}-BUGFIX-{commit前6位}
-7. 只输出DSL文本，不要包裹在markdown代码块中
+注意示例中的关键结构：
+- 顶层有 boundary 字段
+- test_spec 中有 args（每个参数有 type/required/allowed）和 outputs
+- preconditions 只有 what 和 involves 两个字段
+- trigger 只有 type、target、method 三个字段
 
-## Bugfix记录
+## 字段规格
+
+必填顶层字段：source_commit, bug_summary, module, action, fix_summary, test_type, boundary, test_spec, wrong_behavior, correct_behavior, data_dependencies
+
+test_spec 必填子字段：preconditions, trigger, args, outputs, assertions
+
+args 格式：{"参数名": {"type": "string|int|uuid|bool|decimal|datetime|date|array|json", "required": true|false, "allowed": null|[...]}}
+outputs 格式：{"变量名": "类型"}
+preconditions 格式：[{"what": "描述", "involves": "db|redis|session|config|file"}]
+trigger 格式：{"type": "controller_action|...", "target": "类名", "method": "方法名"}
+
+boundary 取值：controller_action→http, service_call→service, event_handler→event, cron_job→cron
+
+如果不是 bugfix：{"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
+
+## 参数提取
+
+从 PHP 代码推导 args：$request->get()、$request->getPost()、函数参数
+type：用于 DB 查询→uuid，算术→int，日期→datetime/date，json_decode→json，其他→string
+required：有 if(!$param) throw→true，有默认值/??→false
+allowed：switch/case 或 in_array→列举，无约束→null
+
+从 PHP 代码推导 outputs：_jsonformat() 数据结构、$this->view->setVar()、return 值
+
+## Bugfix 记录
 
 {context_json}
+
+## 提醒
+
+输出纯 JSON（不要 markdown 包裹）。必须包含 boundary、args、outputs。preconditions 和 trigger 中不要加 key_params 或任何多余字段。参照上面的示例格式。

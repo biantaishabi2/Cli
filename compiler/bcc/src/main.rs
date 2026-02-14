@@ -68,13 +68,20 @@ enum Commands {
         action: TraceAction,
     },
 
-    /// 从 git bugfix 历史中提取 BDD 场景
+    /// 从 git bugfix 历史提取测试规格书
     ///
-    /// 四步流水线：collect → context → generate → organize
-    ///   collect(c)  扫描 git log，按变更行数分级(A/B/C)，自动打标签
-    ///   context(x)  提取每个 commit 的 diff 和修改函数的 before/after 代码
-    ///   generate(g) 调用 codex exec 将上下文转为 bddc DSL 场景
-    ///   organize(o) 按模块归类，标记疑似重复，生成覆盖率报告
+    /// 四步流水线及产出：
+    ///
+    ///   collect(c)  扫描 git log → inventory.json（commit 列表、分级、标签）
+    ///   context(x)  提取 diff + 函数 before/after → contexts/*.json
+    ///   generate(g) 调用 LLM 生成测试规格书 → specs/*.json
+    ///               需要安装 codex CLI（npm i -g @openai/codex）
+    ///               未安装时降级：输出 prompts/*.prompt.txt 供手动喂给 LLM
+    ///   organize(o) 按模块归类 → by_module/*.json + coverage.md
+    ///
+    /// 最终产出是结构化的测试规格书（JSON），作为 bddc autochain 的输入：
+    ///   bcc bugfix = "这些 bug 要测什么"（知识提取）
+    ///   bddc autochain = "怎么做测试"（指令设计 + DSL + 编译 + 运行）
     #[command(
         name = "bugfix",
         after_help = r#"示例:
@@ -83,22 +90,38 @@ enum Commands {
   bcc bugfix /path/to/repo -o output/ --path app/controllers/  # 按文件路径扫描
   bcc bugfix /path/to/repo -o output/ -s c               # 只扫描，输出 inventory.json
   bcc bugfix /path/to/repo -o output/ -s g --limit 20    # 前 20 个 commit 跑到生成
-  bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix"#
+  bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix
+
+产出目录结构:
+  output/
+  ├── inventory.json          # collect: commit 清单（hash/grade/module/tags）
+  ├── contexts/               # context: 每个 commit 的 diff + 函数上下文
+  │   └── <hash>.json
+  ├── specs/                  # generate: 每个 commit 的测试规格书
+  │   └── <hash>.json
+  ├── prompts/                # generate 降级: 未安装 codex 时输出 prompt 文件
+  │   └── <hash>.prompt.txt
+  ├── by_module/              # organize: 按模块归类的规格书数组
+  │   └── <module>.json
+  └── coverage.md             # organize: 模块覆盖率报告
+
+下游使用（bddc autochain 消费规格书）:
+  bddc domain.autowire --specs output/by_module/order.json"#
     )]
     Bugfix {
         /// Git 仓库路径
         repo: Option<String>,
 
-        /// 输出目录（collect 输出 inventory.json，context 输出 contexts/，
-        /// generate 输出 scenarios/，organize 输出 features/ + coverage.md）
+        /// 输出目录（collect → inventory.json，context → contexts/，
+        /// generate → specs/，organize → by_module/ + coverage.md）
         #[arg(short, long)]
         output: Option<String>,
 
         /// 执行到哪一步停止，不指定则全部执行
         ///   collect(c)  — git log 扫描分级
         ///   context(x)  — diff + 函数上下文
-        ///   generate(g) — codex exec 生成 DSL
-        ///   organize(o) — 归类 + 覆盖率报告
+        ///   generate(g) — LLM 生成测试规格书 JSON
+        ///   organize(o) — 按模块归类 + 覆盖率报告
         #[arg(short, long, value_name = "STEP")]
         step: Option<String>,
 
@@ -365,7 +388,7 @@ fn main() {
                 Some(r) if r != "help" => r,
                 _ => {
                     // 没给 repo 或 repo="help"，打印帮助
-                    eprintln!("从 git bugfix 历史中提取 BDD 场景\n");
+                    eprintln!("从 git bugfix 历史提取测试规格书\n");
                     eprintln!("用法: bcc bugfix <REPO> -o <OUTPUT> [OPTIONS]\n");
                     eprintln!("详细帮助: bcc bugfix --help");
                     std::process::exit(0);

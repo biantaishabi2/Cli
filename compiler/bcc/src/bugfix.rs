@@ -113,7 +113,7 @@ pub fn run(
     if target == Step::Context { return; }
 
     // generate
-    generate(output, prompt_template, force);
+    generate(output, prompt_template, force, limit);
     if target == Step::Generate { return; }
 
     // organize
@@ -656,10 +656,10 @@ fn parse_diff_hunks(
 
 // ─── generate ──────────────────────────────────────────
 
-fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
+fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Option<usize>) {
     let contexts_dir = format!("{}/contexts", output);
-    let scenarios_dir = format!("{}/scenarios", output);
-    fs::create_dir_all(&scenarios_dir).ok();
+    let specs_dir = format!("{}/specs", output);
+    fs::create_dir_all(&specs_dir).ok();
 
     // 加载 prompt 模板
     let template = load_prompt_template(prompt_template);
@@ -700,11 +700,19 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
         }
 
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let out_path = format!("{}/{}.dsl", scenarios_dir, stem);
+        let out_path = format!("{}/{}.json", specs_dir, stem);
 
         if !force && std::path::Path::new(&out_path).exists() {
             skipped += 1;
             continue;
+        }
+
+        // limit 检查（只计数实际处理的，不计 skip 的）
+        if let Some(max) = limit {
+            if processed + failed >= max {
+                eprintln!("[generate] reached limit: {}", max);
+                break;
+            }
         }
 
         // 读取 context JSON
@@ -721,38 +729,60 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
         let prompt = template.replace("{context_json}", &context_str);
 
         if codex_available {
-            // 调用 codex exec
-            let tmp_out = format!("{}/{}.tmp", scenarios_dir, stem);
+            // 通过 stdin 传入 prompt（避免大 JSON 超 ARG_MAX）
+            let tmp_out = format!("{}/{}.tmp", specs_dir, stem);
+
             let result = Command::new("codex")
                 .args([
                     "exec",
                     "--full-auto",
                     "--ephemeral",
                     "-o", &tmp_out,
-                    &prompt,
                 ])
-                .output();
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        stdin.write_all(prompt.as_bytes()).ok();
+                    }
+                    child.wait_with_output()
+                });
 
             match result {
                 Ok(o) if o.status.success() => {
-                    // 读取 codex 输出
+                    // 读取 codex 输出，提取 JSON
                     let content = fs::read_to_string(&tmp_out).unwrap_or_default();
-                    if content.is_empty() {
-                        // codex 可能直接输出到 stdout
-                        let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-                        if !stdout.trim().is_empty() {
-                            fs::write(&out_path, extract_dsl_block(&stdout)).ok();
-                        } else {
-                            eprintln!("[generate] empty output for {}", stem);
-                            failed += 1;
-                            continue;
-                        }
+                    let raw = if content.is_empty() {
+                        String::from_utf8_lossy(&o.stdout).to_string()
                     } else {
-                        fs::write(&out_path, extract_dsl_block(&content)).ok();
+                        content
+                    };
+
+                    let json_str = extract_json_block(&raw);
+                    if json_str.trim().is_empty() {
+                        eprintln!("[generate] empty output for {}", stem);
+                        failed += 1;
+                    } else {
+                        // 校验 JSON 格式
+                        match serde_json::from_str::<serde_json::Value>(&json_str) {
+                            Ok(val) => {
+                                let pretty = serde_json::to_string_pretty(&val).unwrap();
+                                fs::write(&out_path, &pretty).ok();
+                                processed += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("[generate] invalid JSON for {}: {}", stem, e);
+                                // 保存原始输出供调试
+                                let raw_path = format!("{}/{}.raw.txt", specs_dir, stem);
+                                fs::write(&raw_path, &json_str).ok();
+                                failed += 1;
+                            }
+                        }
                     }
-                    // 清理临时文件
                     fs::remove_file(&tmp_out).ok();
-                    processed += 1;
                 }
                 Ok(o) => {
                     let stderr = String::from_utf8_lossy(&o.stderr);
@@ -776,9 +806,9 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool) {
     }
 
     if codex_available {
-        eprintln!("[generate] processed: {}, skipped: {}, failed: {}", processed, skipped, failed);
+        eprintln!("[generate] specs: {}, skipped: {}, failed: {}", processed, skipped, failed);
     } else {
-        eprintln!("[generate] prompts written: {}, skipped: {} (use codex manually)", processed, skipped);
+        eprintln!("[generate] prompts written: {}, skipped: {} (feed to LLM manually)", processed, skipped);
     }
 }
 
@@ -806,204 +836,187 @@ fn load_prompt_template(custom_path: Option<&str>) -> String {
     DEFAULT_PROMPT_TEMPLATE.to_string()
 }
 
-const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是BDD测试专家。请将以下PHP bugfix记录转为bddc DSL场景。
+const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是后端测试分析专家。分析 git bugfix 记录，输出测试规格书 JSON。
 
-## bddc DSL 语法
+## 完整示例
 
-```
-# Source: {hash}
-# Bug: {一句话根因}
-[SCENARIO: BDD-{MODULE}-BUGFIX-{HASH_SHORT}] TITLE: {标题} TAGS: regression {tags}
-GIVEN {前置条件指令} {参数}
-WHEN {触发操作指令} {参数}
-THEN {断言指令} {参数}
-```
+输入是一个"$config_id 从 999 改为 1001"的 bugfix，正确输出如下：
 
-## 规则
+{"source_commit":"abc123","bug_summary":"配置ID错误导致查询命中错误数据","module":"activity","action":"showAction","fix_summary":"将 $config_id 从 999 修正为 1001","test_type":"regression","boundary":"http","test_spec":{"preconditions":[{"what":"用户已登录","involves":"session"},{"what":"数据库存在 config_id=1001 的记录","involves":"db"}],"trigger":{"type":"controller_action","target":"ActivityController","method":"showAction"},"args":{"config_id":{"type":"int","required":true,"allowed":null},"user_id":{"type":"uuid","required":true,"allowed":null}},"outputs":{"result_count":"int","title":"string"},"assertions":[{"what":"查询使用 config_id=1001","type":"db_state","expected":"config_id=1001"}]},"wrong_behavior":"使用 config_id=999 查询","correct_behavior":"使用 config_id=1001 查询","data_dependencies":["db"]}
 
-1. diff中被替换的旧代码 = bug的根因，新代码 = 正确行为
-2. GIVEN 描述触发bug的数据条件（使用 $变量名 作为参数）
-3. WHEN 描述用户/系统操作
-4. THEN 描述修复后的期望行为
-5. 每个场景头部加注释：# Source: {hash} 和 # Bug: {一句话根因}
-6. SCENARIO ID 格式：BDD-{模块}-BUGFIX-{commit前6位}
-7. 只输出DSL文本，不要包裹在markdown代码块中
+注意示例中的关键结构：
+- 顶层有 boundary 字段
+- test_spec 中有 args（每个参数有 type/required/allowed）和 outputs
+- preconditions 只有 what 和 involves 两个字段
+- trigger 只有 type、target、method 三个字段
 
-## Bugfix记录
+## 字段规格
 
-{context_json}"#;
+必填顶层字段：source_commit, bug_summary, module, action, fix_summary, test_type, boundary, test_spec, wrong_behavior, correct_behavior, data_dependencies
 
-/// 从 codex 输出中提取 DSL 块（去掉 markdown 代码块包裹）
-fn extract_dsl_block(text: &str) -> String {
-    let mut lines = Vec::new();
-    let mut in_code_block = false;
+test_spec 必填子字段：preconditions, trigger, args, outputs, assertions
 
+args 格式：{"参数名": {"type": "string|int|uuid|bool|decimal|datetime|date|array|json", "required": true|false, "allowed": null|[...]}}
+outputs 格式：{"变量名": "类型"}
+preconditions 格式：[{"what": "描述", "involves": "db|redis|session|config|file"}]
+trigger 格式：{"type": "controller_action|...", "target": "类名", "method": "方法名"}
+
+boundary 取值：controller_action→http, service_call→service, event_handler→event, cron_job→cron
+
+如果不是 bugfix：{"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
+
+## 参数提取
+
+从 PHP 代码推导 args：$request->get()、$request->getPost()、函数参数
+type：用于 DB 查询→uuid，算术→int，日期→datetime/date，json_decode→json，其他→string
+required：有 if(!$param) throw→true，有默认值/??→false
+allowed：switch/case 或 in_array→列举，无约束→null
+
+从 PHP 代码推导 outputs：_jsonformat() 数据结构、$this->view->setVar()、return 值
+
+## Bugfix 记录
+
+{context_json}
+
+## 提醒
+
+输出纯 JSON（不要 markdown 包裹）。必须包含 boundary、args、outputs。preconditions 和 trigger 中不要加 key_params 或任何多余字段。参照上面的示例格式。"#;
+
+/// 从 LLM 输出中提取 JSON（去掉 markdown 包裹和非 JSON 文本）
+fn extract_json_block(text: &str) -> String {
+    let trimmed = text.trim();
+
+    // 如果整体就是合法 JSON，直接返回
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        return trimmed.to_string();
+    }
+
+    // 尝试从 markdown 代码块中提取
+    let mut code_block = String::new();
+    let mut in_block = false;
     for line in text.lines() {
         if line.trim().starts_with("```") {
-            if in_code_block {
-                in_code_block = false;
-                continue;
+            if in_block {
+                break; // 结束第一个代码块
             }
-            in_code_block = true;
+            in_block = true;
             continue;
         }
+        if in_block {
+            code_block.push_str(line);
+            code_block.push('\n');
+        }
+    }
+    if !code_block.trim().is_empty() {
+        return code_block.trim().to_string();
+    }
 
-        // DSL 特征行：注释/场景声明/步骤关键字
-        let is_dsl_line = line.contains("[SCENARIO:")
-            || line.starts_with("# Source:") || line.starts_with("# Bug:")
-            || line.starts_with("# WARNING:")
-            || line.starts_with("GIVEN ") || line.starts_with("WHEN ") || line.starts_with("THEN ");
-
-        if in_code_block || is_dsl_line {
-            lines.push(line);
+    // 最后尝试：找第一个 { 到最后一个 } 之间的内容
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start < end {
+            return trimmed[start..=end].to_string();
         }
     }
 
-    if lines.is_empty() {
-        text.to_string()
-    } else {
-        lines.join("\n")
-    }
+    trimmed.to_string()
 }
 
 // ─── organize ──────────────────────────────────────────
 
 fn organize(output: &str, coverage_report: Option<&str>) {
-    let scenarios_dir = format!("{}/scenarios", output);
-    let features_dir = format!("{}/features", output);
+    let specs_dir = format!("{}/specs", output);
+    let by_module_dir = format!("{}/by_module", output);
     let inventory_path = format!("{}/inventory.json", output);
-    fs::create_dir_all(&features_dir).ok();
+    fs::create_dir_all(&by_module_dir).ok();
 
-    // 读取 inventory 用于模块信息
+    // 读取 inventory 用于模块信息兜底
     let inventory: Option<Inventory> = fs::read_to_string(&inventory_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
-    // 构建 hash → commit 查找表
     let mut commit_map: HashMap<String, &BugfixCommit> = HashMap::new();
     if let Some(ref inv) = inventory {
         for c in &inv.commits {
             commit_map.insert(c.hash.clone(), c);
-            // 也用短 hash 建索引
             if c.hash.len() >= 6 {
                 commit_map.insert(c.hash[..6].to_string(), c);
             }
         }
     }
 
-    // 扫描所有 .dsl 文件
-    let entries = match fs::read_dir(&scenarios_dir) {
+    // 扫描 specs/*.json
+    let entries = match fs::read_dir(&specs_dir) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("[organize] cannot read {}: {}", scenarios_dir, e);
+            eprintln!("[organize] cannot read {}: {}", specs_dir, e);
             std::process::exit(1);
         }
     };
 
     // 按模块分组
-    let mut by_module: HashMap<String, Vec<(String, String)>> = HashMap::new(); // module → [(filename, content)]
-    let mut total_scenarios = 0;
+    let mut by_module: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut total_specs = 0;
+    let mut skipped = 0;
 
     for entry in entries {
         let entry = match entry { Ok(e) => e, Err(_) => continue };
         let path = entry.path();
-        if path.extension().map_or(true, |ext| ext != "dsl") { continue; }
+        if path.extension().map_or(true, |ext| ext != "json") { continue; }
 
-        let filename = path.file_name().unwrap().to_string_lossy().to_string();
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
         let content = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => continue,
         };
 
-        // 从 commit_map 查找模块
-        let module = commit_map.get(&stem)
-            .map(|c| c.module.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+        let spec: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
 
-        // 统计场景数
-        let scenario_count = content.matches("[SCENARIO:").count();
-        total_scenarios += scenario_count;
+        // 跳过非 bugfix（skip: true）
+        if spec.get("skip").and_then(|v| v.as_bool()).unwrap_or(false) {
+            skipped += 1;
+            continue;
+        }
 
-        by_module.entry(module).or_default().push((filename, content));
+        // 取 module：优先用 spec 里的，否则从 inventory 兜底
+        let module = spec.get("module")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                commit_map.get(&stem)
+                    .map(|c| c.module.clone())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+
+        total_specs += 1;
+        by_module.entry(module).or_default().push(spec);
     }
 
-    // 写出按模块合并的 feature 文件
-    let mut module_stats: Vec<(String, usize, usize)> = Vec::new(); // (module, file_count, scenario_count)
+    // 写出按模块合并的 JSON 数组
+    let mut module_stats: Vec<(String, usize)> = Vec::new();
 
-    for (module, files) in &by_module {
-        let mut merged = String::new();
-        merged.push_str(&format!("# Module: {}\n", module));
-        merged.push_str(&format!("# Generated by: bcc bugfix --step organize\n"));
-        merged.push_str(&format!("# Files: {}\n\n", files.len()));
+    for (module, specs) in &by_module {
+        let module_json = serde_json::json!({
+            "module": module,
+            "generated_at": chrono_now(),
+            "spec_count": specs.len(),
+            "specs": specs,
+        });
 
-        let mut scenario_count = 0;
-        let mut seen_scenarios: Vec<(String, Vec<String>)> = Vec::new(); // (function_name, tags)
+        // module 名可能含 /（如 sysadmin/property），替换为 _ 作为文件名
+        let safe_name = module.replace('/', "_");
+        let module_path = format!("{}/{}.json", by_module_dir, safe_name);
+        let pretty = serde_json::to_string_pretty(&module_json).unwrap();
+        fs::write(&module_path, &pretty).ok();
 
-        for (filename, content) in files {
-            merged.push_str(&format!("# --- {} ---\n", filename));
-            merged.push_str(content);
-            if !content.ends_with('\n') {
-                merged.push('\n');
-            }
-            merged.push('\n');
-
-            // 提取场景信息用于重复检测
-            for line in content.lines() {
-                if line.contains("[SCENARIO:") {
-                    scenario_count += 1;
-                    // 提取 TITLE 后的函数名线索
-                    let func_hint = line.split("TITLE:").nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .split_whitespace()
-                        .take(3)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let tags: Vec<String> = line.split("TAGS:")
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect();
-                    seen_scenarios.push((func_hint, tags));
-                }
-            }
-        }
-
-        // 检测疑似重复（标题前3词相同 + tags 相同）
-        let mut dup_warnings = Vec::new();
-        for i in 0..seen_scenarios.len() {
-            for j in (i+1)..seen_scenarios.len() {
-                if seen_scenarios[i].0 == seen_scenarios[j].0
-                    && seen_scenarios[i].1 == seen_scenarios[j].1
-                    && !seen_scenarios[i].0.is_empty()
-                {
-                    dup_warnings.push(format!(
-                        "# WARNING: 疑似重复 — '{}' tags={:?}",
-                        seen_scenarios[i].0, seen_scenarios[i].1
-                    ));
-                }
-            }
-        }
-
-        if !dup_warnings.is_empty() {
-            merged.push_str("\n# === 重复检测 ===\n");
-            for w in &dup_warnings {
-                merged.push_str(w);
-                merged.push('\n');
-            }
-        }
-
-        let feature_path = format!("{}/{}.dsl", features_dir, module);
-        fs::write(&feature_path, &merged).ok();
-
-        module_stats.push((module.clone(), files.len(), scenario_count));
+        module_stats.push((module.clone(), specs.len()));
     }
 
-    // 排序
-    module_stats.sort_by(|a, b| b.2.cmp(&a.2));
+    module_stats.sort_by(|a, b| b.1.cmp(&a.1));
 
     // 生成覆盖率报告
     let report_path = coverage_report
@@ -1011,21 +1024,29 @@ fn organize(output: &str, coverage_report: Option<&str>) {
         .unwrap_or_else(|| format!("{}/coverage.md", output));
 
     let mut report = String::new();
-    report.push_str("# BDD Bugfix 场景覆盖率\n\n");
+    report.push_str("# Bugfix 测试规格书覆盖率\n\n");
     report.push_str(&format!("生成时间：{}\n\n", chrono_now()));
-    report.push_str("| 模块 | commit 数 | 场景数 |\n");
-    report.push_str("|------|----------|--------|\n");
+    report.push_str("| 模块 | 规格书数 |\n");
+    report.push_str("|------|--------|\n");
 
-    for (module, file_count, scenario_count) in &module_stats {
-        report.push_str(&format!("| {} | {} | {} |\n", module, file_count, scenario_count));
+    for (module, count) in &module_stats {
+        report.push_str(&format!("| {} | {} |\n", module, count));
     }
 
-    let total_files: usize = module_stats.iter().map(|s| s.1).sum();
-    report.push_str(&format!("| **合计** | **{}** | **{}** |\n", total_files, total_scenarios));
+    report.push_str(&format!("| **合计** | **{}** |\n", total_specs));
+    if skipped > 0 {
+        report.push_str(&format!("\n跳过非 bugfix：{}\n", skipped));
+    }
+
+    report.push_str(&format!("\n## 下游使用\n\n"));
+    report.push_str("```bash\n");
+    report.push_str("# 将规格书喂给 bddc autochain 生成可执行测试\n");
+    report.push_str(&format!("bddc domain.autowire --specs {}/by_module/<module>.json\n", output));
+    report.push_str("```\n");
 
     fs::write(&report_path, &report).ok();
 
-    eprintln!("[organize] {} modules, {} scenarios → {}", module_stats.len(), total_scenarios, features_dir);
+    eprintln!("[organize] {} modules, {} specs (skipped {} non-bugfix) → {}", module_stats.len(), total_specs, skipped, by_module_dir);
     eprintln!("[organize] coverage report: {}", report_path);
 }
 
@@ -1251,37 +1272,6 @@ class Foo {
         assert!(body.is_empty());
     }
 
-    // ─── extract_dsl_block ─────────────────────────────
-
-    #[test]
-    fn dsl_block_plain_text() {
-        let input = r#"# Source: abc123
-# Bug: 空值未处理
-[SCENARIO: BDD-H-BUGFIX-abc123] TITLE: 测试 TAGS: regression
-GIVEN some_setup
-WHEN some_action
-THEN some_assertion"#;
-        let result = extract_dsl_block(input);
-        assert!(result.contains("[SCENARIO:"));
-        assert!(result.contains("GIVEN"));
-    }
-
-    #[test]
-    fn dsl_block_markdown_wrapped() {
-        let input = "Here is the scenario:\n```dsl\n# Source: abc\n[SCENARIO: BDD-H-001] TITLE: test TAGS: t\nGIVEN x\nWHEN y\nTHEN z\n```\nDone.";
-        let result = extract_dsl_block(input);
-        assert!(result.contains("[SCENARIO:"));
-        assert!(!result.contains("```"));
-        assert!(!result.contains("Done."));
-    }
-
-    #[test]
-    fn dsl_block_empty_returns_original() {
-        let input = "no dsl content here at all";
-        let result = extract_dsl_block(input);
-        assert_eq!(result, input);
-    }
-
     // ─── parse_git_log ─────────────────────────────────
 
     #[test]
@@ -1411,5 +1401,676 @@ THEN some_assertion"#;
     fn resolve_module_without_map() {
         // 无 module_map 时走 module_from_filename
         assert_eq!(resolve_module("app/controllers/OrderController.php", &None), "order");
+    }
+
+    // ─── generate (集成测试) ─────────────────────────
+
+    /// 创建临时 contexts/ 目录并写入 N 个假 context JSON
+    fn setup_generate_test(n: usize) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let contexts = dir.path().join("contexts");
+        fs::create_dir_all(&contexts).unwrap();
+        for i in 0..n {
+            let json = serde_json::json!({
+                "hash": format!("abc{:03}", i),
+                "message": format!("fix bug {}", i),
+                "grade": "A",
+                "module": "test",
+                "tags": ["regression"],
+                "diffs": [],
+            });
+            fs::write(
+                contexts.join(format!("abc{:03}.json", i)),
+                serde_json::to_string(&json).unwrap(),
+            ).unwrap();
+        }
+        dir
+    }
+
+    /// 统计 generate 产出文件数（codex 模式写 specs/*.json，降级模式写 prompts/*.prompt.txt）
+    fn count_generate_output(dir: &std::path::Path) -> usize {
+        let spec_count = fs::read_dir(dir.join("specs"))
+            .map(|e| e.filter_map(|f| f.ok())
+                .filter(|f| {
+                    let p = f.path();
+                    p.extension().map_or(false, |ext| ext == "json")
+                        && !p.to_string_lossy().ends_with(".raw.txt")
+                })
+                .count())
+            .unwrap_or(0);
+        let prompt_count = fs::read_dir(dir.join("prompts"))
+            .map(|e| e.filter_map(|f| f.ok())
+                .filter(|f| f.path().to_string_lossy().ends_with(".prompt.txt"))
+                .count())
+            .unwrap_or(0);
+        spec_count + prompt_count
+    }
+
+    #[test]
+    fn generate_limit_respected() {
+        // 准备 5 个 context，limit=2，应只处理 2 个
+        let dir = setup_generate_test(5);
+        let output = dir.path().to_str().unwrap();
+        generate(output, None, false, Some(2));
+
+        let count = count_generate_output(dir.path());
+        assert_eq!(count, 2, "should only process 2 out of 5");
+    }
+
+    #[test]
+    fn generate_no_limit_processes_all() {
+        // 准备 3 个 context，无 limit，应全部处理
+        let dir = setup_generate_test(3);
+        let output = dir.path().to_str().unwrap();
+        generate(output, None, false, None);
+
+        let count = count_generate_output(dir.path());
+        assert_eq!(count, 3, "should process all 3");
+    }
+
+    #[test]
+    fn generate_skip_existing() {
+        // 准备 3 个 context，预先创建 1 个已有 spec，应跳过
+        let dir = setup_generate_test(3);
+        let output = dir.path().to_str().unwrap();
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).unwrap();
+        fs::write(specs.join("abc000.json"), r#"{"existing": true}"#).unwrap();
+
+        generate(output, None, false, None);
+
+        let count = count_generate_output(dir.path());
+        // abc000 被 skip（已有 1 个 .json），另外 2 个被处理
+        // 总产出 = 1 (预存) + 2 (新生成) = 3
+        assert_eq!(count, 3, "should have 1 existing + 2 newly generated");
+    }
+
+    // ─── extract_json_block ───────────────────────────
+
+    #[test]
+    fn json_block_plain() {
+        let input = r#"{"source_commit": "abc", "bug_summary": "test"}"#;
+        let result = extract_json_block(input);
+        assert!(result.contains("source_commit"));
+    }
+
+    #[test]
+    fn json_block_markdown_wrapped() {
+        let input = "Here is the result:\n```json\n{\"skip\": true, \"reason\": \"feature\"}\n```\nDone.";
+        let result = extract_json_block(input);
+        assert!(result.contains("skip"));
+        assert!(!result.contains("```"));
+        assert!(!result.contains("Done"));
+    }
+
+    #[test]
+    fn json_block_with_surrounding_text() {
+        let input = "Analysis complete. Output:\n{\"module\": \"order\", \"action\": \"create\"}\nEnd of output.";
+        let result = extract_json_block(input);
+        assert!(result.starts_with('{'));
+        assert!(result.ends_with('}'));
+        assert!(result.contains("order"));
+    }
+
+    // ─── organize (集成测试) ──────────────────────────
+
+    /// 构造 specs/ 目录写入假 spec JSON，返回 tempdir
+    fn setup_organize_test(specs: &[(&str, serde_json::Value)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let specs_dir = dir.path().join("specs");
+        fs::create_dir_all(&specs_dir).unwrap();
+        for (name, json) in specs {
+            fs::write(
+                specs_dir.join(format!("{}.json", name)),
+                serde_json::to_string(json).unwrap(),
+            ).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn organize_groups_by_module() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+            ("bbb222", serde_json::json!({
+                "source_commit": "bbb222", "module": "order",
+                "bug_summary": "重复", "test_type": "regression"
+            })),
+            ("ccc333", serde_json::json!({
+                "source_commit": "ccc333", "module": "payment",
+                "bug_summary": "金额", "test_type": "boundary"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        // by_module/ 应有 2 个文件
+        let by_module = dir.path().join("by_module");
+        assert!(by_module.join("order.json").exists(), "order.json should exist");
+        assert!(by_module.join("payment.json").exists(), "payment.json should exist");
+
+        // order 模块应有 2 个 spec
+        let order: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("order.json")).unwrap()
+        ).unwrap();
+        assert_eq!(order["spec_count"], 2);
+        assert_eq!(order["specs"].as_array().unwrap().len(), 2);
+
+        // payment 模块应有 1 个 spec
+        let payment: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("payment.json")).unwrap()
+        ).unwrap();
+        assert_eq!(payment["spec_count"], 1);
+
+        // coverage.md 应存在且包含模块统计
+        let coverage = fs::read_to_string(dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("order"));
+        assert!(coverage.contains("payment"));
+        assert!(coverage.contains("**3**")); // 合计 3 个 spec
+    }
+
+    #[test]
+    fn organize_skips_non_bugfix() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+            ("bbb222", serde_json::json!({
+                "skip": true, "reason": "feature", "summary": "新增功能"
+            })),
+            ("ccc333", serde_json::json!({
+                "skip": true, "reason": "refactor", "summary": "重构"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        // 只有 order 模块 1 个 spec
+        let by_module = dir.path().join("by_module");
+        assert!(by_module.join("order.json").exists());
+        let order: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("order.json")).unwrap()
+        ).unwrap();
+        assert_eq!(order["spec_count"], 1);
+
+        // coverage 应显示跳过数
+        let coverage = fs::read_to_string(dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("跳过非 bugfix：2"));
+    }
+
+    #[test]
+    fn organize_module_with_slash_in_name() {
+        // module 含 /（如 sysadmin/property）应替换为 _ 作为文件名
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "sysadmin/property",
+                "bug_summary": "权限bug", "test_type": "regression"
+            })),
+            ("bbb222", serde_json::json!({
+                "source_commit": "bbb222", "module": "outterajax/oaactive",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        let by_module = dir.path().join("by_module");
+        // / 被替换为 _
+        assert!(by_module.join("sysadmin_property.json").exists(),
+            "sysadmin/property should become sysadmin_property.json");
+        assert!(by_module.join("outterajax_oaactive.json").exists(),
+            "outterajax/oaactive should become outterajax_oaactive.json");
+
+        // 不应创建子目录
+        assert!(!by_module.join("sysadmin").exists(),
+            "should not create sysadmin/ subdirectory");
+    }
+
+    #[test]
+    fn organize_custom_coverage_report_path() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "test", "test_type": "regression"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        let custom_path = dir.path().join("custom_report.md");
+        organize(output, Some(custom_path.to_str().unwrap()));
+
+        assert!(custom_path.exists(), "custom coverage report should exist");
+        assert!(!dir.path().join("coverage.md").exists(),
+            "default coverage.md should not be created");
+    }
+
+    // ─── extract_file_diff ──────────────────────────────
+
+    #[test]
+    fn extract_file_diff_single_file() {
+        let diff = "\
+diff --git a/app/controllers/OrderController.php b/app/controllers/OrderController.php
+index abc..def 100644
+--- a/app/controllers/OrderController.php
++++ b/app/controllers/OrderController.php
+@@ -10,3 +10,4 @@
+ context line
+-old line
++new line
++added line
+";
+        let result = extract_file_diff(diff, "OrderController.php");
+        assert!(result.contains("diff --git"));
+        assert!(result.contains("+new line"));
+        assert!(result.contains("+added line"));
+    }
+
+    #[test]
+    fn extract_file_diff_from_multi_file_diff() {
+        let diff = "\
+diff --git a/foo.php b/foo.php
+--- a/foo.php
++++ b/foo.php
+@@ -1,2 +1,2 @@
+-old foo
++new foo
+diff --git a/bar.php b/bar.php
+--- a/bar.php
++++ b/bar.php
+@@ -1,2 +1,2 @@
+-old bar
++new bar
+diff --git a/baz.php b/baz.php
+--- a/baz.php
++++ b/baz.php
+@@ -1,2 +1,2 @@
+-old baz
++new baz
+";
+        // 只提取 bar.php 的部分
+        let result = extract_file_diff(diff, "bar.php");
+        assert!(result.contains("+new bar"));
+        assert!(!result.contains("foo"), "should not contain foo.php content");
+        assert!(!result.contains("baz"), "should not contain baz.php content");
+    }
+
+    #[test]
+    fn extract_file_diff_not_found() {
+        let diff = "diff --git a/foo.php b/foo.php\n+something\n";
+        let result = extract_file_diff(diff, "nonexistent.php");
+        assert!(result.is_empty());
+    }
+
+    // ─── parse_diff_hunks ────────────────────────────────
+
+    #[test]
+    fn parse_diff_hunks_php_function_changed() {
+        let before = r#"<?php
+class OrderController {
+    public function create($data) {
+        return $data;
+    }
+    public function delete($id) {
+        DB::delete($id);
+    }
+}"#;
+        let after = r#"<?php
+class OrderController {
+    public function create($data) {
+        if (empty($data)) { return null; }
+        return $data;
+    }
+    public function delete($id) {
+        DB::delete($id);
+    }
+}"#;
+        // 构造与 after 对应的 diff
+        let diff = "\
+diff --git a/OrderController.php b/OrderController.php
+--- a/OrderController.php
++++ b/OrderController.php
+@@ -2,4 +2,5 @@
+ class OrderController {
+     public function create($data) {
++        if (empty($data)) { return null; }
+         return $data;
+     }
+";
+        let hunks = parse_diff_hunks(diff, "OrderController.php", before, after, "php");
+        // create 被改了，应出现在 hunks 中
+        assert!(!hunks.is_empty(), "should have at least one hunk");
+        let func_names: Vec<&str> = hunks.iter()
+            .filter_map(|h| h["function_name"].as_str())
+            .collect();
+        assert!(func_names.contains(&"create"), "should contain changed function 'create'");
+        // delete 未改，不应出现
+        assert!(!func_names.contains(&"delete"), "should not contain unchanged function 'delete'");
+    }
+
+    #[test]
+    fn parse_diff_hunks_empty_after() {
+        // after 为空时应返回空
+        let hunks = parse_diff_hunks("diff...", "foo.php", "before", "", "php");
+        assert!(hunks.is_empty());
+    }
+
+    // ─── load_prompt_template ────────────────────────────
+
+    #[test]
+    fn load_prompt_template_custom() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let tpl_path = dir.path().join("my_template.txt");
+        fs::write(&tpl_path, "custom prompt: {context_json}").unwrap();
+
+        let result = load_prompt_template(Some(tpl_path.to_str().unwrap()));
+        assert_eq!(result, "custom prompt: {context_json}");
+    }
+
+    #[test]
+    fn load_prompt_template_fallback_default() {
+        // 传一个不存在的路径，应降级到内置默认模板
+        let result = load_prompt_template(Some("/nonexistent/path/template.txt"));
+        assert!(result.contains("测试规格书"), "should contain default template content");
+        assert!(result.contains("{context_json}"), "should contain placeholder");
+    }
+
+    #[test]
+    fn load_prompt_template_none() {
+        // 不传自定义路径，使用默认模板
+        let result = load_prompt_template(None);
+        assert!(result.contains("测试规格书"));
+    }
+
+    // ─── collect + context (git 集成测试) ────────────────
+
+    /// 创建一个临时 git 仓库，提交若干 PHP bugfix commit
+    fn setup_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let repo = dir.path().to_str().unwrap();
+
+        // git init
+        Command::new("git").args(["-C", repo, "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo, "config", "user.email", "test@test.com"]).output().unwrap();
+        Command::new("git").args(["-C", repo, "config", "user.name", "Test"]).output().unwrap();
+
+        // commit 1: 初始文件
+        let ctrl_dir = dir.path().join("app/controllers");
+        fs::create_dir_all(&ctrl_dir).unwrap();
+        fs::write(ctrl_dir.join("OrderController.php"), r#"<?php
+class OrderController {
+    public function create($data) {
+        return save($data);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "init: add OrderController"]).output().unwrap();
+
+        // commit 2: bugfix（关键字匹配 + 文件路径匹配）
+        fs::write(ctrl_dir.join("OrderController.php"), r#"<?php
+class OrderController {
+    public function create($data) {
+        if (empty($data)) { return null; }
+        return save($data);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "fix: 修复空值导致报错"]).output().unwrap();
+
+        // commit 3: 另一个 bugfix
+        fs::write(ctrl_dir.join("PayController.php"), r#"<?php
+class PayController {
+    public function refund($id) {
+        return do_refund($id);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "init: add PayController"]).output().unwrap();
+
+        fs::write(ctrl_dir.join("PayController.php"), r#"<?php
+class PayController {
+    public function refund($id) {
+        if ($id <= 0) { throw new Exception("invalid id"); }
+        return do_refund($id);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "bug: 退款ID校验缺失"]).output().unwrap();
+
+        // commit 4: 非 bugfix（feature）
+        fs::write(ctrl_dir.join("UserController.php"), r#"<?php
+class UserController {
+    public function list() { return []; }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "feat: 新增用户列表"]).output().unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn collect_by_keyword() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+
+        let inv_path = output_dir.path().join("inventory.json");
+        assert!(inv_path.exists(), "inventory.json should be created");
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&inv_path).unwrap()
+        ).unwrap();
+
+        // 应该扫到 2 个 bugfix commit（"fix: 修复空值" + "bug: 退款ID"）
+        let commits = inv["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 2, "should find 2 bugfix commits by keyword");
+
+        // 每个 commit 应有 grade 和 module
+        for c in commits {
+            assert!(c["grade"].as_str().is_some());
+            assert!(c["module"].as_str().is_some());
+            assert!(!c["changed_files"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn collect_by_path() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 按路径扫描 app/controllers/，应扫到所有涉及该路径的 commit
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], None, false, "php");
+
+        let inv_path = output_dir.path().join("inventory.json");
+        assert!(inv_path.exists());
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&inv_path).unwrap()
+        ).unwrap();
+
+        // 按路径扫到的应比按关键字多（init commit 也会被扫到，只要改了后端文件）
+        let commits = inv["commits"].as_array().unwrap();
+        assert!(commits.len() >= 2, "path scan should find at least 2 commits, got {}", commits.len());
+    }
+
+    #[test]
+    fn collect_with_limit() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], Some(1), false, "php");
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+
+        assert_eq!(inv["commits"].as_array().unwrap().len(), 1, "limit=1 should keep only 1 commit");
+    }
+
+    #[test]
+    fn collect_skip_existing() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 第一次 collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        let content1 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
+
+        // 第二次 collect（不带 force），应跳过
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        let content2 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
+        assert_eq!(content1, content2, "without force, inventory should not be overwritten");
+    }
+
+    #[test]
+    fn context_extracts_diffs() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 先 collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+
+        // 再 context
+        context(output, repo, &["A", "B"], None, false, "php");
+
+        let contexts_dir = output_dir.path().join("contexts");
+        assert!(contexts_dir.exists(), "contexts/ should be created");
+
+        let context_files: Vec<_> = fs::read_dir(&contexts_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+            .collect();
+
+        assert_eq!(context_files.len(), 2, "should have 2 context files (one per bugfix commit)");
+
+        // 验证 context 内容结构
+        for entry in &context_files {
+            let content: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(entry.path()).unwrap()
+            ).unwrap();
+            assert!(content["hash"].as_str().is_some(), "should have hash");
+            assert!(content["message"].as_str().is_some(), "should have message");
+            assert!(content["diffs"].as_array().is_some(), "should have diffs array");
+
+            // diffs 中应有函数级 hunks
+            let diffs = content["diffs"].as_array().unwrap();
+            assert!(!diffs.is_empty(), "should have at least one file diff");
+            for d in diffs {
+                assert!(d["file"].as_str().is_some());
+                assert!(d["raw_diff"].as_str().is_some());
+                assert!(d["hunks"].as_array().is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn context_skip_existing() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        context(output, repo, &["A", "B"], None, false, "php");
+
+        // 读取 inventory 获取 commit hash
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+        let first_hash = inv["commits"][0]["hash"].as_str().unwrap();
+        let ctx_path = output_dir.path().join(format!("contexts/{}.json", first_hash));
+        let content1 = fs::read_to_string(&ctx_path).unwrap();
+
+        // 再跑一次 context（不带 force），文件不应被覆盖
+        context(output, repo, &["A", "B"], None, false, "php");
+        let content2 = fs::read_to_string(&ctx_path).unwrap();
+        assert_eq!(content1, content2, "without force, context file should not be overwritten");
+    }
+
+    // ─── 端到端：collect → context → organize ────────────
+
+    #[test]
+    fn end_to_end_collect_context_organize() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // Step 1: collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        assert!(output_dir.path().join("inventory.json").exists());
+
+        // Step 2: context
+        context(output, repo, &["A", "B"], None, false, "php");
+        assert!(output_dir.path().join("contexts").exists());
+
+        // Step 3: 模拟 generate 产出（直接写 specs，不调 codex）
+        let specs_dir = output_dir.path().join("specs");
+        fs::create_dir_all(&specs_dir).unwrap();
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+
+        for commit in inv["commits"].as_array().unwrap() {
+            let hash = commit["hash"].as_str().unwrap();
+            let spec = serde_json::json!({
+                "source_commit": hash,
+                "module": commit["module"],
+                "bug_summary": "test bug",
+                "test_type": "regression",
+                "test_spec": {
+                    "preconditions": [],
+                    "trigger": {"type": "controller_action", "target": "Test", "method": "test"},
+                    "assertions": [{"what": "test", "type": "return_value", "expected": "ok"}]
+                },
+                "wrong_behavior": "before",
+                "correct_behavior": "after",
+            });
+            fs::write(specs_dir.join(format!("{}.json", hash)), serde_json::to_string(&spec).unwrap()).unwrap();
+        }
+
+        // Step 4: organize
+        organize(output, None);
+
+        // 验证 by_module 产出
+        let by_module = output_dir.path().join("by_module");
+        assert!(by_module.exists(), "by_module/ should exist");
+        let module_files: Vec<_> = fs::read_dir(&by_module).unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+            .collect();
+        assert!(!module_files.is_empty(), "should have at least one module file");
+
+        // 验证 coverage.md
+        let coverage = fs::read_to_string(output_dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("覆盖率"));
+        assert!(coverage.contains("bddc"));
     }
 }

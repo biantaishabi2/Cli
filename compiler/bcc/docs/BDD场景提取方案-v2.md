@@ -120,28 +120,32 @@ bcc bugfix . -o output/ -s g --limit 100                      # 生成前100个
 bcc bugfix . -o output/ -s g                                  # 继续跑剩余的
 ```
 
-## 五、generate prompt 调整
+## 五、generate 输出：测试规格书 JSON
 
-在默认 prompt 模板中增加分类判断：
+generate 调用 LLM 将 diff 上下文翻译为**结构化的业务语义描述**（测试规格书），而不是直接生成 DSL。
+这是因为 bcc 站在 PHP 侧，只能说清"要测什么"（业务层），"怎么测"（实现层）由下游 bddc 在 Elixir 项目中决定。
 
+输出格式：`specs/<hash>.json`
+
+```json
+{
+  "source_commit": "hash",
+  "bug_summary": "一句话 bug 根因",
+  "module": "从文件路径推导的模块名",
+  "action": "被修改的函数/方法名",
+  "fix_summary": "修复做了什么",
+  "test_type": "regression|boundary|null_safety|security|concurrency",
+  "test_spec": {
+    "preconditions": [{"what": "条件", "involves": "db|redis|...", "key_params": ["参数"]}],
+    "trigger": {"type": "controller_action", "target": "类名", "method": "方法名"},
+    "assertions": [{"what": "断言", "type": "return_value|db_state|...", "expected": "值"}]
+  },
+  "wrong_behavior": "修复前的错误行为",
+  "correct_behavior": "修复后的正确行为"
+}
 ```
-你是BDD测试专家。分析以下 git commit 的 diff：
 
-1. 先判断这个 commit 是 bugfix 还是 feature/refactor/config
-2. 如果是 bugfix，生成 bddc DSL 场景
-3. 如果不是 bugfix，只输出一行: SKIP: {类型} - {原因}
-
-判断依据（看 diff 内容，不是 message）：
-- 加了 if/null 判断 → bugfix
-- 加了 try/catch → bugfix
-- 改了条件/比较逻辑 → bugfix
-- 加了安全过滤(htmlspecialchars等) → bugfix
-- 新增整个函数/Action → feature
-- 大段代码重组 → refactor
-- 只改文案/链接/配置值 → config
-
-{context_json}
-```
+非 bugfix 的 commit 输出 `{"skip": true, "reason": "feature|refactor|config"}`，由 organize 步骤过滤。
 
 ## 六、module_map.json
 
@@ -173,7 +177,7 @@ module_map 是可选的，用于将文件路径映射到业务模块名。不传
 | P2 | E.运动/K.异步/A.审批 | ~600-800 各 |
 | P3 | 其余 16 个模块 | ~6,000 |
 
-每个模块：scan → context → generate → organize → bddc compile 验证。
+每个模块：scan → context → generate → organize → bddc autochain（指令设计 + DSL + 编译 + 测试）。
 
 ## 八、预期产出
 
@@ -182,4 +186,4 @@ module_map 是可选的，用于将文件路径映射到业务模块名。不传
 | 扫描 commit 数 | ~2,500 | 13,775 |
 | 分级 A/B/C | — | 8,334 / 3,424 / 2,017 |
 | 覆盖模块数 | ~150 | 400 |
-| BDD 场景数(估) | 800-1,200 | 2,500-4,000 |
+| 测试规格书数(估) | 800-1,200 | 2,500-4,000 |
