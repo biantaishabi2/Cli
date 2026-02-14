@@ -38,7 +38,10 @@ bcc extract compiler/bcc/fixtures/sample_service.ex --mode ast
 bcc trace status compiler/bcc/fixtures/trace_project/src compiler/bcc/fixtures/trace_project/docs/backend-trace/files/src
 bcc bugfix /path/to/repo -o output/ --lang elixir   # git bugfix → BDD 场景
 bcc arch matrix --seed-file compiler/bcc/docs/backend-trace/module-registry.seed.yaml --ast-file compiler/bcc/docs/backend-trace/artifacts/trace2contract/module-relations.json
-bcc arch validate --target ... --actual ... --out-dir ...
+bcc arch validate \
+  --target compiler/bcc/docs/backend-trace/trace2contract/seed/v3.target-matrix.yaml \
+  --actual compiler/bcc/docs/backend-trace/artifacts/trace2contract/module-relations.actual.json \
+  --out-dir compiler/bcc/docs/backend-trace/artifacts/trace2contract/versions/v3-draft
 
 # bddc（Elixir escript）
 cd compiler/bddc
