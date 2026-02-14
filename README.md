@@ -1,6 +1,6 @@
 # Cli
 
-[![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
+[![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
 [![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
 
 承载多个命令行工具的 monorepo，按职责分类管理。
