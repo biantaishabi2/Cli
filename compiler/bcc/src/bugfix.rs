@@ -271,9 +271,9 @@ fn collect(
         *by_grade.entry(c.grade.clone()).or_insert(0) += 1;
     }
 
-    // 获取总 commit 数
+    // 获取被扫描分支的总 commit 数
     let total_commits = Command::new("git")
-        .args(["-C", repo, "rev-list", "--all", "--count"])
+        .args(["-C", repo, "rev-list", &branch_ref, "--count"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<usize>().ok())
