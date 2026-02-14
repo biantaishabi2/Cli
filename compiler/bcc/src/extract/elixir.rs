@@ -311,7 +311,8 @@ fn node_text(node: tree_sitter::Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
 }
 
-/// 基于全文扫描的副作用检测
+/// 基于全文关键词扫描的副作用分类标签（行为检测的分类维度）
+/// 独立于 tree-sitter 提取，用 contains() 捕获 use GenServer 等非 dot-call 模式
 fn detect_side_effects(content: &str, se: &mut SideEffects) {
     if content.contains("Task.async") || content.contains("Task.start") {
         se.has_async = true;

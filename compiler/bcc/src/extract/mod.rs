@@ -39,6 +39,8 @@ pub struct CallRecord {
     pub line: usize,
 }
 
+/// 副作用分类标签——行为检测的分类维度，标注模块的外部交互类型
+/// 通过全文关键词扫描得出，独立于 tree-sitter AST 提取
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SideEffects {
