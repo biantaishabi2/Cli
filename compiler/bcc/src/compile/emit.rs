@@ -92,6 +92,13 @@ fn emit_via_elixir(ast: &[QuotedAST], verbose: bool) -> Result<String, String> {
 fn find_emit_script() -> Result<String, String> {
     let script_name = "bcc_emit.exs";
 
+    // 0. 编译期嵌入的包目录（最可靠）
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let compile_time = Path::new(manifest_dir).join("scripts").join(script_name);
+    if compile_time.exists() {
+        return Ok(compile_time.to_string_lossy().to_string());
+    }
+
     // 1. 相对于 binary 所在目录的 scripts/
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
