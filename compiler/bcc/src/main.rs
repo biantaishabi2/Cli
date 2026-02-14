@@ -76,9 +76,10 @@ enum Commands {
     #[command(
         name = "bugfix",
         after_help = r#"示例:
-  bcc bugfix /path/to/repo -o output/                    # 全量执行四步
+  bcc bugfix /path/to/repo -o output/                    # 全量执行四步（当前分支 + 关键字）
+  bcc bugfix /path/to/repo -o output/ -b main            # 指定扫描 main 分支
+  bcc bugfix /path/to/repo -o output/ --path app/controllers/  # 按文件路径扫描
   bcc bugfix /path/to/repo -o output/ -s c               # 只扫描，输出 inventory.json
-  bcc bugfix /path/to/repo -o output/ -s x               # 扫描 + 上下文提取
   bcc bugfix /path/to/repo -o output/ -s g --limit 20    # 前 20 个 commit 跑到生成
   bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix"#
     )]
@@ -106,6 +107,14 @@ enum Commands {
         /// 筛选级别（逗号分隔）：A(≤10行) B(10-50行) C(>50行)
         #[arg(long, default_value = "A,B")]
         grade: String,
+
+        /// 扫描分支（默认当前分支，不再扫全部分支）
+        #[arg(short, long)]
+        branch: Option<String>,
+
+        /// 按文件路径扫描（传了则用 git log <branch> -- <path>，不再按关键字匹配）
+        #[arg(long, value_name = "PATH")]
+        path: Option<String>,
 
         /// 扫描关键字（逗号分隔），匹配 commit message
         #[arg(long, default_value = "修复,fix,bug")]
@@ -191,7 +200,7 @@ fn main() {
             }
         },
         Some(Commands::Bugfix {
-            repo, output, step, lang, grade, keywords,
+            repo, output, step, lang, branch, path, grade, keywords,
             module_map, prompt_template, limit, force, coverage_report,
         }) => {
             let repo = match repo {
@@ -217,6 +226,8 @@ fn main() {
                 &repo, &output,
                 step.as_deref(),
                 &lang,
+                branch.as_deref(),
+                path.as_deref(),
                 &grade, &keywords,
                 module_map.as_deref(),
                 prompt_template.as_deref(),

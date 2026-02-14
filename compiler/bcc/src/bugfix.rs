@@ -70,6 +70,8 @@ pub fn run(
     output: &str,
     step: Option<&str>,
     lang: &str,
+    branch: Option<&str>,
+    path: Option<&str>,
     grade: &str,
     keywords: &str,
     module_map: Option<&str>,
@@ -103,7 +105,7 @@ pub fn run(
     fs::create_dir_all(output).ok();
 
     // collect
-    collect(repo, output, keywords, module_map, &grades, limit, force, lang);
+    collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
     if target == Step::Collect { return; }
 
     // context
@@ -160,6 +162,8 @@ fn is_backend_file(path: &str, lang: &str) -> bool {
 fn collect(
     repo: &str,
     output: &str,
+    branch: Option<&str>,
+    path: Option<&str>,
     keywords: &str,
     module_map_path: Option<&str>,
     grades: &[&str],
@@ -178,18 +182,28 @@ fn collect(
         fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<ModuleMap>(&s).ok())
     });
 
-    // 扫描 git log
-    let kw_list: Vec<&str> = keywords.split(',').map(|s| s.trim()).collect();
-    let mut all_commits: HashMap<String, BugfixCommit> = HashMap::new();
+    // 确定分支：指定 > 当前分支
+    let branch_ref = branch.map(|b| b.to_string()).unwrap_or_else(|| {
+        Command::new("git")
+            .args(["-C", repo, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "HEAD".to_string())
+    });
 
-    for kw in &kw_list {
+    let mut all_commits: HashMap<String, BugfixCommit> = HashMap::new();
+    let fmt = "--format=__COMMIT__%H%n__MSG__%s%n__AUTHOR__%an%n__DATE__%ai";
+
+    if let Some(file_path) = path {
+        // 按文件路径扫描：git log <branch> --no-merges --numstat -- <path>
+        eprintln!("[collect] scanning by path: {} (branch: {})", file_path, branch_ref);
         let git_output = Command::new("git")
             .args([
                 "-C", repo,
-                "log", "--all", "--no-merges",
-                &format!("--grep={}", kw), "-i",
-                "--numstat",
-                "--format=__COMMIT__%H%n__MSG__%s%n__AUTHOR__%an%n__DATE__%ai",
+                "log", &branch_ref, "--no-merges",
+                "--numstat", fmt,
+                "--", file_path,
             ])
             .output();
 
@@ -199,7 +213,32 @@ fn collect(
                 parse_git_log(&stdout, &module_map, &mut all_commits);
             }
             Err(e) => {
-                eprintln!("[collect] git log failed for keyword '{}': {}", kw, e);
+                eprintln!("[collect] git log failed for path '{}': {}", file_path, e);
+            }
+        }
+    } else {
+        // 按关键字扫描：git log <branch> --no-merges --grep=<kw>
+        let kw_list: Vec<&str> = keywords.split(',').map(|s| s.trim()).collect();
+        eprintln!("[collect] scanning by keywords: {:?} (branch: {})", kw_list, branch_ref);
+
+        for kw in &kw_list {
+            let git_output = Command::new("git")
+                .args([
+                    "-C", repo,
+                    "log", &branch_ref, "--no-merges",
+                    &format!("--grep={}", kw), "-i",
+                    "--numstat", fmt,
+                ])
+                .output();
+
+            match git_output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    parse_git_log(&stdout, &module_map, &mut all_commits);
+                }
+                Err(e) => {
+                    eprintln!("[collect] git log failed for keyword '{}': {}", kw, e);
+                }
             }
         }
     }
