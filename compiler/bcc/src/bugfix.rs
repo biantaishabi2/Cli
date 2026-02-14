@@ -1440,4 +1440,82 @@ THEN some_assertion"#;
         // 无 module_map 时走 module_from_filename
         assert_eq!(resolve_module("app/controllers/OrderController.php", &None), "order");
     }
+
+    // ─── generate (集成测试) ─────────────────────────
+
+    /// 创建临时 contexts/ 目录并写入 N 个假 context JSON
+    fn setup_generate_test(n: usize) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let contexts = dir.path().join("contexts");
+        fs::create_dir_all(&contexts).unwrap();
+        for i in 0..n {
+            let json = serde_json::json!({
+                "hash": format!("abc{:03}", i),
+                "message": format!("fix bug {}", i),
+                "grade": "A",
+                "module": "test",
+                "tags": ["regression"],
+                "diffs": [],
+            });
+            fs::write(
+                contexts.join(format!("abc{:03}.json", i)),
+                serde_json::to_string(&json).unwrap(),
+            ).unwrap();
+        }
+        dir
+    }
+
+    /// 统计 generate 产出文件数（codex 模式写 scenarios/*.dsl，降级模式写 prompts/*.prompt.txt）
+    fn count_generate_output(dir: &std::path::Path) -> usize {
+        let dsl_count = fs::read_dir(dir.join("scenarios"))
+            .map(|e| e.filter_map(|f| f.ok())
+                .filter(|f| f.path().extension().map_or(false, |ext| ext == "dsl"))
+                .count())
+            .unwrap_or(0);
+        let prompt_count = fs::read_dir(dir.join("prompts"))
+            .map(|e| e.filter_map(|f| f.ok())
+                .filter(|f| f.path().to_string_lossy().ends_with(".prompt.txt"))
+                .count())
+            .unwrap_or(0);
+        dsl_count + prompt_count
+    }
+
+    #[test]
+    fn generate_limit_respected() {
+        // 准备 5 个 context，limit=2，应只处理 2 个
+        let dir = setup_generate_test(5);
+        let output = dir.path().to_str().unwrap();
+        generate(output, None, false, Some(2));
+
+        let count = count_generate_output(dir.path());
+        assert_eq!(count, 2, "should only process 2 out of 5");
+    }
+
+    #[test]
+    fn generate_no_limit_processes_all() {
+        // 准备 3 个 context，无 limit，应全部处理
+        let dir = setup_generate_test(3);
+        let output = dir.path().to_str().unwrap();
+        generate(output, None, false, None);
+
+        let count = count_generate_output(dir.path());
+        assert_eq!(count, 3, "should process all 3");
+    }
+
+    #[test]
+    fn generate_skip_existing() {
+        // 准备 3 个 context，预先创建 1 个 .dsl，应跳过已有的
+        let dir = setup_generate_test(3);
+        let output = dir.path().to_str().unwrap();
+        let scenarios = dir.path().join("scenarios");
+        fs::create_dir_all(&scenarios).unwrap();
+        fs::write(scenarios.join("abc000.dsl"), "existing").unwrap();
+
+        generate(output, None, false, None);
+
+        let count = count_generate_output(dir.path());
+        // abc000 被 skip（已有 1 个 .dsl），另外 2 个被处理
+        // 总产出 = 1 (预存) + 2 (新生成) = 3
+        assert_eq!(count, 3, "should have 1 existing + 2 newly generated");
+    }
 }
