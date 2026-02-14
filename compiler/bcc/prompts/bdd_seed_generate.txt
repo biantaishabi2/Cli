@@ -1,0 +1,4 @@
+[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}
+GIVEN given_seed_context id="{ID}" module="{MODULE}"
+WHEN when_execute_seed_contract module="{MODULE}"
+THEN then_seed_contract_should_hold module="{MODULE}"
