@@ -301,3 +301,139 @@ pub fn run(
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), ts));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(path, content).expect("write file");
+    }
+
+    #[test]
+    fn bdd_seed_pipeline_outputs_expected_structure() {
+        let root = temp_dir("bcc_bdd_seed");
+        let source = root.join("source");
+        let output = root.join("output");
+        let template = root.join("template.dsl");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("account.yaml"),
+            r#"module: ACCOUNT
+contract: create account
+"#,
+        );
+        write(
+            &source.join("billing.json"),
+            r#"{"module_id":"BILLING","contract":"issue invoice"}"#,
+        );
+        write(
+            &template,
+            r#"[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}
+GIVEN given_seed_context id="{ID}" module="{MODULE}"
+WHEN when_execute_seed_contract module="{MODULE}"
+THEN then_seed_contract_should_hold module="{MODULE}"
+"#,
+        );
+
+        let contexts = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "stable",
+            None,
+            true,
+        )
+        .expect("context");
+        assert_eq!(contexts.len(), 2);
+
+        run_generate(
+            &output.to_string_lossy(),
+            Some(&template.to_string_lossy()),
+            true,
+        )
+        .expect("generate");
+        run_organize(&output.to_string_lossy(), None, true).expect("organize");
+
+        assert!(output.join("contexts/account_account.json").exists());
+        assert!(output.join("contexts/billing_billing.json").exists());
+        assert!(output.join("scenarios/account_account.dsl").exists());
+        assert!(output.join("scenarios/billing_billing.dsl").exists());
+        assert!(output.join("features/ACCOUNT.dsl").exists());
+        assert!(output.join("features/BILLING.dsl").exists());
+        assert!(output.join("coverage.md").exists());
+
+        let feature = fs::read_to_string(output.join("features/ACCOUNT.dsl")).expect("read feature");
+        assert!(feature.contains("[SCENARIO: BDD-ACCOUNT-SEED-account_account]"));
+        let coverage = fs::read_to_string(output.join("coverage.md")).expect("read coverage");
+        assert!(coverage.contains("| ACCOUNT |"));
+        assert!(coverage.contains("| BILLING |"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_context_module_filter_works() {
+        let root = temp_dir("bcc_bdd_filter");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("account.yaml"),
+            r#"module: ACCOUNT
+contract: account contract
+"#,
+        );
+        write(
+            &source.join("billing.yaml"),
+            r#"module: BILLING
+contract: billing contract
+"#,
+        );
+
+        let contexts = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            Some("ACCOUNT"),
+            "all",
+            None,
+            true,
+        )
+        .expect("context filter");
+
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].module, "ACCOUNT");
+        assert!(output.join("contexts/account_account.json").exists());
+        assert!(!output.join("contexts/billing_billing.json").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_generate_requires_contexts() {
+        let root = temp_dir("bcc_bdd_no_context");
+        let output = root.join("output");
+        fs::create_dir_all(&output).expect("create output");
+
+        let err = run_generate(&output.to_string_lossy(), None, true).expect_err("should fail");
+        assert!(err.contains("no contexts found"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+}

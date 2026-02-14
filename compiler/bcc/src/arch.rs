@@ -1206,3 +1206,270 @@ fn report_impl(
     println!("arch_report_written={}", out);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), ts));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    #[test]
+    fn arch_end_to_end_outputs_are_generated() {
+        let root = temp_dir("bcc_arch_e2e");
+        let seed = root.join("seed.yaml");
+        let ast = root.join("ast.json");
+        let actual = root.join("actual.json");
+        let matrix_out = root.join("seed_out");
+        let validate_out = root.join("validate_out");
+        let report_out = validate_out.join("architecture-debt.md");
+        let trace_module_map = root.join("module_map.json");
+        let module_registry = root.join("module_registry.yaml");
+        let bugfix_module_map = root.join("module_map.bugfix.json");
+
+        write(
+            &seed,
+            r#"version: v3
+source_of_truth: architecture_doc_v3
+modules:
+  - module_id: ACCOUNT
+    precedence: 10
+    path_rules:
+      include: ["src/account/**"]
+  - module_id: BILLING
+    precedence: 10
+    path_rules:
+      include: ["src/billing/**"]
+  - module_id: NOTIFY
+    precedence: 10
+    path_rules:
+      include: ["src/notify/**"]
+relations_expected:
+  - caller: ACCOUNT
+    callee: BILLING
+    allowed: true
+  - caller: ACCOUNT
+    callee: NOTIFY
+    allowed: true
+"#,
+        );
+        write(
+            &ast,
+            r#"{
+  "source_count": 3,
+  "records": [
+    {
+      "sourcePath": "src/account/create.ts",
+      "localDependencies": ["src/billing/invoice.ts", "src/notify/send.ts"],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/billing/invoice.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/notify/send.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+        );
+        write(
+            &actual,
+            r#"[
+  {"caller":"ACCOUNT","callee":"BILLING","import_edges":1,"call_edges":0,"total_edges":1},
+  {"caller":"ACCOUNT","callee":"NOTIFY","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+        write(
+            &trace_module_map,
+            r#"{
+  "entries": [
+    {"path":"src/account/","module_id":"ACCOUNT"},
+    {"path":"src/billing/","module_id":"BILLING"},
+    {"path":"src/notify/","module_id":"NOTIFY"}
+  ]
+}"#,
+        );
+        write(
+            &module_registry,
+            r#"modules:
+  - module_id: ACCOUNT
+    display_name: 账户域
+  - module_id: BILLING
+    display_name: 计费域
+  - module_id: NOTIFY
+    display_name: 通知域
+"#,
+        );
+
+        matrix_impl(
+            &seed.to_string_lossy(),
+            &ast.to_string_lossy(),
+            &matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            true,
+        )
+        .expect("matrix ok");
+
+        assert!(matrix_out.join("v3.target-matrix.yaml").exists());
+        assert!(matrix_out.join("v3.transition-matrix.yaml").exists());
+        assert!(matrix_out.join("v3.gates.yaml").exists());
+
+        let code = validate_impl(
+            &matrix_out.join("v3.target-matrix.yaml").to_string_lossy(),
+            &matrix_out.join("v3.transition-matrix.yaml").to_string_lossy(),
+            &matrix_out.join("v3.gates.yaml").to_string_lossy(),
+            &actual.to_string_lossy(),
+            &validate_out.to_string_lossy(),
+            "both",
+            true,
+            true,
+        )
+        .expect("validate ok");
+        assert_eq!(code, 0);
+
+        assert!(validate_out.join("scenario-validation.tsv").exists());
+        assert!(validate_out.join("gate-evaluation.tsv").exists());
+        assert!(validate_out.join("summary.json").exists());
+        assert!(validate_out.join("v3-validation-report.md").exists());
+
+        report_impl(
+            &validate_out.join("scenario-validation.tsv").to_string_lossy(),
+            &validate_out.join("gate-evaluation.tsv").to_string_lossy(),
+            &validate_out.join("summary.json").to_string_lossy(),
+            &report_out.to_string_lossy(),
+            20,
+            "md",
+        )
+        .expect("report ok");
+        let report_text = fs::read_to_string(&report_out).expect("read report");
+        assert!(report_text.contains("Architecture Debt Report"));
+
+        export_module_map_impl(
+            &trace_module_map.to_string_lossy(),
+            Some(&module_registry.to_string_lossy()),
+            &bugfix_module_map.to_string_lossy(),
+            "file",
+            true,
+        )
+        .expect("export map ok");
+        let map_text = fs::read_to_string(&bugfix_module_map).expect("read module_map");
+        assert!(map_text.contains("\"mapping\""));
+        assert!(map_text.contains("\"module_names\""));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_fail_flags_control_exit_code() {
+        let root = temp_dir("bcc_arch_flags");
+        let target = root.join("target.yaml");
+        let transition = root.join("transition.yaml");
+        let gates = root.join("gates.yaml");
+        let actual = root.join("actual.json");
+        let strict_out = root.join("strict_out");
+        let report_out = root.join("report_out");
+
+        write(
+            &target,
+            r#"version: v3
+kind: target_contract
+intent: target
+source_of_truth: test
+notes: []
+allow_edges:
+  - caller: A
+    callee: B
+forbid_edges: []
+"#,
+        );
+        write(
+            &transition,
+            r#"version: v3
+kind: transition_contract
+base: v3.target
+intent: transition
+notes: []
+temporary_allow_edges: []
+blocked_edges: []
+"#,
+        );
+        write(
+            &gates,
+            r#"version: v3
+kind: verification_gates
+intent: gate
+profiles:
+  transition:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 0
+    max_forbidden_total_edges: 0
+    max_missing_edges_count: 0
+    max_directed_density_pct: 1
+    max_bidirectional_pair_count: 0
+  target:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 0
+    max_forbidden_total_edges: 0
+    max_missing_edges_count: 0
+    max_directed_density_pct: 1
+    max_bidirectional_pair_count: 0
+"#,
+        );
+        // B->A is unexpected, so gate should fail.
+        write(
+            &actual,
+            r#"[
+  {"caller":"A","callee":"B","import_edges":1,"call_edges":0,"total_edges":1},
+  {"caller":"B","callee":"A","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+
+        let strict_code = validate_impl(
+            &target.to_string_lossy(),
+            &transition.to_string_lossy(),
+            &gates.to_string_lossy(),
+            &actual.to_string_lossy(),
+            &strict_out.to_string_lossy(),
+            "both",
+            true,
+            true,
+        )
+        .expect("strict validate");
+        assert_eq!(strict_code, 2);
+
+        let report_code = validate_impl(
+            &target.to_string_lossy(),
+            &transition.to_string_lossy(),
+            &gates.to_string_lossy(),
+            &actual.to_string_lossy(),
+            &report_out.to_string_lossy(),
+            "both",
+            false,
+            false,
+        )
+        .expect("report validate");
+        assert_eq!(report_code, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+}
