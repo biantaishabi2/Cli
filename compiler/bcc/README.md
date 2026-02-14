@@ -1,6 +1,6 @@
 # BCC — Backend Compiler
 
-YAML 驱动的 Elixir 骨架生成器，含源码结构提取、文档覆盖审计和 git bugfix BDD 场景挖掘。
+YAML 驱动的 Elixir 骨架生成器，含源码结构提取、文档覆盖审计和 git bugfix 测试规格书提取。
 
 ## 安装
 
@@ -20,7 +20,7 @@ YAML 驱动的 Elixir 骨架生成器，含源码结构提取、文档覆盖审�
 bcc compile   YAML 契约 → Elixir 模块骨架
 bcc extract   源码 → FileRecord JSON（Elixir/TypeScript/PHP）
 bcc trace     文档覆盖审计（status/report/seed）
-bcc bugfix    git bugfix 历史 → bddc DSL 场景
+bcc bugfix    git bugfix 历史 → 测试规格书 JSON
 ```
 
 ### bcc compile
@@ -50,14 +50,16 @@ bcc trace seed lib/ docs/ --write     # 补充缺失文档模板
 
 ### bcc bugfix
 
-从 git bugfix 历史中提取 BDD 场景，四步流水线：
+从 git bugfix 历史提取测试规格书，四步流水线：
 
 ```
 collect(c)  → git log 扫描、分级(A/B/C)、自动打标签
 context(x)  → diff + 函数体 before/after 提取
-generate(g) → codex exec 生成 bddc DSL 场景
-organize(o) → 按模块归类、重复检测、覆盖率报告
+generate(g) → LLM 生成测试规格书 JSON（specs/*.json）
+organize(o) → 按模块归类（by_module/*.json）+ 覆盖率报告
 ```
+
+产出 `by_module/<module>.json` 作为 bddc autochain 的输入物料。
 
 ```bash
 bcc bugfix /path/to/repo -o output/                    # 全量执行
@@ -80,7 +82,7 @@ bcc bugfix /path/to/repo -o output/ --lang typescript   # TypeScript 项目
 
 ```bash
 cd compiler/bcc
-cargo test          # 30 个单测
+cargo test          # 66 个测试
 cargo run -- extract fixtures/sample_controller.php --mode ast  # PHP 端到端
 ```
 
@@ -94,5 +96,5 @@ cargo run -- extract fixtures/sample_controller.php --mode ast  # PHP 端到端
 
 ## 文档
 
-- [技术设计文档](docs/技术设计文档-后端编译器.md) — 完整设计、BDD 场景、里程碑
-- [BDD 场景提取方案](docs/BDD场景提取方案.md) — bugfix 子命令详细设计
+- [技术设计文档](docs/技术设计文档-后端编译器.md) — 完整设计、里程碑
+- [测试规格书提取方案](docs/BDD场景提取方案-v2.md) — bugfix 子命令详细设计（模块驱动全量扫描）
