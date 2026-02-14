@@ -110,16 +110,16 @@ enum Commands {
         /// Git 仓库路径
         repo: Option<String>,
 
-        /// 输出目录（collect 输出 inventory.json，context 输出 contexts/，
-        /// generate 输出 scenarios/，organize 输出 features/ + coverage.md）
+        /// 输出目录（collect → inventory.json，context → contexts/，
+        /// generate → specs/，organize → by_module/ + coverage.md）
         #[arg(short, long)]
         output: Option<String>,
 
         /// 执行到哪一步停止，不指定则全部执行
         ///   collect(c)  — git log 扫描分级
         ///   context(x)  — diff + 函数上下文
-        ///   generate(g) — codex exec 生成 DSL
-        ///   organize(o) — 归类 + 覆盖率报告
+        ///   generate(g) — LLM 生成测试规格书 JSON
+        ///   organize(o) — 按模块归类 + 覆盖率报告
         #[arg(short, long, value_name = "STEP")]
         step: Option<String>,
 
@@ -230,7 +230,7 @@ fn main() {
                 Some(r) if r != "help" => r,
                 _ => {
                     // 没给 repo 或 repo="help"，打印帮助
-                    eprintln!("从 git bugfix 历史中提取 BDD 场景\n");
+                    eprintln!("从 git bugfix 历史提取测试规格书\n");
                     eprintln!("用法: bcc bugfix <REPO> -o <OUTPUT> [OPTIONS]\n");
                     eprintln!("详细帮助: bcc bugfix --help");
                     std::process::exit(0);
