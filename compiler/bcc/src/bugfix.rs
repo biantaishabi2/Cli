@@ -69,6 +69,7 @@ pub fn run(
     repo: &str,
     output: &str,
     step: Option<&str>,
+    lang: &str,
     grade: &str,
     keywords: &str,
     module_map: Option<&str>,
@@ -89,17 +90,24 @@ pub fn run(
         }
     };
 
+    // 验证语言
+    let extensions = lang_extensions(lang);
+    if extensions.is_empty() {
+        eprintln!("unsupported language: '{}'. Valid: php, elixir, typescript", lang);
+        std::process::exit(1);
+    }
+
     let grades: Vec<&str> = grade.split(',').map(|s| s.trim()).collect();
 
     // 确保输出目录存在
     fs::create_dir_all(output).ok();
 
     // collect
-    collect(repo, output, keywords, module_map, &grades, limit, force);
+    collect(repo, output, keywords, module_map, &grades, limit, force, lang);
     if target == Step::Collect { return; }
 
     // context
-    context(output, repo, &grades, limit, force);
+    context(output, repo, &grades, limit, force, lang);
     if target == Step::Context { return; }
 
     // generate
@@ -108,6 +116,43 @@ pub fn run(
 
     // organize
     organize(output, coverage_report);
+}
+
+/// 语言 → 文件扩展名列表
+fn lang_extensions(lang: &str) -> Vec<&'static str> {
+    match lang {
+        "php" => vec![".php"],
+        "elixir" => vec![".ex", ".exs"],
+        "typescript" | "ts" => vec![".ts", ".tsx"],
+        _ => vec![],
+    }
+}
+
+/// 根据语言判断是否为后端业务文件
+fn is_backend_file(path: &str, lang: &str) -> bool {
+    let exts = lang_extensions(lang);
+    let has_ext = exts.iter().any(|ext| path.ends_with(ext));
+    if !has_ext { return false; }
+
+    match lang {
+        "php" => {
+            let lower = path.to_lowercase();
+            lower.contains("controller") || lower.contains("model")
+                || lower.contains("trait") || lower.contains("service")
+                || lower.contains("logic") || lower.contains("provider")
+        }
+        "elixir" => {
+            // Elixir 项目：lib/ 下的业务代码（排除 test/、deps/、_build/）
+            path.starts_with("lib/") || path.contains("/lib/")
+        }
+        "typescript" | "ts" => {
+            let lower = path.to_lowercase();
+            (lower.contains("src/") || lower.contains("lib/"))
+                && !lower.contains("node_modules") && !lower.contains(".test.")
+                && !lower.contains(".spec.")
+        }
+        _ => false,
+    }
 }
 
 // ─── collect ────────────────────────────────────────────
@@ -120,6 +165,7 @@ fn collect(
     grades: &[&str],
     limit: Option<usize>,
     force: bool,
+    lang: &str,
 ) {
     let inventory_path = format!("{}/inventory.json", output);
     if !force && std::path::Path::new(&inventory_path).exists() {
@@ -160,7 +206,7 @@ fn collect(
 
     // 过滤 + 分级 + 打标签
     let mut commits: Vec<BugfixCommit> = all_commits.into_values()
-        .filter(|c| c.changed_files.iter().any(|f| is_backend_file(&f.path)))
+        .filter(|c| c.changed_files.iter().any(|f| is_backend_file(&f.path, lang)))
         .collect();
 
     // 分级
@@ -278,13 +324,6 @@ fn parse_git_log(
     }
 }
 
-fn is_backend_file(path: &str) -> bool {
-    path.ends_with(".php")
-        && (path.contains("controller") || path.contains("Controller")
-            || path.contains("model") || path.contains("Model")
-            || path.contains("trait") || path.contains("Trait")
-            || path.contains("service") || path.contains("Service"))
-}
 
 fn classify_file_kind(path: &str) -> String {
     let lower = path.to_lowercase();
@@ -337,7 +376,7 @@ fn chrono_now() -> String {
 
 // ─── context ────────────────────────────────────────────
 
-fn context(output: &str, repo: &str, _grades: &[&str], _limit: Option<usize>, force: bool) {
+fn context(output: &str, repo: &str, _grades: &[&str], _limit: Option<usize>, force: bool, lang: &str) {
     let inventory_path = format!("{}/inventory.json", output);
     let inventory_str = match fs::read_to_string(&inventory_path) {
         Ok(s) => s,
@@ -376,10 +415,11 @@ fn context(output: &str, repo: &str, _grades: &[&str], _limit: Option<usize>, fo
             }
         };
 
-        // 对每个 PHP 文件提取函数上下文
+        // 对每个源码文件提取函数上下文
+        let exts = lang_extensions(lang);
         let mut diffs = Vec::new();
         for file in &commit.changed_files {
-            if !file.path.ends_with(".php") { continue; }
+            if !exts.iter().any(|ext| file.path.ends_with(ext)) { continue; }
 
             // 获取修复后文件
             let after_content = git_show(repo, &commit.hash, &file.path);
@@ -387,7 +427,7 @@ fn context(output: &str, repo: &str, _grades: &[&str], _limit: Option<usize>, fo
             let before_content = git_show(repo, &format!("{}^", commit.hash), &file.path);
 
             // 解析 diff hunks
-            let hunks = parse_diff_hunks(&raw_diff, &file.path, &before_content, &after_content);
+            let hunks = parse_diff_hunks(&raw_diff, &file.path, &before_content, &after_content, lang);
 
             diffs.push(serde_json::json!({
                 "file": file.path,
@@ -445,25 +485,28 @@ fn parse_diff_hunks(
     file_path: &str,
     before_content: &str,
     after_content: &str,
+    lang: &str,
 ) -> Vec<serde_json::Value> {
-    // 简化实现：用 tree-sitter PHP 提取函数列表，匹配改动行
-    // 完整实现需要解析 @@ hunk headers
     let mut hunks = Vec::new();
 
-    if !file_path.ends_with(".php") || after_content.is_empty() {
-        return hunks;
-    }
+    if after_content.is_empty() { return hunks; }
 
-    // 用 extract::php 获取函数列表
-    let after_record = crate::extract::php::extract(after_content, file_path);
+    // 根据语言调度到对应的 extract 模块获取函数列表
+    let after_record = match lang {
+        "php" => crate::extract::php::extract(after_content, file_path),
+        "elixir" => crate::extract::elixir::extract(after_content, file_path),
+        "typescript" | "ts" => {
+            let ts_lang = if file_path.ends_with(".tsx") { "tsx" } else { "typescript" };
+            crate::extract::typescript::extract(after_content, file_path, ts_lang)
+        }
+        _ => return hunks,
+    };
 
-    // 对每个 export 函数，提取函数体
+    // 对每个 export 函数，提取函数体并比较 before/after
     for export in &after_record.exports {
-        // 在 before_content 中查找同名函数
         let before_func = extract_function_body(before_content, &export.name);
         let after_func = extract_function_body(after_content, &export.name);
 
-        // 如果 before/after 不同，说明这个函数被修改了
         if before_func != after_func && !after_func.is_empty() {
             hunks.push(serde_json::json!({
                 "function_name": export.name,
@@ -661,7 +704,6 @@ THEN {断言指令} {参数}
 fn extract_dsl_block(text: &str) -> String {
     let mut lines = Vec::new();
     let mut in_code_block = false;
-    let mut found_dsl = false;
 
     for line in text.lines() {
         if line.trim().starts_with("```") {
@@ -673,20 +715,18 @@ fn extract_dsl_block(text: &str) -> String {
             continue;
         }
 
-        // 检测 DSL 特征行
-        if line.contains("[SCENARIO:") || line.starts_with("# Source:") || line.starts_with("# Bug:")
-            || line.starts_with("GIVEN ") || line.starts_with("WHEN ") || line.starts_with("THEN ")
-        {
-            found_dsl = true;
-        }
+        // DSL 特征行：注释/场景声明/步骤关键字
+        let is_dsl_line = line.contains("[SCENARIO:")
+            || line.starts_with("# Source:") || line.starts_with("# Bug:")
+            || line.starts_with("# WARNING:")
+            || line.starts_with("GIVEN ") || line.starts_with("WHEN ") || line.starts_with("THEN ");
 
-        if in_code_block || found_dsl || line.starts_with('#') {
+        if in_code_block || is_dsl_line {
             lines.push(line);
         }
     }
 
     if lines.is_empty() {
-        // 没找到 DSL 特征，返回原文
         text.to_string()
     } else {
         lines.join("\n")
@@ -881,4 +921,267 @@ fn extract_function_body(content: &str, func_name: &str) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── classify_grade ────────────────────────────────
+
+    #[test]
+    fn grade_a_boundary() {
+        assert_eq!(classify_grade(0), "A");
+        assert_eq!(classify_grade(1), "A");
+        assert_eq!(classify_grade(10), "A");
+    }
+
+    #[test]
+    fn grade_b_boundary() {
+        assert_eq!(classify_grade(11), "B");
+        assert_eq!(classify_grade(50), "B");
+    }
+
+    #[test]
+    fn grade_c_boundary() {
+        assert_eq!(classify_grade(51), "C");
+        assert_eq!(classify_grade(1000), "C");
+    }
+
+    // ─── auto_tag ──────────────────────────────────────
+
+    #[test]
+    fn tag_security() {
+        assert!(auto_tag("修复xss漏洞").contains(&"security".to_string()));
+        assert!(auto_tag("fix越权访问").contains(&"security".to_string()));
+    }
+
+    #[test]
+    fn tag_datetime() {
+        assert!(auto_tag("修复时区问题").contains(&"datetime".to_string()));
+        assert!(auto_tag("fix UTC时间").contains(&"datetime".to_string()));
+    }
+
+    #[test]
+    fn tag_null_safety() {
+        assert!(auto_tag("空值判断fix").contains(&"null_safety".to_string()));
+        assert!(auto_tag("null pointer fix").contains(&"null_safety".to_string()));
+    }
+
+    #[test]
+    fn tag_transaction() {
+        assert!(auto_tag("修复事务回滚").contains(&"transaction".to_string()));
+    }
+
+    #[test]
+    fn tag_multiple() {
+        let tags = auto_tag("修复xss漏洞导致空值");
+        assert!(tags.contains(&"security".to_string()));
+        assert!(tags.contains(&"null_safety".to_string()));
+    }
+
+    #[test]
+    fn tag_no_match() {
+        assert!(auto_tag("重构代码").is_empty());
+        assert!(auto_tag("add new feature").is_empty());
+    }
+
+    // ─── lang_extensions ───────────────────────────────
+
+    #[test]
+    fn lang_extensions_php() {
+        assert_eq!(lang_extensions("php"), vec![".php"]);
+    }
+
+    #[test]
+    fn lang_extensions_elixir() {
+        assert_eq!(lang_extensions("elixir"), vec![".ex", ".exs"]);
+    }
+
+    #[test]
+    fn lang_extensions_typescript() {
+        assert_eq!(lang_extensions("typescript"), vec![".ts", ".tsx"]);
+        assert_eq!(lang_extensions("ts"), vec![".ts", ".tsx"]);
+    }
+
+    #[test]
+    fn lang_extensions_unknown() {
+        assert!(lang_extensions("python").is_empty());
+        assert!(lang_extensions("").is_empty());
+    }
+
+    // ─── is_backend_file ───────────────────────────────
+
+    #[test]
+    fn backend_file_php() {
+        assert!(is_backend_file("app/controllers/FooController.php", "php"));
+        assert!(is_backend_file("app/models/User.php", "php"));
+        assert!(is_backend_file("app/traits/AuthTrait.php", "php"));
+        assert!(is_backend_file("app/services/PayService.php", "php"));
+        // 非业务目录的 PHP 不算
+        assert!(!is_backend_file("config/app.php", "php"));
+        assert!(!is_backend_file("routes/web.php", "php"));
+        // 非 PHP 文件不算
+        assert!(!is_backend_file("app/controllers/foo.js", "php"));
+    }
+
+    #[test]
+    fn backend_file_elixir() {
+        assert!(is_backend_file("lib/shop/order/cart.ex", "elixir"));
+        assert!(is_backend_file("lib/shop_web/live/page_live.ex", "elixir"));
+        // test/ 不算
+        assert!(!is_backend_file("test/shop/order_test.exs", "elixir"));
+        // 非 Elixir 文件
+        assert!(!is_backend_file("lib/shop/readme.md", "elixir"));
+    }
+
+    #[test]
+    fn backend_file_typescript() {
+        assert!(is_backend_file("src/components/App.ts", "typescript"));
+        assert!(is_backend_file("src/pages/Home.tsx", "typescript"));
+        // test 文件不算
+        assert!(!is_backend_file("src/components/App.test.ts", "typescript"));
+        assert!(!is_backend_file("src/components/App.spec.tsx", "typescript"));
+        // node_modules 不算
+        assert!(!is_backend_file("node_modules/foo/src/index.ts", "typescript"));
+    }
+
+    // ─── classify_file_kind ────────────────────────────
+
+    #[test]
+    fn file_kind_controller() {
+        assert_eq!(classify_file_kind("app/controllers/FooController.php"), "controller");
+    }
+
+    #[test]
+    fn file_kind_model() {
+        assert_eq!(classify_file_kind("app/models/User.php"), "model");
+    }
+
+    #[test]
+    fn file_kind_trait() {
+        assert_eq!(classify_file_kind("app/traits/AuthTrait.php"), "trait");
+    }
+
+    #[test]
+    fn file_kind_service() {
+        assert_eq!(classify_file_kind("app/services/PayService.php"), "service");
+    }
+
+    #[test]
+    fn file_kind_other() {
+        assert_eq!(classify_file_kind("app/helpers/utils.php"), "other");
+    }
+
+    // ─── extract_function_body ─────────────────────────
+
+    #[test]
+    fn extract_simple_function() {
+        let php = r#"<?php
+class Foo {
+    public function bar() {
+        return 1;
+    }
+    public function baz() {
+        return 2;
+    }
+}"#;
+        let body = extract_function_body(php, "bar");
+        assert!(body.contains("function bar()"));
+        assert!(body.contains("return 1;"));
+        assert!(!body.contains("return 2;"));
+    }
+
+    #[test]
+    fn extract_nested_braces() {
+        let php = r#"<?php
+class Foo {
+    public function complex() {
+        if (true) {
+            foreach ($items as $item) {
+                echo $item;
+            }
+        }
+        return true;
+    }
+}"#;
+        let body = extract_function_body(php, "complex");
+        assert!(body.contains("function complex()"));
+        assert!(body.contains("foreach"));
+        assert!(body.contains("return true;"));
+    }
+
+    #[test]
+    fn extract_nonexistent_function() {
+        let php = "<?php\nclass Foo { public function bar() { return 1; } }";
+        let body = extract_function_body(php, "nonexistent");
+        assert!(body.is_empty());
+    }
+
+    // ─── extract_dsl_block ─────────────────────────────
+
+    #[test]
+    fn dsl_block_plain_text() {
+        let input = r#"# Source: abc123
+# Bug: 空值未处理
+[SCENARIO: BDD-H-BUGFIX-abc123] TITLE: 测试 TAGS: regression
+GIVEN some_setup
+WHEN some_action
+THEN some_assertion"#;
+        let result = extract_dsl_block(input);
+        assert!(result.contains("[SCENARIO:"));
+        assert!(result.contains("GIVEN"));
+    }
+
+    #[test]
+    fn dsl_block_markdown_wrapped() {
+        let input = "Here is the scenario:\n```dsl\n# Source: abc\n[SCENARIO: BDD-H-001] TITLE: test TAGS: t\nGIVEN x\nWHEN y\nTHEN z\n```\nDone.";
+        let result = extract_dsl_block(input);
+        assert!(result.contains("[SCENARIO:"));
+        assert!(!result.contains("```"));
+        assert!(!result.contains("Done."));
+    }
+
+    #[test]
+    fn dsl_block_empty_returns_original() {
+        let input = "no dsl content here at all";
+        let result = extract_dsl_block(input);
+        assert_eq!(result, input);
+    }
+
+    // ─── parse_git_log ─────────────────────────────────
+
+    #[test]
+    fn parse_single_commit() {
+        let output = "__COMMIT__abc123def456\n__MSG__修复空值bug\n__AUTHOR__test\n__DATE__2025-12-22 10:30:00 +0800\n3\t1\tapp/controllers/FooController.php\n";
+        let mut commits = HashMap::new();
+        parse_git_log(output, &None, &mut commits);
+        assert_eq!(commits.len(), 1);
+        let c = commits.get("abc123def456").unwrap();
+        assert_eq!(c.message, "修复空值bug");
+        assert_eq!(c.author, "test");
+        assert_eq!(c.date, "2025-12-22");
+        assert_eq!(c.total_lines, 4); // 3 + 1
+        assert_eq!(c.changed_files.len(), 1);
+        assert_eq!(c.changed_files[0].add, 3);
+        assert_eq!(c.changed_files[0].del, 1);
+    }
+
+    #[test]
+    fn parse_dedup_commits() {
+        let output = "__COMMIT__aaa\n__MSG__fix1\n__AUTHOR__a\n__DATE__2025-01-01\n1\t1\tapp/controllers/A.php\n__COMMIT__aaa\n__MSG__fix1\n__AUTHOR__a\n__DATE__2025-01-01\n1\t1\tapp/controllers/A.php\n";
+        let mut commits = HashMap::new();
+        parse_git_log(output, &None, &mut commits);
+        assert_eq!(commits.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_files() {
+        let output = "__COMMIT__bbb\n__MSG__fix\n__AUTHOR__b\n__DATE__2025-01-01\n5\t2\tapp/controllers/A.php\n3\t0\tapp/models/B.php\n";
+        let mut commits = HashMap::new();
+        parse_git_log(output, &None, &mut commits);
+        let c = commits.get("bbb").unwrap();
+        assert_eq!(c.changed_files.len(), 2);
+        assert_eq!(c.total_lines, 10); // 5+2+3+0
+    }
 }

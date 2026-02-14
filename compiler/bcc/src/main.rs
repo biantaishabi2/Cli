@@ -66,44 +66,68 @@ enum Commands {
         action: TraceAction,
     },
 
-    /// Mine BDD scenarios from git bugfix history
+    /// 从 git bugfix 历史中提取 BDD 场景
+    ///
+    /// 四步流水线：collect → context → generate → organize
+    ///   collect(c)  扫描 git log，按变更行数分级(A/B/C)，自动打标签
+    ///   context(x)  提取每个 commit 的 diff 和修改函数的 before/after 代码
+    ///   generate(g) 调用 codex exec 将上下文转为 bddc DSL 场景
+    ///   organize(o) 按模块归类，标记疑似重复，生成覆盖率报告
+    #[command(
+        name = "bugfix",
+        after_help = r#"示例:
+  bcc bugfix /path/to/repo -o output/                    # 全量执行四步
+  bcc bugfix /path/to/repo -o output/ -s c               # 只扫描，输出 inventory.json
+  bcc bugfix /path/to/repo -o output/ -s x               # 扫描 + 上下文提取
+  bcc bugfix /path/to/repo -o output/ -s g --limit 20    # 前 20 个 commit 跑到生成
+  bcc bugfix /path/to/repo -o output/ --lang elixir      # 扫描 Elixir 项目的 bugfix"#
+    )]
     Bugfix {
-        /// Git repo path
+        /// Git 仓库路径
         repo: String,
 
-        /// Output directory
+        /// 输出目录（collect 输出 inventory.json，context 输出 contexts/，
+        /// generate 输出 scenarios/，organize 输出 features/ + coverage.md）
         #[arg(short, long)]
         output: String,
 
-        /// Run up to this step: collect(c), context(x), generate(g), organize(o)
-        #[arg(short, long)]
+        /// 执行到哪一步停止，不指定则全部执行
+        ///   collect(c)  — git log 扫描分级
+        ///   context(x)  — diff + 函数上下文
+        ///   generate(g) — codex exec 生成 DSL
+        ///   organize(o) — 归类 + 覆盖率报告
+        #[arg(short, long, value_name = "STEP")]
         step: Option<String>,
 
-        /// Filter by grade, comma-separated
+        /// 源码语言：php, elixir, typescript [默认: php]
+        #[arg(short, long, default_value = "php")]
+        lang: String,
+
+        /// 筛选级别（逗号分隔）：A(≤10行) B(10-50行) C(>50行)
         #[arg(long, default_value = "A,B")]
         grade: String,
 
-        /// Scan keywords, comma-separated
+        /// 扫描关键字（逗号分隔），匹配 commit message
         #[arg(long, default_value = "修复,fix,bug")]
         keywords: String,
 
-        /// Module mapping JSON file
+        /// 模块映射 JSON（格式: {"mapping":{"path/prefix":"MODULE"}, "module_names":{"MODULE":"名称"}}）
         #[arg(long)]
         module_map: Option<String>,
 
-        /// Custom prompt template for generate step
+        /// 自定义 prompt 模板文件路径（默认使用内置模板）
         #[arg(long)]
         prompt_template: Option<String>,
 
-        /// Max commits to process
+        /// 最多处理 N 个 commit
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Force re-process existing outputs
+        /// 强制重做已有输出（默认跳过已存在的文件）
         #[arg(long)]
         force: bool,
 
-        /// Coverage report output path
+        /// 覆盖率报告输出路径（默认: <output>/coverage.md）
         #[arg(long)]
         coverage_report: Option<String>,
     },
@@ -167,12 +191,13 @@ fn main() {
             }
         },
         Some(Commands::Bugfix {
-            repo, output, step, grade, keywords,
+            repo, output, step, lang, grade, keywords,
             module_map, prompt_template, limit, force, coverage_report,
         }) => {
             bugfix::run(
                 &repo, &output,
                 step.as_deref(),
+                &lang,
                 &grade, &keywords,
                 module_map.as_deref(),
                 prompt_template.as_deref(),
