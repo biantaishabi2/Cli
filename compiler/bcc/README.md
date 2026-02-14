@@ -128,6 +128,16 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 `--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
 `-s check` 会产出 `quality-check.json`，有不合格场景时返回非零；`-s fix` 会尝试修复并产出 `quality-fix.json`。
 
+## 闭环
+
+新项目线（Greenfield）：
+- `compile -> arch matrix -> arch validate -> bdd seed -> bddc check`
+
+存量项目线（Brownfield）：
+- `extract -> arch validate -> arch export-module-map -> bugfix -> bddc check`
+
+`arch validate` 与 `bdd seed check` 是当前主线的门禁点；`cargo test -p bcc --test cli_arch_bdd` 负责 CI Smoke 覆盖。
+
 ## 支持语言
 
 | 语言 | extract | bugfix | tree-sitter |
