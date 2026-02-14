@@ -32,44 +32,50 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: orchestration/taskctl
 
-      - name: Build release binary
-        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
+      - name: Build all workspace members
+        run: cargo build --release
 
       - name: Prepare package variables
         id: vars
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          BINARY="taskctl"
           TARGET="${{ matrix.target }}"
-          ASSET="${BINARY}-${VERSION}-${TARGET}.tar.gz"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "taskctl_asset=taskctl-${VERSION}-${TARGET}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "bcc_asset=bcc-${VERSION}-${TARGET}.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - name: Create tarball
+      - name: Create tarballs
         shell: bash
         run: |
           mkdir -p dist
-          cp orchestration/taskctl/target/release/taskctl dist/taskctl
+          # taskctl
+          cp target/release/taskctl dist/taskctl
           chmod +x dist/taskctl
-          tar -C dist -czf "dist/${{ steps.vars.outputs.asset }}" taskctl
+          tar -C dist -czf "dist/${{ steps.vars.outputs.taskctl_asset }}" taskctl
+          # bcc
+          cp target/release/bcc dist/bcc
+          chmod +x dist/bcc
+          tar -C dist -czf "dist/${{ steps.vars.outputs.bcc_asset }}" bcc
 
-      - name: Create checksum
+      - name: Create checksums
         shell: bash
         run: |
           cd dist
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${{ steps.vars.outputs.asset }}" > "${{ steps.vars.outputs.asset }}.sha256"
-          else
-            shasum -a 256 "${{ steps.vars.outputs.asset }}" > "${{ steps.vars.outputs.asset }}.sha256"
-          fi
+          for asset in "${{ steps.vars.outputs.taskctl_asset }}" "${{ steps.vars.outputs.bcc_asset }}"; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$asset" > "${asset}.sha256"
+            else
+              shasum -a 256 "$asset" > "${asset}.sha256"
+            fi
+          done
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/${{ steps.vars.outputs.asset }}
-            dist/${{ steps.vars.outputs.asset }}.sha256
+            dist/${{ steps.vars.outputs.taskctl_asset }}
+            dist/${{ steps.vars.outputs.taskctl_asset }}.sha256
+            dist/${{ steps.vars.outputs.bcc_asset }}
+            dist/${{ steps.vars.outputs.bcc_asset }}.sha256

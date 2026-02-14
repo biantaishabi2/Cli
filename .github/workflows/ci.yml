@@ -18,17 +18,45 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: orchestration/taskctl
 
       - name: Run tests
-        run: cargo test --manifest-path orchestration/taskctl/Cargo.toml
+        run: cargo test -p taskctl
 
       - name: Build release binary
-        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
+        run: cargo build --release -p taskctl
 
       - name: Verify binary help
-        run: ./orchestration/taskctl/target/release/taskctl --help
+        run: ./target/release/taskctl --help
+
+  bcc:
+    name: bcc test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p bcc
+
+      - name: Verify bcc help
+        run: |
+          ./target/release/bcc --help
+          ./target/release/bcc --version
+
+      - name: Verify compile dry-run
+        run: ./target/release/bcc compile compiler/bcc/fixtures/session_service.yaml --dry-run 2>&1 | grep "module: SessionService"
+
+      - name: Verify extract
+        run: ./target/release/bcc extract compiler/bcc/fixtures/sample_service.ex --mode ast | grep '"language": "elixir"'
+
+      - name: Verify trace
+        run: ./target/release/bcc trace status compiler/bcc/fixtures/trace_project/src compiler/bcc/fixtures/trace_project/docs/backend-trace/files/src | grep "总文件: 3"
 
   bddc:
     name: bddc test (ubuntu)
@@ -71,7 +99,7 @@ jobs:
         run: ./bdd_compiler --help
 
   build-matrix:
-    name: taskctl build (${{ matrix.label }})
+    name: taskctl+bcc build (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -90,11 +118,12 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: orchestration/taskctl
 
-      - name: Build release binary
-        run: cargo build --release --manifest-path orchestration/taskctl/Cargo.toml
+      - name: Build all workspace members
+        run: cargo build --release
 
-      - name: Verify binary help
-        run: ./orchestration/taskctl/target/release/taskctl --help
+      - name: Verify taskctl
+        run: ./target/release/taskctl --help
+
+      - name: Verify bcc
+        run: ./target/release/bcc --help

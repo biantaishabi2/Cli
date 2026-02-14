@@ -15,18 +15,23 @@
 - **`bddc/`**（Elixir escript，已就绪）
   BDD 编译器：DSL 解析 → 指令集生成 → 运行时覆盖校验 → 测试代码生成。从 shop 项目迁入。
 
-- **`bcc/`**（Rust + Elixir emit，设计中）
-  后端编译器：YAML 技术设计 → Elixir Quoted AST → Pass Pipeline（最佳实践注入）→ `.ex` 模块骨架。
+- **`bcc/`**（Rust + Elixir emit，PoC 已完成）
+  后端编译器：三命令（compile/extract/trace）已跑通端到端闭环。compile: YAML → AST → Pass Pipeline → `.ex`；extract: 源码 → FileRecord JSON；trace: 文档覆盖审计。
 
 ## 快速上手
 
 ```bash
-# taskctl
-cd orchestration/taskctl
-cargo test
-cargo run -- --help
+# 构建所有 Rust 工具（workspace 根目录）
+cargo build --release
+./target/release/taskctl --help
+./target/release/bcc --help
 
-# bddc
+# bcc 快速验证
+./target/release/bcc compile compiler/bcc/fixtures/session_service.yaml --dry-run
+./target/release/bcc extract compiler/bcc/fixtures/sample_service.ex --mode ast
+./target/release/bcc trace status compiler/bcc/fixtures/trace_project/src compiler/bcc/fixtures/trace_project/docs/backend-trace/files/src
+
+# bddc（Elixir escript）
 cd compiler/bddc
 mix deps.get
 mix escript.build
