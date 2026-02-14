@@ -89,6 +89,9 @@ bcc arch validate \
   --out-dir docs/backend-trace/artifacts/trace2contract/versions/v3-draft \
   --profile both
 
+# 调试模式：只出报告，不因 gate/fobidden 非零退出
+bcc arch validate ... --fail-on-gate false --fail-on-forbidden false
+
 # 3) 导出 bugfix 可消费的 module_map
 bcc arch export-module-map \
   --module-map docs/backend-trace/artifacts/trace2contract/module_map.json \
@@ -117,6 +120,8 @@ bcc bdd seed \
 bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s context
 bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s generate
 ```
+
+`--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
 
 ## 支持语言
 

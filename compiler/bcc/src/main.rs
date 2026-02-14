@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 
 mod spec;
 mod compile;
@@ -224,9 +224,9 @@ enum ArchAction {
         out_dir: String,
         #[arg(long, default_value = "both")]
         profile: String,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         fail_on_gate: bool,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         fail_on_forbidden: bool,
     },
 
