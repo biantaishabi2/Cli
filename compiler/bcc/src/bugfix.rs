@@ -835,48 +835,143 @@ fn load_prompt_template(custom_path: Option<&str>) -> String {
     DEFAULT_PROMPT_TEMPLATE.to_string()
 }
 
-const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是后端测试分析专家。分析以下 git bugfix 记录，输出结构化的测试规格书 JSON。
+const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是后端测试分析专家。分析 git bugfix 记录，输出测试规格书 JSON。
 
-## 输出格式（严格 JSON，不要包裹在 markdown 代码块中）
+## 完整示例
 
-{
-  "source_commit": "完整commit hash",
-  "bug_summary": "一句话描述bug根因",
-  "module": "模块名（从文件路径推导）",
-  "action": "被修改的函数/方法名",
-  "fix_summary": "修复做了什么（一句话）",
-  "test_type": "regression|boundary|null_safety|security|concurrency",
-  "test_spec": {
-    "preconditions": [
-      {"what": "前置条件描述", "involves": "db|redis|session|config|file", "key_params": ["参数名"]}
-    ],
-    "trigger": {
-      "type": "controller_action|service_call|event_handler|cron_job",
-      "target": "类名或模块名",
-      "method": "方法名",
-      "key_params": ["触发时的关键参数"]
-    },
-    "assertions": [
-      {"what": "断言描述", "type": "return_value|db_state|redis_state|event_emitted|exception|http_status", "expected": "期望值"}
-    ]
-  },
-  "wrong_behavior": "修复前的错误行为",
-  "correct_behavior": "修复后的正确行为",
-  "data_dependencies": ["db", "redis", "api", "file"]
-}
+输入是一个"$config_id 从 999 改为 1001"的 bugfix，正确输出如下：
 
-## 分析规则
+{"source_commit":"abc123","bug_summary":"配置ID错误导致查询命中错误数据","module":"activity","action":"showAction","fix_summary":"将 $config_id 从 999 修正为 1001","test_type":"regression","boundary":"http","test_spec":{"preconditions":[{"what":"用户已登录","involves":"session"},{"what":"数据库存在 config_id=1001 的记录","involves":"db"}],"trigger":{"type":"controller_action","target":"ActivityController","method":"showAction"},"args":{"config_id":{"type":"int","required":true,"allowed":null},"user_id":{"type":"uuid","required":true,"allowed":null}},"outputs":{"result_count":"int","title":"string"},"assertions":[{"what":"查询使用 config_id=1001","type":"db_state","expected":"config_id=1001"}]},"wrong_behavior":"使用 config_id=999 查询","correct_behavior":"使用 config_id=1001 查询","data_dependencies":["db"]}
 
-1. diff 中被替换的旧代码 = bug 根因（wrong_behavior），新代码 = 正确行为（correct_behavior）
-2. preconditions 描述触发 bug 需要的数据/状态条件
-3. trigger 描述用户/系统的操作入口
-4. assertions 描述修复后应通过的检查点
-5. 如果 commit 不是 bugfix（纯 feature/refactor/config），输出: {"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
-6. test_type 根据 bug 类型选择：空值检查→null_safety，安全漏洞→security，并发问题→concurrency，边界条件→boundary，其他→regression
+注意示例中的关键结构：
+- 顶层有 boundary 字段
+- test_spec 中有 args（每个参数有 type/required/allowed）和 outputs
+- preconditions 只有 what 和 involves 两个字段
+- trigger 只有 type、target、method 三个字段
+
+## 字段规格
+
+必填顶层字段：source_commit, bug_summary, module, action, fix_summary, test_type, boundary, test_spec, wrong_behavior, correct_behavior, data_dependencies
+
+test_spec 必填子字段：preconditions, trigger, args, outputs, assertions
+
+args 格式：{"参数名": {"type": "string|int|uuid|bool|decimal|datetime|date|array|json", "required": true|false, "allowed": null|[...]}}
+outputs 格式：{"变量名": "类型"}
+preconditions 格式：[{"what": "描述", "involves": "db|redis|session|config|file"}]
+trigger 格式：{"type": "controller_action|...", "target": "类名", "method": "方法名"}
+
+boundary 取值：controller_action→http, service_call→service, event_handler→event, cron_job→cron
+
+如果不是 bugfix：{"skip": true, "reason": "feature|refactor|config", "summary": "简述"}
+
+## 参数提取
+
+从 PHP 代码推导 args：$request->get()、$request->getPost()、函数参数
+type：用于 DB 查询→uuid，算术→int，日期→datetime/date，json_decode→json，其他→string
+required：有 if(!$param) throw→true，有默认值/??→false
+allowed：switch/case 或 in_array→列举，无约束→null
+
+从 PHP 代码推导 outputs：_jsonformat() 数据结构、$this->view->setVar()、return 值
 
 ## Bugfix 记录
 
-{context_json}"#;
+{context_json}
+
+## 提醒
+
+输出纯 JSON（不要 markdown 包裹）。必须包含 boundary、args、outputs。preconditions 和 trigger 中不要加 key_params 或任何多余字段。参照上面的示例格式。"#;
+
+/// codex --output-schema 使用的 JSON Schema，强制输出结构
+const SPEC_OUTPUT_SCHEMA: &str = r#"{
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "skip": {"type": "boolean", "const": true},
+        "reason": {"type": "string", "enum": ["feature", "refactor", "config"]},
+        "summary": {"type": "string"}
+      },
+      "required": ["skip", "reason", "summary"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "source_commit": {"type": "string"},
+        "bug_summary": {"type": "string"},
+        "module": {"type": "string"},
+        "action": {"type": "string"},
+        "fix_summary": {"type": "string"},
+        "test_type": {"type": "string", "enum": ["regression", "boundary", "null_safety", "security", "concurrency"]},
+        "boundary": {"type": "string", "enum": ["http", "service", "domain", "db", "event", "cron"]},
+        "test_spec": {
+          "type": "object",
+          "properties": {
+            "preconditions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "what": {"type": "string"},
+                  "involves": {"type": "string", "enum": ["db", "redis", "session", "config", "file", "api"]}
+                },
+                "required": ["what", "involves"],
+                "additionalProperties": false
+              }
+            },
+            "trigger": {
+              "type": "object",
+              "properties": {
+                "type": {"type": "string", "enum": ["controller_action", "service_call", "event_handler", "cron_job"]},
+                "target": {"type": "string"},
+                "method": {"type": "string"}
+              },
+              "required": ["type", "target", "method"],
+              "additionalProperties": false
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "type": {"type": "string", "enum": ["string", "int", "uuid", "bool", "decimal", "datetime", "date", "array", "json"]},
+                  "required": {"type": "boolean"},
+                  "allowed": {}
+                },
+                "required": ["type", "required", "allowed"]
+              },
+              "minProperties": 1
+            },
+            "outputs": {
+              "type": "object",
+              "additionalProperties": {"type": "string"},
+              "minProperties": 1
+            },
+            "assertions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "what": {"type": "string"},
+                  "type": {"type": "string", "enum": ["return_value", "db_state", "redis_state", "event_emitted", "exception", "http_status"]},
+                  "expected": {"type": "string"}
+                },
+                "required": ["what", "type", "expected"]
+              }
+            }
+          },
+          "required": ["preconditions", "trigger", "args", "outputs", "assertions"]
+        },
+        "wrong_behavior": {"type": "string"},
+        "correct_behavior": {"type": "string"},
+        "data_dependencies": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["db", "redis", "api", "file", "session", "config"]}
+        }
+      },
+      "required": ["source_commit", "bug_summary", "module", "action", "fix_summary", "test_type", "boundary", "test_spec", "wrong_behavior", "correct_behavior", "data_dependencies"]
+    }
+  ]
+}"#;
 
 /// 从 LLM 输出中提取 JSON（去掉 markdown 包裹和非 JSON 文本）
 fn extract_json_block(text: &str) -> String {
