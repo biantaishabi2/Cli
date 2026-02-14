@@ -1003,7 +1003,9 @@ fn organize(output: &str, coverage_report: Option<&str>) {
             "specs": specs,
         });
 
-        let module_path = format!("{}/{}.json", by_module_dir, module);
+        // module 名可能含 /（如 sysadmin/property），替换为 _ 作为文件名
+        let safe_name = module.replace('/', "_");
+        let module_path = format!("{}/{}.json", by_module_dir, safe_name);
         let pretty = serde_json::to_string_pretty(&module_json).unwrap();
         fs::write(&module_path, &pretty).ok();
 
@@ -1504,5 +1506,140 @@ class Foo {
         assert!(result.starts_with('{'));
         assert!(result.ends_with('}'));
         assert!(result.contains("order"));
+    }
+
+    // ─── organize (集成测试) ──────────────────────────
+
+    /// 构造 specs/ 目录写入假 spec JSON，返回 tempdir
+    fn setup_organize_test(specs: &[(&str, serde_json::Value)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let specs_dir = dir.path().join("specs");
+        fs::create_dir_all(&specs_dir).unwrap();
+        for (name, json) in specs {
+            fs::write(
+                specs_dir.join(format!("{}.json", name)),
+                serde_json::to_string(json).unwrap(),
+            ).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn organize_groups_by_module() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+            ("bbb222", serde_json::json!({
+                "source_commit": "bbb222", "module": "order",
+                "bug_summary": "重复", "test_type": "regression"
+            })),
+            ("ccc333", serde_json::json!({
+                "source_commit": "ccc333", "module": "payment",
+                "bug_summary": "金额", "test_type": "boundary"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        // by_module/ 应有 2 个文件
+        let by_module = dir.path().join("by_module");
+        assert!(by_module.join("order.json").exists(), "order.json should exist");
+        assert!(by_module.join("payment.json").exists(), "payment.json should exist");
+
+        // order 模块应有 2 个 spec
+        let order: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("order.json")).unwrap()
+        ).unwrap();
+        assert_eq!(order["spec_count"], 2);
+        assert_eq!(order["specs"].as_array().unwrap().len(), 2);
+
+        // payment 模块应有 1 个 spec
+        let payment: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("payment.json")).unwrap()
+        ).unwrap();
+        assert_eq!(payment["spec_count"], 1);
+
+        // coverage.md 应存在且包含模块统计
+        let coverage = fs::read_to_string(dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("order"));
+        assert!(coverage.contains("payment"));
+        assert!(coverage.contains("**3**")); // 合计 3 个 spec
+    }
+
+    #[test]
+    fn organize_skips_non_bugfix() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+            ("bbb222", serde_json::json!({
+                "skip": true, "reason": "feature", "summary": "新增功能"
+            })),
+            ("ccc333", serde_json::json!({
+                "skip": true, "reason": "refactor", "summary": "重构"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        // 只有 order 模块 1 个 spec
+        let by_module = dir.path().join("by_module");
+        assert!(by_module.join("order.json").exists());
+        let order: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(by_module.join("order.json")).unwrap()
+        ).unwrap();
+        assert_eq!(order["spec_count"], 1);
+
+        // coverage 应显示跳过数
+        let coverage = fs::read_to_string(dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("跳过非 bugfix：2"));
+    }
+
+    #[test]
+    fn organize_module_with_slash_in_name() {
+        // module 含 /（如 sysadmin/property）应替换为 _ 作为文件名
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "sysadmin/property",
+                "bug_summary": "权限bug", "test_type": "regression"
+            })),
+            ("bbb222", serde_json::json!({
+                "source_commit": "bbb222", "module": "outterajax/oaactive",
+                "bug_summary": "空值", "test_type": "null_safety"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        organize(output, None);
+
+        let by_module = dir.path().join("by_module");
+        // / 被替换为 _
+        assert!(by_module.join("sysadmin_property.json").exists(),
+            "sysadmin/property should become sysadmin_property.json");
+        assert!(by_module.join("outterajax_oaactive.json").exists(),
+            "outterajax/oaactive should become outterajax_oaactive.json");
+
+        // 不应创建子目录
+        assert!(!by_module.join("sysadmin").exists(),
+            "should not create sysadmin/ subdirectory");
+    }
+
+    #[test]
+    fn organize_custom_coverage_report_path() {
+        let dir = setup_organize_test(&[
+            ("aaa111", serde_json::json!({
+                "source_commit": "aaa111", "module": "order",
+                "bug_summary": "test", "test_type": "regression"
+            })),
+        ]);
+        let output = dir.path().to_str().unwrap();
+        let custom_path = dir.path().join("custom_report.md");
+        organize(output, Some(custom_path.to_str().unwrap()));
+
+        assert!(custom_path.exists(), "custom coverage report should exist");
+        assert!(!dir.path().join("coverage.md").exists(),
+            "default coverage.md should not be created");
     }
 }
