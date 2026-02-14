@@ -96,3 +96,4 @@ cargo run -- extract fixtures/sample_controller.php --mode ast  # PHP 端到端
 
 - [技术设计文档](docs/技术设计文档-后端编译器.md) — 完整设计、BDD 场景、里程碑
 - [BDD 场景提取方案](docs/BDD场景提取方案.md) — bugfix 子命令详细设计
+- [架构闭环迁移计划](docs/架构闭环迁移计划.md) — TS 过渡到 Rust 的闭环落地路径与待实现清单
