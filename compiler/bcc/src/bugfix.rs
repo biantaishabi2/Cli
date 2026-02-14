@@ -731,13 +731,22 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
         if codex_available {
             // 通过 stdin 传入 prompt（避免大 JSON 超 ARG_MAX）
             let tmp_out = format!("{}/{}.tmp", specs_dir, stem);
+
+            // 查找 output-schema 文件
+            let schema_path = find_schema_file();
+            let mut args = vec![
+                "exec".to_string(),
+                "--full-auto".to_string(),
+                "--ephemeral".to_string(),
+                "-o".to_string(), tmp_out.clone(),
+            ];
+            if let Some(ref sp) = schema_path {
+                args.push("--output-schema".to_string());
+                args.push(sp.clone());
+            }
+
             let result = Command::new("codex")
-                .args([
-                    "exec",
-                    "--full-auto",
-                    "--ephemeral",
-                    "-o", &tmp_out,
-                ])
+                .args(&args)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -833,6 +842,19 @@ fn load_prompt_template(custom_path: Option<&str>) -> String {
 
     // 最终降级：内嵌默认模板
     DEFAULT_PROMPT_TEMPLATE.to_string()
+}
+
+/// 查找 output-schema JSON 文件（与 prompt 模板同目录）
+fn find_schema_file() -> Option<String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let path = dir.join("../../compiler/bcc/prompts/bugfix_schema.json");
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
 }
 
 const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是后端测试分析专家。分析 git bugfix 记录，输出测试规格书 JSON。
