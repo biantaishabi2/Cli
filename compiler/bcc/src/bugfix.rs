@@ -1642,4 +1642,431 @@ class Foo {
         assert!(!dir.path().join("coverage.md").exists(),
             "default coverage.md should not be created");
     }
+
+    // ─── extract_file_diff ──────────────────────────────
+
+    #[test]
+    fn extract_file_diff_single_file() {
+        let diff = "\
+diff --git a/app/controllers/OrderController.php b/app/controllers/OrderController.php
+index abc..def 100644
+--- a/app/controllers/OrderController.php
++++ b/app/controllers/OrderController.php
+@@ -10,3 +10,4 @@
+ context line
+-old line
++new line
++added line
+";
+        let result = extract_file_diff(diff, "OrderController.php");
+        assert!(result.contains("diff --git"));
+        assert!(result.contains("+new line"));
+        assert!(result.contains("+added line"));
+    }
+
+    #[test]
+    fn extract_file_diff_from_multi_file_diff() {
+        let diff = "\
+diff --git a/foo.php b/foo.php
+--- a/foo.php
++++ b/foo.php
+@@ -1,2 +1,2 @@
+-old foo
++new foo
+diff --git a/bar.php b/bar.php
+--- a/bar.php
++++ b/bar.php
+@@ -1,2 +1,2 @@
+-old bar
++new bar
+diff --git a/baz.php b/baz.php
+--- a/baz.php
++++ b/baz.php
+@@ -1,2 +1,2 @@
+-old baz
++new baz
+";
+        // 只提取 bar.php 的部分
+        let result = extract_file_diff(diff, "bar.php");
+        assert!(result.contains("+new bar"));
+        assert!(!result.contains("foo"), "should not contain foo.php content");
+        assert!(!result.contains("baz"), "should not contain baz.php content");
+    }
+
+    #[test]
+    fn extract_file_diff_not_found() {
+        let diff = "diff --git a/foo.php b/foo.php\n+something\n";
+        let result = extract_file_diff(diff, "nonexistent.php");
+        assert!(result.is_empty());
+    }
+
+    // ─── parse_diff_hunks ────────────────────────────────
+
+    #[test]
+    fn parse_diff_hunks_php_function_changed() {
+        let before = r#"<?php
+class OrderController {
+    public function create($data) {
+        return $data;
+    }
+    public function delete($id) {
+        DB::delete($id);
+    }
+}"#;
+        let after = r#"<?php
+class OrderController {
+    public function create($data) {
+        if (empty($data)) { return null; }
+        return $data;
+    }
+    public function delete($id) {
+        DB::delete($id);
+    }
+}"#;
+        // 构造与 after 对应的 diff
+        let diff = "\
+diff --git a/OrderController.php b/OrderController.php
+--- a/OrderController.php
++++ b/OrderController.php
+@@ -2,4 +2,5 @@
+ class OrderController {
+     public function create($data) {
++        if (empty($data)) { return null; }
+         return $data;
+     }
+";
+        let hunks = parse_diff_hunks(diff, "OrderController.php", before, after, "php");
+        // create 被改了，应出现在 hunks 中
+        assert!(!hunks.is_empty(), "should have at least one hunk");
+        let func_names: Vec<&str> = hunks.iter()
+            .filter_map(|h| h["function_name"].as_str())
+            .collect();
+        assert!(func_names.contains(&"create"), "should contain changed function 'create'");
+        // delete 未改，不应出现
+        assert!(!func_names.contains(&"delete"), "should not contain unchanged function 'delete'");
+    }
+
+    #[test]
+    fn parse_diff_hunks_empty_after() {
+        // after 为空时应返回空
+        let hunks = parse_diff_hunks("diff...", "foo.php", "before", "", "php");
+        assert!(hunks.is_empty());
+    }
+
+    // ─── load_prompt_template ────────────────────────────
+
+    #[test]
+    fn load_prompt_template_custom() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let tpl_path = dir.path().join("my_template.txt");
+        fs::write(&tpl_path, "custom prompt: {context_json}").unwrap();
+
+        let result = load_prompt_template(Some(tpl_path.to_str().unwrap()));
+        assert_eq!(result, "custom prompt: {context_json}");
+    }
+
+    #[test]
+    fn load_prompt_template_fallback_default() {
+        // 传一个不存在的路径，应降级到内置默认模板
+        let result = load_prompt_template(Some("/nonexistent/path/template.txt"));
+        assert!(result.contains("测试规格书"), "should contain default template content");
+        assert!(result.contains("{context_json}"), "should contain placeholder");
+    }
+
+    #[test]
+    fn load_prompt_template_none() {
+        // 不传自定义路径，使用默认模板
+        let result = load_prompt_template(None);
+        assert!(result.contains("测试规格书"));
+    }
+
+    // ─── collect + context (git 集成测试) ────────────────
+
+    /// 创建一个临时 git 仓库，提交若干 PHP bugfix commit
+    fn setup_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let repo = dir.path().to_str().unwrap();
+
+        // git init
+        Command::new("git").args(["-C", repo, "init"]).output().unwrap();
+        Command::new("git").args(["-C", repo, "config", "user.email", "test@test.com"]).output().unwrap();
+        Command::new("git").args(["-C", repo, "config", "user.name", "Test"]).output().unwrap();
+
+        // commit 1: 初始文件
+        let ctrl_dir = dir.path().join("app/controllers");
+        fs::create_dir_all(&ctrl_dir).unwrap();
+        fs::write(ctrl_dir.join("OrderController.php"), r#"<?php
+class OrderController {
+    public function create($data) {
+        return save($data);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "init: add OrderController"]).output().unwrap();
+
+        // commit 2: bugfix（关键字匹配 + 文件路径匹配）
+        fs::write(ctrl_dir.join("OrderController.php"), r#"<?php
+class OrderController {
+    public function create($data) {
+        if (empty($data)) { return null; }
+        return save($data);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "fix: 修复空值导致报错"]).output().unwrap();
+
+        // commit 3: 另一个 bugfix
+        fs::write(ctrl_dir.join("PayController.php"), r#"<?php
+class PayController {
+    public function refund($id) {
+        return do_refund($id);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "init: add PayController"]).output().unwrap();
+
+        fs::write(ctrl_dir.join("PayController.php"), r#"<?php
+class PayController {
+    public function refund($id) {
+        if ($id <= 0) { throw new Exception("invalid id"); }
+        return do_refund($id);
+    }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "bug: 退款ID校验缺失"]).output().unwrap();
+
+        // commit 4: 非 bugfix（feature）
+        fs::write(ctrl_dir.join("UserController.php"), r#"<?php
+class UserController {
+    public function list() { return []; }
+}
+"#).unwrap();
+        Command::new("git").args(["-C", repo, "add", "."]).output().unwrap();
+        Command::new("git").args(["-C", repo, "commit", "-m", "feat: 新增用户列表"]).output().unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn collect_by_keyword() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+
+        let inv_path = output_dir.path().join("inventory.json");
+        assert!(inv_path.exists(), "inventory.json should be created");
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&inv_path).unwrap()
+        ).unwrap();
+
+        // 应该扫到 2 个 bugfix commit（"fix: 修复空值" + "bug: 退款ID"）
+        let commits = inv["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 2, "should find 2 bugfix commits by keyword");
+
+        // 每个 commit 应有 grade 和 module
+        for c in commits {
+            assert!(c["grade"].as_str().is_some());
+            assert!(c["module"].as_str().is_some());
+            assert!(!c["changed_files"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn collect_by_path() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 按路径扫描 app/controllers/，应扫到所有涉及该路径的 commit
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], None, false, "php");
+
+        let inv_path = output_dir.path().join("inventory.json");
+        assert!(inv_path.exists());
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&inv_path).unwrap()
+        ).unwrap();
+
+        // 按路径扫到的应比按关键字多（init commit 也会被扫到，只要改了后端文件）
+        let commits = inv["commits"].as_array().unwrap();
+        assert!(commits.len() >= 2, "path scan should find at least 2 commits, got {}", commits.len());
+    }
+
+    #[test]
+    fn collect_with_limit() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], Some(1), false, "php");
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+
+        assert_eq!(inv["commits"].as_array().unwrap().len(), 1, "limit=1 should keep only 1 commit");
+    }
+
+    #[test]
+    fn collect_skip_existing() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 第一次 collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        let content1 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
+
+        // 第二次 collect（不带 force），应跳过
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        let content2 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
+        assert_eq!(content1, content2, "without force, inventory should not be overwritten");
+    }
+
+    #[test]
+    fn context_extracts_diffs() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // 先 collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+
+        // 再 context
+        context(output, repo, &["A", "B"], None, false, "php");
+
+        let contexts_dir = output_dir.path().join("contexts");
+        assert!(contexts_dir.exists(), "contexts/ should be created");
+
+        let context_files: Vec<_> = fs::read_dir(&contexts_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+            .collect();
+
+        assert_eq!(context_files.len(), 2, "should have 2 context files (one per bugfix commit)");
+
+        // 验证 context 内容结构
+        for entry in &context_files {
+            let content: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(entry.path()).unwrap()
+            ).unwrap();
+            assert!(content["hash"].as_str().is_some(), "should have hash");
+            assert!(content["message"].as_str().is_some(), "should have message");
+            assert!(content["diffs"].as_array().is_some(), "should have diffs array");
+
+            // diffs 中应有函数级 hunks
+            let diffs = content["diffs"].as_array().unwrap();
+            assert!(!diffs.is_empty(), "should have at least one file diff");
+            for d in diffs {
+                assert!(d["file"].as_str().is_some());
+                assert!(d["raw_diff"].as_str().is_some());
+                assert!(d["hunks"].as_array().is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn context_skip_existing() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        context(output, repo, &["A", "B"], None, false, "php");
+
+        // 读取 inventory 获取 commit hash
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+        let first_hash = inv["commits"][0]["hash"].as_str().unwrap();
+        let ctx_path = output_dir.path().join(format!("contexts/{}.json", first_hash));
+        let content1 = fs::read_to_string(&ctx_path).unwrap();
+
+        // 再跑一次 context（不带 force），文件不应被覆盖
+        context(output, repo, &["A", "B"], None, false, "php");
+        let content2 = fs::read_to_string(&ctx_path).unwrap();
+        assert_eq!(content1, content2, "without force, context file should not be overwritten");
+    }
+
+    // ─── 端到端：collect → context → organize ────────────
+
+    #[test]
+    fn end_to_end_collect_context_organize() {
+        let repo_dir = setup_git_repo();
+        let output_dir = tempfile::tempdir().expect("create output dir");
+        let repo = repo_dir.path().to_str().unwrap();
+        let output = output_dir.path().to_str().unwrap();
+        fs::create_dir_all(output).ok();
+
+        // Step 1: collect
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        assert!(output_dir.path().join("inventory.json").exists());
+
+        // Step 2: context
+        context(output, repo, &["A", "B"], None, false, "php");
+        assert!(output_dir.path().join("contexts").exists());
+
+        // Step 3: 模拟 generate 产出（直接写 specs，不调 codex）
+        let specs_dir = output_dir.path().join("specs");
+        fs::create_dir_all(&specs_dir).unwrap();
+
+        let inv: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
+        ).unwrap();
+
+        for commit in inv["commits"].as_array().unwrap() {
+            let hash = commit["hash"].as_str().unwrap();
+            let spec = serde_json::json!({
+                "source_commit": hash,
+                "module": commit["module"],
+                "bug_summary": "test bug",
+                "test_type": "regression",
+                "test_spec": {
+                    "preconditions": [],
+                    "trigger": {"type": "controller_action", "target": "Test", "method": "test"},
+                    "assertions": [{"what": "test", "type": "return_value", "expected": "ok"}]
+                },
+                "wrong_behavior": "before",
+                "correct_behavior": "after",
+            });
+            fs::write(specs_dir.join(format!("{}.json", hash)), serde_json::to_string(&spec).unwrap()).unwrap();
+        }
+
+        // Step 4: organize
+        organize(output, None);
+
+        // 验证 by_module 产出
+        let by_module = output_dir.path().join("by_module");
+        assert!(by_module.exists(), "by_module/ should exist");
+        let module_files: Vec<_> = fs::read_dir(&by_module).unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+            .collect();
+        assert!(!module_files.is_empty(), "should have at least one module file");
+
+        // 验证 coverage.md
+        let coverage = fs::read_to_string(output_dir.path().join("coverage.md")).unwrap();
+        assert!(coverage.contains("覆盖率"));
+        assert!(coverage.contains("bddc"));
+    }
 }
