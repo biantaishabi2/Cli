@@ -88,6 +88,7 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
             ]),
         };
 
+        // def name(args), do: body → {:def, [], [call, [do: body]]}
         body.push(QuotedAST::Call {
             name: "def".into(),
             meta: vec![],
@@ -97,18 +98,28 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
                     meta: vec![],
                     args: params,
                 },
-                return_val,
+                QuotedAST::List(vec![
+                    QuotedAST::Tuple(vec![
+                        QuotedAST::Atom("do".into()),
+                        return_val,
+                    ]),
+                ]),
             ],
         });
     }
 
-    // defmodule 包裹
+    // defmodule 包裹: {:defmodule, [], [aliases, [do: block]]}
     vec![QuotedAST::Call {
         name: "defmodule".into(),
         meta: vec![],
         args: vec![
             QuotedAST::Aliases { segments: vec![spec.module.name.clone()] },
-            QuotedAST::Block(body),
+            QuotedAST::List(vec![
+                QuotedAST::Tuple(vec![
+                    QuotedAST::Atom("do".into()),
+                    QuotedAST::Block(body),
+                ]),
+            ]),
         ],
     }]
 }

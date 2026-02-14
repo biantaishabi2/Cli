@@ -56,7 +56,7 @@ pub fn validate(spec: &ModuleSpec, path: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// compile 命令入口
-pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Option<&str>, force: bool) {
+pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Option<&str>, force: bool, verbose: bool) {
     // Step 1: 解析 YAML
     let spec = match parse_yaml(path) {
         Ok(s) => s,
@@ -111,7 +111,7 @@ pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Opti
         }
     };
 
-    crate::compile::emit::emit_to_dir(&ast, &spec, output_dir, force);
+    crate::compile::emit::emit_to_dir(&ast, &spec, output_dir, force, verbose);
 }
 
 pub mod ast;

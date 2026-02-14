@@ -39,6 +39,10 @@ enum Commands {
         /// Force overwrite existing output
         #[arg(long)]
         force: bool,
+
+        /// Show verbose emit pipeline logs
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Extract structural info from source files into FileRecord JSON
@@ -46,9 +50,13 @@ enum Commands {
         /// Source file path
         path: String,
 
-        /// Output mode: ast (JSON), yaml (draft), markdown
+        /// Output mode: ast (JSON), doc (markdown), yaml (draft)
         #[arg(long, default_value = "ast")]
         mode: String,
+
+        /// Output file (default: stdout)
+        #[arg(long)]
+        output: Option<String>,
     },
 
     /// Audit documentation coverage against source files
@@ -98,11 +106,11 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Compile { path, dry_run, emit_ast, passes, output, force }) => {
-            compile::run(&path, dry_run, emit_ast, &passes, output.as_deref(), force);
+        Some(Commands::Compile { path, dry_run, emit_ast, passes, output, force, verbose }) => {
+            compile::run(&path, dry_run, emit_ast, &passes, output.as_deref(), force, verbose);
         }
-        Some(Commands::Extract { path, mode }) => {
-            extract::run(&path, &mode);
+        Some(Commands::Extract { path, mode, output }) => {
+            extract::run(&path, &mode, output.as_deref());
         }
         Some(Commands::Trace { action }) => match action {
             TraceAction::Status { source_dir, docs_dir } => {

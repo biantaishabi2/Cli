@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// 将 AST 序列化为 Elixir 源码并写入文件
-pub fn emit_to_dir(ast: &[QuotedAST], spec: &ModuleSpec, output_dir: &str, force: bool) {
+pub fn emit_to_dir(ast: &[QuotedAST], spec: &ModuleSpec, output_dir: &str, force: bool, verbose: bool) {
     let module_name_snake = to_snake_case(&spec.module.name);
     let target_dir = Path::new(output_dir).join(&module_name_snake);
 
@@ -23,9 +23,17 @@ pub fn emit_to_dir(ast: &[QuotedAST], spec: &ModuleSpec, output_dir: &str, force
     let output_file = target_dir.join(format!("{}.ex", module_name_snake));
 
     // 先尝试用 Elixir 序列化
-    let source = match emit_via_elixir(ast) {
-        Ok(s) => s,
-        Err(_) => {
+    let source = match emit_via_elixir(ast, verbose) {
+        Ok(s) => {
+            if verbose {
+                eprintln!("[verbose] emit: 使用 bcc_emit.exs (Elixir Macro.to_string + Code.format_string!)");
+            }
+            s
+        }
+        Err(e) => {
+            if verbose {
+                eprintln!("[verbose] emit: Elixir 路径失败 ({}), 回退到 emit_simple", e);
+            }
             // Elixir 不可用时，用 Rust 侧简易序列化
             emit_simple(ast, spec)
         }
@@ -36,11 +44,19 @@ pub fn emit_to_dir(ast: &[QuotedAST], spec: &ModuleSpec, output_dir: &str, force
 }
 
 /// 通过 Elixir helper 序列化 AST
-fn emit_via_elixir(ast: &[QuotedAST]) -> Result<String, String> {
+fn emit_via_elixir(ast: &[QuotedAST], verbose: bool) -> Result<String, String> {
     let json = serde_json::to_string(ast).map_err(|e| e.to_string())?;
+
+    if verbose {
+        eprintln!("[verbose] emit: AST JSON 大小 {} bytes", json.len());
+    }
 
     // 查找 bcc_emit.exs 脚本
     let script_path = find_emit_script()?;
+
+    if verbose {
+        eprintln!("[verbose] emit: 找到脚本 {}", script_path);
+    }
 
     let output = Command::new("elixir")
         .arg(&script_path)
@@ -59,30 +75,38 @@ fn emit_via_elixir(ast: &[QuotedAST]) -> Result<String, String> {
         .map_err(|e| format!("elixir not available: {}", e))?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let source = String::from_utf8_lossy(&output.stdout).to_string();
+        if verbose {
+            eprintln!("[verbose] emit: Elixir 输出 {} bytes", source.len());
+        }
+        Ok(source)
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if verbose {
+            eprintln!("[verbose] emit: Elixir 错误: {}", stderr.trim());
+        }
+        Err(stderr)
     }
 }
 
 fn find_emit_script() -> Result<String, String> {
-    // 按优先级查找脚本位置
-    let candidates = [
-        // 相对于 binary 的位置
-        "scripts/bcc_emit.exs",
-        // 开发环境
-        "compiler/bcc/scripts/bcc_emit.exs",
-    ];
+    let script_name = "bcc_emit.exs";
 
-    // 获取 binary 所在目录
+    // 1. 相对于 binary 所在目录的 scripts/
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let script = exe_dir.join("scripts/bcc_emit.exs");
+            let script = exe_dir.join("scripts").join(script_name);
             if script.exists() {
                 return Ok(script.to_string_lossy().to_string());
             }
         }
     }
+
+    // 2. 相对于 cwd 的常见位置
+    let candidates = [
+        format!("scripts/{}", script_name),
+        format!("compiler/bcc/scripts/{}", script_name),
+    ];
 
     for c in &candidates {
         if Path::new(c).exists() {
@@ -90,7 +114,14 @@ fn find_emit_script() -> Result<String, String> {
         }
     }
 
-    Err("bcc_emit.exs not found".into())
+    // 3. 通过 BCC_EMIT_SCRIPT 环境变量
+    if let Ok(path) = std::env::var("BCC_EMIT_SCRIPT") {
+        if Path::new(&path).exists() {
+            return Ok(path);
+        }
+    }
+
+    Err("bcc_emit.exs not found (set BCC_EMIT_SCRIPT env or place in scripts/)".into())
 }
 
 /// Rust 侧简易序列化（不依赖 Elixir）
