@@ -5,6 +5,8 @@ mod compile;
 mod extract;
 mod trace;
 mod bugfix;
+mod arch;
+mod bdd_seed;
 
 /// BCC — Backend Compiler for YAML-driven Elixir skeleton generation
 #[derive(Parser)]
@@ -140,6 +142,18 @@ enum Commands {
         #[arg(long)]
         coverage_report: Option<String>,
     },
+
+    /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report）
+    Arch {
+        #[command(subcommand)]
+        action: ArchAction,
+    },
+
+    /// BDD 场景种子生成（新项目主线）
+    Bdd {
+        #[command(subcommand)]
+        action: BddAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -175,6 +189,100 @@ enum TraceAction {
         /// Max files to seed
         #[arg(long)]
         max: Option<usize>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArchAction {
+    /// 生成 target/transition/gates 初稿
+    Matrix {
+        #[arg(long)]
+        seed_file: String,
+        #[arg(long)]
+        ast_file: String,
+        #[arg(long, default_value = "docs/backend-trace/trace2contract/seed")]
+        out_dir: String,
+        #[arg(long, default_value = "v3")]
+        version: String,
+        #[arg(long, default_value = "all")]
+        emit: String,
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// 回放实际依赖并做 gate 验证
+    Validate {
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        transition: String,
+        #[arg(long)]
+        gates: String,
+        #[arg(long)]
+        actual: String,
+        #[arg(long, default_value = "docs/backend-trace/artifacts/trace2contract/versions/v3-draft")]
+        out_dir: String,
+        #[arg(long, default_value = "both")]
+        profile: String,
+        #[arg(long, default_value_t = true)]
+        fail_on_gate: bool,
+        #[arg(long, default_value_t = true)]
+        fail_on_forbidden: bool,
+    },
+
+    /// 导出 bugfix 可消费的 module_map.json
+    ExportModuleMap {
+        #[arg(long)]
+        module_map: String,
+        #[arg(long)]
+        module_registry: Option<String>,
+        #[arg(long, default_value = "docs/backend-trace/artifacts/module_map.bugfix.json")]
+        out: String,
+        #[arg(long, default_value = "file")]
+        mapping_mode: String,
+        #[arg(long, default_value_t = true)]
+        include_module_names: bool,
+    },
+
+    /// 聚合架构债务报告
+    Report {
+        #[arg(long)]
+        scenario_validation: String,
+        #[arg(long)]
+        gate_evaluation: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        out: String,
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        #[arg(long, default_value = "md")]
+        format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum BddAction {
+    /// 生成/归并 BDD 场景种子
+    Seed {
+        #[arg(long)]
+        source: String,
+        #[arg(short, long)]
+        output: String,
+        #[arg(short, long, default_value = "organize")]
+        step: String,
+        #[arg(long)]
+        module: Option<String>,
+        #[arg(long, default_value = "all")]
+        edge_class: String,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        prompt_template: Option<String>,
+        #[arg(long)]
+        coverage_report: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -235,6 +343,54 @@ fn main() {
                 coverage_report.as_deref(),
             );
         }
+        Some(Commands::Arch { action }) => match action {
+            ArchAction::Matrix { seed_file, ast_file, out_dir, version, emit, force } => {
+                arch::matrix(&seed_file, &ast_file, &out_dir, &version, &emit, force);
+            }
+            ArchAction::Validate {
+                target, transition, gates, actual, out_dir, profile, fail_on_gate, fail_on_forbidden
+            } => {
+                arch::validate(
+                    &target, &transition, &gates, &actual, &out_dir, &profile, fail_on_gate, fail_on_forbidden
+                );
+            }
+            ArchAction::ExportModuleMap {
+                module_map, module_registry, out, mapping_mode, include_module_names
+            } => {
+                arch::export_module_map(
+                    &module_map,
+                    module_registry.as_deref(),
+                    &out,
+                    &mapping_mode,
+                    include_module_names,
+                );
+            }
+            ArchAction::Report { scenario_validation, gate_evaluation, summary, out, top, format } => {
+                arch::report(&scenario_validation, &gate_evaluation, &summary, &out, top, &format);
+            }
+        },
+        Some(Commands::Bdd { action }) => match action {
+            BddAction::Seed {
+                source, output, step, module, edge_class, limit, prompt_template, coverage_report, force
+            } => {
+                let step_norm = step.to_ascii_lowercase();
+                if !["context", "generate", "organize"].contains(&step_norm.as_str()) {
+                    eprintln!("invalid --step '{}': expected context|generate|organize", step);
+                    std::process::exit(1);
+                }
+                bdd_seed::run(
+                    &source,
+                    &output,
+                    &step_norm,
+                    module.as_deref(),
+                    &edge_class,
+                    limit,
+                    prompt_template.as_deref(),
+                    coverage_report.as_deref(),
+                    force,
+                );
+            }
+        },
         None => {
             eprintln!("Usage: bcc <COMMAND>\n\nFor more information, try '--help'.");
             std::process::exit(2);
