@@ -1,0 +1,18 @@
+# niuma 配置示例
+# 复制为 .niuma.yml 使用
+
+ai:
+  # 默认 AI provider
+  default: codex
+
+  # AI provider 列表
+  providers:
+    kimi:
+      cmd: "kimi --prompt {prompt} --work-dir {workdir}"
+    opencode:
+      cmd: "opencode run {prompt}"
+    codex:
+      cmd: "codex exec {prompt}"
+
+# 环境变量覆盖：
+# NIUMA_AI_DEFAULT=kimi  覆盖 ai.default

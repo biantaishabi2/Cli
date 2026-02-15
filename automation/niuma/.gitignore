@@ -1,0 +1,21 @@
+# Go 构建产物
+niuma
+*.exe
+*.test
+*.out
+
+# 依赖缓存
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 配置文件（含敏感信息）
+.niuma.yml
