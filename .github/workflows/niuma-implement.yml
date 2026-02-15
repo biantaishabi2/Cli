@@ -36,8 +36,11 @@ jobs:
       - name: Implement Code
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           ./niuma fix \
-            --repo ${{ github.repository }} \
-            --issue ${{ github.event.issue.number }} \
-            --repo-dir ${{ github.workspace }}
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --repo-dir "$WORKSPACE"

@@ -39,12 +39,14 @@ jobs:
         if: github.event_name == 'issue_comment'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          LABELS=$(gh issue view ${{ github.event.issue.number }} --json labels -q '.labels[].name')
+          LABELS=$(gh issue view "$ISSUE_NUMBER" --json labels -q '.labels[].name')
           if echo "$LABELS" | grep -q "bot:needs-discussion"; then
             ./niuma plan-final \
-              --repo ${{ github.repository }} \
-              --issue ${{ github.event.issue.number }} || true
+              --repo "$REPO" \
+              --issue "$ISSUE_NUMBER" || true
           fi
 
       # 定时扫描：检查所有讨论中的 issue
@@ -52,11 +54,12 @@ jobs:
         if: github.event_name == 'schedule'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           ISSUES=$(gh issue list --label "bot:needs-discussion" --json number -q '.[].number')
           for ISSUE in $ISSUES; do
             echo "检查 issue #$ISSUE 讨论收敛..."
             ./niuma plan-final \
-              --repo ${{ github.repository }} \
-              --issue $ISSUE || true
+              --repo "$REPO" \
+              --issue "$ISSUE" || true
           done

@@ -34,10 +34,11 @@ jobs:
         id: find_pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          ISSUE=${{ github.event.issue.number }}
           # 从 PR_CREATED marker 中读取 PR 号
-          PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
+          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
             --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
@@ -45,8 +46,11 @@ jobs:
         if: steps.find_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
         run: |
           ./niuma review \
-            --repo ${{ github.repository }} \
-            --issue ${{ github.event.issue.number }} \
-            --pr ${{ steps.find_pr.outputs.pr_number }}
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER"

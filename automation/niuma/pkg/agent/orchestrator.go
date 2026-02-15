@@ -288,7 +288,10 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 
 	// 读取最终方案
 	finalMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePlanFinal)
-	if err != nil || finalMC == nil {
+	if err != nil {
+		return fmt.Errorf("查找最终方案失败: %w", err)
+	}
+	if finalMC == nil {
 		return fmt.Errorf("未找到最终方案")
 	}
 
@@ -345,6 +348,7 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 	var gitOps *GitOps
 	var branchName string
 
+	var cleanupWorktree func() // worktree 清理函数（失败时调用）
 	if o.config != nil && o.config.RepoDir != "" {
 		// 使用 worktree 隔离
 		ws := NewWorkspace(o.config.RepoDir)
@@ -356,7 +360,16 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 		actualWorkDir = wtPath
 		branchName = ws.BranchName(o.issueNumber, slug)
 		gitOps = NewGitOps(wtPath)
+		// 失败时清理 worktree（成功创建 PR 后置 nil 跳过清理，供 iterate 复用）
+		cleanupWorktree = func() { _ = ws.Remove(o.issueNumber) }
 	}
+
+	// 失败时清理 worktree（defer 在 return 前执行）
+	defer func() {
+		if cleanupWorktree != nil {
+			cleanupWorktree()
+		}
+	}()
 
 	// AI agent 模式执行
 	implProvider := o.getImplementProvider()
@@ -390,6 +403,8 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 				return 0, fmt.Errorf("创建 PR 失败: %w", err)
 			}
 			prNumber = pr.GetNumber()
+			// 成功创建 PR，保留 worktree 供 iterate 复用
+			cleanupWorktree = nil
 		}
 	}
 
@@ -441,7 +456,10 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 
 	// 读取最终方案
 	finalMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePlanFinal)
-	if err != nil || finalMC == nil {
+	if err != nil {
+		return fmt.Errorf("查找最终方案失败: %w", err)
+	}
+	if finalMC == nil {
 		return fmt.Errorf("未找到最终方案")
 	}
 
@@ -501,11 +519,8 @@ func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, p
 			gitOps = NewGitOps(actualWorkDir)
 			// 从 git 获取实际分支名，避免 issue 标题变化导致 slug 不匹配
 			branchName, _ = gitOps.CurrentBranch()
-		}
-		if gitOps == nil {
-			gitOps = NewGitOps(actualWorkDir)
-			slug := slugFromTitle(input.IssueTitle)
-			branchName = ws.BranchName(o.issueNumber, slug)
+		} else {
+			return fmt.Errorf("worktree 不存在（issue #%d），请先执行 fix 创建 worktree", o.issueNumber)
 		}
 	}
 
@@ -572,7 +587,10 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 
 	// 读取最终方案
 	finalMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePlanFinal)
-	if err != nil || finalMC == nil {
+	if err != nil {
+		return fmt.Errorf("查找最终方案失败: %w", err)
+	}
+	if finalMC == nil {
 		return fmt.Errorf("未找到最终方案")
 	}
 

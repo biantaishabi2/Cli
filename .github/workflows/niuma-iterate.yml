@@ -40,9 +40,10 @@ jobs:
         id: find_pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          ISSUE=${{ github.event.issue.number }}
-          PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
+          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
             --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
@@ -50,12 +51,16 @@ jobs:
         if: steps.find_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           ./niuma iterate \
-            --repo ${{ github.repository }} \
-            --issue ${{ github.event.issue.number }} \
-            --pr ${{ steps.find_pr.outputs.pr_number }} \
-            --repo-dir ${{ github.workspace }}
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER" \
+            --repo-dir "$WORKSPACE"
 
   # 人工 PR review changes_requested → 迭代
   iterate-from-human:
@@ -82,9 +87,9 @@ jobs:
         id: extract
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          BODY=$(gh pr view $PR_NUMBER --json body -q '.body')
+          BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
           ISSUE_NUMBER=$(echo "$BODY" | grep -Eo 'Closes #[0-9]+' | sed 's/Closes #//' | head -1)
           echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -93,9 +98,13 @@ jobs:
         if: steps.extract.outputs.issue_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           ./niuma iterate \
-            --repo ${{ github.repository }} \
-            --issue ${{ steps.extract.outputs.issue_number }} \
-            --pr ${{ steps.extract.outputs.pr_number }} \
-            --repo-dir ${{ github.workspace }}
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER" \
+            --repo-dir "$WORKSPACE"
