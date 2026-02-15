@@ -79,12 +79,12 @@ fn extract_recursive(
         let kind = node.kind();
 
         match kind {
-            // @moduledoc / @spec 等模块属性
+            // @moduledoc / @spec / @behaviour 等模块属性
             "unary_operator" => {
                 if let Some(op) = node.child_by_field_name("operator") {
                     if node_text(op, source) == "@" {
                         if let Some(operand) = node.child_by_field_name("operand") {
-                            handle_module_attribute(operand, source, module_doc, pending_spec);
+                            handle_module_attribute(operand, source, module_doc, pending_spec, imports);
                         }
                     }
                 }
@@ -189,12 +189,13 @@ fn extract_recursive(
     }
 }
 
-/// 处理 @moduledoc / @spec 等模块属性
+/// 处理 @moduledoc / @spec / @behaviour 等模块属性
 fn handle_module_attribute(
     operand: tree_sitter::Node,
     source: &[u8],
     module_doc: &mut Option<String>,
     pending_spec: &mut Option<String>,
+    imports: &mut Vec<ImportRecord>,
 ) {
     if operand.kind() != "call" {
         return;
@@ -218,6 +219,21 @@ fn handle_module_attribute(
                         .trim_matches(|c: char| c == '(' || c == ')')
                         .to_string();
                     *pending_spec = Some(spec_text);
+                }
+            }
+            // @behaviour Module.Name — 记为 import
+            "behaviour" | "behavior" => {
+                if let Some(args) = find_child_by_kind(&operand, "arguments") {
+                    let spec = node_text(args, source)
+                        .trim_matches(|c: char| c == '(' || c == ')')
+                        .trim()
+                        .to_string();
+                    if !spec.is_empty() {
+                        imports.push(ImportRecord {
+                            specifier: spec,
+                            kind: "behaviour".into(),
+                        });
+                    }
                 }
             }
             _ => {}
@@ -376,6 +392,48 @@ mod tests {
     fn infer_module_returns_none_for_non_ex() {
         assert_eq!(infer_module_from_path("lib/mix.exs"), None);
         assert_eq!(infer_module_from_path("lib/config.exs"), None);
+    }
+
+    #[test]
+    fn extract_behaviour_as_import() {
+        let source = r#"
+defmodule MyApp.Worker do
+  @behaviour GenServer
+  @behaviour Gong.Extension
+
+  def init(state), do: {:ok, state}
+end
+"#;
+        let record = extract(source, "lib/my_app/worker.ex");
+        // @behaviour 应被记为 import
+        let behaviour_imports: Vec<_> = record.imports.iter()
+            .filter(|i| i.kind == "behaviour")
+            .collect();
+        assert_eq!(behaviour_imports.len(), 2);
+        assert!(behaviour_imports.iter().any(|i| i.specifier == "GenServer"));
+        assert!(behaviour_imports.iter().any(|i| i.specifier == "Gong.Extension"));
+    }
+
+    #[test]
+    fn extract_use_with_keyword_args() {
+        let source = r#"
+defmodule Test do
+  use Jido.AI.ReActAgent,
+    tools: [Gong.Tools.Read, Gong.Tools.Write],
+    model: "deepseek"
+
+  def run, do: :ok
+end
+"#;
+        let record = extract(source, "lib/test.ex");
+        // use 应该被记为 import
+        let use_imports: Vec<_> = record.imports.iter()
+            .filter(|i| i.kind == "use")
+            .collect();
+        assert!(!use_imports.is_empty());
+        // specifier 应该包含完整的 use 参数文本
+        let spec = &use_imports[0].specifier;
+        assert!(spec.contains("Jido.AI.ReActAgent"));
     }
 }
 

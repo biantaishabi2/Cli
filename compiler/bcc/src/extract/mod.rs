@@ -508,19 +508,43 @@ fn resolve_dependencies(
             }
         }
         "elixir" => {
-            // 从 alias/import/use 解析
+            // 建立别名短名→完整模块名映射（用于解析 calls 中的短名）
+            let mut alias_short_map: HashMap<String, String> = HashMap::new();
+
+            // 从 alias/import/use/behaviour 解析
             for imp in &record.imports {
                 let module_names = expand_elixir_specifier(&imp.specifier);
                 for module_name in &module_names {
                     if let Some(rel_path) = module_map.get(module_name.as_str()) {
                         deps.push(rel_path.clone());
                     }
+                    // 建立短名映射：Gong.Compaction.TokenEstimator → TokenEstimator
+                    if let Some(short) = module_name.rsplit('.').next() {
+                        alias_short_map.insert(short.to_string(), module_name.clone());
+                    }
+                }
+
+                // 从 use 宏参数中提取嵌套的模块引用
+                if imp.kind == "use" {
+                    for nested_mod in extract_nested_module_refs(&imp.specifier) {
+                        if let Some(rel_path) = module_map.get(nested_mod.as_str()) {
+                            deps.push(rel_path.clone());
+                        }
+                    }
                 }
             }
+
             // 从 calls（直接模块调用如 Gong.Tape.Store）解析
             for call in &record.calls {
+                // 先尝试完整名匹配
                 if let Some(rel_path) = module_map.get(&call.callee) {
                     deps.push(rel_path.clone());
+                }
+                // 再尝试别名短名映射
+                else if let Some(full_name) = alias_short_map.get(&call.callee) {
+                    if let Some(rel_path) = module_map.get(full_name.as_str()) {
+                        deps.push(rel_path.clone());
+                    }
                 }
             }
         }
@@ -792,6 +816,45 @@ pub fn expand_elixir_specifier(specifier: &str) -> Vec<String> {
     vec![module_name.to_string()]
 }
 
+/// 从 use 宏参数文本中提取嵌套的模块引用
+/// 例如 `Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]`
+/// → 提取 [`Gong.Tools.Read`, `Gong.Tools.Write`]
+fn extract_nested_module_refs(specifier: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    // 用正则匹配大写开头的 dot-separated 标识符（至少两段，排除主模块名）
+    // 模式：大写字母开头，后跟字母数字，然后 .大写字母开头 重复一次以上
+    let mut i = 0;
+    let bytes = specifier.as_bytes();
+    let len = bytes.len();
+
+    // 跳过第一个模块名（use 的目标模块）
+    let first_comma = specifier.find(',').unwrap_or(len);
+
+    while i < len {
+        // 跳过第一个逗号之前的内容
+        if i < first_comma {
+            i += 1;
+            continue;
+        }
+        // 找大写字母开头的位置
+        if bytes[i].is_ascii_uppercase() {
+            let start = i;
+            // 收集 模块名段: 大写字母开头 + 字母数字下划线，用 . 连接
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                i += 1;
+            }
+            let candidate = &specifier[start..i];
+            // 至少两段（Foo.Bar）才是模块引用，排除单段如 String
+            if candidate.contains('.') && candidate.chars().next().map_or(false, |c| c.is_uppercase()) {
+                refs.push(candidate.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    refs
+}
+
 /// 从 specifier 中提取模块名，去掉关键字选项和换行
 /// 处理 `Gong.Tape.Store, as: TS` → `Gong.Tape.Store`
 /// 处理 `Jido.AI.ReActAgent,\n  name: "gong"` → `Jido.AI.ReActAgent`
@@ -880,5 +943,30 @@ mod tests {
         assert_eq!(strip_keyword_options("Foo.Bar, only: [a: 1]"), "Foo.Bar");
         assert_eq!(strip_keyword_options("Foo.Bar, except: [b: 2]"), "Foo.Bar");
         assert_eq!(strip_keyword_options("Foo.Bar"), "Foo.Bar");
+    }
+
+    #[test]
+    fn extract_nested_module_refs_from_use_args() {
+        // use Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]
+        let spec = "Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write], model: \"deepseek\"";
+        let mut refs = extract_nested_module_refs(spec);
+        refs.sort();
+        assert_eq!(refs, vec!["Gong.Tools.Read", "Gong.Tools.Write"]);
+    }
+
+    #[test]
+    fn extract_nested_module_refs_no_nested() {
+        // 没有嵌套模块引用
+        let spec = "GenServer";
+        let refs = extract_nested_module_refs(spec);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn extract_nested_module_refs_single_word_excluded() {
+        // 单段名（如 String, Integer）不应被提取
+        let spec = "Foo.Bar, validate: String";
+        let refs = extract_nested_module_refs(spec);
+        assert!(refs.is_empty());
     }
 }
