@@ -33,7 +33,9 @@ jobs:
       - name: Generate Plan Draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           ./niuma plan-draft \
-            --repo ${{ github.repository }} \
-            --issue ${{ github.event.issue.number }}
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER"

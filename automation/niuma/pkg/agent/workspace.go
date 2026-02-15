@@ -17,8 +17,12 @@ type Workspace struct {
 
 // NewWorkspace 创建 Workspace
 func NewWorkspace(repoDir string) *Workspace {
-	// 去除尾部斜杠，防止 filepath.Dir 计算错误
-	return &Workspace{RepoDir: strings.TrimRight(repoDir, "/")}
+	// 规范化路径，防止路径穿越
+	absPath, err := filepath.Abs(repoDir)
+	if err != nil {
+		absPath = filepath.Clean(repoDir)
+	}
+	return &Workspace{RepoDir: absPath}
 }
 
 // Create 创建 worktree 并切出新分支
