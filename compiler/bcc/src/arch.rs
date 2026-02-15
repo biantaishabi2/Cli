@@ -677,9 +677,7 @@ fn evaluate_scenario(
     }
 
     unexpected_top.sort_by(|a, b| b.1.cmp(&a.1));
-    unexpected_top.truncate(10);
     forbidden_top.sort_by(|a, b| b.1.cmp(&a.1));
-    forbidden_top.truncate(10);
 
     EvalResult {
         name: name.to_string(),
@@ -814,6 +812,35 @@ fn to_tsv(headers: &[&str], rows: &[Vec<String>]) -> String {
     out
 }
 
+/// 解析 edge_key "caller->callee" 为 (caller, callee)
+fn parse_edge_key(key: &str) -> Option<(&str, &str)> {
+    key.split_once("->")
+}
+
+/// 生成一个 bdd seed 可消费的 YAML source 文件
+fn write_bdd_source_yaml(
+    dir: &Path,
+    caller: &str,
+    callee: &str,
+    edge_class: &str,
+    weight: i64,
+) -> Result<(), String> {
+    let filename = format!("{}_{}.yaml", caller, callee);
+    let content = format!(
+        "module: {}\ncontract: {} -> {} arch violation\nedge_class: {}\nsource_file: arch-validate-export\nsource_summary: \"{} dependency {}->{}  (weight: {})\"\n",
+        caller.to_ascii_uppercase(),
+        caller,
+        callee,
+        edge_class,
+        edge_class,
+        caller,
+        callee,
+        weight
+    );
+    let path = dir.join(&filename);
+    fs::write(&path, &content).map_err(|e| format!("write {} failed: {}", path.display(), e))
+}
+
 pub fn validate(
     target_path: &str,
     transition_path: &str,
@@ -823,6 +850,7 @@ pub fn validate(
     profile: &str,
     fail_on_gate: bool,
     fail_on_forbidden: bool,
+    export_bdd_source: Option<&str>,
 ) {
     let code = match validate_impl(
         target_path,
@@ -833,6 +861,7 @@ pub fn validate(
         profile,
         fail_on_gate,
         fail_on_forbidden,
+        export_bdd_source,
     ) {
         Ok(code) => code,
         Err(e) => {
@@ -854,6 +883,7 @@ fn validate_impl(
     profile: &str,
     fail_on_gate: bool,
     fail_on_forbidden: bool,
+    export_bdd_source: Option<&str>,
 ) -> Result<i32, String> {
     let target_raw =
         fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
@@ -1039,16 +1069,22 @@ fn validate_impl(
         report.push('\n');
 
         if !r.forbidden_top.is_empty() {
-            report.push_str("### Forbidden Top\n");
-            for (edge, c) in &r.forbidden_top {
+            report.push_str(&format!(
+                "### Forbidden Top (showing top 20 of {})\n",
+                r.forbidden_top.len()
+            ));
+            for (edge, c) in r.forbidden_top.iter().take(20) {
                 report.push_str(&format!("- {}: {}\n", edge, c));
             }
             report.push('\n');
         }
 
         if !r.unexpected_top.is_empty() {
-            report.push_str("### Unexpected Top\n");
-            for (edge, c) in &r.unexpected_top {
+            report.push_str(&format!(
+                "### Unexpected Top (showing top 20 of {})\n",
+                r.unexpected_top.len()
+            ));
+            for (edge, c) in r.unexpected_top.iter().take(20) {
                 report.push_str(&format!("- {}: {}\n", edge, c));
             }
             report.push('\n');
@@ -1117,6 +1153,35 @@ fn validate_impl(
         ),
     )
     .map_err(|e| format!("write summary.json failed: {}", e))?;
+
+    // 导出 bdd source YAML（如果指定了 --export-bdd-source）
+    if let Some(bdd_dir) = export_bdd_source {
+        let bdd_path = Path::new(bdd_dir);
+        fs::create_dir_all(bdd_path)
+            .map_err(|e| format!("create bdd source dir failed: {}", e))?;
+
+        let mut exported = 0usize;
+        for (key, weight) in &transition_eval.forbidden_top {
+            if let Some((caller, callee)) = parse_edge_key(key) {
+                write_bdd_source_yaml(bdd_path, caller, callee, "blocked", *weight)?;
+                exported += 1;
+            } else {
+                eprintln!("[validate] skip malformed edge key: {}", key);
+            }
+        }
+        for (key, weight) in &transition_eval.unexpected_top {
+            if let Some((caller, callee)) = parse_edge_key(key) {
+                write_bdd_source_yaml(bdd_path, caller, callee, "temporary", *weight)?;
+                exported += 1;
+            } else {
+                eprintln!("[validate] skip malformed edge key: {}", key);
+            }
+        }
+        eprintln!(
+            "[validate] exported {} bdd source files to {}",
+            exported, bdd_dir
+        );
+    }
 
     let mut code = 0;
     let enforce_target = profile == "target" || profile == "both";
@@ -1515,6 +1580,7 @@ relations_expected:
             "both",
             true,
             true,
+            None,
         )
         .expect("validate ok");
         assert_eq!(code, 0);
@@ -1627,6 +1693,7 @@ profiles:
             "both",
             true,
             true,
+            None,
         )
         .expect("strict validate");
         assert_eq!(strict_code, 2);
@@ -1640,6 +1707,7 @@ profiles:
             "both",
             false,
             false,
+            None,
         )
         .expect("report validate");
         assert_eq!(report_code, 0);
