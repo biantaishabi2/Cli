@@ -14,7 +14,7 @@ defaults:
     working-directory: automation/niuma
 
 jobs:
-  test:
+  bdd:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +24,8 @@ jobs:
           go-version: '1.22'
           cache-dependency-path: automation/niuma/go.sum
 
-      - name: Unit Tests
-        run: go test ./...
+      - name: BDD Tests
+        run: go test -tags bdd ./...
 
       - name: Build
         run: go build -o niuma ./cmd/niuma
@@ -36,7 +36,7 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: test
+    needs: bdd
     steps:
       - uses: actions/checkout@v4
 
