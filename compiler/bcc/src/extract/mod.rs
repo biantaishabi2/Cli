@@ -309,6 +309,13 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         HashMap::new()
     };
 
+    // TypeScript monorepo：扫描 package.json 建立包名→入口路径映射
+    let package_map = if lang_norm == "typescript" {
+        build_monorepo_package_map(root)
+    } else {
+        HashMap::new()
+    };
+
     for file_path in &files {
         let rel_path = file_path
             .strip_prefix(root)
@@ -335,7 +342,7 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         };
 
         // 解析 localDependencies：将 import specifier 转为相对路径
-        let local_deps = resolve_dependencies(&record, root, file_path, &lang_norm, &module_map);
+        let local_deps = resolve_dependencies(&record, root, file_path, &lang_norm, &module_map, &package_map);
 
         records.push(AstSnapshotRecord {
             sourcePath: rel_path,
@@ -479,6 +486,7 @@ fn resolve_dependencies(
     file_path: &Path,
     lang: &str,
     module_map: &HashMap<String, String>,
+    package_map: &HashMap<String, String>,
 ) -> Vec<String> {
     let mut deps = Vec::new();
 
@@ -486,20 +494,32 @@ fn resolve_dependencies(
         "typescript" => {
             let file_dir = file_path.parent().unwrap_or(root);
             for imp in &record.imports {
-                if !imp.specifier.starts_with('.') {
-                    continue; // 跳过第三方包
-                }
-                // 解析相对导入为相对于 root 的路径
-                if let Some(resolved) = resolve_ts_import(file_dir, &imp.specifier, root) {
-                    deps.push(resolved);
+                if imp.specifier.starts_with('.') {
+                    // 相对导入：解析为相对于 root 的路径
+                    if let Some(resolved) = resolve_ts_import(file_dir, &imp.specifier, root) {
+                        deps.push(resolved);
+                    }
+                } else {
+                    // 非相对导入：查 monorepo 包名映射表
+                    if let Some(resolved) = resolve_ts_package_import(&imp.specifier, package_map) {
+                        deps.push(resolved);
+                    }
                 }
             }
         }
         "elixir" => {
+            // 从 alias/import/use 解析
             for imp in &record.imports {
-                // Elixir import specifier 是模块名，查映射表
-                let module_name = imp.specifier.trim();
-                if let Some(rel_path) = module_map.get(module_name) {
+                let module_names = expand_elixir_specifier(&imp.specifier);
+                for module_name in &module_names {
+                    if let Some(rel_path) = module_map.get(module_name.as_str()) {
+                        deps.push(rel_path.clone());
+                    }
+                }
+            }
+            // 从 calls（直接模块调用如 Gong.Tape.Store）解析
+            for call in &record.calls {
+                if let Some(rel_path) = module_map.get(&call.callee) {
                     deps.push(rel_path.clone());
                 }
             }
@@ -525,10 +545,17 @@ fn resolve_ts_import(file_dir: &Path, specifier: &str, root: &Path) -> Option<St
         base.join("index.tsx"),
     ];
 
+    // canonicalize root 以便 strip_prefix 正确工作
+    let canon_root = root.canonicalize().ok()?;
+
     for candidate in &candidates {
         if candidate.exists() {
-            let rel = candidate.strip_prefix(root).ok()?;
-            return Some(rel.to_string_lossy().replace('\\', "/"));
+            // canonicalize 解析 .. 和 symlinks
+            if let Ok(canon) = candidate.canonicalize() {
+                if let Ok(rel) = canon.strip_prefix(&canon_root) {
+                    return Some(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
         }
     }
     None
@@ -571,4 +598,287 @@ fn extract_elixir_module_name(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ── TypeScript monorepo 包名解析 ──
+
+/// 扫描目录下的 package.json 文件，建立 npm 包名 → 入口文件相对路径映射
+/// 支持 packages/*/package.json 和根级 package.json
+fn build_monorepo_package_map(root: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    // 递归扫描所有 package.json（排除 node_modules）
+    collect_package_jsons(root, root, &mut map);
+    map
+}
+
+fn collect_package_jsons(dir: &Path, root: &Path, map: &mut HashMap<String, String>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if name == "node_modules" || name == ".git" || name == "dist" || name == ".next" {
+                continue;
+            }
+            collect_package_jsons(&path, root, map);
+        } else if path.file_name().map(|n| n.to_string_lossy() == "package.json").unwrap_or(false) {
+            parse_package_json(&path, root, map);
+        }
+    }
+}
+
+/// 解析单个 package.json，提取包名和入口文件（main/exports）
+fn parse_package_json(pkg_path: &Path, root: &Path, map: &mut HashMap<String, String>) {
+    let content = match fs::read_to_string(pkg_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let pkg_name = match json.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+
+    let pkg_dir = match pkg_path.parent() {
+        Some(d) => d,
+        None => return,
+    };
+
+    // 尝试从 exports 提取子路径映射
+    // exports: { ".": { "import": "./src/index.ts" }, "./providers": { "import": "./src/providers/index.ts" } }
+    if let Some(exports) = json.get("exports").and_then(|e| e.as_object()) {
+        for (key, value) in exports {
+            let entry_path = extract_export_entry(value);
+            if let Some(entry) = entry_path {
+                let abs_entry = pkg_dir.join(&entry);
+                if let Some(resolved) = resolve_entry_path(&abs_entry, root) {
+                    if key == "." {
+                        map.insert(pkg_name.clone(), resolved);
+                    } else {
+                        // "./providers" → "@scope/pkg/providers"
+                        let sub_path = key.strip_prefix("./").unwrap_or(key);
+                        map.insert(format!("{}/{}", pkg_name, sub_path), resolved);
+                    }
+                }
+            }
+        }
+    }
+
+    // 如果 exports 没有 "." 入口，用 main/module 字段
+    if !map.contains_key(&pkg_name) {
+        let main_field = json.get("module").or_else(|| json.get("main")).and_then(|m| m.as_str());
+        if let Some(main) = main_field {
+            let abs_entry = pkg_dir.join(main);
+            if let Some(resolved) = resolve_entry_path(&abs_entry, root) {
+                map.insert(pkg_name.clone(), resolved);
+            }
+        } else {
+            // 尝试默认入口 src/index.ts
+            let default_entries = ["src/index.ts", "src/index.tsx", "index.ts"];
+            for entry in &default_entries {
+                let abs_entry = pkg_dir.join(entry);
+                if abs_entry.exists() {
+                    if let Some(resolved) = resolve_entry_path(&abs_entry, root) {
+                        map.insert(pkg_name.clone(), resolved);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 从 exports 值中提取实际文件路径
+fn extract_export_entry(value: &serde_json::Value) -> Option<String> {
+    // 字符串：直接路径
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    // 对象：优先 import → default → types
+    if let Some(obj) = value.as_object() {
+        for key in &["import", "default", "require"] {
+            if let Some(v) = obj.get(*key) {
+                if let Some(s) = v.as_str() {
+                    return Some(s.to_string());
+                }
+                // 递归处理嵌套条件
+                if let Some(resolved) = extract_export_entry(v) {
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 将绝对路径解析为相对于 root 的路径（尝试多种扩展名）
+fn resolve_entry_path(abs_path: &Path, root: &Path) -> Option<String> {
+    let candidates = [
+        abs_path.to_path_buf(),
+        abs_path.with_extension("ts"),
+        abs_path.with_extension("tsx"),
+        abs_path.join("index.ts"),
+        abs_path.join("index.tsx"),
+    ];
+    for candidate in &candidates {
+        if candidate.exists() {
+            if let Ok(rel) = candidate.strip_prefix(root) {
+                return Some(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    None
+}
+
+/// 解析 TypeScript 非相对导入：查 monorepo 包名映射表
+fn resolve_ts_package_import(specifier: &str, package_map: &HashMap<String, String>) -> Option<String> {
+    // 精确匹配：@scope/pkg 或 @scope/pkg/sub
+    if let Some(resolved) = package_map.get(specifier) {
+        return Some(resolved.clone());
+    }
+    // 尝试最长前缀匹配：import "@scope/pkg/deep/path" → 匹配 "@scope/pkg"
+    // 逐级剥离路径查找
+    let mut path = specifier;
+    while let Some(idx) = path.rfind('/') {
+        path = &specifier[..idx];
+        if let Some(resolved) = package_map.get(path) {
+            return Some(resolved.clone());
+        }
+    }
+    None
+}
+
+// ── Elixir alias/import/use specifier 解析 ──
+
+/// 展开 Elixir import specifier 为模块名列表
+/// 处理：
+/// - 简单模块名：`Gong.Tape.Store` → [`Gong.Tape.Store`]
+/// - multi-alias：`Gong.Tape.{Entry, Index}` → [`Gong.Tape.Entry`, `Gong.Tape.Index`]
+/// - 带 as: 子句：`Gong.Tape.Store, as: TS` → [`Gong.Tape.Store`]
+/// - 带 only/except：`Gong.Tape.Store, only: [get: 1]` → [`Gong.Tape.Store`]
+pub fn expand_elixir_specifier(specifier: &str) -> Vec<String> {
+    let trimmed = specifier.trim();
+
+    // 检查是否包含 multi-alias 语法 {A, B}
+    if let Some(brace_start) = trimmed.find('{') {
+        if let Some(brace_end) = trimmed.find('}') {
+            let prefix = trimmed[..brace_start].trim().trim_end_matches('.');
+            let inner = &trimmed[brace_start + 1..brace_end];
+            return inner
+                .split(',')
+                .map(|s| {
+                    let name = s.trim();
+                    // 子元素可能也有 as: 子句，去掉
+                    let name = strip_keyword_options(name);
+                    format!("{}.{}", prefix, name)
+                })
+                .filter(|s| !s.ends_with('.'))
+                .collect();
+        }
+    }
+
+    // 简单模块名，可能带 as:/only:/except: 选项
+    let module_name = strip_keyword_options(trimmed);
+    if module_name.is_empty() {
+        return Vec::new();
+    }
+    vec![module_name.to_string()]
+}
+
+/// 从 specifier 中提取模块名，去掉关键字选项和换行
+/// 处理 `Gong.Tape.Store, as: TS` → `Gong.Tape.Store`
+/// 处理 `Jido.AI.ReActAgent,\n  name: "gong"` → `Jido.AI.ReActAgent`
+fn strip_keyword_options(s: &str) -> &str {
+    let trimmed = s.trim();
+    // 找第一个逗号或换行，取前面部分
+    let end = trimmed.find(',')
+        .unwrap_or(trimmed.len())
+        .min(trimmed.find('\n').unwrap_or(trimmed.len()));
+    trimmed[..end].trim()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_simple_module() {
+        assert_eq!(
+            expand_elixir_specifier("Gong.Tape.Store"),
+            vec!["Gong.Tape.Store"]
+        );
+    }
+
+    #[test]
+    fn expand_multi_alias() {
+        let mut result = expand_elixir_specifier("Gong.Tape.{Entry, Index, FileStore}");
+        result.sort();
+        assert_eq!(result, vec!["Gong.Tape.Entry", "Gong.Tape.FileStore", "Gong.Tape.Index"]);
+    }
+
+    #[test]
+    fn expand_with_as_clause() {
+        assert_eq!(
+            expand_elixir_specifier("Gong.Tape.Store, as: TS"),
+            vec!["Gong.Tape.Store"]
+        );
+    }
+
+    #[test]
+    fn expand_with_only_clause() {
+        assert_eq!(
+            expand_elixir_specifier("Gong.Tape.Store, only: [get: 1, put: 2]"),
+            vec!["Gong.Tape.Store"]
+        );
+    }
+
+    #[test]
+    fn expand_multi_alias_with_dot_prefix() {
+        // alias Gong.{Tape, Tools} — 有时 prefix 带点，有时不带
+        let mut result = expand_elixir_specifier("Gong.{Tape, Tools}");
+        result.sort();
+        assert_eq!(result, vec!["Gong.Tape", "Gong.Tools"]);
+    }
+
+    #[test]
+    fn resolve_ts_package_exact_match() {
+        let mut map = HashMap::new();
+        map.insert("@mariozechner/pi-ai".to_string(), "ai/src/index.ts".to_string());
+        assert_eq!(
+            resolve_ts_package_import("@mariozechner/pi-ai", &map),
+            Some("ai/src/index.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_ts_package_prefix_match() {
+        let mut map = HashMap::new();
+        map.insert("@mariozechner/pi-ai".to_string(), "ai/src/index.ts".to_string());
+        // import "@mariozechner/pi-ai/providers/openai" 应匹配包名
+        assert_eq!(
+            resolve_ts_package_import("@mariozechner/pi-ai/providers/openai", &map),
+            Some("ai/src/index.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_ts_package_no_match() {
+        let map = HashMap::new();
+        assert_eq!(resolve_ts_package_import("lodash", &map), None);
+    }
+
+    #[test]
+    fn strip_keyword_options_works() {
+        assert_eq!(strip_keyword_options("Foo.Bar, as: FB"), "Foo.Bar");
+        assert_eq!(strip_keyword_options("Foo.Bar, only: [a: 1]"), "Foo.Bar");
+        assert_eq!(strip_keyword_options("Foo.Bar, except: [b: 2]"), "Foo.Bar");
+        assert_eq!(strip_keyword_options("Foo.Bar"), "Foo.Bar");
+    }
 }
