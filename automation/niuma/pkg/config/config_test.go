@@ -66,6 +66,9 @@ func TestLoad_WorkflowConfig(t *testing.T) {
 workflow:
   require_plan_approval: true
   max_iterate_rounds: 5
+  allowed_prefixes:
+    - "automation/"
+    - "scripts/"
 `
 	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
 	require.NoError(t, err)
@@ -75,6 +78,7 @@ workflow:
 	assert.True(t, cfg.Workflow.RequirePlanApproval)
 	assert.Equal(t, 5, cfg.Workflow.MaxIterateRounds)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxIterateRounds())
+	assert.Equal(t, []string{"automation/", "scripts/"}, cfg.Workflow.AllowedPrefixes)
 }
 
 func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {

@@ -31,7 +31,7 @@ func (g *GitOps) HasChanges() (bool, error) {
 
 // CommitAll 将所有变更加入暂存区并提交
 func (g *GitOps) CommitAll(message string) error {
-	// git add -A
+	// git add -A（worktree 为隔离环境，需要暂存新建文件；.gitignore 过滤敏感文件）
 	cmd := exec.Command("git", "add", "-A")
 	cmd.Dir = g.WorkDir
 	out, err := cmd.CombinedOutput()

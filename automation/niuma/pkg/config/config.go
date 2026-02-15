@@ -18,8 +18,9 @@ type Config struct {
 
 // WorkflowConfig 工作流配置
 type WorkflowConfig struct {
-	RequirePlanApproval bool `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
-	MaxIterateRounds    int  `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+	RequirePlanApproval bool     `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int      `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+	AllowedPrefixes     []string `yaml:"allowed_prefixes"`      // 额外允许修改的目录前缀
 }
 
 // GetMaxIterateRounds 获取最大迭代轮数，默认3

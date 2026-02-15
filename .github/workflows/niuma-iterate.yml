@@ -43,7 +43,7 @@ jobs:
         run: |
           ISSUE=${{ github.event.issue.number }}
           PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
-            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -oP 'pr=\K\d+' | tail -1)
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       - name: Iterate on Review
@@ -85,7 +85,7 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           BODY=$(gh pr view $PR_NUMBER --json body -q '.body')
-          ISSUE_NUMBER=$(echo "$BODY" | grep -oP 'Closes #\K\d+' | head -1)
+          ISSUE_NUMBER=$(echo "$BODY" | grep -Eo 'Closes #[0-9]+' | sed 's/Closes #//' | head -1)
           echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 

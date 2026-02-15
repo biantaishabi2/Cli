@@ -126,8 +126,8 @@ func TestDoPlanFinal_PathValidationFailure(t *testing.T) {
 	assert.Contains(t, labels, string(state.StateNeedsDiscussion))
 }
 
-func TestDoImplement_HappyPath(t *testing.T) {
-	// DoImplement 现在使用 Execute 而非 Complete
+func TestDoImplement_NoWorktree(t *testing.T) {
+	// 无 worktree 模式：AI 执行完成但无 git 操作，状态回滚
 	mockAI := ai.NewMockProvider()
 	mockAI.SetExecuteResults("// 实现代码\nfunc Login() {}")
 
@@ -142,13 +142,14 @@ func TestDoImplement_HappyPath(t *testing.T) {
 	err := orch.DoImplement(context.Background(), "/tmp/work")
 	require.NoError(t, err)
 
-	// 验证 PR marker
-	mc := mockGH.GetMarker(1, marker.TypePRCreated)
-	require.NotNil(t, mc)
-
-	// 验证状态
+	// 无 worktree → prNumber=0 → 状态回滚到 plan-final
 	labels := mockGH.Labels[1]
-	assert.Contains(t, labels, string(state.StatePRCreated))
+	assert.Contains(t, labels, string(state.StatePlanFinal))
+
+	// 验证发了"无文件变更"评论
+	comments := mockGH.Comments[1]
+	require.NotEmpty(t, comments)
+	assert.Contains(t, comments[len(comments)-1].GetBody(), "无文件变更")
 }
 
 func TestDoIterate_HappyPath(t *testing.T) {
@@ -320,6 +321,7 @@ func TestDoImplement_RequireApproval_WaitsAtPlanFinal(t *testing.T) {
 }
 
 func TestDoImplement_PlanApproved_Proceeds(t *testing.T) {
+	// plan-approved 状态下允许执行实现（无 worktree → 状态回滚到 plan-approved）
 	mockAI := ai.NewMockProvider()
 	mockAI.SetExecuteResults("// 实现代码")
 	mockGH := NewMockGitHub()
@@ -338,9 +340,13 @@ func TestDoImplement_PlanApproved_Proceeds(t *testing.T) {
 	err := orch.DoImplement(context.Background(), "/tmp/work")
 	require.NoError(t, err)
 
-	// 验证状态到了 pr-created
+	// 验证 AI 执行了（评论包含实现结果）
+	comments := mockGH.Comments[1]
+	require.NotEmpty(t, comments)
+
+	// 无 worktree → prNumber=0 → 状态回滚到 plan-approved
 	labels := mockGH.Labels[1]
-	assert.Contains(t, labels, string(state.StatePRCreated))
+	assert.Contains(t, labels, string(state.StatePlanApproved))
 }
 
 func TestDoIterate_ExceedsMaxRounds(t *testing.T) {
@@ -421,10 +427,10 @@ func TestDoReview_NotApproved(t *testing.T) {
 	labels := mockGH.Labels[1]
 	assert.Contains(t, labels, string(state.StatePRNeedsFix))
 
-	// 验证发了 PR review（REQUEST_CHANGES）
+	// 验证发了 PR review（COMMENT，因为 GitHub 不允许对自己的 PR 提 REQUEST_CHANGES）
 	reviews := mockGH.Reviews[10]
 	require.Len(t, reviews, 1)
-	assert.Equal(t, "REQUEST_CHANGES", reviews[0].GetState())
+	assert.Equal(t, "COMMENT", reviews[0].GetState())
 	assert.Contains(t, reviews[0].GetBody(), "自审未通过")
 	assert.Contains(t, reviews[0].GetBody(), "缺少错误处理")
 }

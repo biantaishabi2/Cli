@@ -314,6 +314,11 @@ func runReview(cmd *cobra.Command, args []string) error {
 func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator, error) {
 	cfg := config.LoadWithDefaults(".")
 
+	// 配置额外的安全路径白名单
+	if len(cfg.Workflow.AllowedPrefixes) > 0 {
+		agent.AddAllowedPrefixes(cfg.Workflow.AllowedPrefixes...)
+	}
+
 	// 构建所有 provider
 	providers, err := resolveProviders(cfg)
 	if err != nil {

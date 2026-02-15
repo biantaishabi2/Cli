@@ -63,14 +63,14 @@ type ConvergenceInput struct {
 func (c *ConvergenceChecker) Check(input *ConvergenceInput) ConvergeResult {
 	now := c.Now()
 
-	// 0. 检查 /finalize 命令（人主动确认）
-	if hasCommand(input.Comments, "/finalize") {
-		return ShouldFinalize
-	}
-
-	// 1. 检查 /hold 命令（暂缓定稿）
-	if hasCommand(input.Comments, "/hold") {
-		return NotConverged
+	// 0. 检查最后一条命令（只看最后发出的 /finalize 或 /hold）
+	if lastCmd := findLastCommand(input.Comments); lastCmd != "" {
+		switch lastCmd {
+		case "/finalize":
+			return ShouldFinalize
+		case "/hold":
+			return NotConverged
+		}
 	}
 
 	// 2. 轮次收敛：讨论汇总更新 ≥ MaxRounds 次
@@ -134,20 +134,20 @@ func (m *Machine) CheckConvergence(ctx context.Context, checker *ConvergenceChec
 	return checker.Check(input), nil
 }
 
-// hasCommand 检查评论中是否有人发了指定命令（最后一条命令优先）
-func hasCommand(comments []*ghapi.IssueComment, cmd string) bool {
-	// 倒序检查，最后一条命令优先
+// findLastCommand 从评论中倒序查找最后一条 /finalize 或 /hold 命令
+// 只看最后一条命令，忽略之前的命令
+func findLastCommand(comments []*ghapi.IssueComment) string {
 	for i := len(comments) - 1; i >= 0; i-- {
 		body := strings.TrimSpace(comments[i].GetBody())
 		lines := strings.Split(body, "\n")
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
-			if trimmed == cmd {
-				return true
+			if trimmed == "/finalize" || trimmed == "/hold" {
+				return trimmed
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // getLastHumanCommentTime 获取最后一条非 bot 评论的时间

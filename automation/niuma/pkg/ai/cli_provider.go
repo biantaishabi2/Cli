@@ -95,12 +95,13 @@ func (p *CLIProvider) executeWithCmd(ctx context.Context, prompt string, o *opti
 	}
 	tmpFile.Close()
 
-	// 模板替换
+	// 模板替换（对路径进行 shell 转义，防止路径含空格导致命令注入）
 	cmdStr := cmdTemplate
-	cmdStr = strings.ReplaceAll(cmdStr, "{prompt_file}", tmpFile.Name())
-	cmdStr = strings.ReplaceAll(cmdStr, "{prompt}", tmpFile.Name()) // 兼容旧模板
+	escaped := shellQuote(tmpFile.Name())
+	cmdStr = strings.ReplaceAll(cmdStr, "{prompt_file}", escaped)
+	cmdStr = strings.ReplaceAll(cmdStr, "{prompt}", escaped) // 兼容旧模板
 	if o.WorkDir != "" {
-		cmdStr = strings.ReplaceAll(cmdStr, "{workdir}", o.WorkDir)
+		cmdStr = strings.ReplaceAll(cmdStr, "{workdir}", shellQuote(o.WorkDir))
 	}
 
 	// 执行命令
@@ -127,4 +128,9 @@ func (p *CLIProvider) executeWithCmd(ctx context.Context, prompt string, o *opti
 	}
 
 	return result, nil
+}
+
+// shellQuote 对路径进行 shell 安全转义（用单引号包裹，转义内部单引号）
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

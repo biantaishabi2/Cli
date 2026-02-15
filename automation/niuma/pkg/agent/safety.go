@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// 允许修改的目录前缀
-var allowedPrefixes = []string{
+// defaultAllowedPrefixes 默认允许修改的目录前缀
+var defaultAllowedPrefixes = []string{
 	"src/",
 	"lib/",
 	"pkg/",
@@ -18,6 +18,19 @@ var allowedPrefixes = []string{
 	"tests/",
 	"test/",
 	"spec/",
+}
+
+// extraAllowedPrefixes 额外允许的目录前缀（可通过 AddAllowedPrefixes 配置）
+var extraAllowedPrefixes []string
+
+// AddAllowedPrefixes 添加额外的路径白名单前缀
+func AddAllowedPrefixes(prefixes ...string) {
+	extraAllowedPrefixes = append(extraAllowedPrefixes, prefixes...)
+}
+
+// ResetAllowedPrefixes 重置额外白名单（用于测试）
+func ResetAllowedPrefixes() {
+	extraAllowedPrefixes = nil
 }
 
 // 高风险路径（需要额外审查）
@@ -89,7 +102,12 @@ func IsHighRiskChange(path string) bool {
 }
 
 func isAllowedPath(path string) bool {
-	for _, prefix := range allowedPrefixes {
+	for _, prefix := range defaultAllowedPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range extraAllowedPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}

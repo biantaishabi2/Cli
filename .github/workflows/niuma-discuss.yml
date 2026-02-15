@@ -4,7 +4,7 @@ on:
   issue_comment:
     types: [created]
   schedule:
-    - cron: '*/5 * * * *'  # 每 5 分钟检查收敛
+    - cron: '*/15 * * * *'  # 每 15 分钟检查收敛
 
 defaults:
   run:

@@ -198,10 +198,10 @@ func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
 	default: // NotConverged
 		// 多 provider 讨论模式
 		if o.hasMultipleDiscussionProviders() {
-			return o.doMultiProviderDiscussion(ctx, comments, summaryMC)
+			return o.doMultiProviderDiscussion(ctx, summaryMC)
 		}
 		// 单 provider 模式
-		return o.updateDiscussionSummary(ctx, comments, summaryMC)
+		return o.updateDiscussionSummary(ctx, summaryMC)
 	}
 }
 
@@ -293,76 +293,30 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	}
 	input.FinalPlan = finalMC.Comment.GetBody()
 
+	// 记录进入前的状态，用于失败回滚
+	prevState := currentState
+
 	// 转状态到 implementing
 	if err := o.transition(ctx, state.StateImplementing); err != nil {
 		return err
 	}
 
-	// 确定实际工作目录
-	actualWorkDir := workDir
-	var ws *Workspace
-	var gitOps *GitOps
-	var branchName string
-
-	if o.config != nil && o.config.RepoDir != "" {
-		// 使用 worktree 隔离
-		ws = NewWorkspace(o.config.RepoDir)
-		slug := slugFromTitle(input.IssueTitle)
-		wtPath, err := ws.Create(o.issueNumber, slug)
-		if err != nil {
-			return fmt.Errorf("创建 worktree 失败: %w", err)
-		}
-		actualWorkDir = wtPath
-		branchName = ws.BranchName(o.issueNumber, slug)
-		gitOps = NewGitOps(wtPath)
+	// 实现逻辑封装，失败时回滚状态
+	prNumber, implErr := o.doImplementInner(ctx, input, workDir)
+	if implErr != nil {
+		// 回滚状态并通知
+		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateImplementing), string(prevState))
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			fmt.Sprintf("## ❌ 实现失败\n\n%s\n\n状态已回滚到 `%s`。", implErr.Error(), prevState))
+		return implErr
 	}
 
-	// AI agent 模式执行
-	implProvider := o.getImplementProvider()
-	result, err := implProvider.Execute(ctx, input.FinalPlan+"\n\n"+BuildImplementContext(input), ai.WithWorkDir(actualWorkDir))
-	if err != nil {
-		return fmt.Errorf("AI 代码实现失败: %w", err)
-	}
-
-	// 如果有 worktree，执行 git 操作
-	prNumber := 0
-	if gitOps != nil {
-		hasChanges, err := gitOps.HasChanges()
-		if err != nil {
-			return fmt.Errorf("检查变更失败: %w", err)
-		}
-
-		if hasChanges {
-			// commit
-			commitMsg := fmt.Sprintf("feat: implement fix for #%d\n\n%s", o.issueNumber, input.IssueTitle)
-			if err := gitOps.CommitAll(commitMsg); err != nil {
-				return fmt.Errorf("提交失败: %w", err)
-			}
-
-			// push
-			if err := gitOps.Push(branchName); err != nil {
-				return fmt.Errorf("推送失败: %w", err)
-			}
-
-			// 创建 PR
-			prTitle := fmt.Sprintf("fix: %s (#%d)", input.IssueTitle, o.issueNumber)
-			prBody := fmt.Sprintf("Closes #%d\n\n## Summary\n\n%s", o.issueNumber, input.FinalPlan)
-			pr, err := o.github.CreatePR(ctx, prTitle, prBody, branchName, "master")
-			if err != nil {
-				return fmt.Errorf("创建 PR 失败: %w", err)
-			}
-			prNumber = pr.GetNumber()
-		}
-	}
-
-	// 发布实现结果评论
-	commentBody := fmt.Sprintf("## 🔧 代码实现\n\nAI 已完成代码生成。\n\n<details>\n<summary>实现详情</summary>\n\n%s\n\n</details>", result)
-	if prNumber > 0 {
-		commentBody += fmt.Sprintf("\n\n✅ PR #%d 已创建。", prNumber)
-	}
-	_, err = o.github.AddComment(ctx, o.issueNumber, commentBody)
-	if err != nil {
-		return fmt.Errorf("发布实现结果失败: %w", err)
+	// 无变更时不创建 PR marker，提前返回
+	if prNumber == 0 {
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			"## ℹ️ 代码实现\n\nAI 执行完成，但 worktree 中无文件变更。状态已回滚。")
+		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateImplementing), string(prevState))
+		return nil
 	}
 
 	// 创建 PR marker
@@ -378,6 +332,73 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 
 	// 转状态
 	return o.transition(ctx, state.StatePRCreated)
+}
+
+// doImplementInner 执行实现的内部逻辑，返回 PR 号（0 表示无变更）
+func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput, workDir string) (int, error) {
+	actualWorkDir := workDir
+	var gitOps *GitOps
+	var branchName string
+
+	if o.config != nil && o.config.RepoDir != "" {
+		// 使用 worktree 隔离
+		ws := NewWorkspace(o.config.RepoDir)
+		slug := slugFromTitle(input.IssueTitle)
+		wtPath, err := ws.Create(o.issueNumber, slug)
+		if err != nil {
+			return 0, fmt.Errorf("创建 worktree 失败: %w", err)
+		}
+		actualWorkDir = wtPath
+		branchName = ws.BranchName(o.issueNumber, slug)
+		gitOps = NewGitOps(wtPath)
+	}
+
+	// AI agent 模式执行
+	implProvider := o.getImplementProvider()
+	result, err := implProvider.Execute(ctx, input.FinalPlan+"\n\n"+BuildImplementContext(input), ai.WithWorkDir(actualWorkDir))
+	if err != nil {
+		return 0, fmt.Errorf("AI 代码实现失败: %w", err)
+	}
+
+	// 如果有 worktree，执行 git 操作
+	prNumber := 0
+	if gitOps != nil {
+		hasChanges, err := gitOps.HasChanges()
+		if err != nil {
+			return 0, fmt.Errorf("检查变更失败: %w", err)
+		}
+
+		if hasChanges {
+			commitMsg := fmt.Sprintf("feat: implement fix for #%d\n\n%s", o.issueNumber, input.IssueTitle)
+			if err := gitOps.CommitAll(commitMsg); err != nil {
+				return 0, fmt.Errorf("提交失败: %w", err)
+			}
+
+			if err := gitOps.Push(branchName); err != nil {
+				return 0, fmt.Errorf("推送失败: %w", err)
+			}
+
+			prTitle := fmt.Sprintf("fix: %s (#%d)", input.IssueTitle, o.issueNumber)
+			prBody := fmt.Sprintf("Closes #%d\n\n## Summary\n\n%s", o.issueNumber, input.FinalPlan)
+			pr, err := o.github.CreatePR(ctx, prTitle, prBody, branchName, "master")
+			if err != nil {
+				return 0, fmt.Errorf("创建 PR 失败: %w", err)
+			}
+			prNumber = pr.GetNumber()
+		}
+	}
+
+	// 发布实现结果评论
+	commentBody := fmt.Sprintf("## 🔧 代码实现\n\nAI 已完成代码生成。\n\n<details>\n<summary>实现详情</summary>\n\n%s\n\n</details>", result)
+	if prNumber > 0 {
+		commentBody += fmt.Sprintf("\n\n✅ PR #%d 已创建。", prNumber)
+	}
+	_, err = o.github.AddComment(ctx, o.issueNumber, commentBody)
+	if err != nil {
+		return 0, fmt.Errorf("发布实现结果失败: %w", err)
+	}
+
+	return prNumber, nil
 }
 
 // DoIterate 根据 review 意见迭代修改
@@ -438,13 +459,18 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 
 	if o.config != nil && o.config.RepoDir != "" {
 		ws := NewWorkspace(o.config.RepoDir)
-		slug := slugFromTitle(input.IssueTitle)
 		// 复用已有 worktree
 		if ws.Exists(o.issueNumber) {
 			actualWorkDir = ws.Path(o.issueNumber)
+			gitOps = NewGitOps(actualWorkDir)
+			// 从 git 获取实际分支名，避免 issue 标题变化导致 slug 不匹配
+			branchName, _ = gitOps.CurrentBranch()
 		}
-		branchName = ws.BranchName(o.issueNumber, slug)
-		gitOps = NewGitOps(actualWorkDir)
+		if gitOps == nil {
+			gitOps = NewGitOps(actualWorkDir)
+			slug := slugFromTitle(input.IssueTitle)
+			branchName = ws.BranchName(o.issueNumber, slug)
+		}
 	}
 
 	// AI agent 模式修复
@@ -557,12 +583,18 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	}
 
 	// 发 PR review
+	// 注意：GitHub 不允许对自己的 PR 提 REQUEST_CHANGES，
+	// 所以不通过时用 COMMENT，通过时尝试 APPROVE 失败则回退到 COMMENT
 	reviewBody := FormatReviewResult(result)
-	event := "REQUEST_CHANGES"
+	event := "COMMENT"
 	if result.Approved {
 		event = "APPROVE"
 	}
 	_, err = o.github.CreatePRReview(ctx, prNumber, reviewBody, event)
+	if err != nil && result.Approved {
+		// APPROVE 失败（可能是自己的 PR），回退到 COMMENT
+		_, err = o.github.CreatePRReview(ctx, prNumber, reviewBody, "COMMENT")
+	}
 	if err != nil {
 		return fmt.Errorf("发布审查结果失败: %w", err)
 	}
@@ -626,7 +658,7 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 }
 
 // updateDiscussionSummary 更新讨论汇总（单 provider 模式）
-func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, comments []*github.IssueComment, existing *gh.MarkerComment) error {
+func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, existing *gh.MarkerComment) error {
 	input, err := o.buildPromptInput(ctx)
 	if err != nil {
 		return err
@@ -658,7 +690,7 @@ func (o *Orchestrator) hasMultipleDiscussionProviders() bool {
 
 // doMultiProviderDiscussion 多 provider "左右互搏"讨论
 // 每个 provider 独立给出方案，然后 consolidator 汇总
-func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, comments []*github.IssueComment, existing *gh.MarkerComment) error {
+func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *gh.MarkerComment) error {
 	input, err := o.buildPromptInput(ctx)
 	if err != nil {
 		return err
@@ -680,11 +712,14 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, comments [
 		opinions = append(opinions, fmt.Sprintf("[%s 的方案]\n%s", p.Name(), raw))
 	}
 
-	// 用 consolidator 汇总
+	// 用 consolidator 汇总（先 copy 再 append，避免污染 input.Comments 底层数组）
+	merged := make([]string, 0, len(input.Comments)+len(opinions))
+	merged = append(merged, input.Comments...)
+	merged = append(merged, opinions...)
 	consolidateInput := &PromptInput{
 		IssueTitle: input.IssueTitle,
 		IssueBody:  input.IssueBody,
-		Comments:   append(input.Comments, opinions...),
+		Comments:   merged,
 	}
 	summary, err := o.plan.Consolidate(ctx, consolidateInput)
 	if err != nil {
