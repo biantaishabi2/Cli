@@ -998,3 +998,97 @@ fn rust_bugfix_collect_and_context() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ═══════════════════════════════════════════════════════════
+// GitHub Issue 关联测试
+// ═══════════════════════════════════════════════════════════
+
+// ─── 场景：collect 在 gh 不可用时静默跳过 issue 拉取 ──────
+
+#[test]
+fn collect_skips_issue_when_gh_unavailable() {
+    let root = temp_dir("bdd_issue_no_gh");
+    let repo = root.join("repo");
+    let ctrl = repo.join("app/controllers");
+    fs::create_dir_all(&ctrl).expect("create repo dirs");
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .expect("run git")
+    };
+
+    // 创建含 #N 引用的 commit
+    write(&ctrl.join("OrderController.php"), "<?php\nclass OrderController {}\n");
+    git(&["init"]);
+    git(&["config", "user.email", "test@bdd.com"]);
+    git(&["config", "user.name", "bdd-test"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+
+    write(
+        &ctrl.join("OrderController.php"),
+        "<?php\nclass OrderController {\n    public function show() { return 1; }\n}\n",
+    );
+    git(&["add", "."]);
+    git(&["commit", "-m", "fix: handle empty order (#99)"]);
+
+    let out = root.join("out");
+
+    // 用最小 PATH 确保 gh 不可用
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .arg("bugfix")
+        .args([
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force",
+        ])
+        .env("BCC_FORCE_PROMPT_MODE", "1")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run bcc bugfix");
+
+    assert!(result.status.success(), "collect should succeed without gh");
+
+    // inventory.json 应存在且 commit 中无 issue 字段
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
+    let commits = inv["commits"].as_array().unwrap();
+    assert!(!commits.is_empty(), "should have commits");
+    // 无 gh 时 issue 应为 null/不存在
+    for c in commits {
+        assert!(c.get("issue").is_none() || c["issue"].is_null(),
+            "issue should not be present without gh, got: {}", c);
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+// ─── 场景：--issue 参数被 CLI 接受 ──────────────────────
+
+#[test]
+fn cli_accepts_issue_flag() {
+    let root = temp_dir("bdd_issue_cli_flag");
+    let repo = setup_bugfix_repo(&root);
+    let out = root.join("out");
+
+    // 传 --issue 99（不存在的 issue，但 gh 不可用时应静默跳过）
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .arg("bugfix")
+        .args([
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force", "--issue", "99",
+        ])
+        .env("BCC_FORCE_PROMPT_MODE", "1")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run bcc bugfix with --issue");
+
+    assert!(result.status.success(), "collect with --issue should succeed, stderr: {}",
+        String::from_utf8_lossy(&result.stderr));
+    assert!(out.join("inventory.json").exists(), "inventory.json should be created");
+
+    let _ = fs::remove_dir_all(&root);
+}

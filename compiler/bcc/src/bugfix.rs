@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 
 // ─── 数据结构 ───────────────────────────────────────────
 
@@ -23,6 +24,14 @@ struct InventoryMeta {
     by_grade: HashMap<String, usize>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct IssueInfo {
+    number: u64,
+    title: String,
+    body: String,           // issue body（截断到前 2000 字符避免 prompt 过长）
+    comments: Vec<String>,  // 每条评论 body（同样截断）
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct BugfixCommit {
     hash: String,
@@ -34,6 +43,8 @@ struct BugfixCommit {
     tags: Vec<String>,
     changed_files: Vec<ChangedFile>,
     total_lines: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<IssueInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,6 +90,7 @@ pub fn run(
     limit: Option<usize>,
     force: bool,
     coverage_report: Option<&str>,
+    issue: Option<u64>,
 ) {
     let target: Option<Step> = match step {
         Some("collect") | Some("c") => Some(Step::Collect),
@@ -107,14 +119,14 @@ pub fn run(
     match target {
         None => {
             // 全量执行
-            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
+            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang, issue);
             cleanup_stale_artifacts(output);
             context(output, repo, force, lang);
             generate(output, prompt_template, force, limit);
             organize(output, coverage_report);
         }
         Some(Step::Collect) => {
-            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
+            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang, issue);
         }
         Some(Step::Context) => {
             let inv_path = format!("{}/inventory.json", output);
@@ -196,6 +208,7 @@ fn collect(
     limit: Option<usize>,
     force: bool,
     lang: &str,
+    cli_issue: Option<u64>,
 ) {
     let inventory_path = format!("{}/inventory.json", output);
     if !force && std::path::Path::new(&inventory_path).exists() {
@@ -291,6 +304,32 @@ fn collect(
         commits.truncate(max);
     }
 
+    // 拉取 issue 信息（--issue 手动指定优先，否则从 message 自动提取）
+    let gh_available = check_gh_available();
+    if gh_available {
+        let mut issue_cache: HashMap<u64, IssueInfo> = HashMap::new();
+        for commit in &mut commits {
+            let issue_nums = if let Some(manual) = cli_issue {
+                vec![manual]
+            } else {
+                extract_issue_numbers(&commit.message)
+            };
+            if let Some(&num) = issue_nums.first() {
+                if let Some(cached) = issue_cache.get(&num) {
+                    commit.issue = Some(cached.clone());
+                } else if let Some(info) = fetch_issue(repo, num) {
+                    issue_cache.insert(num, info.clone());
+                    commit.issue = Some(info);
+                }
+            }
+        }
+        if !issue_cache.is_empty() {
+            eprintln!("[collect] enriched {} unique issues", issue_cache.len());
+        }
+    } else {
+        eprintln!("[collect] gh CLI not available, skipping issue enrichment");
+    }
+
     // 统计
     let mut by_grade: HashMap<String, usize> = HashMap::new();
     for c in &commits {
@@ -352,6 +391,7 @@ fn parse_git_log(
                 tags: Vec::new(),
                 changed_files: Vec::new(),
                 total_lines: 0,
+                issue: None,
             });
         } else if let Some(msg) = line.strip_prefix("__MSG__") {
             if let Some(ref mut c) = current {
@@ -500,6 +540,113 @@ fn chrono_now() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+// ─── issue 关联 ─────────────────────────────────────────
+
+/// 从 commit message 中提取 issue 编号（#123 格式）
+fn extract_issue_numbers(message: &str) -> Vec<u64> {
+    let re = Regex::new(r"#(\d+)").unwrap();
+    let mut nums: Vec<u64> = re.captures_iter(message)
+        .filter_map(|cap| cap[1].parse::<u64>().ok())
+        .collect();
+    nums.dedup();
+    nums
+}
+
+/// 检测 gh CLI 是否可用且已认证
+fn check_gh_available() -> bool {
+    Command::new("gh")
+        .args(["auth", "status"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// 从 git remote origin URL 解析 owner/repo
+fn detect_github_remote(repo: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", repo, "remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_github_remote(&url)
+}
+
+/// 解析 GitHub remote URL 为 owner/repo 格式
+fn parse_github_remote(url: &str) -> Option<String> {
+    // git@github.com:owner/repo.git
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let repo = rest.trim_end_matches(".git");
+        return Some(repo.to_string());
+    }
+    // https://github.com/owner/repo.git
+    if url.contains("github.com/") {
+        let parts: Vec<&str> = url.split("github.com/").collect();
+        if parts.len() >= 2 {
+            let repo = parts[1].trim_end_matches(".git").trim_end_matches('/');
+            return Some(repo.to_string());
+        }
+    }
+    None
+}
+
+/// 截断字符串到指定字符数
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...(truncated)", truncated)
+    }
+}
+
+/// 用 gh api 拉取 issue 详情
+fn fetch_issue(repo: &str, number: u64) -> Option<IssueInfo> {
+    let remote = detect_github_remote(repo)?;
+
+    // 拉取 issue 标题和正文
+    let output = Command::new("gh")
+        .args(["api", &format!("repos/{}/issues/{}", remote, number)])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        eprintln!("[issue] gh api failed for issue #{}: {}", number,
+            String::from_utf8_lossy(&output.stderr).trim());
+        return None;
+    }
+
+    let issue_json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let title = issue_json["title"].as_str().unwrap_or("").to_string();
+    let body = truncate_str(issue_json["body"].as_str().unwrap_or(""), 2000);
+
+    // 拉取评论
+    let comments_output = Command::new("gh")
+        .args(["api", &format!("repos/{}/issues/{}/comments", remote, number)])
+        .output()
+        .ok();
+
+    let comments: Vec<String> = comments_output
+        .and_then(|o| {
+            if o.status.success() {
+                serde_json::from_slice::<Vec<serde_json::Value>>(&o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c["body"].as_str().map(|b| truncate_str(b, 2000)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    eprintln!("[issue] fetched #{}: {} ({} comments)", number, title, comments.len());
+
+    Some(IssueInfo { number, title, body, comments })
+}
+
 // ─── cleanup ─────────────────────────────────────────────
 
 /// 清理目录中 hash 不在 valid_hashes 中的 .json 文件
@@ -593,7 +740,7 @@ fn context(output: &str, repo: &str, force: bool, lang: &str) {
             }));
         }
 
-        let context_json = serde_json::json!({
+        let mut context_json = serde_json::json!({
             "hash": commit.hash,
             "message": commit.message,
             "grade": commit.grade,
@@ -601,6 +748,10 @@ fn context(output: &str, repo: &str, force: bool, lang: &str) {
             "tags": commit.tags,
             "diffs": diffs,
         });
+        // 有 issue 时追加到 context
+        if let Some(ref issue) = commit.issue {
+            context_json["issue"] = serde_json::to_value(issue).unwrap();
+        }
 
         let json_str = serde_json::to_string_pretty(&context_json).unwrap();
         fs::write(&out_path, &json_str).expect("failed to write context json");
@@ -957,6 +1108,15 @@ required：有 if(!$param) throw→true，有默认值/??→false
 allowed：switch/case 或 in_array→列举，无约束→null
 
 从 PHP 代码推导 outputs：_jsonformat() 数据结构、$this->view->setVar()、return 值
+
+## GitHub Issue 上下文（如有）
+
+如果下方 context_json 中包含 "issue" 字段，其中有：
+- title: issue 标题（通常描述 bug 现象）
+- body: issue 正文（包含问题分析、复现步骤、验收标准）
+- comments: 评论列表（可能包含讨论和验证结果）
+
+请结合 issue 中的信息生成更精确的 test_spec。优先使用 issue 中明确描述的验收标准作为 assertions。
 
 ## Bugfix 记录
 
@@ -1991,7 +2151,7 @@ class UserController {
         let output = output_dir.path().to_str().unwrap();
         fs::create_dir_all(output).ok();
 
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
 
         let inv_path = output_dir.path().join("inventory.json");
         assert!(inv_path.exists(), "inventory.json should be created");
@@ -2021,7 +2181,7 @@ class UserController {
         fs::create_dir_all(output).ok();
 
         // 按路径扫描 app/controllers/，应扫到所有涉及该路径的 commit
-        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], None, false, "php", None);
 
         let inv_path = output_dir.path().join("inventory.json");
         assert!(inv_path.exists());
@@ -2043,7 +2203,7 @@ class UserController {
         let output = output_dir.path().to_str().unwrap();
         fs::create_dir_all(output).ok();
 
-        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], Some(1), false, "php");
+        collect(repo, output, None, Some("app/controllers/"), "fix,bug", None, &["A", "B"], Some(1), false, "php", None);
 
         let inv: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.path().join("inventory.json")).unwrap()
@@ -2061,11 +2221,11 @@ class UserController {
         fs::create_dir_all(output).ok();
 
         // 第一次 collect
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
         let content1 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
 
         // 第二次 collect（不带 force），应跳过
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
         let content2 = fs::read_to_string(output_dir.path().join("inventory.json")).unwrap();
         assert_eq!(content1, content2, "without force, inventory should not be overwritten");
     }
@@ -2079,7 +2239,7 @@ class UserController {
         fs::create_dir_all(output).ok();
 
         // 先 collect
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
 
         // 再 context
         context(output, repo, false, "php");
@@ -2123,7 +2283,7 @@ class UserController {
         let output = output_dir.path().to_str().unwrap();
         fs::create_dir_all(output).ok();
 
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
         context(output, repo, false, "php");
 
         // 读取 inventory 获取 commit hash
@@ -2151,7 +2311,7 @@ class UserController {
         fs::create_dir_all(output).ok();
 
         // Step 1: collect
-        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
+        collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php", None);
         assert!(output_dir.path().join("inventory.json").exists());
 
         // Step 2: context
@@ -2200,5 +2360,112 @@ class UserController {
         let coverage = fs::read_to_string(output_dir.path().join("coverage.md")).unwrap();
         assert!(coverage.contains("覆盖率"));
         assert!(coverage.contains("bddc"));
+    }
+
+    // ─── extract_issue_numbers ────────────────────────
+
+    #[test]
+    fn issue_number_from_hash_ref() {
+        assert_eq!(extract_issue_numbers("fix: handle empty (#2)"), vec![2]);
+        assert_eq!(extract_issue_numbers("closes #123"), vec![123]);
+    }
+
+    #[test]
+    fn issue_number_multiple() {
+        let nums = extract_issue_numbers("fix #1 and #2");
+        assert_eq!(nums, vec![1, 2]);
+    }
+
+    #[test]
+    fn issue_number_none() {
+        assert!(extract_issue_numbers("no issue here").is_empty());
+        assert!(extract_issue_numbers("refactor code").is_empty());
+    }
+
+    // ─── parse_github_remote ─────────────────────────
+
+    #[test]
+    fn parse_ssh_remote() {
+        assert_eq!(
+            parse_github_remote("git@github.com:owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_https_remote() {
+        assert_eq!(
+            parse_github_remote("https://github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_https_no_dotgit() {
+        assert_eq!(
+            parse_github_remote("https://github.com/owner/repo"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_non_github_remote() {
+        assert_eq!(parse_github_remote("https://gitlab.com/owner/repo.git"), None);
+    }
+
+    // ─── truncate_str ────────────────────────────────
+
+    #[test]
+    fn truncate_short_string() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string() {
+        let long = "a".repeat(100);
+        let result = truncate_str(&long, 10);
+        assert!(result.starts_with("aaaaaaaaaa"));
+        assert!(result.contains("...(truncated)"));
+    }
+
+    // ─── IssueInfo serde 兼容性 ──────────────────────
+
+    #[test]
+    fn bugfix_commit_without_issue_serializes_cleanly() {
+        let commit = BugfixCommit {
+            hash: "abc".into(), message: "fix".into(), author: "test".into(),
+            date: "2025-01-01".into(), grade: "A".into(), module: "test".into(),
+            tags: vec![], changed_files: vec![], total_lines: 5, issue: None,
+        };
+        let json = serde_json::to_string(&commit).unwrap();
+        // skip_serializing_if 保证无 issue 字段
+        assert!(!json.contains("issue"));
+    }
+
+    #[test]
+    fn bugfix_commit_with_issue_roundtrip() {
+        let commit = BugfixCommit {
+            hash: "abc".into(), message: "fix (#1)".into(), author: "test".into(),
+            date: "2025-01-01".into(), grade: "A".into(), module: "test".into(),
+            tags: vec![], changed_files: vec![], total_lines: 5,
+            issue: Some(IssueInfo {
+                number: 1, title: "bug title".into(),
+                body: "bug body".into(), comments: vec!["comment1".into()],
+            }),
+        };
+        let json = serde_json::to_string(&commit).unwrap();
+        assert!(json.contains("\"issue\""));
+        assert!(json.contains("bug title"));
+        // 反序列化回来
+        let back: BugfixCommit = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.issue.unwrap().number, 1);
+    }
+
+    #[test]
+    fn old_inventory_without_issue_deserializes() {
+        // 模拟旧格式的 inventory JSON（无 issue 字段）
+        let json = r#"{"hash":"abc","message":"fix","author":"test","date":"2025-01-01","grade":"A","module":"test","tags":[],"changed_files":[],"total_lines":5}"#;
+        let commit: BugfixCommit = serde_json::from_str(json).unwrap();
+        assert!(commit.issue.is_none());
     }
 }
