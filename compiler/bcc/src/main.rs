@@ -50,16 +50,24 @@ enum Commands {
 
     /// Extract structural info from source files into FileRecord JSON
     Extract {
-        /// Source file path
+        /// Source file or directory path
         path: String,
 
         /// Output mode: ast (JSON), doc (markdown), yaml (draft)
         #[arg(long, default_value = "ast")]
         mode: String,
 
-        /// Output file (default: stdout)
+        /// Output file (default: stdout; required in --batch mode)
         #[arg(long)]
         output: Option<String>,
+
+        /// Batch mode: recursively extract all files in directory, output AstSnapshot JSON
+        #[arg(long)]
+        batch: bool,
+
+        /// Language filter for batch mode: typescript, elixir, rust, php
+        #[arg(long)]
+        lang: Option<String>,
     },
 
     /// Audit documentation coverage against source files
@@ -350,8 +358,26 @@ fn main() {
                 verbose,
             );
         }
-        Some(Commands::Extract { path, mode, output }) => {
-            extract::run(&path, &mode, output.as_deref());
+        Some(Commands::Extract {
+            path,
+            mode,
+            output,
+            batch,
+            lang,
+        }) => {
+            if batch {
+                let lang = lang.unwrap_or_else(|| {
+                    eprintln!("--lang is required in --batch mode");
+                    std::process::exit(1);
+                });
+                let output = output.unwrap_or_else(|| {
+                    eprintln!("--output is required in --batch mode");
+                    std::process::exit(1);
+                });
+                extract::run_batch(&path, &lang, &output);
+            } else {
+                extract::run(&path, &mode, output.as_deref());
+            }
         }
         Some(Commands::Trace { action }) => match action {
             TraceAction::Status {
