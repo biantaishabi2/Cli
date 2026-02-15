@@ -29,7 +29,7 @@ automation/niuma/
 ├── pkg/
 │   ├── agent/           # 核心逻辑（状态机/计划/实现）
 │   ├── github/          # GitHub API 封装
-│   ├── codex/           # 内网 AI 调用
+│   ├── ai/              # AI Provider 抽象（支持 Kimi/OpenCode/Codex 等多后端）
 │   ├── state/           # Label 状态机
 │   └── marker/          # 幂等 Marker 管理
 ├── templates/           # Final Plan 模板
@@ -66,7 +66,9 @@ Merged
 | `bot:needs-discussion` | 信息不足/冲突，进入讨论态 |
 | `bot:plan-final` | **最终方案定稿**（含测试场景） |
 | `bot:implementing` | 正在改代码 |
-| `bot:pr-ready` | PR 已创建，等待 Review |
+| `bot:pr-created` | PR 已创建，等待自检 |
+| `bot:pr-reviewable` | 自检通过，可人工审核 |
+| `bot:pr-needs-fix` | 自检/审核失败，需修复 |
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
 
@@ -86,8 +88,9 @@ mv niuma /usr/local/bin/
 ### 2. 配置
 
 ```bash
-# 设置内网 Codex 地址
-export NIUMACODEX_URL="http://your-codex-server:8080"
+# 配置文件指定 AI provider（默认读 .niuma.yml）
+# 或通过环境变量覆盖
+export NIUMA_AI_PROVIDER="kimi"
 
 # 设置 GitHub Token（需有 repo 权限）
 export GITHUB_TOKEN="ghp_xxx"
@@ -122,7 +125,7 @@ niuma iterate --repo owner/repo --pr 456
 
 ### 1. 目标与非目标
 - 要做什么
-- 明确不做什�
+- 明确不做什么
 
 ### 2. 根因分析（证据链）
 - 问题根因
