@@ -1,0 +1,1326 @@
+{
+  "added": [
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "channel_ingress",
+      "total_edges": 121,
+      "import_edges": 121,
+      "call_edges": 0,
+      "src_file_count": 13,
+      "dst_file_count": 101,
+      "top_src": [
+        [
+          "src/plugin-sdk/index.ts",
+          60
+        ],
+        [
+          "src/plugins/runtime/index.ts",
+          37
+        ],
+        [
+          "src/agents/tools/telegram-actions.ts",
+          5
+        ],
+        [
+          "src/agents/tools/message-tool.ts",
+          3
+        ],
+        [
+          "src/agents/tools/slack-actions.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/discord/send.ts",
+          4
+        ],
+        [
+          "src/channels/plugins/types.ts",
+          4
+        ],
+        [
+          "src/channels/dock.ts",
+          3
+        ],
+        [
+          "src/channels/plugins/bluebubbles-actions.ts",
+          2
+        ],
+        [
+          "src/channels/plugins/index.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "agent_runtime",
+      "total_edges": 108,
+      "import_edges": 98,
+      "call_edges": 10,
+      "src_file_count": 35,
+      "dst_file_count": 56,
+      "top_src": [
+        [
+          "src/plugins/runtime/index.ts",
+          19
+        ],
+        [
+          "src/agents/tools/image-tool.ts",
+          11
+        ],
+        [
+          "src/agents/tools/session-status-tool.ts",
+          10
+        ],
+        [
+          "src/plugin-sdk/index.ts",
+          8
+        ],
+        [
+          "src/agents/tools/sessions-spawn-tool.ts",
+          7
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/agents/agent-scope.ts",
+          11
+        ],
+        [
+          "src/agents/schema/typebox.ts",
+          9
+        ],
+        [
+          "src/media/mime.ts",
+          5
+        ],
+        [
+          "src/agents/lanes.ts",
+          4
+        ],
+        [
+          "src/agents/date-time.ts",
+          4
+        ]
+      ]
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "channel_ingress",
+      "total_edges": 96,
+      "import_edges": 86,
+      "call_edges": 10,
+      "src_file_count": 43,
+      "dst_file_count": 21,
+      "top_src": [
+        [
+          "src/cli/deps.ts",
+          6
+        ],
+        [
+          "src/commands/channels/capabilities.ts",
+          6
+        ],
+        [
+          "src/commands/agents.providers.ts",
+          5
+        ],
+        [
+          "src/commands/onboard-channels.ts",
+          5
+        ],
+        [
+          "src/commands/agents.bindings.ts",
+          4
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/channels/plugins/index.ts",
+          32
+        ],
+        [
+          "src/channels/plugins/types.ts",
+          18
+        ],
+        [
+          "src/channels/plugins/helpers.ts",
+          13
+        ],
+        [
+          "src/channels/registry.ts",
+          7
+        ],
+        [
+          "src/channels/plugins/catalog.ts",
+          4
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "channel_ingress",
+      "total_edges": 91,
+      "import_edges": 87,
+      "call_edges": 4,
+      "src_file_count": 40,
+      "dst_file_count": 31,
+      "top_src": [
+        [
+          "src/infra/outbound/outbound-session.ts",
+          14
+        ],
+        [
+          "src/infra/outbound/deliver.ts",
+          9
+        ],
+        [
+          "src/config/sessions/metadata.ts",
+          4
+        ],
+        [
+          "src/infra/outbound/message-action-runner.ts",
+          4
+        ],
+        [
+          "src/config/plugin-auto-enable.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/channels/plugins/types.ts",
+          27
+        ],
+        [
+          "src/channels/plugins/index.ts",
+          18
+        ],
+        [
+          "src/channels/registry.ts",
+          9
+        ],
+        [
+          "src/channels/chat-type.ts",
+          6
+        ],
+        [
+          "src/channels/plugins/message-actions.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "agent_runtime",
+      "total_edges": 85,
+      "import_edges": 74,
+      "call_edges": 11,
+      "src_file_count": 28,
+      "dst_file_count": 36,
+      "top_src": [
+        [
+          "src/cron/isolated-agent/run.ts",
+          22
+        ],
+        [
+          "src/infra/heartbeat-runner.ts",
+          10
+        ],
+        [
+          "src/extensionAPI.ts",
+          7
+        ],
+        [
+          "src/infra/outbound/message-action-runner.ts",
+          5
+        ],
+        [
+          "src/security/audit-extra.sync.ts",
+          5
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/agents/agent-scope.ts",
+          10
+        ],
+        [
+          "src/agents/model-selection.ts",
+          8
+        ],
+        [
+          "src/auto-reply/templating.ts",
+          6
+        ],
+        [
+          "src/agents/usage.ts",
+          4
+        ],
+        [
+          "src/auto-reply/types.ts",
+          4
+        ]
+      ]
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "channel_ingress",
+      "total_edges": 73,
+      "import_edges": 68,
+      "call_edges": 5,
+      "src_file_count": 32,
+      "dst_file_count": 24,
+      "top_src": [
+        [
+          "src/auto-reply/reply/commands-allowlist.ts",
+          12
+        ],
+        [
+          "src/agents/channel-tools.ts",
+          5
+        ],
+        [
+          "src/tts/tts.ts",
+          4
+        ],
+        [
+          "src/agents/pi-embedded-runner/compact.ts",
+          3
+        ],
+        [
+          "src/agents/pi-embedded-runner/run/attempt.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/channels/plugins/index.ts",
+          14
+        ],
+        [
+          "src/channels/dock.ts",
+          13
+        ],
+        [
+          "src/channels/plugins/types.ts",
+          8
+        ],
+        [
+          "src/channels/registry.ts",
+          7
+        ],
+        [
+          "src/channels/chat-type.ts",
+          6
+        ]
+      ]
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "platform_hosts",
+      "total_edges": 73,
+      "import_edges": 66,
+      "call_edges": 7,
+      "src_file_count": 26,
+      "dst_file_count": 17,
+      "top_src": [
+        [
+          "src/cli/node-cli/daemon.ts",
+          9
+        ],
+        [
+          "src/cli/daemon-cli/status.print.ts",
+          6
+        ],
+        [
+          "src/commands/doctor-gateway-daemon-flow.ts",
+          6
+        ],
+        [
+          "src/commands/doctor-format.ts",
+          5
+        ],
+        [
+          "src/cli/daemon-cli/lifecycle.ts",
+          4
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/daemon/service.ts",
+          15
+        ],
+        [
+          "src/daemon/constants.ts",
+          10
+        ],
+        [
+          "src/daemon/systemd-hints.ts",
+          9
+        ],
+        [
+          "src/daemon/systemd.ts",
+          6
+        ],
+        [
+          "src/daemon/launchd.ts",
+          6
+        ]
+      ]
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "gateway_control_plane",
+      "total_edges": 72,
+      "import_edges": 71,
+      "call_edges": 1,
+      "src_file_count": 44,
+      "dst_file_count": 8,
+      "top_src": [
+        [
+          "src/slack/monitor/message-handler/prepare.ts",
+          4
+        ],
+        [
+          "src/telegram/bot-message-context.ts",
+          4
+        ],
+        [
+          "src/discord/monitor/agent-components.ts",
+          3
+        ],
+        [
+          "src/discord/monitor/message-handler.preflight.ts",
+          3
+        ],
+        [
+          "src/discord/monitor/message-handler.process.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/routing/session-key.ts",
+          29
+        ],
+        [
+          "src/routing/resolve-route.ts",
+          18
+        ],
+        [
+          "src/pairing/pairing-store.ts",
+          12
+        ],
+        [
+          "src/pairing/pairing-messages.ts",
+          9
+        ],
+        [
+          "src/gateway/client.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "gateway_control_plane",
+      "total_edges": 44,
+      "import_edges": 36,
+      "call_edges": 8,
+      "src_file_count": 30,
+      "dst_file_count": 8,
+      "top_src": [
+        [
+          "src/auto-reply/reply/directive-handling.impl.ts",
+          4
+        ],
+        [
+          "src/auto-reply/reply/directive-handling.persist.ts",
+          3
+        ],
+        [
+          "src/agents/agent-scope.ts",
+          2
+        ],
+        [
+          "src/agents/sandbox/shared.ts",
+          2
+        ],
+        [
+          "src/agents/subagent-announce.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/routing/session-key.ts",
+          22
+        ],
+        [
+          "src/gateway/call.ts",
+          5
+        ],
+        [
+          "src/sessions/model-overrides.ts",
+          5
+        ],
+        [
+          "src/sessions/level-overrides.ts",
+          4
+        ],
+        [
+          "src/sessions/session-key-utils.ts",
+          3
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "ops_client_entry",
+      "total_edges": 44,
+      "import_edges": 33,
+      "call_edges": 11,
+      "src_file_count": 23,
+      "dst_file_count": 17,
+      "top_src": [
+        [
+          "src/config/sessions/store.ts",
+          4
+        ],
+        [
+          "src/index.ts",
+          4
+        ],
+        [
+          "src/infra/tailscale.ts",
+          3
+        ],
+        [
+          "src/security/audit-extra.sync.ts",
+          3
+        ],
+        [
+          "src/security/audit.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/cli/command-format.ts",
+          9
+        ],
+        [
+          "src/cli/parse-duration.ts",
+          8
+        ],
+        [
+          "src/browser/config.ts",
+          4
+        ],
+        [
+          "src/cli/parse-bytes.ts",
+          3
+        ],
+        [
+          "src/terminal/theme.ts",
+          3
+        ]
+      ]
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "ops_client_entry",
+      "total_edges": 41,
+      "import_edges": 41,
+      "call_edges": 0,
+      "src_file_count": 23,
+      "dst_file_count": 12,
+      "top_src": [
+        [
+          "src/channel-web.ts",
+          6
+        ],
+        [
+          "src/channels/plugins/onboarding/signal.ts",
+          5
+        ],
+        [
+          "src/channels/plugins/onboarding/whatsapp.ts",
+          4
+        ],
+        [
+          "src/channels/plugins/onboarding/imessage.ts",
+          3
+        ],
+        [
+          "src/channels/plugins/onboarding/telegram.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/web/media.ts",
+          9
+        ],
+        [
+          "src/wizard/prompts.ts",
+          8
+        ],
+        [
+          "src/terminal/links.ts",
+          6
+        ],
+        [
+          "src/cli/command-format.ts",
+          5
+        ],
+        [
+          "src/web/accounts.ts",
+          3
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "gateway_control_plane",
+      "total_edges": 40,
+      "import_edges": 33,
+      "call_edges": 7,
+      "src_file_count": 28,
+      "dst_file_count": 11,
+      "top_src": [
+        [
+          "src/security/audit.ts",
+          4
+        ],
+        [
+          "src/infra/outbound/outbound-session.ts",
+          3
+        ],
+        [
+          "src/config/sessions/main-session.ts",
+          2
+        ],
+        [
+          "src/config/sessions/transcript.ts",
+          2
+        ],
+        [
+          "src/cron/normalize.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/routing/session-key.ts",
+          24
+        ],
+        [
+          "src/sessions/transcript-events.ts",
+          2
+        ],
+        [
+          "src/gateway/call.ts",
+          2
+        ],
+        [
+          "src/routing/resolve-route.ts",
+          2
+        ],
+        [
+          "src/gateway/auth.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "gateway_control_plane",
+      "total_edges": 40,
+      "import_edges": 36,
+      "call_edges": 4,
+      "src_file_count": 22,
+      "dst_file_count": 13,
+      "top_src": [
+        [
+          "src/agents/tools/session-status-tool.ts",
+          4
+        ],
+        [
+          "src/agents/tools/message-tool.ts",
+          3
+        ],
+        [
+          "src/agents/tools/sessions-helpers.ts",
+          3
+        ],
+        [
+          "src/agents/tools/sessions-history-tool.ts",
+          3
+        ],
+        [
+          "src/agents/tools/sessions-send-tool.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/routing/session-key.ts",
+          16
+        ],
+        [
+          "src/gateway/call.ts",
+          9
+        ],
+        [
+          "src/gateway/server-methods/types.ts",
+          4
+        ],
+        [
+          "src/routing/resolve-route.ts",
+          2
+        ],
+        [
+          "src/sessions/session-key-utils.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "gateway_control_plane",
+      "callee": "ops_client_entry",
+      "total_edges": 37,
+      "import_edges": 36,
+      "call_edges": 1,
+      "src_file_count": 24,
+      "dst_file_count": 12,
+      "top_src": [
+        [
+          "src/gateway/server.impl.ts",
+          4
+        ],
+        [
+          "src/gateway/openresponses-http.ts",
+          3
+        ],
+        [
+          "src/gateway/server-methods/types.ts",
+          3
+        ],
+        [
+          "src/gateway/boot.ts",
+          2
+        ],
+        [
+          "src/gateway/openai-http.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/cli/deps.ts",
+          13
+        ],
+        [
+          "src/commands/agent.ts",
+          6
+        ],
+        [
+          "src/commands/health.ts",
+          4
+        ],
+        [
+          "src/wizard/session.ts",
+          3
+        ],
+        [
+          "src/cli/command-format.ts",
+          3
+        ]
+      ]
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "plugin_tool_extension",
+      "total_edges": 36,
+      "import_edges": 31,
+      "call_edges": 5,
+      "src_file_count": 11,
+      "dst_file_count": 19,
+      "top_src": [
+        [
+          "src/cli/hooks-cli.ts",
+          7
+        ],
+        [
+          "src/cli/plugins-cli.ts",
+          7
+        ],
+        [
+          "src/commands/onboarding/plugin-install.ts",
+          7
+        ],
+        [
+          "src/cli/plugin-registry.ts",
+          4
+        ],
+        [
+          "src/commands/auth-choice.apply.plugin-provider.ts",
+          3
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/plugins/loader.ts",
+          5
+        ],
+        [
+          "src/plugins/enable.ts",
+          4
+        ],
+        [
+          "src/hooks/hooks-status.ts",
+          3
+        ],
+        [
+          "src/plugins/types.ts",
+          3
+        ],
+        [
+          "src/plugins/installs.ts",
+          3
+        ]
+      ]
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "ops_client_entry",
+      "total_edges": 32,
+      "import_edges": 30,
+      "call_edges": 2,
+      "src_file_count": 12,
+      "dst_file_count": 23,
+      "top_src": [
+        [
+          "src/plugins/runtime/index.ts",
+          7
+        ],
+        [
+          "src/plugin-sdk/index.ts",
+          5
+        ],
+        [
+          "src/agents/tools/browser-tool.ts",
+          4
+        ],
+        [
+          "src/agents/tools/nodes-tool.ts",
+          4
+        ],
+        [
+          "src/agents/tools/canvas-tool.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/web/media.ts",
+          3
+        ],
+        [
+          "src/cli/parse-duration.ts",
+          3
+        ],
+        [
+          "src/cli/command-format.ts",
+          3
+        ],
+        [
+          "src/cli/nodes-camera.ts",
+          2
+        ],
+        [
+          "src/web/outbound.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "ops_client_entry",
+      "total_edges": 27,
+      "import_edges": 23,
+      "call_edges": 4,
+      "src_file_count": 20,
+      "dst_file_count": 9,
+      "top_src": [
+        [
+          "src/agents/sandbox/browser.ts",
+          3
+        ],
+        [
+          "src/agents/pi-embedded-runner/run/images.ts",
+          2
+        ],
+        [
+          "src/agents/pi-extensions/context-pruning/settings.ts",
+          2
+        ],
+        [
+          "src/agents/sandbox/docker.ts",
+          2
+        ],
+        [
+          "src/media/host.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/cli/command-format.ts",
+          10
+        ],
+        [
+          "src/cli/parse-duration.ts",
+          5
+        ],
+        [
+          "src/browser/bridge-server.ts",
+          4
+        ],
+        [
+          "src/commands/agent/types.ts",
+          2
+        ],
+        [
+          "src/browser/constants.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "plugin_tool_extension",
+      "total_edges": 24,
+      "import_edges": 23,
+      "call_edges": 1,
+      "src_file_count": 14,
+      "dst_file_count": 12,
+      "top_src": [
+        [
+          "src/channels/plugins/actions/discord/handle-action.ts",
+          3
+        ],
+        [
+          "src/channels/plugins/catalog.ts",
+          3
+        ],
+        [
+          "src/channels/plugins/actions/discord/handle-action.guild-admin.ts",
+          2
+        ],
+        [
+          "src/channels/plugins/actions/telegram.ts",
+          2
+        ],
+        [
+          "src/channels/plugins/load.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/agents/tools/common.ts",
+          7
+        ],
+        [
+          "src/plugins/runtime.ts",
+          5
+        ],
+        [
+          "src/agents/tools/discord-actions.ts",
+          2
+        ],
+        [
+          "src/plugins/registry.ts",
+          2
+        ],
+        [
+          "src/agents/tools/telegram-actions.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "gateway_control_plane",
+      "callee": "plugin_tool_extension",
+      "total_edges": 21,
+      "import_edges": 19,
+      "call_edges": 2,
+      "src_file_count": 12,
+      "dst_file_count": 10,
+      "top_src": [
+        [
+          "src/gateway/server-startup.ts",
+          6
+        ],
+        [
+          "src/gateway/test-helpers.mocks.ts",
+          3
+        ],
+        [
+          "src/gateway/server-close.ts",
+          2
+        ],
+        [
+          "src/gateway/tools-invoke-http.ts",
+          2
+        ],
+        [
+          "src/gateway/config-reload.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/plugins/runtime.ts",
+          3
+        ],
+        [
+          "src/hooks/gmail-watcher.ts",
+          3
+        ],
+        [
+          "src/plugins/services.ts",
+          3
+        ],
+        [
+          "src/plugins/loader.ts",
+          3
+        ],
+        [
+          "src/plugins/registry.ts",
+          3
+        ]
+      ]
+    }
+  ],
+  "remaining": [
+    {
+      "caller": "platform_hosts",
+      "callee": "ops_client_entry",
+      "total_edges": 8,
+      "import_edges": 7,
+      "call_edges": 1,
+      "src_file_count": 5,
+      "dst_file_count": 5,
+      "top_src": [
+        [
+          "src/node-host/runner.ts",
+          3
+        ],
+        [
+          "src/daemon/systemd-hints.ts",
+          2
+        ],
+        [
+          "src/daemon/launchd.ts",
+          1
+        ],
+        [
+          "src/daemon/schtasks.ts",
+          1
+        ],
+        [
+          "src/daemon/systemd.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/terminal/theme.ts",
+          3
+        ],
+        [
+          "src/cli/command-format.ts",
+          2
+        ],
+        [
+          "src/browser/config.ts",
+          1
+        ],
+        [
+          "src/browser/control-service.ts",
+          1
+        ],
+        [
+          "src/browser/routes/dispatcher.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "foundation_infra",
+      "total_edges": 7,
+      "import_edges": 5,
+      "call_edges": 2,
+      "src_file_count": 3,
+      "dst_file_count": 5,
+      "top_src": [
+        [
+          "src/providers/github-copilot-auth.ts",
+          3
+        ],
+        [
+          "src/providers/github-copilot-token.ts",
+          3
+        ],
+        [
+          "src/providers/github-copilot-models.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/config/logging.ts",
+          2
+        ],
+        [
+          "src/infra/json-file.ts",
+          2
+        ],
+        [
+          "src/runtime.ts",
+          1
+        ],
+        [
+          "src/config/types.ts",
+          1
+        ],
+        [
+          "src/config/paths.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "plugin_tool_extension",
+      "total_edges": 7,
+      "import_edges": 6,
+      "call_edges": 1,
+      "src_file_count": 4,
+      "dst_file_count": 6,
+      "top_src": [
+        [
+          "src/config/validation.ts",
+          3
+        ],
+        [
+          "src/infra/outbound/message-action-runner.ts",
+          2
+        ],
+        [
+          "src/test-utils/channel-plugins.ts",
+          1
+        ],
+        [
+          "src/utils/message-channel.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/agents/tools/common.ts",
+          2
+        ],
+        [
+          "src/plugins/config-state.ts",
+          1
+        ],
+        [
+          "src/plugins/manifest-registry.ts",
+          1
+        ],
+        [
+          "src/plugins/schema-validator.ts",
+          1
+        ],
+        [
+          "src/plugins/registry.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "ops_client_entry",
+      "total_edges": 5,
+      "import_edges": 4,
+      "call_edges": 1,
+      "src_file_count": 2,
+      "dst_file_count": 4,
+      "top_src": [
+        [
+          "src/providers/github-copilot-auth.ts",
+          3
+        ],
+        [
+          "src/providers/qwen-portal-oauth.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/cli/command-format.ts",
+          2
+        ],
+        [
+          "src/commands/models/shared.ts",
+          1
+        ],
+        [
+          "src/commands/onboard-auth.ts",
+          1
+        ],
+        [
+          "src/terminal/prompt-style.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "platform_hosts",
+      "callee": "agent_runtime",
+      "total_edges": 4,
+      "import_edges": 4,
+      "call_edges": 0,
+      "src_file_count": 3,
+      "dst_file_count": 2,
+      "top_src": [
+        [
+          "src/node-host/runner.ts",
+          2
+        ],
+        [
+          "src/canvas-host/a2ui.ts",
+          1
+        ],
+        [
+          "src/canvas-host/server.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/media/mime.ts",
+          3
+        ],
+        [
+          "src/agents/agent-scope.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "external_dependencies",
+      "total_edges": 2,
+      "import_edges": 2,
+      "call_edges": 0,
+      "src_file_count": 2,
+      "dst_file_count": 2,
+      "top_src": [
+        [
+          "src/agents/auth-profiles/oauth.ts",
+          1
+        ],
+        [
+          "src/agents/models-config.providers.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/providers/qwen-portal-oauth.ts",
+          1
+        ],
+        [
+          "src/providers/github-copilot-token.ts",
+          1
+        ]
+      ]
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "agent_runtime",
+      "total_edges": 2,
+      "import_edges": 1,
+      "call_edges": 1,
+      "src_file_count": 1,
+      "dst_file_count": 1,
+      "top_src": [
+        [
+          "src/providers/github-copilot-auth.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/agents/auth-profiles.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "platform_hosts",
+      "total_edges": 2,
+      "import_edges": 1,
+      "call_edges": 1,
+      "src_file_count": 1,
+      "dst_file_count": 1,
+      "top_src": [
+        [
+          "src/infra/restart.ts",
+          2
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/daemon/constants.ts",
+          2
+        ]
+      ]
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "external_dependencies",
+      "total_edges": 2,
+      "import_edges": 2,
+      "call_edges": 0,
+      "src_file_count": 2,
+      "dst_file_count": 1,
+      "top_src": [
+        [
+          "src/commands/auth-choice.apply.github-copilot.ts",
+          1
+        ],
+        [
+          "src/commands/models.ts",
+          1
+        ]
+      ],
+      "top_dst": [
+        [
+          "src/providers/github-copilot-auth.ts",
+          2
+        ]
+      ]
+    }
+  ]
+}

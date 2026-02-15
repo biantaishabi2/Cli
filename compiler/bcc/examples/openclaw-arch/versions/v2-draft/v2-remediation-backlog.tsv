@@ -1,0 +1,16 @@
+priority	status_candidate	edge	total_edges	call_ratio	affected_src_files	affected_dst_files	replacement_pattern	hypothesis
+P1	temporary_candidate	plugin_tool_extension->channel_ingress	121	0	13	101	Apply shared-kernel + ports-and-adapters refactor to remove cross-layer direct dependency	suspected heavy barrel export/type coupling
+P1	temporary_candidate	foundation_infra->channel_ingress	91	0.044	40	31	Apply shared-kernel + ports-and-adapters refactor to remove cross-layer direct dependency	outbound infra may include channel policy details
+P1	temporary_candidate	foundation_infra->ops_client_entry	44	0.25	23	17	Extract shared presentation/config helpers from ops layer into shared kernel package	infra reuses CLI presentation helpers
+P1	temporary_candidate	channel_ingress->ops_client_entry	41	0	23	12	Extract shared presentation/config helpers from ops layer into shared kernel package	suspected ui/format utility leakage
+P1	temporary_candidate	foundation_infra->gateway_control_plane	40	0.175	28	11	Extract session-key and route primitives to shared kernel contract	shared session-key utility may be misplaced
+P2	temporary_candidate	gateway_control_plane->ops_client_entry	37	0.027	24	12	Extract shared presentation/config helpers from ops layer into shared kernel package	control plane and ops entry boundary may be over-coupled
+P2	temporary_candidate	plugin_tool_extension->ops_client_entry	32	0.0625	12	23	Extract shared presentation/config helpers from ops layer into shared kernel package	plugin runtime may depend on CLI/web helpers
+P2	temporary_candidate	agent_runtime->ops_client_entry	27	0.1481	20	9	Extract shared presentation/config helpers from ops layer into shared kernel package	runtime may depend on terminal/CLI formatting helpers
+P1	remove_candidate	platform_hosts->ops_client_entry	8	0.125	5	5	Move host interactions behind node-host protocol adapter; remove host->runtime/cli direct imports	host->CLI/browser reverse dependency likely accidental
+P2	temporary_candidate	external_dependencies->foundation_infra	7	0.2857	3	5	Apply shared-kernel + ports-and-adapters refactor to remove cross-layer direct dependency	provider currently touches config/log storage helpers
+P1	remove_candidate	foundation_infra->plugin_tool_extension	7	0.1429	4	6	Define plugin capability interface in foundation layer; plugin implementation bound at composition root	infra->plugin reverse dependency likely layer breach
+P1	remove_candidate	external_dependencies->ops_client_entry	5	0.2	2	4	Introduce auth/provider ports; providers depend on auth contracts, not runtime/cli internals	provider->CLI reverse dependency likely accidental
+P1	remove_candidate	platform_hosts->agent_runtime	4	0	3	2	Move host interactions behind node-host protocol adapter; remove host->runtime/cli direct imports	host->runtime reverse dependency should go through protocol ports
+P2	temporary_candidate	foundation_infra->platform_hosts	2	0.5	1	1	Apply shared-kernel + ports-and-adapters refactor to remove cross-layer direct dependency	restart and host constants coupling may be interfaceable
+P1	remove_candidate	external_dependencies->agent_runtime	2	0.5	1	1	Introduce auth/provider ports; providers depend on auth contracts, not runtime/cli internals	reverse provider->runtime dependency should be constrained by ports

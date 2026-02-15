@@ -1,0 +1,114 @@
+version: 0.4.0
+kind: target_contract
+intent: "Ideal architecture contract for re-implementation"
+source_of_truth: architecture_design
+notes:
+  - "Target matrix is intentionally strict: edges not listed in allow_edges are treated as architecture debt unless explicitly transitional."
+
+allow_edges:
+  # V0 baseline allows
+  - caller: gateway_control_plane
+    callee: agent_runtime
+    rationale: gateway dispatches runtime requests
+  - caller: gateway_control_plane
+    callee: channel_ingress
+    rationale: gateway and channel coordination contract
+  - caller: gateway_control_plane
+    callee: foundation_infra
+    rationale: gateway uses shared infra/runtime facilities
+  - caller: gateway_control_plane
+    callee: platform_hosts
+    rationale: gateway integrates host/node entrypoints
+  - caller: agent_runtime
+    callee: plugin_tool_extension
+    rationale: runtime invokes tools/plugins
+  - caller: agent_runtime
+    callee: foundation_infra
+    rationale: runtime uses storage/config/session infra
+  - caller: channel_ingress
+    callee: foundation_infra
+    rationale: channel ingestion persists state and policy traces
+  - caller: channel_ingress
+    callee: agent_runtime
+    rationale: channel triggers runtime turn flow
+  - caller: plugin_tool_extension
+    callee: foundation_infra
+    rationale: plugin runtime depends on shared infra contracts
+  - caller: ops_client_entry
+    callee: gateway_control_plane
+    rationale: ops controls gateway surface
+  - caller: ops_client_entry
+    callee: foundation_infra
+    rationale: ops reads/writes infra and config
+  - caller: ops_client_entry
+    callee: agent_runtime
+    rationale: ops triggers runtime operations
+  - caller: platform_hosts
+    callee: gateway_control_plane
+    rationale: host side connects through gateway protocol
+  - caller: platform_hosts
+    callee: foundation_infra
+    rationale: host uses core infra primitives
+
+  # Promoted keep edges (from V2 research)
+  - caller: ops_client_entry
+    callee: channel_ingress
+    rationale: onboarding and capability management across channels
+  - caller: ops_client_entry
+    callee: platform_hosts
+    rationale: daemon/node-host lifecycle management
+  - caller: ops_client_entry
+    callee: plugin_tool_extension
+    rationale: plugin lifecycle operations
+  - caller: channel_ingress
+    callee: gateway_control_plane
+    rationale: inbound routing/session resolution
+  - caller: channel_ingress
+    callee: plugin_tool_extension
+    rationale: channel actions invoke plugin/tool capabilities
+  - caller: gateway_control_plane
+    callee: plugin_tool_extension
+    rationale: gateway invokes plugin services/hooks
+  - caller: plugin_tool_extension
+    callee: agent_runtime
+    rationale: tools need runtime context/schema
+  - caller: plugin_tool_extension
+    callee: gateway_control_plane
+    rationale: tool/session state binding through control plane
+  - caller: foundation_infra
+    callee: agent_runtime
+    rationale: scheduler/orchestration starts runtime turns
+  - caller: agent_runtime
+    callee: gateway_control_plane
+    rationale: runtime resolves session/route contracts
+  - caller: agent_runtime
+    callee: channel_ingress
+    rationale: runtime output path binds channel semantics
+  - caller: ops_client_entry
+    callee: external_dependencies
+    rationale: login/auth bootstrap path from ops commands
+  - caller: agent_runtime
+    callee: external_dependencies
+    rationale: runtime provider auth/model handshake
+
+forbid_edges:
+  - caller: external_dependencies
+    callee: gateway_control_plane
+    rationale: external adapters must not drive gateway internals
+
+  # Explicitly wrong-direction edges to remove
+  - caller: external_dependencies
+    callee: agent_runtime
+    rationale: provider adapter must not depend on runtime internals
+  - caller: external_dependencies
+    callee: ops_client_entry
+    rationale: provider adapter must not depend on cli/ops internals
+  - caller: platform_hosts
+    callee: ops_client_entry
+    rationale: host layer must not depend on cli/browser layer
+  - caller: platform_hosts
+    callee: agent_runtime
+    rationale: host layer must use protocol ports, not runtime internals
+  - caller: foundation_infra
+    callee: plugin_tool_extension
+    rationale: infra must not depend on plugin implementation layer

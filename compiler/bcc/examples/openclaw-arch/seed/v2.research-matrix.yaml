@@ -1,0 +1,130 @@
+version: 0.3.0-draft
+kind: research_matrix
+based_on:
+  - docs/backend-trace/trace2contract/seed/v0.module-registry.seed.yaml
+  - docs/backend-trace/trace2contract/seed/v1.module-registry.seed.yaml
+notes:
+  - "This is a research draft matrix, not executable production rule set."
+  - "Status labels are hypotheses to be validated by edge-severity and semantic sampling."
+
+statuses:
+  - keep_candidate
+  - temporary_candidate
+  - remove_candidate
+
+edges:
+  - caller: ops_client_entry
+    callee: channel_ingress
+    status: keep_candidate
+    reason: ops and onboarding orchestrate channel accounts and capabilities
+  - caller: ops_client_entry
+    callee: platform_hosts
+    status: keep_candidate
+    reason: daemon and node-host lifecycle management from control plane
+  - caller: ops_client_entry
+    callee: plugin_tool_extension
+    status: keep_candidate
+    reason: plugin install/update/status via operational entrypoints
+  - caller: channel_ingress
+    callee: gateway_control_plane
+    status: keep_candidate
+    reason: inbound channel events require routing/session resolution
+  - caller: channel_ingress
+    callee: plugin_tool_extension
+    status: keep_candidate
+    reason: channel action handlers invoke tool/plugin capabilities
+  - caller: gateway_control_plane
+    callee: plugin_tool_extension
+    status: keep_candidate
+    reason: gateway startup/invoke path integrates plugin services
+  - caller: plugin_tool_extension
+    callee: agent_runtime
+    status: keep_candidate
+    reason: tools need runtime context and agent schema/session state
+  - caller: plugin_tool_extension
+    callee: gateway_control_plane
+    status: keep_candidate
+    reason: tools interact with session and routing control contracts
+  - caller: foundation_infra
+    callee: agent_runtime
+    status: keep_candidate
+    reason: cron and heartbeat orchestration trigger runtime execution
+  - caller: agent_runtime
+    callee: gateway_control_plane
+    status: keep_candidate
+    reason: runtime reads/writes session routing information
+  - caller: agent_runtime
+    callee: channel_ingress
+    status: keep_candidate
+    reason: runtime output flow couples with channel semantics
+
+  - caller: plugin_tool_extension
+    callee: channel_ingress
+    status: temporary_candidate
+    reason: suspected heavy barrel export/type coupling
+  - caller: channel_ingress
+    callee: ops_client_entry
+    status: temporary_candidate
+    reason: suspected ui/format utility leakage
+  - caller: foundation_infra
+    callee: channel_ingress
+    status: temporary_candidate
+    reason: outbound infra may include channel policy details
+  - caller: foundation_infra
+    callee: gateway_control_plane
+    status: temporary_candidate
+    reason: shared session-key utility may be misplaced
+  - caller: foundation_infra
+    callee: ops_client_entry
+    status: temporary_candidate
+    reason: infra reuses CLI presentation helpers
+  - caller: gateway_control_plane
+    callee: ops_client_entry
+    status: temporary_candidate
+    reason: control plane and ops entry boundary may be over-coupled
+  - caller: plugin_tool_extension
+    callee: ops_client_entry
+    status: temporary_candidate
+    reason: plugin runtime may depend on CLI/web helpers
+  - caller: agent_runtime
+    callee: ops_client_entry
+    status: temporary_candidate
+    reason: runtime may depend on terminal/CLI formatting helpers
+
+  - caller: ops_client_entry
+    callee: external_dependencies
+    status: keep_candidate
+    reason: auth/login flows initiated by operational commands
+  - caller: agent_runtime
+    callee: external_dependencies
+    status: keep_candidate
+    reason: provider auth/model handshake at runtime
+  - caller: external_dependencies
+    callee: foundation_infra
+    status: temporary_candidate
+    reason: provider currently touches config/log storage helpers
+  - caller: foundation_infra
+    callee: platform_hosts
+    status: temporary_candidate
+    reason: restart and host constants coupling may be interfaceable
+
+  - caller: external_dependencies
+    callee: agent_runtime
+    status: remove_candidate
+    reason: reverse provider->runtime dependency should be constrained by ports
+  - caller: external_dependencies
+    callee: ops_client_entry
+    status: remove_candidate
+    reason: provider->CLI reverse dependency likely accidental
+  - caller: platform_hosts
+    callee: ops_client_entry
+    status: remove_candidate
+    reason: host->CLI/browser reverse dependency likely accidental
+  - caller: platform_hosts
+    callee: agent_runtime
+    status: remove_candidate
+    reason: host->runtime reverse dependency should go through protocol ports
+  - caller: foundation_infra
+    callee: plugin_tool_extension
+    status: remove_candidate
+    reason: infra->plugin reverse dependency likely layer breach

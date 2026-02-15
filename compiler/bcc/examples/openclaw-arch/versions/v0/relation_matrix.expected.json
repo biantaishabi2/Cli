@@ -1,0 +1,77 @@
+[
+  {
+    "caller": "gateway_control_plane",
+    "callee": "agent_runtime",
+    "allowed": true
+  },
+  {
+    "caller": "gateway_control_plane",
+    "callee": "channel_ingress",
+    "allowed": true
+  },
+  {
+    "caller": "gateway_control_plane",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "gateway_control_plane",
+    "callee": "platform_hosts",
+    "allowed": true
+  },
+  {
+    "caller": "agent_runtime",
+    "callee": "plugin_tool_extension",
+    "allowed": true
+  },
+  {
+    "caller": "agent_runtime",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "channel_ingress",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "channel_ingress",
+    "callee": "agent_runtime",
+    "allowed": true
+  },
+  {
+    "caller": "plugin_tool_extension",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "ops_client_entry",
+    "callee": "gateway_control_plane",
+    "allowed": true
+  },
+  {
+    "caller": "ops_client_entry",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "ops_client_entry",
+    "callee": "agent_runtime",
+    "allowed": true
+  },
+  {
+    "caller": "platform_hosts",
+    "callee": "gateway_control_plane",
+    "allowed": true
+  },
+  {
+    "caller": "platform_hosts",
+    "callee": "foundation_infra",
+    "allowed": true
+  },
+  {
+    "caller": "external_dependencies",
+    "callee": "gateway_control_plane",
+    "allowed": false
+  }
+]

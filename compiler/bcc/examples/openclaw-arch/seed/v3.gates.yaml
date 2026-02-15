@@ -1,0 +1,20 @@
+version: 0.4.0
+kind: verification_gates
+intent: "Objective acceptance gates for transition and final target"
+
+profiles:
+  transition:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 5
+    max_forbidden_total_edges: 26
+    max_missing_edges_count: 0
+    max_directed_density_pct: 75
+    max_bidirectional_pair_count: 20
+
+  target:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 0
+    max_forbidden_total_edges: 0
+    max_missing_edges_count: 0
+    max_directed_density_pct: 40
+    max_bidirectional_pair_count: 5

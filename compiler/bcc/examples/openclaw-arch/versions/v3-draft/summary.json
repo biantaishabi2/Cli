@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-02-14T14:55:12.023Z",
+  "outputs": [
+    "docs/backend-trace/artifacts/trace2contract/versions/v3-draft/scenario-validation.tsv",
+    "docs/backend-trace/artifacts/trace2contract/versions/v3-draft/gate-evaluation.tsv",
+    "docs/backend-trace/artifacts/trace2contract/versions/v3-draft/v3-validation-report.md"
+  ],
+  "scenarios": {
+    "v3_target": {
+      "unexpected_edges_count": 10,
+      "forbidden_edges_count": 5,
+      "gate_pass": false
+    },
+    "v3_transition": {
+      "unexpected_edges_count": 0,
+      "forbidden_edges_count": 5,
+      "gate_pass": true
+    }
+  }
+}

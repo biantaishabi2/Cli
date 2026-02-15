@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-02-14T14:36:31.078Z",
+  "inputs": {
+    "v2Matrix": "docs/backend-trace/trace2contract/seed/v2.research-matrix.yaml",
+    "v0Expected": "docs/backend-trace/artifacts/trace2contract/versions/v0/relation_matrix.expected.json",
+    "v1Expected": "docs/backend-trace/artifacts/trace2contract/versions/v1/relation_matrix.expected.json",
+    "v1Actual": "docs/backend-trace/artifacts/trace2contract/versions/v1/relation_matrix.actual.json",
+    "v1Investigation": "docs/backend-trace/artifacts/trace2contract/versions/v1/edge-investigation.json"
+  },
+  "outputs": [
+    "docs/backend-trace/artifacts/trace2contract/versions/v2-draft/edge-severity.tsv",
+    "docs/backend-trace/artifacts/trace2contract/versions/v2-draft/sampling-evidence.md",
+    "docs/backend-trace/artifacts/trace2contract/versions/v2-draft/v2-remediation-backlog.tsv",
+    "docs/backend-trace/artifacts/trace2contract/versions/v2-draft/scenario-validation.tsv",
+    "docs/backend-trace/artifacts/trace2contract/versions/v2-draft/v2-validation-report.md"
+  ],
+  "candidate_edges": 28,
+  "scenarios": [
+    {
+      "name": "baseline_v1",
+      "unexpected": 9,
+      "forbidden": 0
+    },
+    {
+      "name": "v2_balanced_allow_keep_and_temporary",
+      "unexpected": 0,
+      "forbidden": 5
+    },
+    {
+      "name": "v2_strict_allow_keep_only",
+      "unexpected": 10,
+      "forbidden": 5
+    }
+  ]
+}

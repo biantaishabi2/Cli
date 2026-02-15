@@ -1,0 +1,29 @@
+status	caller	callee	total_edges	import_edges	call_edges	call_ratio	src_file_count	dst_file_count	top_src_share_pct	top_dst_share_pct	top_src	top_dst	reason
+remove_candidate	platform_hosts	ops_client_entry	8	7	1	0.125	5	5	37.5	37.5	src/node-host/runner.ts	src/terminal/theme.ts	host->CLI/browser reverse dependency likely accidental
+remove_candidate	foundation_infra	plugin_tool_extension	7	6	1	0.1429	4	6	42.86	28.57	src/config/validation.ts	src/agents/tools/common.ts	infra->plugin reverse dependency likely layer breach
+remove_candidate	external_dependencies	ops_client_entry	5	4	1	0.2	2	4	60	40	src/providers/github-copilot-auth.ts	src/cli/command-format.ts	provider->CLI reverse dependency likely accidental
+remove_candidate	platform_hosts	agent_runtime	4	4	0	0	3	2	50	75	src/node-host/runner.ts	src/media/mime.ts	host->runtime reverse dependency should go through protocol ports
+remove_candidate	external_dependencies	agent_runtime	2	1	1	0.5	1	1	100	100	src/providers/github-copilot-auth.ts	src/agents/auth-profiles.ts	reverse provider->runtime dependency should be constrained by ports
+temporary_candidate	plugin_tool_extension	channel_ingress	121	121	0	0	13	101	49.59	3.31	src/plugin-sdk/index.ts	src/discord/send.ts	suspected heavy barrel export/type coupling
+temporary_candidate	foundation_infra	channel_ingress	91	87	4	0.044	40	31	15.38	29.67	src/infra/outbound/outbound-session.ts	src/channels/plugins/types.ts	outbound infra may include channel policy details
+temporary_candidate	foundation_infra	ops_client_entry	44	33	11	0.25	23	17	9.09	20.45	src/config/sessions/store.ts	src/cli/command-format.ts	infra reuses CLI presentation helpers
+temporary_candidate	channel_ingress	ops_client_entry	41	41	0	0	23	12	14.63	21.95	src/channel-web.ts	src/web/media.ts	suspected ui/format utility leakage
+temporary_candidate	foundation_infra	gateway_control_plane	40	33	7	0.175	28	11	10	60	src/security/audit.ts	src/routing/session-key.ts	shared session-key utility may be misplaced
+temporary_candidate	gateway_control_plane	ops_client_entry	37	36	1	0.027	24	12	10.81	35.14	src/gateway/server.impl.ts	src/cli/deps.ts	control plane and ops entry boundary may be over-coupled
+temporary_candidate	plugin_tool_extension	ops_client_entry	32	30	2	0.0625	12	23	21.88	9.38	src/plugins/runtime/index.ts	src/web/media.ts	plugin runtime may depend on CLI/web helpers
+temporary_candidate	agent_runtime	ops_client_entry	27	23	4	0.1481	20	9	11.11	37.04	src/agents/sandbox/browser.ts	src/cli/command-format.ts	runtime may depend on terminal/CLI formatting helpers
+temporary_candidate	external_dependencies	foundation_infra	7	5	2	0.2857	3	5	42.86	28.57	src/providers/github-copilot-auth.ts	src/config/logging.ts	provider currently touches config/log storage helpers
+temporary_candidate	foundation_infra	platform_hosts	2	1	1	0.5	1	1	100	100	src/infra/restart.ts	src/daemon/constants.ts	restart and host constants coupling may be interfaceable
+keep_candidate	plugin_tool_extension	agent_runtime	108	98	10	0.0926	35	56	17.59	10.19	src/plugins/runtime/index.ts	src/agents/agent-scope.ts	tools need runtime context and agent schema/session state
+keep_candidate	ops_client_entry	channel_ingress	96	86	10	0.1042	43	21	6.25	33.33	src/cli/deps.ts	src/channels/plugins/index.ts	ops and onboarding orchestrate channel accounts and capabilities
+keep_candidate	foundation_infra	agent_runtime	85	74	11	0.1294	28	36	25.88	11.76	src/cron/isolated-agent/run.ts	src/agents/agent-scope.ts	cron and heartbeat orchestration trigger runtime execution
+keep_candidate	ops_client_entry	platform_hosts	73	66	7	0.0959	26	17	12.33	20.55	src/cli/node-cli/daemon.ts	src/daemon/service.ts	daemon and node-host lifecycle management from control plane
+keep_candidate	agent_runtime	channel_ingress	73	68	5	0.0685	32	24	16.44	19.18	src/auto-reply/reply/commands-allowlist.ts	src/channels/plugins/index.ts	runtime output flow couples with channel semantics
+keep_candidate	channel_ingress	gateway_control_plane	72	71	1	0.0139	44	8	5.56	40.28	src/slack/monitor/message-handler/prepare.ts	src/routing/session-key.ts	inbound channel events require routing/session resolution
+keep_candidate	agent_runtime	gateway_control_plane	44	36	8	0.1818	30	8	9.09	50	src/auto-reply/reply/directive-handling.impl.ts	src/routing/session-key.ts	runtime reads/writes session routing information
+keep_candidate	plugin_tool_extension	gateway_control_plane	40	36	4	0.1	22	13	10	40	src/agents/tools/session-status-tool.ts	src/routing/session-key.ts	tools interact with session and routing control contracts
+keep_candidate	ops_client_entry	plugin_tool_extension	36	31	5	0.1389	11	19	19.44	13.89	src/cli/hooks-cli.ts	src/plugins/loader.ts	plugin install/update/status via operational entrypoints
+keep_candidate	channel_ingress	plugin_tool_extension	24	23	1	0.0417	14	12	12.5	29.17	src/channels/plugins/actions/discord/handle-action.ts	src/agents/tools/common.ts	channel action handlers invoke tool/plugin capabilities
+keep_candidate	gateway_control_plane	plugin_tool_extension	21	19	2	0.0952	12	10	28.57	14.29	src/gateway/server-startup.ts	src/plugins/runtime.ts	gateway startup/invoke path integrates plugin services
+keep_candidate	ops_client_entry	external_dependencies	2	2	0	0	2	1	50	100	src/commands/auth-choice.apply.github-copilot.ts	src/providers/github-copilot-auth.ts	auth/login flows initiated by operational commands
+keep_candidate	agent_runtime	external_dependencies	2	2	0	0	2	2	50	50	src/agents/auth-profiles/oauth.ts	src/providers/qwen-portal-oauth.ts	provider auth/model handshake at runtime

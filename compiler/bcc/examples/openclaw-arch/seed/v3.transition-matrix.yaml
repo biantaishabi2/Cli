@@ -1,0 +1,86 @@
+version: 0.4.0
+kind: transition_contract
+base: docs/backend-trace/trace2contract/seed/v3.target-matrix.yaml
+intent: "Migration contract between current codebase and V3 target"
+notes:
+  - "temporary_allow_edges are tolerated only during migration; each edge needs owner and due date."
+  - "blocked_edges are immediate cleanup targets and counted as forbidden in transition replay."
+
+temporary_allow_edges:
+  - caller: plugin_tool_extension
+    callee: channel_ingress
+    owner: platform-arch
+    due: 2026-04-30
+    reason: plugin-sdk barrel/type coupling to be split by explicit contracts
+  - caller: foundation_infra
+    callee: channel_ingress
+    owner: infra-runtime
+    due: 2026-05-15
+    reason: outbound/session routing details still mixed in infra
+  - caller: foundation_infra
+    callee: ops_client_entry
+    owner: infra-runtime
+    due: 2026-05-15
+    reason: shared cli formatting helpers not yet extracted
+  - caller: channel_ingress
+    callee: ops_client_entry
+    owner: channels
+    due: 2026-05-01
+    reason: web/wizard utility leakage pending shared-kernel extraction
+  - caller: foundation_infra
+    callee: gateway_control_plane
+    owner: infra-runtime
+    due: 2026-05-15
+    reason: session-key utility pending shared contract refactor
+  - caller: gateway_control_plane
+    callee: ops_client_entry
+    owner: gateway
+    due: 2026-05-01
+    reason: gateway still imports cli deps abstractions
+  - caller: plugin_tool_extension
+    callee: ops_client_entry
+    owner: plugins
+    due: 2026-05-01
+    reason: plugin runtime still reuses web/cli helper modules
+  - caller: agent_runtime
+    callee: ops_client_entry
+    owner: runtime
+    due: 2026-05-01
+    reason: runtime uses terminal/cli formatting helpers
+  - caller: external_dependencies
+    callee: foundation_infra
+    owner: provider-auth
+    due: 2026-05-30
+    reason: provider auth path still directly touches config/log internals
+  - caller: foundation_infra
+    callee: platform_hosts
+    owner: infra-runtime
+    due: 2026-05-30
+    reason: restart path still coupled to host constants
+
+blocked_edges:
+  - caller: external_dependencies
+    callee: agent_runtime
+    owner: provider-auth
+    priority: P1
+    reason: wrong dependency direction
+  - caller: external_dependencies
+    callee: ops_client_entry
+    owner: provider-auth
+    priority: P1
+    reason: wrong dependency direction
+  - caller: platform_hosts
+    callee: ops_client_entry
+    owner: host-runtime
+    priority: P1
+    reason: wrong dependency direction
+  - caller: platform_hosts
+    callee: agent_runtime
+    owner: host-runtime
+    priority: P1
+    reason: wrong dependency direction
+  - caller: foundation_infra
+    callee: plugin_tool_extension
+    owner: infra-runtime
+    priority: P1
+    reason: layer inversion

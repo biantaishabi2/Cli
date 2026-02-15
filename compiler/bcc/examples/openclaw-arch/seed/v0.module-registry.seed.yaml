@@ -1,0 +1,280 @@
+version: 0.1.0
+source_of_truth: architecture_docs
+generated_at: 2026-02-14
+sources:
+  - docs/技术设计文档-后端能力.md
+  - docs/backend-trace/source-tree.md
+  - docs/backend-trace/artifacts/prd-tag-evidence.tsv
+
+# precedence 小数字优先，用于解决路径重叠（确定性，不打分）
+modules:
+  - module_id: channel_ingress
+    display_name: 渠道接入
+    domain_kind: business
+    layer: application
+    precedence: 20
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.1 接入层（Channels）定义"
+    path_rules:
+      include:
+        - src/channels/**
+        - src/discord/**
+        - src/telegram/**
+        - src/slack/**
+        - src/line/**
+        - src/imessage/**
+        - src/signal/**
+        - src/whatsapp/**
+        - src/channel-web.ts
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/channels/plugins/types.adapters.ts
+        tag: channel-adapter-contracts
+      - file: src/channels/plugins/onboarding-types.ts
+        tag: channel-onboarding-type-contracts
+
+  - module_id: gateway_control_plane
+    display_name: 网关控制面
+    domain_kind: business
+    layer: application
+    precedence: 10
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.2 网关层（Gateway）定义"
+      - doc: docs/concepts/architecture.md
+        reason: "Gateway 协议与生命周期"
+    path_rules:
+      include:
+        - src/gateway/**
+        - src/routing/**
+        - src/sessions/**
+        - src/pairing/**
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/gateway/protocol/schema/frames.ts
+        tag: gateway-ws-frame-contract
+      - file: src/gateway/open-responses.schema.ts
+        tag: responses-stream-event-contract
+      - file: src/gateway/server/ws-types.ts
+        tag: ws-client-state-contract
+
+  - module_id: agent_runtime
+    display_name: Agent 运行时
+    domain_kind: business
+    layer: application
+    precedence: 30
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.3 运行层（Agents）定义"
+      - doc: docs/concepts/agent.md
+        reason: "Agent runtime 边界"
+    path_rules:
+      include:
+        - src/agents/**
+        - src/auto-reply/**
+        - src/memory/**
+        - src/media/**
+        - src/media-understanding/**
+        - src/link-understanding/**
+        - src/markdown/**
+        - src/tts/**
+      exclude:
+        - src/agents/tools/**
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/agents/pi-embedded-runner/run.ts
+        tag: agent-run-orchestration
+      - file: src/agents/pi-tools.types.ts
+        tag: tool-contract
+
+  - module_id: plugin_tool_extension
+    display_name: 插件与工具扩展
+    domain_kind: business
+    layer: application
+    precedence: 5
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.4 扩展层（Plugins / Tools）定义"
+    path_rules:
+      include:
+        - src/plugins/**
+        - src/agents/tools/**
+        - src/hooks/**
+        - src/plugin-sdk/**
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/plugins/manifest.ts
+        tag: plugin-manifest-contract-and-loader
+      - file: src/plugins/runtime/types.ts
+        tag: plugin-runtime-type-contract
+
+  - module_id: foundation_infra
+    display_name: 基础设施与治理
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 40
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.5 数据与治理层定义"
+    path_rules:
+      include:
+        - src/config/**
+        - src/infra/**
+        - src/cron/**
+        - src/security/**
+        - src/logging/**
+        - src/types/**
+        - src/utils/**
+        - src/utils.ts
+        - src/process/**
+        - src/compat/**
+        - src/shared/**
+        - src/test-helpers/**
+        - src/test-utils/**
+        - src/entry.ts
+        - src/index.ts
+        - src/runtime.ts
+        - src/globals.ts
+        - src/logger.ts
+        - src/logging.ts
+        - src/polls.ts
+        - src/version.ts
+        - src/extensionAPI.ts
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/config/types.openclaw.ts
+        tag: top-level-config-contract
+      - file: src/config/types.gateway.ts
+        tag: gateway-config-contract
+      - file: src/config/sessions/types.ts
+        tag: session-domain-contracts
+
+  - module_id: ops_client_entry
+    display_name: 运维与客户端入口
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 50
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "2.6 运维与客户端扩展入口定义"
+    path_rules:
+      include:
+        - src/cli/**
+        - src/commands/**
+        - src/tui/**
+        - src/terminal/**
+        - src/wizard/**
+        - src/browser/**
+        - src/web/**
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/config/types.browser.ts
+        tag: browser-config-contract
+
+  - module_id: platform_hosts
+    display_name: 平台宿主与设备侧
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 60
+    provenance:
+      - doc: docs/技术设计文档-后端能力.md
+        reason: "平台宿主（acp/node-host/canvas-host/daemon/macos）归入基础设施模块"
+    path_rules:
+      include:
+        - src/acp/**
+        - src/node-host/**
+        - src/canvas-host/**
+        - src/daemon/**
+        - src/macos/**
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/acp/server.ts
+        tag: agent-workspace-files-rpc
+
+  - module_id: external_dependencies
+    display_name: 外部依赖边界
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 70
+    provenance:
+      - doc: docs/backend-trace/trace2contract-mapping.md
+        reason: "外部依赖单独建轴并归入 infrastructure"
+    path_rules:
+      include:
+        - src/providers/**
+        - src/agents/pi-*
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    symbol_anchors:
+      - file: src/agents/pi-embedded-runner.ts
+        tag: agents
+
+relations_expected:
+  - caller: gateway_control_plane
+    callee: agent_runtime
+    allowed: true
+  - caller: gateway_control_plane
+    callee: channel_ingress
+    allowed: true
+  - caller: gateway_control_plane
+    callee: foundation_infra
+    allowed: true
+  - caller: gateway_control_plane
+    callee: platform_hosts
+    allowed: true
+  - caller: agent_runtime
+    callee: plugin_tool_extension
+    allowed: true
+  - caller: agent_runtime
+    callee: foundation_infra
+    allowed: true
+  - caller: channel_ingress
+    callee: foundation_infra
+    allowed: true
+  - caller: channel_ingress
+    callee: agent_runtime
+    allowed: true
+  - caller: plugin_tool_extension
+    callee: foundation_infra
+    allowed: true
+  - caller: ops_client_entry
+    callee: gateway_control_plane
+    allowed: true
+  - caller: ops_client_entry
+    callee: foundation_infra
+    allowed: true
+  - caller: ops_client_entry
+    callee: agent_runtime
+    allowed: true
+  - caller: platform_hosts
+    callee: gateway_control_plane
+    allowed: true
+  - caller: platform_hosts
+    callee: foundation_infra
+    allowed: true
+  - caller: external_dependencies
+    callee: gateway_control_plane
+    allowed: false

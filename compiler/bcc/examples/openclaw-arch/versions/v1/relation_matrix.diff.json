@@ -1,0 +1,69 @@
+{
+  "missing_edge": [],
+  "unexpected_edge": [
+    {
+      "caller": "agent_runtime",
+      "callee": "external_dependencies",
+      "import_edges": 2,
+      "call_edges": 0,
+      "total_edges": 2
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "agent_runtime",
+      "import_edges": 1,
+      "call_edges": 1,
+      "total_edges": 2
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "foundation_infra",
+      "import_edges": 5,
+      "call_edges": 2,
+      "total_edges": 7
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "ops_client_entry",
+      "import_edges": 4,
+      "call_edges": 1,
+      "total_edges": 5
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "platform_hosts",
+      "import_edges": 1,
+      "call_edges": 1,
+      "total_edges": 2
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "plugin_tool_extension",
+      "import_edges": 6,
+      "call_edges": 1,
+      "total_edges": 7
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "external_dependencies",
+      "import_edges": 2,
+      "call_edges": 0,
+      "total_edges": 2
+    },
+    {
+      "caller": "platform_hosts",
+      "callee": "agent_runtime",
+      "import_edges": 4,
+      "call_edges": 0,
+      "total_edges": 4
+    },
+    {
+      "caller": "platform_hosts",
+      "callee": "ops_client_entry",
+      "import_edges": 7,
+      "call_edges": 1,
+      "total_edges": 8
+    }
+  ],
+  "forbidden_edge": []
+}

@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-02-14T14:04:51.667Z",
+  "git": {
+    "head": "37e1228b016707e88155e18b119094dab9fea9b5",
+    "branch": "main"
+  },
+  "inputs": {
+    "seed_file": "docs/backend-trace/trace2contract/seed/v1.module-registry.seed.yaml",
+    "ast_file": "docs/backend-trace/artifacts/backend-docs-ast.json",
+    "source_files": [
+      "docs/backend-trace/trace2contract/seed/v1.module-registry.seed.yaml",
+      "docs/backend-trace/artifacts/backend-docs-ast.json",
+      "docs/技术设计文档-后端能力.md",
+      "docs/backend-trace/source-tree.md",
+      "docs/backend-trace/artifacts/prd-tag-evidence.tsv"
+    ],
+    "sha256": {
+      "docs/backend-trace/trace2contract/seed/v1.module-registry.seed.yaml": "5f96cc4d5eec402fee34f9e93ab164b8a41865c8bac1626798f33d2b5a5ee05c",
+      "docs/backend-trace/artifacts/backend-docs-ast.json": "7e9da2b03bde84fc2ab3b935ea2d19a70222e01d8bd58f2b74106996efd9c7bb",
+      "docs/技术设计文档-后端能力.md": "c759d059eba467361e399d5ec35af405cf2955c868de46dd5ca526421e8b8f81",
+      "docs/backend-trace/source-tree.md": "af9b6dd24033fb7233f94a7df8c19ad983d7a18ded20e7ca29b4292884302653",
+      "docs/backend-trace/artifacts/prd-tag-evidence.tsv": "71ac02e716772ca6b98f66542b3903d86430fc5c70225f3436d4aa3b9df57c77"
+    }
+  }
+}

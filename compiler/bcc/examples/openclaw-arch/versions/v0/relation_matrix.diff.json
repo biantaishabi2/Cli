@@ -1,0 +1,202 @@
+{
+  "missing_edge": [],
+  "unexpected_edge": [
+    {
+      "caller": "agent_runtime",
+      "callee": "channel_ingress",
+      "import_edges": 68,
+      "call_edges": 5,
+      "total_edges": 73
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "external_dependencies",
+      "import_edges": 2,
+      "call_edges": 0,
+      "total_edges": 2
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "gateway_control_plane",
+      "import_edges": 36,
+      "call_edges": 8,
+      "total_edges": 44
+    },
+    {
+      "caller": "agent_runtime",
+      "callee": "ops_client_entry",
+      "import_edges": 23,
+      "call_edges": 4,
+      "total_edges": 27
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "gateway_control_plane",
+      "import_edges": 71,
+      "call_edges": 1,
+      "total_edges": 72
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "ops_client_entry",
+      "import_edges": 41,
+      "call_edges": 0,
+      "total_edges": 41
+    },
+    {
+      "caller": "channel_ingress",
+      "callee": "plugin_tool_extension",
+      "import_edges": 23,
+      "call_edges": 1,
+      "total_edges": 24
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "agent_runtime",
+      "import_edges": 1,
+      "call_edges": 1,
+      "total_edges": 2
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "foundation_infra",
+      "import_edges": 5,
+      "call_edges": 2,
+      "total_edges": 7
+    },
+    {
+      "caller": "external_dependencies",
+      "callee": "ops_client_entry",
+      "import_edges": 4,
+      "call_edges": 1,
+      "total_edges": 5
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "agent_runtime",
+      "import_edges": 74,
+      "call_edges": 11,
+      "total_edges": 85
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "channel_ingress",
+      "import_edges": 87,
+      "call_edges": 4,
+      "total_edges": 91
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "gateway_control_plane",
+      "import_edges": 33,
+      "call_edges": 7,
+      "total_edges": 40
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "ops_client_entry",
+      "import_edges": 33,
+      "call_edges": 11,
+      "total_edges": 44
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "platform_hosts",
+      "import_edges": 1,
+      "call_edges": 1,
+      "total_edges": 2
+    },
+    {
+      "caller": "foundation_infra",
+      "callee": "plugin_tool_extension",
+      "import_edges": 6,
+      "call_edges": 1,
+      "total_edges": 7
+    },
+    {
+      "caller": "gateway_control_plane",
+      "callee": "ops_client_entry",
+      "import_edges": 36,
+      "call_edges": 1,
+      "total_edges": 37
+    },
+    {
+      "caller": "gateway_control_plane",
+      "callee": "plugin_tool_extension",
+      "import_edges": 19,
+      "call_edges": 2,
+      "total_edges": 21
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "channel_ingress",
+      "import_edges": 86,
+      "call_edges": 10,
+      "total_edges": 96
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "external_dependencies",
+      "import_edges": 2,
+      "call_edges": 0,
+      "total_edges": 2
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "platform_hosts",
+      "import_edges": 66,
+      "call_edges": 7,
+      "total_edges": 73
+    },
+    {
+      "caller": "ops_client_entry",
+      "callee": "plugin_tool_extension",
+      "import_edges": 31,
+      "call_edges": 5,
+      "total_edges": 36
+    },
+    {
+      "caller": "platform_hosts",
+      "callee": "agent_runtime",
+      "import_edges": 4,
+      "call_edges": 0,
+      "total_edges": 4
+    },
+    {
+      "caller": "platform_hosts",
+      "callee": "ops_client_entry",
+      "import_edges": 7,
+      "call_edges": 1,
+      "total_edges": 8
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "agent_runtime",
+      "import_edges": 98,
+      "call_edges": 10,
+      "total_edges": 108
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "channel_ingress",
+      "import_edges": 121,
+      "call_edges": 0,
+      "total_edges": 121
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "gateway_control_plane",
+      "import_edges": 36,
+      "call_edges": 4,
+      "total_edges": 40
+    },
+    {
+      "caller": "plugin_tool_extension",
+      "callee": "ops_client_entry",
+      "import_edges": 30,
+      "call_edges": 2,
+      "total_edges": 32
+    }
+  ],
+  "forbidden_edge": []
+}

@@ -1,0 +1,4 @@
+name	allow_count	forbid_count	matched_edges_count	matched_total_edges	unexpected_edges_count	unexpected_total_edges	forbidden_edges_count	forbidden_total_edges	missing_edges_count
+baseline_v1	33	1	33	4094	9	39	0	0	0
+v2_balanced_allow_keep_and_temporary	37	6	37	4107	0	0	5	26	0
+v2_strict_allow_keep_only	27	6	27	3665	10	442	5	26	0
