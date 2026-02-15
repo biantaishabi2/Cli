@@ -395,10 +395,11 @@ func TestDoReview_Approved(t *testing.T) {
 	labels := mockGH.Labels[1]
 	assert.Contains(t, labels, string(state.StatePRReviewable))
 
-	// 验证发了评论
-	comments := mockGH.Comments[1]
-	require.Len(t, comments, 1)
-	assert.Contains(t, comments[0].GetBody(), "自审通过")
+	// 验证发了 PR review（APPROVE）
+	reviews := mockGH.Reviews[10]
+	require.Len(t, reviews, 1)
+	assert.Equal(t, "APPROVE", reviews[0].GetState())
+	assert.Contains(t, reviews[0].GetBody(), "自审通过")
 }
 
 func TestDoReview_NotApproved(t *testing.T) {
@@ -420,11 +421,12 @@ func TestDoReview_NotApproved(t *testing.T) {
 	labels := mockGH.Labels[1]
 	assert.Contains(t, labels, string(state.StatePRNeedsFix))
 
-	// 验证评论包含问题列表
-	comments := mockGH.Comments[1]
-	require.Len(t, comments, 1)
-	assert.Contains(t, comments[0].GetBody(), "自审未通过")
-	assert.Contains(t, comments[0].GetBody(), "缺少错误处理")
+	// 验证发了 PR review（REQUEST_CHANGES）
+	reviews := mockGH.Reviews[10]
+	require.Len(t, reviews, 1)
+	assert.Equal(t, "REQUEST_CHANGES", reviews[0].GetState())
+	assert.Contains(t, reviews[0].GetBody(), "自审未通过")
+	assert.Contains(t, reviews[0].GetBody(), "缺少错误处理")
 }
 
 func TestDoReview_WrongState(t *testing.T) {

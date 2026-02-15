@@ -218,6 +218,22 @@ func (m *MockGitHub) GetPRDiff(_ context.Context, number int) (string, error) {
 	return "", nil
 }
 
+func (m *MockGitHub) CreatePRReview(_ context.Context, number int, body, event string) (*github.PullRequestReview, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return nil, m.Error
+	}
+
+	review := &github.PullRequestReview{
+		Body:  github.Ptr(body),
+		State: github.Ptr(event),
+	}
+	m.Reviews[number] = append(m.Reviews[number], review)
+	return review, nil
+}
+
 func (m *MockGitHub) ListPRReviews(_ context.Context, number int) ([]*github.PullRequestReview, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -41,6 +41,19 @@ func (c *Client) GetPRDiff(ctx context.Context, number int) (string, error) {
 	return diff, nil
 }
 
+// CreatePRReview 创建 PR review
+// event: "APPROVE" 或 "REQUEST_CHANGES"
+func (c *Client) CreatePRReview(ctx context.Context, number int, body, event string) (*github.PullRequestReview, error) {
+	review, _, err := c.gh.PullRequests.CreateReview(ctx, c.owner, c.repo, number, &github.PullRequestReviewRequest{
+		Body:  &body,
+		Event: &event,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("创建 PR #%d review 失败: %w", number, err)
+	}
+	return review, nil
+}
+
 // ListPRReviews 列出 PR 的所有 review
 func (c *Client) ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error) {
 	var allReviews []*github.PullRequestReview

@@ -556,9 +556,13 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return fmt.Errorf("解析审查结果失败: %w", err)
 	}
 
-	// 发评论
-	commentBody := FormatReviewResult(result)
-	_, err = o.github.AddComment(ctx, o.issueNumber, commentBody)
+	// 发 PR review
+	reviewBody := FormatReviewResult(result)
+	event := "REQUEST_CHANGES"
+	if result.Approved {
+		event = "APPROVE"
+	}
+	_, err = o.github.CreatePRReview(ctx, prNumber, reviewBody, event)
 	if err != nil {
 		return fmt.Errorf("发布审查结果失败: %w", err)
 	}
