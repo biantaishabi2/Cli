@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
@@ -602,52 +602,6 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// 用 gh api 拉取 issue 详情
-fn fetch_issue(repo: &str, number: u64) -> Option<IssueInfo> {
-    let remote = detect_github_remote(repo)?;
-
-    // 拉取 issue 标题和正文
-    let output = Command::new("gh")
-        .args(["api", &format!("repos/{}/issues/{}", remote, number)])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        eprintln!("[issue] gh api failed for issue #{}: {}", number,
-            String::from_utf8_lossy(&output.stderr).trim());
-        return None;
-    }
-
-    let issue_json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let title = issue_json["title"].as_str().unwrap_or("").to_string();
-    let body = truncate_str(issue_json["body"].as_str().unwrap_or(""), 2000);
-
-    // 拉取评论
-    let comments_output = Command::new("gh")
-        .args(["api", &format!("repos/{}/issues/{}/comments", remote, number)])
-        .output()
-        .ok();
-
-    let comments: Vec<String> = comments_output
-        .and_then(|o| {
-            if o.status.success() {
-                serde_json::from_slice::<Vec<serde_json::Value>>(&o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| c["body"].as_str().map(|b| truncate_str(b, 2000)))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    eprintln!("[issue] fetched #{}: {} ({} comments)", number, title, comments.len());
-
-    Some(IssueInfo { number, title, body, comments })
-}
-
 // ─── issue 内容增强（PR/Issue 合并）────────────────────────
 
 /// 判断 GitHub API 返回的是否为 PR
@@ -671,7 +625,7 @@ fn find_linked_pr(repo: &str, issue_num: u64) -> Option<u64> {
     let output = Command::new("gh")
         .args([
             "api",
-            &format!("search/issues?q=repo:{}+is:pr+closes:{}&sort=updated&order=desc&per_page=1", remote, issue_num)
+            &format!("search/issues?q=repo:{}+is:pr+%22closes+%23{}%22+in:body&sort=updated&order=desc&per_page=1", remote, issue_num)
         ])
         .output()
         .ok()?;

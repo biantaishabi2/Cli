@@ -1106,14 +1106,18 @@ fn issue_enrichment_merges_pr_and_issue() {
         return;
     }
 
-    let repo = "/Users/biantaishabi/Cli"; // 本仓库
+    // 从 CARGO_MANIFEST_DIR 动态定位仓库根目录
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let repo_path = Path::new(manifest).parent().unwrap().parent().unwrap();
+    let repo = repo_path.to_str().unwrap();
+    let out = temp_dir("bcc_issue_enrichment");
 
     // 测试 1: PR #4 应该能提取到关联的 Issue #2
     // 注意：这需要真实调用 GitHub API
     let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .arg("bugfix")
         .args([
-            repo, "-o", "/tmp/test_issue_8", "-s", "c", "--force",
+            repo, "-o", &out.to_string_lossy(), "-s", "c", "--force",
             "--issue", "4", // 手动指定 PR #4
         ])
         .env("BCC_FORCE_PROMPT_MODE", "1")
@@ -1123,9 +1127,9 @@ fn issue_enrichment_merges_pr_and_issue() {
     if let Ok(output) = result {
         assert!(output.status.success(), "collect should not fail: {}",
             String::from_utf8_lossy(&output.stderr));
-        
+
         // 检查 inventory.json
-        if let Ok(inv_content) = fs::read_to_string("/tmp/test_issue_8/inventory.json") {
+        if let Ok(inv_content) = fs::read_to_string(out.join("inventory.json")) {
             let inv: serde_json::Value = serde_json::from_str(&inv_content).unwrap_or_default();
             if let Some(commits) = inv["commits"].as_array() {
                 if let Some(first) = commits.first() {
@@ -1145,7 +1149,7 @@ fn issue_enrichment_merges_pr_and_issue() {
         }
     }
 
-    let _ = fs::remove_dir_all("/tmp/test_issue_8");
+    let _ = fs::remove_dir_all(&out);
 }
 
 /// 测试 extract_closes_refs 正则匹配（单元测试补充）
