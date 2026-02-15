@@ -19,7 +19,8 @@
   后端编译器：六命令（compile/extract/trace/arch/bugfix/bdd seed）已就绪，覆盖新/旧代码闭环。  
   典型链路：  
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`  
-  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`
+  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`  
+  - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/) - 完整架构分析示例（1685 文件项目，含 v0→v3 版本演进）
 
 ## 快速上手
 
@@ -37,11 +38,15 @@ bcc compile compiler/bcc/fixtures/session_service.yaml --dry-run
 bcc extract compiler/bcc/fixtures/sample_service.ex --mode ast
 bcc trace status compiler/bcc/fixtures/trace_project/src compiler/bcc/fixtures/trace_project/docs/backend-trace/files/src
 bcc bugfix /path/to/repo -o output/ --lang elixir   # git bugfix → BDD 场景
-bcc arch matrix --seed-file compiler/bcc/docs/backend-trace/module-registry.seed.yaml --ast-file compiler/bcc/docs/backend-trace/artifacts/trace2contract/module-relations.json
+# 使用 openclaw-arch 案例运行 arch 命令
+cd compiler/bcc/examples/openclaw-arch
+bcc arch matrix --seed-file seed/v3.target-matrix.yaml --ast-file artifacts/module_registry.json
 bcc arch validate \
-  --target compiler/bcc/docs/backend-trace/trace2contract/seed/v3.target-matrix.yaml \
-  --actual compiler/bcc/docs/backend-trace/artifacts/trace2contract/module-relations.actual.json \
-  --out-dir compiler/bcc/docs/backend-trace/artifacts/trace2contract/versions/v3-draft
+  --target seed/v3.target-matrix.yaml \
+  --transition seed/v3.transition-matrix.yaml \
+  --gates seed/v3.gates.yaml \
+  --actual artifacts/relation_matrix.actual.json \
+  --out-dir versions/v4-draft
 
 # bddc（Elixir escript）
 cd compiler/bddc
