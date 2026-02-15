@@ -274,10 +274,10 @@ func TestSlugFromTitle(t *testing.T) {
 	}{
 		{"Fix login bug", "fix-login-bug"},
 		{"Add user authentication", "add-user-authentication"},
-		{"修复中文标题", "fix"},
+		{"修复中文标题", ""},
 		{"  spaces  and  dashes  ", "spaces-and-dashes"},
 		{"A very long title that should be truncated to thirty characters max", "a-very-long-title-that-should-"},
-		{"", "fix"},
+		{"", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {

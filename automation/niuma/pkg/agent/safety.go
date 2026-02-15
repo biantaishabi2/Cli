@@ -20,19 +20,6 @@ var defaultAllowedPrefixes = []string{
 	"spec/",
 }
 
-// extraAllowedPrefixes 额外允许的目录前缀（可通过 AddAllowedPrefixes 配置）
-var extraAllowedPrefixes []string
-
-// AddAllowedPrefixes 添加额外的路径白名单前缀
-func AddAllowedPrefixes(prefixes ...string) {
-	extraAllowedPrefixes = append(extraAllowedPrefixes, prefixes...)
-}
-
-// ResetAllowedPrefixes 重置额外白名单（用于测试）
-func ResetAllowedPrefixes() {
-	extraAllowedPrefixes = nil
-}
-
 // 高风险路径（需要额外审查）
 var highRiskPrefixes = []string{
 	"auth/",
@@ -61,8 +48,8 @@ func (r *ValidationResult) IsClean() bool {
 	return len(r.Rejected) == 0
 }
 
-// ValidateChanges 校验文件变更路径
-func ValidateChanges(changes []FileChange) *ValidationResult {
+// ValidateChanges 校验文件变更路径，extraPrefixes 为额外允许的目录前缀
+func ValidateChanges(changes []FileChange, extraPrefixes ...string) *ValidationResult {
 	result := &ValidationResult{}
 
 	for _, c := range changes {
@@ -75,7 +62,7 @@ func ValidateChanges(changes []FileChange) *ValidationResult {
 			continue
 		}
 
-		if isAllowedPath(path) {
+		if isAllowedPath(path, extraPrefixes) {
 			result.Allowed = append(result.Allowed, path)
 		} else {
 			result.Rejected = append(result.Rejected, path)
@@ -101,13 +88,13 @@ func IsHighRiskChange(path string) bool {
 	return false
 }
 
-func isAllowedPath(path string) bool {
+func isAllowedPath(path string, extraPrefixes []string) bool {
 	for _, prefix := range defaultAllowedPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}
-	for _, prefix := range extraAllowedPrefixes {
+	for _, prefix := range extraPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}

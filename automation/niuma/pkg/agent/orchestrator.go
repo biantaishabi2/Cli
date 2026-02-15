@@ -28,8 +28,9 @@ type OrchestratorConfig struct {
 	RepoDir string
 
 	// 工作流配置
-	RequirePlanApproval bool // 方案定稿后是否需要人工审批
-	MaxIterateRounds    int  // 最大自动迭代轮数（0=默认3）
+	RequirePlanApproval bool     // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int      // 最大自动迭代轮数（0=默认3）
+	AllowedPrefixes     []string // 额外允许修改的目录前缀
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -237,7 +238,11 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 	}
 
 	// 安全校验
-	validation := ValidateChanges(finalPlan.FileChanges)
+	var extraPrefixes []string
+	if o.config != nil {
+		extraPrefixes = o.config.AllowedPrefixes
+	}
+	validation := ValidateChanges(finalPlan.FileChanges, extraPrefixes...)
 	if !validation.IsClean() {
 		// 发评论告知校验失败，但不转状态
 		errorBody := FormatValidationError(validation)
@@ -448,11 +453,42 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	input.ReviewComment = reviewText
 
 	// 转状态到 iterating
+	prevState := currentState
 	if err := o.transition(ctx, state.StateIterating); err != nil {
 		return err
 	}
 
-	// 确定实际工作目录
+	// 执行迭代逻辑，失败时回滚状态
+	iterateErr := o.doIterateInner(ctx, input, prNumber, workDir)
+	if iterateErr != nil {
+		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateIterating), string(prevState))
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			fmt.Sprintf("## ❌ 迭代失败\n\n%s\n\n状态已回滚到 `%s`。", iterateErr.Error(), prevState))
+		return iterateErr
+	}
+
+	// 更新 PR marker revision
+	prMC, _ = o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
+	rev := 1
+	if prMC != nil {
+		rev = prMC.Marker.Revision + 1
+	}
+	m := &marker.Marker{
+		Type:     marker.TypePRCreated,
+		Issue:    o.issueNumber,
+		Revision: rev,
+		PR:       prNumber,
+	}
+	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, "PR 已更新"); err != nil {
+		return fmt.Errorf("更新 PR marker 失败: %w", err)
+	}
+
+	// 转状态回 pr-created
+	return o.transition(ctx, state.StatePRCreated)
+}
+
+// doIterateInner 执行迭代的内部逻辑
+func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, prNumber int, workDir string) error {
 	actualWorkDir := workDir
 	var gitOps *GitOps
 	var branchName string
@@ -513,24 +549,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 		return fmt.Errorf("发布修复结果失败: %w", err)
 	}
 
-	// 更新 PR marker revision
-	prMC, _ = o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
-	rev := 1
-	if prMC != nil {
-		rev = prMC.Marker.Revision + 1
-	}
-	m := &marker.Marker{
-		Type:     marker.TypePRCreated,
-		Issue:    o.issueNumber,
-		Revision: rev,
-		PR:       prNumber,
-	}
-	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, "PR 已更新"); err != nil {
-		return fmt.Errorf("更新 PR marker 失败: %w", err)
-	}
-
-	// 转状态回 pr-created
-	return o.transition(ctx, state.StatePRCreated)
+	return nil
 }
 
 // DoReview AI 自审 PR
@@ -615,13 +634,21 @@ func (o *Orchestrator) currentState(ctx context.Context) (state.State, error) {
 		return "", err
 	}
 
+	var found []state.State
 	for _, label := range labels {
 		if s, err := state.ParseState(label); err == nil {
-			return s, nil
+			found = append(found, s)
 		}
 	}
 
-	return "", fmt.Errorf("issue #%d 没有 bot: 状态 label", o.issueNumber)
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("issue #%d 没有 bot: 状态 label", o.issueNumber)
+	case 1:
+		return found[0], nil
+	default:
+		return "", fmt.Errorf("issue #%d 有多个 bot: 状态 label: %v（请手动清理）", o.issueNumber, found)
+	}
 }
 
 // transition 执行状态转换
@@ -783,9 +810,6 @@ func slugFromTitle(title string) string {
 	slug = strings.Trim(slug, "-")
 	if len(slug) > 30 {
 		slug = slug[:30]
-	}
-	if slug == "" {
-		slug = "fix"
 	}
 	return slug
 }

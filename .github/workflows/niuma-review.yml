@@ -38,7 +38,7 @@ jobs:
           ISSUE=${{ github.event.issue.number }}
           # 从 PR_CREATED marker 中读取 PR 号
           PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
-            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -oP 'pr=\K\d+' | tail -1)
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       - name: AI Self-Review
