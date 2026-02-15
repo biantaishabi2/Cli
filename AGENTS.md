@@ -19,8 +19,11 @@ gh issue list --state open
 # 查看 issue 详情
 gh issue view <number>
 
-# 创建功能分支
-git checkout -b feat/<issue-number>-<brief-desc>
+# 创建功能分支（二选一）
+# 方式1：常规 - 从主分支切出
+git checkout master && git checkout -b feat/<N>-<slug>
+# 方式2：并行开发 - 使用 worktree
+git worktree add ../<项目名>-feat-<N> -b feat/<N>-<slug> master
 
 # 开发完成后提交
 gh issue comment <number> --body "已实现，见 PR #X"
