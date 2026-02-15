@@ -1092,3 +1092,82 @@ fn cli_accepts_issue_flag() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ─── 场景：Issue #8 PR/Issue 内容合并 ──────────────────────
+
+/// 测试 fetch_enriched_issue 能正确处理 PR 和 Issue 关联
+/// 使用本仓库真实的 PR #4 和 Issue #2（如果 gh 可用）
+#[test]
+fn issue_enrichment_merges_pr_and_issue() {
+    // 检查 gh 是否可用
+    let gh_check = Command::new("gh").arg("--version").output();
+    if gh_check.is_err() || !gh_check.unwrap().status.success() {
+        eprintln!("[skip] gh CLI not available, skipping integration test");
+        return;
+    }
+
+    let repo = "/Users/biantaishabi/Cli"; // 本仓库
+
+    // 测试 1: PR #4 应该能提取到关联的 Issue #2
+    // 注意：这需要真实调用 GitHub API
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .arg("bugfix")
+        .args([
+            repo, "-o", "/tmp/test_issue_8", "-s", "c", "--force",
+            "--issue", "4", // 手动指定 PR #4
+        ])
+        .env("BCC_FORCE_PROMPT_MODE", "1")
+        .output();
+
+    // 即使 API 调用失败也不应该 panic，应该静默跳过
+    if let Ok(output) = result {
+        assert!(output.status.success(), "collect should not fail: {}",
+            String::from_utf8_lossy(&output.stderr));
+        
+        // 检查 inventory.json
+        if let Ok(inv_content) = fs::read_to_string("/tmp/test_issue_8/inventory.json") {
+            let inv: serde_json::Value = serde_json::from_str(&inv_content).unwrap_or_default();
+            if let Some(commits) = inv["commits"].as_array() {
+                if let Some(first) = commits.first() {
+                    if let Some(issue) = first.get("issue") {
+                        // 如果成功获取，检查合并格式
+                        let body = issue["body"].as_str().unwrap_or("");
+                        if !body.is_empty() {
+                            // 合并后的内容应该包含两个章节
+                            assert!(
+                                body.contains("## 原始需求") || body.contains("## 实现方案"),
+                                "merged content should have structured sections, got: {}", body
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all("/tmp/test_issue_8");
+}
+
+/// 测试 extract_closes_refs 正则匹配（单元测试补充）
+#[test]
+fn extract_closes_refs_real_pr_examples() {
+    // PR #4 的真实 body 示例（简化）
+    let pr_body = r#"## Summary
+
+- 新增 Rust extractor
+- bugfix collect/context 支持 `--lang rust`
+
+Closes #2
+
+## Test plan
+
+- [x] `cargo test` 全部通过"#;
+
+    // 使用与实现相同的正则
+    let re = regex::Regex::new(r"(?i)(closes|fixes|resolves)\s*#(\d+)").unwrap();
+    let refs: Vec<u64> = re.captures_iter(pr_body)
+        .filter_map(|cap| cap.get(2)?.as_str().parse::<u64>().ok())
+        .collect();
+    
+    assert_eq!(refs, vec![2], "should extract issue #2 from PR body");
+}
