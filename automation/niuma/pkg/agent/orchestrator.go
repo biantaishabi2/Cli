@@ -26,6 +26,18 @@ type OrchestratorConfig struct {
 
 	// 仓库目录（用于 worktree 管理）
 	RepoDir string
+
+	// 工作流配置
+	RequirePlanApproval bool // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int  // 最大自动迭代轮数（0=默认3）
+}
+
+// getMaxIterateRounds 获取最大迭代轮数，默认3
+func (c *OrchestratorConfig) getMaxIterateRounds() int {
+	if c == nil || c.MaxIterateRounds <= 0 {
+		return 3
+	}
+	return c.MaxIterateRounds
 }
 
 // Orchestrator 核心编排器
@@ -250,13 +262,23 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 
 // DoImplement 执行代码实现
 // Phase 2.5：创建 worktree → AI agent 模式 Execute → commit → push → 创建 PR
+// Phase 2.7：支持 plan-approved 审批门
 func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	currentState, err := o.currentState(ctx)
 	if err != nil {
 		return fmt.Errorf("读取状态失败: %w", err)
 	}
-	if currentState != state.StatePlanFinal {
-		return fmt.Errorf("当前状态 %s 不允许实现（需要 %s）", currentState, state.StatePlanFinal)
+
+	// 审批门：如果配置了 require_plan_approval 且当前是 plan-final，等人工审批
+	if currentState == state.StatePlanFinal && o.config != nil && o.config.RequirePlanApproval {
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			"## ⏸️ 等待人工审批\n\n最终方案已生成，请审阅后添加 `bot:plan-approved` 标签以继续实现。")
+		return nil
+	}
+
+	// 允许从 plan-final（自动模式）或 plan-approved（审批模式）进入
+	if currentState != state.StatePlanFinal && currentState != state.StatePlanApproved {
+		return fmt.Errorf("当前状态 %s 不允许实现（需要 %s 或 %s）", currentState, state.StatePlanFinal, state.StatePlanApproved)
 	}
 
 	// 读取最终方案
@@ -360,6 +382,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 
 // DoIterate 根据 review 意见迭代修改
 // Phase 2.5：复用 worktree → AI agent 模式 Execute → commit → push
+// Phase 2.7：迭代次数保护
 func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir string) error {
 	currentState, err := o.currentState(ctx)
 	if err != nil {
@@ -367,6 +390,18 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	}
 	if currentState != state.StatePRNeedsFix {
 		return fmt.Errorf("当前状态 %s 不允许迭代（需要 %s）", currentState, state.StatePRNeedsFix)
+	}
+
+	// 迭代次数保护
+	maxRounds := 3
+	if o.config != nil {
+		maxRounds = o.config.getMaxIterateRounds()
+	}
+	prMC, _ := o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
+	if prMC != nil && prMC.Marker.Revision >= maxRounds {
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			fmt.Sprintf("## ⚠️ 迭代次数已达上限\n\n已自动迭代 %d 轮，仍未通过审查。请人工介入处理。", prMC.Marker.Revision))
+		return nil
 	}
 
 	// 读取 PR review 意见
@@ -453,7 +488,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	}
 
 	// 更新 PR marker revision
-	prMC, _ := o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
+	prMC, _ = o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
 	rev := 1
 	if prMC != nil {
 		rev = prMC.Marker.Revision + 1

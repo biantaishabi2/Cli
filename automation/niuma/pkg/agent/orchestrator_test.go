@@ -286,6 +286,94 @@ func TestSlugFromTitle(t *testing.T) {
 	}
 }
 
+// ===== Phase 2.7 审批门 + 迭代限制测试 =====
+
+func TestDoImplement_RequireApproval_WaitsAtPlanFinal(t *testing.T) {
+	mockAI := ai.NewMockProvider()
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+
+	cfg := &OrchestratorConfig{
+		ImplementProvider:   mockAI,
+		RequirePlanApproval: true,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+
+	err := orch.DoImplement(context.Background(), "/tmp/work")
+	require.NoError(t, err) // 不报错，只是不执行
+
+	// 验证发了等待审批的评论
+	comments := mockGH.Comments[1]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].GetBody(), "等待人工审批")
+
+	// 验证状态没变（仍是 plan-final）
+	labels := mockGH.Labels[1]
+	assert.Contains(t, labels, string(state.StatePlanFinal))
+
+	// 验证没调用 AI
+	assert.Equal(t, 0, mockAI.CallCount())
+}
+
+func TestDoImplement_PlanApproved_Proceeds(t *testing.T) {
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 实现代码")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanApproved))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+
+	cfg := &OrchestratorConfig{
+		ImplementProvider:   mockAI,
+		RequirePlanApproval: true,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+
+	err := orch.DoImplement(context.Background(), "/tmp/work")
+	require.NoError(t, err)
+
+	// 验证状态到了 pr-created
+	labels := mockGH.Labels[1]
+	assert.Contains(t, labels, string(state.StatePRCreated))
+}
+
+func TestDoIterate_ExceedsMaxRounds(t *testing.T) {
+	mockAI := ai.NewMockProvider()
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRNeedsFix))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案")
+	// PR marker revision=3 → 已经迭代了3轮
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 3, PR: 10,
+	}, "PR created")
+
+	cfg := &OrchestratorConfig{
+		ImplementProvider: mockAI,
+		MaxIterateRounds:  3,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+
+	err := orch.DoIterate(context.Background(), 10, "/tmp/work")
+	require.NoError(t, err) // 不报错，只是不执行
+
+	// 验证发了上限评论
+	comments := mockGH.Comments[1]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].GetBody(), "迭代次数已达上限")
+
+	// 验证没调用 AI
+	assert.Equal(t, 0, mockAI.CallCount())
+}
+
 // ===== Phase 2.6 DoReview 测试 =====
 
 func TestDoReview_Approved(t *testing.T) {

@@ -12,7 +12,22 @@ import (
 
 // Config 顶层配置
 type Config struct {
-	AI AIConfig `yaml:"ai"`
+	AI       AIConfig       `yaml:"ai"`
+	Workflow WorkflowConfig `yaml:"workflow"`
+}
+
+// WorkflowConfig 工作流配置
+type WorkflowConfig struct {
+	RequirePlanApproval bool `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int  `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+}
+
+// GetMaxIterateRounds 获取最大迭代轮数，默认3
+func (w *WorkflowConfig) GetMaxIterateRounds() int {
+	if w.MaxIterateRounds <= 0 {
+		return 3
+	}
+	return w.MaxIterateRounds
 }
 
 // AIConfig AI 相关配置

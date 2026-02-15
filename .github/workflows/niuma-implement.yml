@@ -15,7 +15,9 @@ concurrency:
 jobs:
   implement:
     runs-on: self-hosted
-    if: github.event.label.name == 'bot:plan-final'
+    if: >
+      github.event.label.name == 'bot:plan-final' ||
+      github.event.label.name == 'bot:plan-approved'
     permissions:
       issues: write
       pull-requests: write
@@ -32,7 +34,6 @@ jobs:
         run: go build -o niuma ./cmd/niuma
 
       - name: Implement Code
-        id: implement
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -40,22 +41,3 @@ jobs:
             --repo ${{ github.repository }} \
             --issue ${{ github.event.issue.number }} \
             --repo-dir ${{ github.workspace }}
-
-      - name: Find PR Number
-        id: find_pr
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ISSUE=${{ github.event.issue.number }}
-          PR_NUMBER=$(gh pr list --search "Closes #${ISSUE}" --json number -q '.[0].number')
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-
-      - name: AI Self-Review
-        if: steps.find_pr.outputs.pr_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ./niuma review \
-            --repo ${{ github.repository }} \
-            --issue ${{ github.event.issue.number }} \
-            --pr ${{ steps.find_pr.outputs.pr_number }}

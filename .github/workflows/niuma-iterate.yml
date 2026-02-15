@@ -1,6 +1,8 @@
 name: niuma - Iterate
 
 on:
+  issues:
+    types: [labeled]
   pull_request_review:
     types: [submitted]
 
@@ -9,13 +11,58 @@ defaults:
     working-directory: automation/niuma
 
 concurrency:
-  group: niuma-iterate-${{ github.event.pull_request.number }}
+  group: niuma-iterate-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  iterate:
+  # AI 自审不通过 → 自动迭代
+  iterate-from-review:
     runs-on: self-hosted
-    if: github.event.review.state == 'changes_requested'
+    if: >
+      github.event_name == 'issues' &&
+      github.event.label.name == 'bot:pr-needs-fix'
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Find PR Number
+        id: find_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE=${{ github.event.issue.number }}
+          PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -oP 'pr=\K\d+' | tail -1)
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Iterate on Review
+        if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma iterate \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }} \
+            --pr ${{ steps.find_pr.outputs.pr_number }} \
+            --repo-dir ${{ github.workspace }}
+
+  # 人工 PR review changes_requested → 迭代
+  iterate-from-human:
+    runs-on: self-hosted
+    if: >
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested'
     permissions:
       issues: write
       pull-requests: write
@@ -52,13 +99,3 @@ jobs:
             --issue ${{ steps.extract.outputs.issue_number }} \
             --pr ${{ steps.extract.outputs.pr_number }} \
             --repo-dir ${{ github.workspace }}
-
-      - name: AI Self-Review After Iterate
-        if: steps.extract.outputs.issue_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ./niuma review \
-            --repo ${{ github.repository }} \
-            --issue ${{ steps.extract.outputs.issue_number }} \
-            --pr ${{ steps.extract.outputs.pr_number }}

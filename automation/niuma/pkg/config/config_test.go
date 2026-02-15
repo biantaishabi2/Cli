@@ -56,6 +56,35 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	assert.NotNil(t, cfg.AI.Providers)
 }
 
+func TestLoad_WorkflowConfig(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "claude -p {prompt_file}"
+workflow:
+  require_plan_approval: true
+  max_iterate_rounds: 5
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.True(t, cfg.Workflow.RequirePlanApproval)
+	assert.Equal(t, 5, cfg.Workflow.MaxIterateRounds)
+	assert.Equal(t, 5, cfg.Workflow.GetMaxIterateRounds())
+}
+
+func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
+	w := &WorkflowConfig{}
+	assert.Equal(t, 3, w.GetMaxIterateRounds())
+
+	w.MaxIterateRounds = -1
+	assert.Equal(t, 3, w.GetMaxIterateRounds())
+}
+
 func TestLoad_EnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	content := `ai:

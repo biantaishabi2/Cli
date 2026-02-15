@@ -1,0 +1,52 @@
+name: niuma - Review
+
+on:
+  issues:
+    types: [labeled]
+
+defaults:
+  run:
+    working-directory: automation/niuma
+
+concurrency:
+  group: niuma-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: self-hosted
+    if: github.event.label.name == 'bot:pr-created'
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Find PR Number
+        id: find_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE=${{ github.event.issue.number }}
+          # 从 PR_CREATED marker 中读取 PR 号
+          PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/${ISSUE}/comments" \
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -oP 'pr=\K\d+' | tail -1)
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: AI Self-Review
+        if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma review \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }} \
+            --pr ${{ steps.find_pr.outputs.pr_number }}

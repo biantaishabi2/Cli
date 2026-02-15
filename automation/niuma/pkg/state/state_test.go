@@ -30,6 +30,14 @@ func TestIsValidTransition_SkipDiscussion(t *testing.T) {
 	assert.True(t, IsValidTransition(StatePlanDraft, StatePlanFinal))
 }
 
+func TestIsValidTransition_PlanApproval(t *testing.T) {
+	// 人工审批路径
+	assert.True(t, IsValidTransition(StatePlanFinal, StatePlanApproved))
+	assert.True(t, IsValidTransition(StatePlanApproved, StateImplementing))
+	// 跳过审批直接实现（自动模式）
+	assert.True(t, IsValidTransition(StatePlanFinal, StateImplementing))
+}
+
 func TestIsValidTransition_PRNeedsFix(t *testing.T) {
 	assert.True(t, IsValidTransition(StatePRCreated, StatePRNeedsFix))
 	assert.True(t, IsValidTransition(StatePRReviewable, StatePRNeedsFix))
@@ -90,11 +98,11 @@ func TestParseState_Invalid(t *testing.T) {
 }
 
 func TestAllStates_Count(t *testing.T) {
-	assert.Len(t, AllStates, 10)
+	assert.Len(t, AllStates, 11)
 }
 
 func TestAllBotLabels(t *testing.T) {
 	labels := AllBotLabels()
-	assert.Len(t, labels, 10)
+	assert.Len(t, labels, 11)
 	assert.Equal(t, "bot:fix", labels[0])
 }

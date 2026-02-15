@@ -334,7 +334,9 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 
 	// 构建完整配置
 	orchCfg := &agent.OrchestratorConfig{
-		RepoDir: flagRepoDir,
+		RepoDir:             flagRepoDir,
+		RequirePlanApproval: cfg.Workflow.RequirePlanApproval,
+		MaxIterateRounds:    cfg.Workflow.GetMaxIterateRounds(),
 	}
 
 	// 讨论 provider

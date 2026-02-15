@@ -12,6 +12,7 @@ const (
 	StatePlanDraft       State = "bot:plan-draft"
 	StateNeedsDiscussion State = "bot:needs-discussion"
 	StatePlanFinal       State = "bot:plan-final"
+	StatePlanApproved    State = "bot:plan-approved"
 	StateImplementing    State = "bot:implementing"
 	StatePRCreated       State = "bot:pr-created"
 	StatePRReviewable    State = "bot:pr-reviewable"
@@ -26,6 +27,7 @@ var AllStates = []State{
 	StatePlanDraft,
 	StateNeedsDiscussion,
 	StatePlanFinal,
+	StatePlanApproved,
 	StateImplementing,
 	StatePRCreated,
 	StatePRReviewable,
@@ -48,7 +50,8 @@ var validTransitions = map[State][]State{
 	StateFixRequested:    {StatePlanDraft},
 	StatePlanDraft:       {StateNeedsDiscussion, StatePlanFinal},
 	StateNeedsDiscussion: {StatePlanFinal},
-	StatePlanFinal:       {StateImplementing},
+	StatePlanFinal:       {StatePlanApproved, StateImplementing}, // 可选人工审批
+	StatePlanApproved:    {StateImplementing},
 	StateImplementing:    {StatePRCreated},
 	StatePRCreated:       {StatePRReviewable, StatePRNeedsFix},
 	StatePRReviewable:    {StatePRNeedsFix, StateDone},
