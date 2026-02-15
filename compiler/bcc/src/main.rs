@@ -125,7 +125,7 @@ enum Commands {
         #[arg(short, long, value_name = "STEP")]
         step: Option<String>,
 
-        /// 源码语言：php, elixir, typescript [默认: php]
+        /// 源码语言：php, elixir, typescript, rust [默认: php]
         #[arg(short, long, default_value = "php")]
         lang: String,
 
@@ -164,6 +164,10 @@ enum Commands {
         /// 覆盖率报告输出路径（默认: <output>/coverage.md）
         #[arg(long)]
         coverage_report: Option<String>,
+
+        /// 手动指定关联的 GitHub Issue 编号（覆盖 commit message 中的 #N 自动提取）
+        #[arg(long)]
+        issue: Option<u64>,
     },
 
     /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report）
@@ -383,6 +387,7 @@ fn main() {
             limit,
             force,
             coverage_report,
+            issue,
         }) => {
             let repo = match repo {
                 Some(r) if r != "help" => r,
@@ -417,6 +422,7 @@ fn main() {
                 limit,
                 force,
                 coverage_report.as_deref(),
+                issue,
             );
         }
         Some(Commands::Arch { action }) => match action {

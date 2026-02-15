@@ -818,3 +818,277 @@ fn generate_limit_via_cli() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Rust 语言支持测试
+// ═══════════════════════════════════════════════════════════
+
+// ─── Rust extract 冒烟测试 ───────────────────────────────
+
+#[test]
+fn rust_extract_smoke() {
+    let root = temp_dir("bdd_rust_extract");
+    let rs_file = root.join("sample.rs");
+    write(&rs_file, r#"//! 示例模块
+
+use std::collections::HashMap;
+use serde::Serialize;
+
+pub struct Config {
+    pub name: String,
+}
+
+pub enum Status {
+    Active,
+    Inactive,
+}
+
+pub trait Handler {
+    fn handle(&self);
+}
+
+impl Handler for Config {
+    fn handle(&self) {
+        println!("{}", self.name);
+    }
+}
+
+pub fn run(config: &Config) -> Result<(), String> {
+    let map = HashMap::new();
+    println!("running {}", config.name);
+    Ok(())
+}
+
+fn private_helper() {
+    std::fs::read_to_string("file.txt").ok();
+}
+"#);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args(["extract", rs_file.to_str().unwrap(), "--mode", "ast"])
+        .output()
+        .expect("run bcc extract");
+    assert!(output.status.success(), "extract should succeed");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("output should be valid JSON");
+
+    // 验证语言
+    assert_eq!(json["language"], "rust");
+
+    // 验证 exports 包含 pub 声明
+    let exports = json["exports"].as_array().unwrap();
+    let export_names: Vec<&str> = exports.iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(export_names.contains(&"Config"), "should export Config struct");
+    assert!(export_names.contains(&"Status"), "should export Status enum");
+    assert!(export_names.contains(&"Handler"), "should export Handler trait");
+    assert!(export_names.contains(&"run"), "should export run function");
+
+    // 验证 imports
+    let imports = json["imports"].as_array().unwrap();
+    assert!(imports.len() >= 2, "should have at least 2 imports");
+
+    // 验证 calls 包含 println! 宏
+    let calls = json["calls"].as_array().unwrap();
+    let call_names: Vec<&str> = calls.iter()
+        .filter_map(|c| c["callee"].as_str())
+        .collect();
+    assert!(call_names.contains(&"println!"), "should detect println! macro");
+
+    // 验证副作用
+    let se = &json["side_effects"];
+    assert_eq!(se["hasFileIo"], true, "should detect std::fs usage");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+// ─── Rust bugfix collect + context 端到端 ────────────────
+
+/// 创建 Rust 测试用 git 仓库，包含 2 个 bugfix commit
+fn setup_rust_bugfix_repo(root: &Path) -> PathBuf {
+    let repo = root.join("repo");
+    let src = repo.join("src");
+    fs::create_dir_all(&src).expect("create repo dirs");
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .expect("run git")
+    };
+
+    // 初始化 repo
+    write(&src.join("main.rs"), r#"pub fn run() {
+    println!("hello");
+}
+"#);
+    git(&["init"]);
+    git(&["config", "user.email", "test@bdd.com"]);
+    git(&["config", "user.name", "bdd-test"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "init: rust project"]);
+
+    // bugfix commit 1
+    write(&src.join("main.rs"), r#"pub fn run() {
+    if std::env::args().len() < 2 {
+        eprintln!("missing argument");
+        return;
+    }
+    println!("hello");
+}
+"#);
+    git(&["add", "."]);
+    git(&["commit", "-m", "fix: handle empty input"]);
+
+    // bugfix commit 2
+    write(&src.join("lib.rs"), r#"pub fn parse(input: &str) -> Result<i32, String> {
+    input.parse::<i32>().map_err(|e| e.to_string())
+}
+"#);
+    git(&["add", "."]);
+    git(&["commit", "-m", "init: add parser"]);
+
+    write(&src.join("lib.rs"), r#"pub fn parse(input: &str) -> Result<i32, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("empty input".into());
+    }
+    trimmed.parse::<i32>().map_err(|e| e.to_string())
+}
+"#);
+    git(&["add", "."]);
+    git(&["commit", "-m", "bug: parse 空字符串 panic"]);
+
+    repo
+}
+
+#[test]
+fn rust_bugfix_collect_and_context() {
+    let root = temp_dir("bdd_rust_bugfix");
+    let repo = setup_rust_bugfix_repo(&root);
+    let out = root.join("out");
+
+    // collect
+    let c = bcc_bugfix(&[
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "rust", "-s", "c", "--force",
+    ]);
+    assert!(c.status.success(), "collect failed: {}", String::from_utf8_lossy(&c.stderr));
+
+    // 验证 inventory.json
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
+    let commits = inv["commits"].as_array().unwrap();
+    assert!(commits.len() >= 1, "should have at least 1 bugfix commit, got {}", commits.len());
+
+    // context
+    let x = bcc_bugfix(&[
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "rust", "-s", "x", "--force",
+    ]);
+    assert!(x.status.success(), "context failed: {}", String::from_utf8_lossy(&x.stderr));
+
+    // 验证 contexts/ 有文件
+    let ctx_count = count_json_files(&out.join("contexts"));
+    assert!(ctx_count >= 1, "should have at least 1 context file, got {}", ctx_count);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+// ═══════════════════════════════════════════════════════════
+// GitHub Issue 关联测试
+// ═══════════════════════════════════════════════════════════
+
+// ─── 场景：collect 在 gh 不可用时静默跳过 issue 拉取 ──────
+
+#[test]
+fn collect_skips_issue_when_gh_unavailable() {
+    let root = temp_dir("bdd_issue_no_gh");
+    let repo = root.join("repo");
+    let ctrl = repo.join("app/controllers");
+    fs::create_dir_all(&ctrl).expect("create repo dirs");
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .expect("run git")
+    };
+
+    // 创建含 #N 引用的 commit
+    write(&ctrl.join("OrderController.php"), "<?php\nclass OrderController {}\n");
+    git(&["init"]);
+    git(&["config", "user.email", "test@bdd.com"]);
+    git(&["config", "user.name", "bdd-test"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+
+    write(
+        &ctrl.join("OrderController.php"),
+        "<?php\nclass OrderController {\n    public function show() { return 1; }\n}\n",
+    );
+    git(&["add", "."]);
+    git(&["commit", "-m", "fix: handle empty order (#99)"]);
+
+    let out = root.join("out");
+
+    // 用最小 PATH 确保 gh 不可用
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .arg("bugfix")
+        .args([
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force",
+        ])
+        .env("BCC_FORCE_PROMPT_MODE", "1")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run bcc bugfix");
+
+    assert!(result.status.success(), "collect should succeed without gh");
+
+    // inventory.json 应存在且 commit 中无 issue 字段
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
+    let commits = inv["commits"].as_array().unwrap();
+    assert!(!commits.is_empty(), "should have commits");
+    // 无 gh 时 issue 应为 null/不存在
+    for c in commits {
+        assert!(c.get("issue").is_none() || c["issue"].is_null(),
+            "issue should not be present without gh, got: {}", c);
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+// ─── 场景：--issue 参数被 CLI 接受 ──────────────────────
+
+#[test]
+fn cli_accepts_issue_flag() {
+    let root = temp_dir("bdd_issue_cli_flag");
+    let repo = setup_bugfix_repo(&root);
+    let out = root.join("out");
+
+    // 传 --issue 99（不存在的 issue，但 gh 不可用时应静默跳过）
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .arg("bugfix")
+        .args([
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force", "--issue", "99",
+        ])
+        .env("BCC_FORCE_PROMPT_MODE", "1")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run bcc bugfix with --issue");
+
+    assert!(result.status.success(), "collect with --issue should succeed, stderr: {}",
+        String::from_utf8_lossy(&result.stderr));
+    assert!(out.join("inventory.json").exists(), "inventory.json should be created");
+
+    let _ = fs::remove_dir_all(&root);
+}
