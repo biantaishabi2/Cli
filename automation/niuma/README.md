@@ -45,7 +45,7 @@ Issue 创建
 Draft Plan（草案方案）
     ↓ (信息不足则进入讨论态)
 Discussion（收敛讨论）
-    ↓ (静默窗口 10min 或轮次上限)
+    ↓ (轮次 ≥ 5 直接定稿 / 静默预警 + 确认窗口 / /finalize 命令)
 Final Plan（最终方案 + 测试场景）
     ↓
 Implement（改代码 + 测试）
@@ -178,14 +178,15 @@ Final Plan 必须包含可执行的测试：
 
 ## GitHub Actions Workflows
 
-4 个 workflow 实现全自动（跑在 self-hosted runner）：
+统一 workflow 实现全自动（跑在 self-hosted runner），根据当前 label 决定执行阶段：
 
-| Workflow | 触发 | 职责 |
-|----------|------|------|
-| `niuma-plan-draft.yml` | Issue labeled `bot:fix` | 生成 Draft Plan |
-| `niuma-discuss.yml` | Issue 评论 / Schedule | 收敛讨论 → Final Plan |
-| `niuma-implement.yml` | Issue labeled `bot:plan-final` | 改代码 → 提 PR |
-| `niuma-iterate.yml` | PR Review / 评论 | 根据意见迭代 |
+| 触发事件 | 执行阶段 |
+|----------|---------|
+| Issue labeled `bot:fix` | Draft Plan |
+| Issue 评论 / Schedule (5min) | Discussion 收敛检查 → Final Plan |
+| Issue labeled `bot:plan-final` | Implement → 提 PR |
+| PR created (`bot:pr-created`) | Self-Check（测试 + 规范） |
+| PR Review (`changes_requested`) | Iterate（自动修复意见） |
 
 ## 幂等机制
 
