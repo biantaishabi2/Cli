@@ -1,5 +1,5 @@
-# Go 构建产物
-niuma
+# Go 构建产物（仅匹配根目录的二进制文件）
+/niuma
 *.exe
 *.test
 *.out

@@ -1,11 +1,8 @@
 // pkg/ai/provider.go
-// AI Provider 接口定义和 CLI 桩实现
+// AI Provider 接口定义
 package ai
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 // Provider AI 后端抽象接口
 type Provider interface {
@@ -51,19 +48,4 @@ func buildOptions(opts []Option) *options {
 		opt(o)
 	}
 	return o
-}
-
-// CLIProvider 通过 CLI 命令调用 AI 工具的桩实现
-// Phase 2 实现实际调用逻辑
-type CLIProvider struct {
-	ProviderName string
-	Cmd          string // CLI 命令模板
-}
-
-func (p *CLIProvider) Name() string {
-	return p.ProviderName
-}
-
-func (p *CLIProvider) Complete(ctx context.Context, prompt string, opts ...Option) (string, error) {
-	return "", fmt.Errorf("AI provider %q not implemented: Phase 2 will add CLI execution support", p.ProviderName)
 }
