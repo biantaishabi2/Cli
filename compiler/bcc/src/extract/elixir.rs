@@ -343,6 +343,42 @@ pub fn infer_module_from_path(rel_path: &str) -> Option<String> {
     Some(module_name)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_module_from_lib_path() {
+        assert_eq!(
+            infer_module_from_path("lib/my_app/accounts/user.ex"),
+            Some("MyApp.Accounts.User".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_module_from_nested_path() {
+        assert_eq!(
+            infer_module_from_path("lib/gong_web/live/dashboard_live.ex"),
+            Some("GongWeb.Live.DashboardLive".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_module_without_lib_prefix() {
+        // 直接传相对路径（没有 lib/ 前缀）
+        assert_eq!(
+            infer_module_from_path("accounts/user.ex"),
+            Some("Accounts.User".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_module_returns_none_for_non_ex() {
+        assert_eq!(infer_module_from_path("lib/mix.exs"), None);
+        assert_eq!(infer_module_from_path("lib/config.exs"), None);
+    }
+}
+
 /// 基于全文关键词扫描的副作用分类标签（行为检测的分类维度）
 /// 独立于 tree-sitter 提取，用 contains() 捕获 use GenServer 等非 dot-call 模式
 fn detect_side_effects(content: &str, se: &mut SideEffects) {

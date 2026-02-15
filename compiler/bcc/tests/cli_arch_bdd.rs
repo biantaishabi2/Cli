@@ -1339,3 +1339,151 @@ relations_expected:
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn batch_extract_elixir_with_module_resolution() {
+    let root = temp_dir("bcc_batch_elixir");
+    let lib = root.join("lib");
+    fs::create_dir_all(lib.join("my_app/accounts")).expect("create dirs");
+    fs::create_dir_all(lib.join("my_app/billing")).expect("create dirs");
+    // 排除目标
+    fs::create_dir_all(root.join("test")).expect("create test dir");
+
+    write(
+        &lib.join("my_app/accounts/user.ex"),
+        r#"defmodule MyApp.Accounts.User do
+  alias MyApp.Billing.Invoice
+
+  def create(name) do
+    Invoice.generate(name)
+  end
+end
+"#,
+    );
+    write(
+        &lib.join("my_app/billing/invoice.ex"),
+        r#"defmodule MyApp.Billing.Invoice do
+  def generate(name) do
+    %{name: name, amount: 0}
+  end
+end
+"#,
+    );
+    // 应被排除的文件
+    write(
+        &root.join("test/user_test.exs"),
+        r#"defmodule MyApp.Accounts.UserTest do
+  use ExUnit.Case
+  test "create" do
+    assert true
+  end
+end
+"#,
+    );
+    write(&root.join("mix.exs"), r#"defmodule MyApp.MixProject do
+  use Mix.Project
+end
+"#);
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract elixir");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+
+    // 只有 2 个 .ex 文件，test/ 和 .exs 被排除
+    assert_eq!(v["source_count"], 2, "should have 2 .ex files");
+    assert_eq!(v["skipped_count"], 0);
+
+    // 验证 records 中的 sourcePath 是相对路径
+    let records = v["records"].as_array().unwrap();
+    let paths: Vec<&str> = records
+        .iter()
+        .map(|r| r["sourcePath"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"lib/my_app/accounts/user.ex"));
+    assert!(paths.contains(&"lib/my_app/billing/invoice.ex"));
+
+    // 验证 user.ex 的 localDependencies 包含 invoice.ex（通过模块名映射）
+    let user_record = records
+        .iter()
+        .find(|r| r["sourcePath"].as_str().unwrap().contains("user.ex"))
+        .expect("find user record");
+    let deps = user_record["localDependencies"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        deps.iter().any(|d| d.contains("invoice.ex")),
+        "user.ex should depend on invoice.ex, got: {:?}",
+        deps
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_skips_node_modules() {
+    let root = temp_dir("bcc_batch_node_modules");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create src");
+    fs::create_dir_all(root.join("node_modules/lodash")).expect("create node_modules");
+    fs::create_dir_all(root.join("__tests__")).expect("create __tests__");
+
+    // 正常文件
+    write(&src.join("app.ts"), "export const app = 'hello';\n");
+    // node_modules 下的文件应被排除
+    write(
+        &root.join("node_modules/lodash/index.ts"),
+        "export function chunk() {}\n",
+    );
+    // __tests__ 下的文件应被排除
+    write(
+        &root.join("__tests__/app.test.ts"),
+        "test('app', () => {});\n",
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(
+        v["source_count"], 1,
+        "only src/app.ts should be included, node_modules and __tests__ excluded"
+    );
+
+    let records = v["records"].as_array().unwrap();
+    let path = records[0]["sourcePath"].as_str().unwrap();
+    assert!(
+        path.contains("app.ts") && !path.contains("node_modules"),
+        "should be src/app.ts, got: {}",
+        path
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
