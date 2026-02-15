@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde_json::Value;
 
 // ─── 数据结构 ───────────────────────────────────────────
 
@@ -317,7 +318,7 @@ fn collect(
             if let Some(&num) = issue_nums.first() {
                 if let Some(cached) = issue_cache.get(&num) {
                     commit.issue = Some(cached.clone());
-                } else if let Some(info) = fetch_issue(repo, num) {
+                } else if let Some(info) = fetch_enriched_issue(repo, num) {
                     issue_cache.insert(num, info.clone());
                     commit.issue = Some(info);
                 }
@@ -645,6 +646,130 @@ fn fetch_issue(repo: &str, number: u64) -> Option<IssueInfo> {
     eprintln!("[issue] fetched #{}: {} ({} comments)", number, title, comments.len());
 
     Some(IssueInfo { number, title, body, comments })
+}
+
+// ─── issue 内容增强（PR/Issue 合并）────────────────────────
+
+/// 判断 GitHub API 返回的是否为 PR
+fn is_pull_request(json: &Value) -> bool {
+    json.get("pull_request").is_some()
+}
+
+/// 从 PR body 中提取 closes/fixes/resolves 关键字后的 issue 编号
+fn extract_closes_refs(body: &str) -> Vec<u64> {
+    let re = Regex::new(r"(?i)(closes|fixes|resolves)\s*#(\d+)").unwrap();
+    re.captures_iter(body)
+        .filter_map(|cap| cap.get(2)?.as_str().parse::<u64>().ok())
+        .collect()
+}
+
+/// 搜索关联指定 issue 的 PR（取最新 merged 的）
+fn find_linked_pr(repo: &str, issue_num: u64) -> Option<u64> {
+    let remote = detect_github_remote(repo)?;
+    
+    // 使用 search API 查找 closes 该 issue 的 PR
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &format!("search/issues?q=repo:{}+is:pr+closes:{}&sort=updated&order=desc&per_page=1", remote, issue_num)
+        ])
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let json: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let items = json.get("items")?.as_array()?;
+    
+    // 取第一个结果（最新更新的）
+    items.first()?.get("number")?.as_u64()
+}
+
+/// 合并 issue 和 PR 的内容
+fn merge_content(issue: &IssueInfo, pr: &IssueInfo) -> IssueInfo {
+    const MAX_TOTAL: usize = 4000;
+    
+    let merged_body = format!(
+        "## 原始需求\n{}\n\n## 实现方案 (PR #{})\n{}",
+        issue.body, pr.number, pr.body
+    );
+    
+    let body = if merged_body.len() > MAX_TOTAL {
+        // 极端情况：两边等比截断
+        let half = MAX_TOTAL / 2;
+        let issue_part = truncate_str(&issue.body, half);
+        let pr_part = truncate_str(&pr.body, half);
+        format!(
+            "## 原始需求\n{}\n\n## 实现方案 (PR #{})\n{}",
+            issue_part, pr.number, pr_part
+        )
+    } else {
+        merged_body
+    };
+    
+    IssueInfo {
+        number: issue.number,
+        title: format!("{} (PR #{})", issue.title, pr.number),
+        body,
+        comments: issue.comments.clone(),
+    }
+}
+
+/// 获取增强的 issue 信息（自动合并 PR 和关联 issue）
+fn fetch_enriched_issue(repo: &str, number: u64) -> Option<IssueInfo> {
+    let json = gh_api_issue(repo, number).ok()?;
+    
+    if is_pull_request(&json) {
+        // PR: 取 PR + 找关联 issue（单层）
+        let pr_info = extract_info_from_json(&json);
+        let refs = extract_closes_refs(&pr_info.body);
+        if let Some(issue_num) = refs.first() {
+            if let Some(issue) = gh_api_issue(repo, *issue_num).ok() {
+                let issue_info = extract_info_from_json(&issue);
+                return Some(merge_content(&issue_info, &pr_info));
+            }
+        }
+        Some(pr_info)
+    } else {
+        // Issue: 取 issue + 找关联 PR（单层）
+        let issue_info = extract_info_from_json(&json);
+        if let Some(pr_num) = find_linked_pr(repo, number) {
+            if let Some(pr) = gh_api_issue(repo, pr_num).ok() {
+                let pr_info = extract_info_from_json(&pr);
+                return Some(merge_content(&issue_info, &pr_info));
+            }
+        }
+        Some(issue_info)
+    }
+}
+
+/// 从 JSON 提取 IssueInfo（不调用 API）
+fn extract_info_from_json(json: &Value) -> IssueInfo {
+    let number = json["number"].as_u64().unwrap_or(0);
+    let title = json["title"].as_str().unwrap_or("").to_string();
+    let body = truncate_str(json["body"].as_str().unwrap_or(""), 2000);
+    IssueInfo { number, title, body, comments: vec![] }
+}
+
+/// 调用 gh api 获取 issue/PR 原始 JSON
+fn gh_api_issue(repo: &str, number: u64) -> Result<Value, String> {
+    let remote = detect_github_remote(repo)
+        .ok_or("cannot detect github remote")?;
+    
+    let output = Command::new("gh")
+        .args(["api", &format!("repos/{}/issues/{}", remote, number)])
+        .output()
+        .map_err(|e| format!("gh api failed: {}", e))?;
+    
+    if !output.status.success() {
+        return Err(format!("gh api returned error: {}", 
+            String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("json parse failed: {}", e))
 }
 
 // ─── cleanup ─────────────────────────────────────────────
@@ -1111,12 +1236,21 @@ allowed：switch/case 或 in_array→列举，无约束→null
 
 ## GitHub Issue 上下文（如有）
 
-如果下方 context_json 中包含 "issue" 字段，其中有：
-- title: issue 标题（通常描述 bug 现象）
-- body: issue 正文（包含问题分析、复现步骤、验收标准）
-- comments: 评论列表（可能包含讨论和验证结果）
+如果下方 context_json 中包含 "issue" 字段，说明该 bugfix 关联了 GitHub Issue/PR。issue.body 的格式如下：
 
-请结合 issue 中的信息生成更精确的 test_spec。优先使用 issue 中明确描述的验收标准作为 assertions。
+```
+## 原始需求
+[issue 中描述的问题现象、背景、验收标准]
+
+## 实现方案 (PR #N)
+[PR 中的实现细节、技术方案、Test plan]
+```
+
+请结合两部分信息生成 test_spec：
+- **原始需求**部分：提取 bug 现象、业务背景、用户验收标准 → 用于生成 preconditions 和 assertions
+- **实现方案**部分：提取技术改动、函数变更、边界条件 → 用于生成 trigger、args、outputs
+
+如果 issue 内容为空或格式不符，则仅使用 code diff 信息生成 test_spec。
 
 ## Bugfix 记录
 
@@ -2467,5 +2601,110 @@ class UserController {
         let json = r#"{"hash":"abc","message":"fix","author":"test","date":"2025-01-01","grade":"A","module":"test","tags":[],"changed_files":[],"total_lines":5}"#;
         let commit: BugfixCommit = serde_json::from_str(json).unwrap();
         assert!(commit.issue.is_none());
+    }
+
+    // ─── issue 内容增强（PR/Issue 合并）────────────────
+
+    #[test]
+    fn is_pull_request_detects_pr() {
+        let pr_json = serde_json::json!({
+            "number": 4,
+            "title": "feat: something",
+            "pull_request": { "url": "..." }
+        });
+        assert!(is_pull_request(&pr_json));
+
+        let issue_json = serde_json::json!({
+            "number": 2,
+            "title": "bug report",
+        });
+        assert!(!is_pull_request(&issue_json));
+    }
+
+    #[test]
+    fn extract_closes_refs_matches_keywords() {
+        let body = "This PR closes #123 and fixes #456. Also resolves #789";
+        let refs = extract_closes_refs(body);
+        assert_eq!(refs, vec![123, 456, 789]);
+    }
+
+    #[test]
+    fn extract_closes_refs_ignores_bare_hash() {
+        let body = "See #123 for context. This is not a closes #456 marker.";
+        let refs = extract_closes_refs(body);
+        // 只有 closes/fixes/resolves #N 才匹配
+        assert_eq!(refs, vec![456]);
+    }
+
+    #[test]
+    fn extract_closes_refs_case_insensitive() {
+        let body = "CLOSES #1, Fixes #2, ReSoLvEs #3";
+        let refs = extract_closes_refs(body);
+        assert_eq!(refs, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn extract_closes_refs_empty() {
+        let body = "See #123 for context. No keyword here.";
+        let refs = extract_closes_refs(body);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn merge_content_combines_issue_and_pr() {
+        let issue = IssueInfo {
+            number: 2,
+            title: "Bug title".into(),
+            body: "Bug description".into(),
+            comments: vec![],
+        };
+        let pr = IssueInfo {
+            number: 4,
+            title: "PR title".into(),
+            body: "Implementation details".into(),
+            comments: vec![],
+        };
+        let merged = merge_content(&issue, &pr);
+        
+        assert!(merged.body.contains("## 原始需求"));
+        assert!(merged.body.contains("Bug description"));
+        assert!(merged.body.contains("## 实现方案 (PR #4)"));
+        assert!(merged.body.contains("Implementation details"));
+        assert!(merged.title.contains("(PR #4)"));
+    }
+
+    #[test]
+    fn merge_content_no_truncation_when_short() {
+        let issue = IssueInfo {
+            number: 1,
+            title: "Title".into(),
+            body: "Short issue body".into(),
+            comments: vec![],
+        };
+        let pr = IssueInfo {
+            number: 2,
+            title: "PR".into(),
+            body: "Short PR body".into(),
+            comments: vec![],
+        };
+        let merged = merge_content(&issue, &pr);
+        
+        // 短内容不截断
+        assert!(merged.body.contains("Short issue body"));
+        assert!(merged.body.contains("Short PR body"));
+    }
+
+    #[test]
+    fn extract_info_from_json_parses_correctly() {
+        let json = serde_json::json!({
+            "number": 42,
+            "title": "Test Issue",
+            "body": "Test body content",
+        });
+        let info = extract_info_from_json(&json);
+        
+        assert_eq!(info.number, 42);
+        assert_eq!(info.title, "Test Issue");
+        assert_eq!(info.body, "Test body content");
     }
 }
