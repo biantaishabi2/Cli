@@ -452,7 +452,28 @@ class UserController {
         .expect("run extract");
     assert!(extract.success());
 
-    let bugfix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+    // -s c: collect（独立执行）
+    let collect = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "bugfix",
+            &repo.to_string_lossy(),
+            "-o",
+            &out.to_string_lossy(),
+            "--lang",
+            "php",
+            "-s",
+            "c",
+            "--limit",
+            "20",
+            "--force",
+        ])
+        .status()
+        .expect("run bugfix collect");
+    assert!(collect.success());
+    assert!(out.join("inventory.json").exists());
+
+    // -s x: context（独立执行，依赖 inventory.json）
+    let context = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "bugfix",
             &repo.to_string_lossy(),
@@ -462,14 +483,11 @@ class UserController {
             "php",
             "-s",
             "x",
-            "--limit",
-            "20",
             "--force",
         ])
         .status()
         .expect("run bugfix context");
-    assert!(bugfix.success());
-    assert!(out.join("inventory.json").exists());
+    assert!(context.success());
     assert!(out.join("contexts").exists());
     let context_count = fs::read_dir(out.join("contexts"))
         .expect("read contexts")
