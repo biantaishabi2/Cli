@@ -44,6 +44,11 @@ func BuildIteratePrompt(input *PromptInput) (string, error) {
 	return renderTemplate("iterate", iterateTmpl, input)
 }
 
+// BuildReviewPrompt 生成自审 prompt
+func BuildReviewPrompt(input *PromptInput) (string, error) {
+	return renderTemplate("review", reviewTmpl, input)
+}
+
 func renderTemplate(name, tmplStr string, input *PromptInput) (string, error) {
 	tmpl, err := template.New(name).Funcs(template.FuncMap{
 		"join": strings.Join,
@@ -155,6 +160,35 @@ const implementTmpl = `你是一个高级软件工程师。请根据以下方案
 2. 包含所有文件变更
 3. 确保代码可编译和通过测试
 4. 输出每个文件的完整变更内容`
+
+const reviewTmpl = `你是一个严格的代码审查员。请审查以下 PR 的代码变更。
+
+## Issue: {{.IssueTitle}}
+
+## 最终方案
+
+{{.FinalPlan}}
+
+## PR Diff
+
+{{.PRDiff}}
+
+## 审查要求
+
+请检查：
+1. 代码是否符合最终方案的要求
+2. 是否有明显的 bug 或逻辑错误
+3. 是否缺少必要的错误处理
+4. 代码风格是否合理
+
+请以 JSON 格式返回审查结果：
+` + "```json" + `
+{
+  "approved": true或false,
+  "summary": "审查总结",
+  "issues": ["问题1", "问题2"]
+}
+` + "```"
 
 const iterateTmpl = `你是一个高级软件工程师。请根据 review 意见修改代码。
 

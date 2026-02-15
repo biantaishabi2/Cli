@@ -32,6 +32,15 @@ func (c *Client) CreatePR(ctx context.Context, title, body, head, base string) (
 	return pr, nil
 }
 
+// GetPRDiff 获取 PR 的 diff 内容
+func (c *Client) GetPRDiff(ctx context.Context, number int) (string, error) {
+	diff, _, err := c.gh.PullRequests.GetRaw(ctx, c.owner, c.repo, number, github.RawOptions{Type: github.Diff})
+	if err != nil {
+		return "", fmt.Errorf("获取 PR #%d diff 失败: %w", number, err)
+	}
+	return diff, nil
+}
+
 // ListPRReviews 列出 PR 的所有 review
 func (c *Client) ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error) {
 	var allReviews []*github.PullRequestReview

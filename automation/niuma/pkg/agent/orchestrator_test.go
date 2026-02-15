@@ -127,7 +127,10 @@ func TestDoPlanFinal_PathValidationFailure(t *testing.T) {
 }
 
 func TestDoImplement_HappyPath(t *testing.T) {
-	mockAI := ai.NewMockProvider("// 实现代码\nfunc Login() {}")
+	// DoImplement 现在使用 Execute 而非 Complete
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 实现代码\nfunc Login() {}")
+
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
 	mockGH.SetLabel(1, string(state.StatePlanFinal))
@@ -146,14 +149,13 @@ func TestDoImplement_HappyPath(t *testing.T) {
 	// 验证状态
 	labels := mockGH.Labels[1]
 	assert.Contains(t, labels, string(state.StatePRCreated))
-
-	// 验证 prompt 包含 workdir
-	calls := mockAI.Calls()
-	assert.Equal(t, "/tmp/work", calls[0].Options.WorkDir)
 }
 
 func TestDoIterate_HappyPath(t *testing.T) {
-	mockAI := ai.NewMockProvider("// 修复代码\nfunc Login() { validate() }")
+	// DoIterate 现在使用 Execute
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 修复代码\nfunc Login() { validate() }")
+
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
 	mockGH.SetLabel(1, string(state.StatePRNeedsFix))
@@ -205,4 +207,171 @@ func TestDoDiscussionCheck_WrongState(t *testing.T) {
 	err := orch.DoDiscussionCheck(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "不是讨论中")
+}
+
+// ===== Phase 2.5 新增测试 =====
+
+func TestNewOrchestratorWithConfig(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+
+	implProvider := ai.NewMockProvider("impl result")
+	discProvider1 := ai.NewMockProvider("opinion 1")
+	discProvider2 := ai.NewMockProvider("opinion 2")
+	consolidator := ai.NewMockProvider(`{"consensus": "汇总", "open_items": []}`)
+
+	cfg := &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{discProvider1, discProvider2},
+		Consolidator:        consolidator,
+		ImplementProvider:   implProvider,
+		RepoDir:             "/tmp/repo",
+	}
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+	require.NotNil(t, orch)
+	assert.Equal(t, implProvider, orch.getImplementProvider())
+}
+
+func TestDoDiscussionCheck_MultiProvider(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	// 两个讨论 provider + 一个 consolidator
+	discProvider1 := ai.NewMockProvider(`{"summary": "方案A"}`)
+	discProvider2 := ai.NewMockProvider(`{"summary": "方案B"}`)
+	consolidator := ai.NewMockProvider(
+		`{"consensus": "综合方案A和B", "open_items": ["待定"], "should_finish": false}`,
+	)
+
+	cfg := &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{discProvider1, discProvider2},
+		Consolidator:        consolidator,
+		ImplementProvider:   ai.NewMockProvider("unused"),
+	}
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+	err := orch.DoDiscussionCheck(context.Background())
+	require.NoError(t, err)
+
+	// 验证讨论汇总 marker 已创建
+	mc := mockGH.GetMarker(1, marker.TypeDiscussionSummary)
+	require.NotNil(t, mc)
+
+	// 验证两个讨论 provider 都被调用
+	assert.Equal(t, 1, discProvider1.CallCount())
+	assert.Equal(t, 1, discProvider2.CallCount())
+
+	// 验证 consolidator 被调用
+	assert.Equal(t, 1, consolidator.CallCount())
+}
+
+func TestSlugFromTitle(t *testing.T) {
+	tests := []struct {
+		title    string
+		expected string
+	}{
+		{"Fix login bug", "fix-login-bug"},
+		{"Add user authentication", "add-user-authentication"},
+		{"修复中文标题", "fix"},
+		{"  spaces  and  dashes  ", "spaces-and-dashes"},
+		{"A very long title that should be truncated to thirty characters max", "a-very-long-title-that-should-"},
+		{"", "fix"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			got := slugFromTitle(tt.title)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+// ===== Phase 2.6 DoReview 测试 =====
+
+func TestDoReview_Approved(t *testing.T) {
+	// AI 审查通过
+	mockAI := ai.NewMockProvider(`{"approved": true, "summary": "代码质量良好", "issues": []}`)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRCreated))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	mockGH.PRDiffs[10] = "diff --git a/auth.go b/auth.go\n+func Login() {}"
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.NoError(t, err)
+
+	// 验证状态转到 pr-reviewable
+	labels := mockGH.Labels[1]
+	assert.Contains(t, labels, string(state.StatePRReviewable))
+
+	// 验证发了评论
+	comments := mockGH.Comments[1]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].GetBody(), "自审通过")
+}
+
+func TestDoReview_NotApproved(t *testing.T) {
+	// AI 审查不通过
+	mockAI := ai.NewMockProvider(`{"approved": false, "summary": "有问题", "issues": ["缺少错误处理", "变量命名不规范"]}`)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRCreated))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	mockGH.PRDiffs[10] = "diff content"
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.NoError(t, err)
+
+	// 验证状态转到 pr-needs-fix
+	labels := mockGH.Labels[1]
+	assert.Contains(t, labels, string(state.StatePRNeedsFix))
+
+	// 验证评论包含问题列表
+	comments := mockGH.Comments[1]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].GetBody(), "自审未通过")
+	assert.Contains(t, comments[0].GetBody(), "缺少错误处理")
+}
+
+func TestDoReview_WrongState(t *testing.T) {
+	mockAI := ai.NewMockProvider("unused")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanFinal)) // 不是 pr-created
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "不允许审查")
+	assert.Equal(t, 0, mockAI.CallCount())
+}
+
+func TestDoReview_NoPlanFinal(t *testing.T) {
+	mockAI := ai.NewMockProvider("unused")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRCreated))
+	mockGH.PRDiffs[10] = "diff content"
+	// 没有设置 PlanFinal marker
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "未找到最终方案")
+}
+
+func TestBuildImplementContext(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle: "Fix bug",
+		IssueBody:  "Something is broken",
+	}
+	ctx := BuildImplementContext(input)
+	assert.Contains(t, ctx, "Fix bug")
+	assert.Contains(t, ctx, "Something is broken")
 }

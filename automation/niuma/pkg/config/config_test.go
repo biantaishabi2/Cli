@@ -18,8 +18,14 @@ func TestLoad_ValidConfig(t *testing.T) {
   providers:
     kimi:
       cmd: "kimi --prompt {prompt}"
+      cmd_agent: "kimi --agent --prompt {prompt_file} --workdir {workdir}"
     codex:
       cmd: "codex exec {prompt}"
+  discussion:
+    providers: [kimi, codex]
+    consolidator: kimi
+  implementation:
+    provider: kimi
 `
 	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
 	require.NoError(t, err)
@@ -29,6 +35,14 @@ func TestLoad_ValidConfig(t *testing.T) {
 	assert.Equal(t, "kimi", cfg.AI.Default)
 	assert.Len(t, cfg.AI.Providers, 2)
 	assert.Equal(t, "kimi --prompt {prompt}", cfg.AI.Providers["kimi"].Cmd)
+	assert.Equal(t, "kimi --agent --prompt {prompt_file} --workdir {workdir}", cfg.AI.Providers["kimi"].CmdAgent)
+
+	// 讨论配置
+	assert.Equal(t, []string{"kimi", "codex"}, cfg.AI.Discussion.Providers)
+	assert.Equal(t, "kimi", cfg.AI.Discussion.Consolidator)
+
+	// 实现配置
+	assert.Equal(t, "kimi", cfg.AI.Implementation.Provider)
 }
 
 func TestLoad_FileNotFound(t *testing.T) {

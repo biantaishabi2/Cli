@@ -33,5 +33,6 @@ type GitHubOps interface {
 
 	// PR 操作
 	CreatePR(ctx context.Context, title, body, head, base string) (*github.PullRequest, error)
+	GetPRDiff(ctx context.Context, number int) (string, error)
 	ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error)
 }

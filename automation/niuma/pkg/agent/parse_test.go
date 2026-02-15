@@ -115,3 +115,50 @@ func TestParseFinalPlanResponse_JSONWithSurroundingText(t *testing.T) {
 	assert.Equal(t, "重构认证", plan.Title)
 	assert.Equal(t, "迁移到 JWT", plan.Approach)
 }
+
+// ===== ParseReviewResponse 测试 =====
+
+func TestParseReviewResponse_Approved(t *testing.T) {
+	raw := `{"approved": true, "summary": "代码质量良好，符合方案要求", "issues": []}`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "代码质量良好，符合方案要求", result.Summary)
+	assert.Empty(t, result.Issues)
+}
+
+func TestParseReviewResponse_NotApproved(t *testing.T) {
+	raw := `{"approved": false, "summary": "发现若干问题", "issues": ["缺少错误处理", "变量命名不规范"]}`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.False(t, result.Approved)
+	assert.Equal(t, "发现若干问题", result.Summary)
+	assert.Len(t, result.Issues, 2)
+	assert.Equal(t, "缺少错误处理", result.Issues[0])
+}
+
+func TestParseReviewResponse_InCodeBlock(t *testing.T) {
+	raw := "审查结果如下：\n```json\n{\"approved\": true, \"summary\": \"通过\"}\n```"
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "通过", result.Summary)
+}
+
+func TestParseReviewResponse_Fallback(t *testing.T) {
+	raw := "代码有一些问题需要修复。"
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.False(t, result.Approved)
+	assert.Equal(t, raw, result.Summary)
+}
+
+func TestParseReviewResponse_Empty(t *testing.T) {
+	_, err := ParseReviewResponse("")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "空响应")
+}

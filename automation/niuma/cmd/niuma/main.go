@@ -1,5 +1,6 @@
 // cmd/niuma/main.go
 // niuma CLI 入口：cobra 命令定义
+// Phase 2.5：支持多 provider、--repo-dir、worktree 自动管理
 package main
 
 import (
@@ -21,6 +22,7 @@ var (
 	flagIssue   int
 	flagPR      int
 	flagWorkDir string
+	flagRepoDir string // 主仓库本地路径（用于 worktree）
 )
 
 func main() {
@@ -39,6 +41,7 @@ func init() {
 	// 全局 flags
 	rootCmd.PersistentFlags().StringVar(&flagRepo, "repo", "", "GitHub 仓库 (owner/repo)")
 	rootCmd.PersistentFlags().IntVar(&flagIssue, "issue", 0, "Issue 编号")
+	rootCmd.PersistentFlags().StringVar(&flagRepoDir, "repo-dir", "", "主仓库本地路径（用于 worktree 隔离）")
 
 	// 注册子命令
 	rootCmd.AddCommand(statusCmd)
@@ -46,6 +49,7 @@ func init() {
 	rootCmd.AddCommand(planFinalCmd)
 	rootCmd.AddCommand(fixCmd)
 	rootCmd.AddCommand(iterateCmd)
+	rootCmd.AddCommand(reviewCmd)
 }
 
 // ===== status 命令：完整实现 =====
@@ -139,12 +143,11 @@ func runPlanDraft(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	provider, err := resolveProvider()
+	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
 		return err
 	}
 
-	orch := agent.NewOrchestrator(client, provider, flagIssue)
 	fmt.Printf("正在为 issue #%d 生成方案草案...\n", flagIssue)
 
 	if err := orch.DoPlanDraft(ctx); err != nil {
@@ -174,12 +177,11 @@ func runPlanFinal(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	provider, err := resolveProvider()
+	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
 		return err
 	}
 
-	orch := agent.NewOrchestrator(client, provider, flagIssue)
 	fmt.Printf("正在为 issue #%d 生成最终方案...\n", flagIssue)
 
 	if err := orch.DoPlanFinal(ctx); err != nil {
@@ -199,7 +201,7 @@ var fixCmd = &cobra.Command{
 }
 
 func init() {
-	fixCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录")
+	fixCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录（无 --repo-dir 时使用）")
 }
 
 func runFix(cmd *cobra.Command, args []string) error {
@@ -213,12 +215,11 @@ func runFix(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	provider, err := resolveProvider()
+	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
 		return err
 	}
 
-	orch := agent.NewOrchestrator(client, provider, flagIssue)
 	fmt.Printf("正在为 issue #%d 实现代码...\n", flagIssue)
 
 	if err := orch.DoImplement(ctx, flagWorkDir); err != nil {
@@ -239,7 +240,7 @@ var iterateCmd = &cobra.Command{
 
 func init() {
 	iterateCmd.Flags().IntVar(&flagPR, "pr", 0, "PR 编号")
-	iterateCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录")
+	iterateCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录（无 --repo-dir 时使用）")
 }
 
 func runIterate(cmd *cobra.Command, args []string) error {
@@ -253,12 +254,11 @@ func runIterate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	provider, err := resolveProvider()
+	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
 		return err
 	}
 
-	orch := agent.NewOrchestrator(client, provider, flagIssue)
 	fmt.Printf("正在为 issue #%d / PR #%d 迭代修改...\n", flagIssue, flagPR)
 
 	if err := orch.DoIterate(ctx, flagPR, flagWorkDir); err != nil {
@@ -269,24 +269,125 @@ func runIterate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ===== review 命令 =====
+
+var reviewCmd = &cobra.Command{
+	Use:   "review",
+	Short: "AI 自审 PR（需要 AI provider）",
+	RunE:  runReview,
+}
+
+func init() {
+	reviewCmd.Flags().IntVar(&flagPR, "pr", 0, "PR 编号")
+}
+
+func runReview(cmd *cobra.Command, args []string) error {
+	if flagRepo == "" || flagIssue == 0 || flagPR == 0 {
+		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
+	}
+
+	ctx := context.Background()
+	client, err := gh.NewClientFromEnv(flagRepo)
+	if err != nil {
+		return err
+	}
+
+	orch, err := buildOrchestrator(client, flagIssue)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("正在为 issue #%d / PR #%d 进行 AI 自审...\n", flagIssue, flagPR)
+
+	if err := orch.DoReview(ctx, flagPR); err != nil {
+		return fmt.Errorf("AI 自审失败: %w", err)
+	}
+
+	fmt.Println("AI 自审完成。")
+	return nil
+}
+
 // ===== 辅助函数 =====
 
-// resolveProvider 根据配置创建 AI Provider
-func resolveProvider() (ai.Provider, error) {
+// buildOrchestrator 根据配置创建 Orchestrator
+// 支持多 provider 和 worktree 模式
+func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator, error) {
 	cfg := config.LoadWithDefaults(".")
 
-	providerName := cfg.AI.Default
-	providerCfg, ok := cfg.AI.Providers[providerName]
+	// 构建所有 provider
+	providers, err := resolveProviders(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// 确定默认 provider
+	defaultName := cfg.AI.Default
+	defaultProvider, ok := providers[defaultName]
 	if !ok {
-		return nil, fmt.Errorf("AI provider %q 未配置，请在 .niuma.yml 中定义或设置 NIUMA_AI_DEFAULT", providerName)
+		return nil, fmt.Errorf("默认 AI provider %q 未配置", defaultName)
 	}
 
-	if providerCfg.Cmd == "" {
-		return nil, fmt.Errorf("AI provider %q 缺少 cmd 配置", providerName)
+	// 如果没有配置多 provider 讨论，使用简单模式
+	if len(cfg.AI.Discussion.Providers) == 0 && flagRepoDir == "" {
+		return agent.NewOrchestrator(client, defaultProvider, issueNumber), nil
 	}
 
-	return &ai.CLIProvider{
-		ProviderName: providerName,
-		Cmd:          providerCfg.Cmd,
-	}, nil
+	// 构建完整配置
+	orchCfg := &agent.OrchestratorConfig{
+		RepoDir: flagRepoDir,
+	}
+
+	// 讨论 provider
+	for _, name := range cfg.AI.Discussion.Providers {
+		p, ok := providers[name]
+		if !ok {
+			return nil, fmt.Errorf("讨论 provider %q 未配置", name)
+		}
+		orchCfg.DiscussionProviders = append(orchCfg.DiscussionProviders, p)
+	}
+
+	// Consolidator
+	if cfg.AI.Discussion.Consolidator != "" {
+		p, ok := providers[cfg.AI.Discussion.Consolidator]
+		if !ok {
+			return nil, fmt.Errorf("汇总 provider %q 未配置", cfg.AI.Discussion.Consolidator)
+		}
+		orchCfg.Consolidator = p
+	}
+
+	// 实现 provider
+	if cfg.AI.Implementation.Provider != "" {
+		p, ok := providers[cfg.AI.Implementation.Provider]
+		if !ok {
+			return nil, fmt.Errorf("实现 provider %q 未配置", cfg.AI.Implementation.Provider)
+		}
+		orchCfg.ImplementProvider = p
+	} else {
+		orchCfg.ImplementProvider = defaultProvider
+	}
+
+	return agent.NewOrchestratorWithConfig(client, issueNumber, orchCfg), nil
+}
+
+// resolveProviders 从配置创建所有 AI Provider
+func resolveProviders(cfg *config.Config) (map[string]ai.Provider, error) {
+	providers := make(map[string]ai.Provider)
+
+	for name, pcfg := range cfg.AI.Providers {
+		if pcfg.Cmd == "" && pcfg.CmdAgent == "" {
+			return nil, fmt.Errorf("AI provider %q 缺少 cmd 或 cmd_agent 配置", name)
+		}
+
+		providers[name] = &ai.CLIProvider{
+			ProviderName: name,
+			Cmd:          pcfg.Cmd,
+			CmdAgent:     pcfg.CmdAgent,
+		}
+	}
+
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("没有配置任何 AI provider，请在 .niuma.yml 中定义或设置 NIUMA_AI_DEFAULT")
+	}
+
+	return providers, nil
 }

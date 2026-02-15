@@ -94,6 +94,29 @@ func FormatFinalPlan(plan *FinalPlan, m *marker.Marker) string {
 	return sb.String()
 }
 
+// FormatReviewResult 格式化审查结果为 Markdown
+func FormatReviewResult(result *ReviewResult) string {
+	var sb strings.Builder
+
+	if result.Approved {
+		sb.WriteString("## ✅ AI 自审通过\n\n")
+	} else {
+		sb.WriteString("## ❌ AI 自审未通过\n\n")
+	}
+
+	sb.WriteString("### 审查总结\n\n")
+	sb.WriteString(result.Summary)
+
+	if len(result.Issues) > 0 {
+		sb.WriteString("\n\n### 发现的问题\n\n")
+		for i, issue := range result.Issues {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue))
+		}
+	}
+
+	return sb.String()
+}
+
 // FormatConvergeWarning 格式化收敛预警为 Markdown
 func FormatConvergeWarning(m *marker.Marker) string {
 	var sb strings.Builder

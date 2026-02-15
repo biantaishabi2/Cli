@@ -49,3 +49,10 @@ type ImplementResult struct {
 type IterateResult struct {
 	RawOutput string // AI 原始输出
 }
+
+// ReviewResult AI 自审结果
+type ReviewResult struct {
+	Approved bool     `json:"approved"`          // 是否通过
+	Summary  string   `json:"summary"`           // 审查总结
+	Issues   []string `json:"issues,omitempty"`  // 问题列表
+}

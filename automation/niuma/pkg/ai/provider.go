@@ -6,8 +6,10 @@ import "context"
 
 // Provider AI 后端抽象接口
 type Provider interface {
-	// Complete 向 AI 发送 prompt，返回补全结果
+	// Complete 文本模式：AI 只读代码，返回文本结果
 	Complete(ctx context.Context, prompt string, opts ...Option) (string, error)
+	// Execute agentic 模式：AI 可读写文件，实际操作代码
+	Execute(ctx context.Context, prompt string, opts ...Option) (string, error)
 	// Name 返回 provider 名称
 	Name() string
 }

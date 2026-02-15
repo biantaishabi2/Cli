@@ -16,11 +16,13 @@ type Call struct {
 
 // MockProvider 使用预设响应的测试用 Provider
 type MockProvider struct {
-	mu        sync.Mutex
-	responses []string // 按顺序返回的响应
-	calls     []Call   // 记录所有调用
-	index     int
-	err       error // 如果设置了则每次调用都返回此错误
+	mu             sync.Mutex
+	responses      []string // 按顺序返回的响应
+	calls          []Call   // 记录所有调用
+	index          int
+	err            error    // 如果设置了则每次调用都返回此错误
+	executeResults []string // Execute 专用响应（可选）
+	executeIndex   int
 }
 
 // NewMockProvider 创建 MockProvider，按顺序返回 responses
@@ -57,6 +59,45 @@ func (m *MockProvider) Complete(ctx context.Context, prompt string, opts ...Opti
 	resp := m.responses[m.index]
 	m.index++
 	return resp, nil
+}
+
+func (m *MockProvider) Execute(ctx context.Context, prompt string, opts ...Option) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	o := buildOptions(opts)
+	m.calls = append(m.calls, Call{Prompt: prompt, Options: o})
+
+	if m.err != nil {
+		return "", m.err
+	}
+
+	// 如果有专用 Execute 响应，优先使用
+	if len(m.executeResults) > 0 {
+		if m.executeIndex >= len(m.executeResults) {
+			return "", fmt.Errorf("mock: no more execute responses (called %d times, have %d)", m.executeIndex+1, len(m.executeResults))
+		}
+		resp := m.executeResults[m.executeIndex]
+		m.executeIndex++
+		return resp, nil
+	}
+
+	// 回退到共享 responses
+	if m.index >= len(m.responses) {
+		return "", fmt.Errorf("mock: no more responses (called %d times, have %d responses)", m.index+1, len(m.responses))
+	}
+
+	resp := m.responses[m.index]
+	m.index++
+	return resp, nil
+}
+
+// SetExecuteResults 设置 Execute 专用的响应序列
+func (m *MockProvider) SetExecuteResults(results ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.executeResults = results
+	m.executeIndex = 0
 }
 
 // Calls 返回所有调用记录

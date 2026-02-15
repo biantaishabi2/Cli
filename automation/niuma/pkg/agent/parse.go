@@ -78,6 +78,27 @@ func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 	return nil, fmt.Errorf("无法解析最终方案，AI 返回非 JSON 格式")
 }
 
+// ParseReviewResponse 解析 AI 返回的审查结果
+func ParseReviewResponse(raw string) (*ReviewResult, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("空响应")
+	}
+
+	jsonStr := extractJSON(raw)
+	if jsonStr != "" {
+		var result ReviewResult
+		if err := json.Unmarshal([]byte(jsonStr), &result); err == nil && result.Summary != "" {
+			return &result, nil
+		}
+	}
+
+	// Fallback：无法解析 JSON，默认不通过
+	return &ReviewResult{
+		Approved: false,
+		Summary:  strings.TrimSpace(raw),
+	}, nil
+}
+
 // extractJSON 从文本中提取 JSON，支持 ```json ... ``` 代码块和裸 JSON
 func extractJSON(text string) string {
 	// 优先尝试 ```json ``` 代码块

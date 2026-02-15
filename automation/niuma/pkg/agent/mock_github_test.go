@@ -20,6 +20,7 @@ type MockGitHub struct {
 	Labels   map[int][]string               // issueNumber → labels
 	Markers  map[string]*gh.MarkerComment   // "type:issueNumber" → marker comment
 	PRs      []*github.PullRequest
+	PRDiffs  map[int]string                      // prNumber → diff
 	Reviews  map[int][]*github.PullRequestReview // prNumber → reviews
 
 	// 计数器
@@ -37,6 +38,7 @@ func NewMockGitHub() *MockGitHub {
 		Comments: make(map[int][]*github.IssueComment),
 		Labels:   make(map[int][]string),
 		Markers:  make(map[string]*gh.MarkerComment),
+		PRDiffs:  make(map[int]string),
 		Reviews:  make(map[int][]*github.PullRequestReview),
 	}
 }
@@ -200,6 +202,20 @@ func (m *MockGitHub) CreatePR(_ context.Context, title, body, head, base string)
 	}
 	m.PRs = append(m.PRs, pr)
 	return pr, nil
+}
+
+func (m *MockGitHub) GetPRDiff(_ context.Context, number int) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return "", m.Error
+	}
+
+	if diff, ok := m.PRDiffs[number]; ok {
+		return diff, nil
+	}
+	return "", nil
 }
 
 func (m *MockGitHub) ListPRReviews(_ context.Context, number int) ([]*github.PullRequestReview, error) {

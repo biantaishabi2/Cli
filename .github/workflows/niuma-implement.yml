@@ -1,0 +1,61 @@
+name: niuma - Implement
+
+on:
+  issues:
+    types: [labeled]
+
+defaults:
+  run:
+    working-directory: automation/niuma
+
+concurrency:
+  group: niuma-impl-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  implement:
+    runs-on: self-hosted
+    if: github.event.label.name == 'bot:plan-final'
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Implement Code
+        id: implement
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma fix \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }} \
+            --repo-dir ${{ github.workspace }}
+
+      - name: Find PR Number
+        id: find_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE=${{ github.event.issue.number }}
+          PR_NUMBER=$(gh pr list --search "Closes #${ISSUE}" --json number -q '.[0].number')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: AI Self-Review
+        if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma review \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }} \
+            --pr ${{ steps.find_pr.outputs.pr_number }}

@@ -1,0 +1,39 @@
+name: niuma - Plan Draft
+
+on:
+  issues:
+    types: [labeled]
+
+defaults:
+  run:
+    working-directory: automation/niuma
+
+concurrency:
+  group: niuma-plan-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan-draft:
+    runs-on: self-hosted
+    if: github.event.label.name == 'bot:fix'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Generate Plan Draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma plan-draft \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }}

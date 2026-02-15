@@ -17,13 +17,27 @@ type Config struct {
 
 // AIConfig AI 相关配置
 type AIConfig struct {
-	Default   string                    `yaml:"default"`
-	Providers map[string]ProviderConfig `yaml:"providers"`
+	Default        string                    `yaml:"default"`
+	Providers      map[string]ProviderConfig `yaml:"providers"`
+	Discussion     DiscussionConfig          `yaml:"discussion"`
+	Implementation ImplementationConfig      `yaml:"implementation"`
 }
 
 // ProviderConfig 单个 AI Provider 配置
 type ProviderConfig struct {
-	Cmd string `yaml:"cmd"`
+	Cmd      string `yaml:"cmd"`       // 文本模式命令（只读，AI 返回文本）
+	CmdAgent string `yaml:"cmd_agent"` // agentic 模式命令（AI 可读写文件）
+}
+
+// DiscussionConfig 讨论（左右互搏）配置
+type DiscussionConfig struct {
+	Providers    []string `yaml:"providers"`    // 参与互搏的 provider 列表
+	Consolidator string   `yaml:"consolidator"` // 汇总用哪个 provider
+}
+
+// ImplementationConfig 实现配置
+type ImplementationConfig struct {
+	Provider string `yaml:"provider"` // 实现用哪个 provider
 }
 
 // Load 从指定目录加载 .niuma.yml

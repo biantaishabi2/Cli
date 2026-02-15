@@ -22,7 +22,6 @@ concurrency:
 jobs:
   niuma:
     runs-on: self-hosted
-    # 只在 bot:fix label 事件、issue 评论、PR review、或定时触发时运行
     if: >
       (github.event_name == 'issues' && contains(github.event.label.name, 'bot:')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request == null) ||
@@ -43,6 +42,8 @@ jobs:
       - name: Build niuma
         run: go build -o niuma ./cmd/niuma
 
+      # ===== 事件驱动 =====
+
       # Issue 被标记 bot:fix → 生成方案草案
       - name: Plan Draft
         if: >
@@ -55,7 +56,7 @@ jobs:
             --repo ${{ github.repository }} \
             --issue ${{ github.event.issue.number }}
 
-      # Issue 评论 → 检查讨论收敛
+      # Issue 评论 → 检查讨论收敛（可能触发 plan-final）
       - name: Discussion Check
         if: >
           github.event_name == 'issue_comment' &&
@@ -63,7 +64,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 只处理有 bot: label 的 issue
           LABELS=$(gh issue view ${{ github.event.issue.number }} --json labels -q '.labels[].name')
           if echo "$LABELS" | grep -q "bot:needs-discussion"; then
             ./niuma plan-final \
@@ -71,7 +71,20 @@ jobs:
               --issue ${{ github.event.issue.number }} || true
           fi
 
-      # PR review 提交 → 检查是否需要迭代
+      # Issue 被标记 bot:plan-final → 自动实现代码
+      - name: Implement
+        if: >
+          github.event_name == 'issues' &&
+          github.event.label.name == 'bot:plan-final'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./niuma fix \
+            --repo ${{ github.repository }} \
+            --issue ${{ github.event.issue.number }} \
+            --workdir ${{ github.workspace }}
+
+      # PR review 提交 → 迭代修复
       - name: Handle PR Review
         if: github.event_name == 'pull_request_review'
         env:
@@ -79,26 +92,60 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           BODY=$(gh pr view $PR_NUMBER --json body -q '.body')
-          # 从 PR body 中提取关联的 issue 号
           ISSUE_NUMBER=$(echo "$BODY" | grep -oP 'Closes #\K\d+' | head -1)
           if [ -n "$ISSUE_NUMBER" ]; then
             ./niuma iterate \
               --repo ${{ github.repository }} \
               --issue $ISSUE_NUMBER \
-              --pr $PR_NUMBER || true
+              --pr $PR_NUMBER \
+              --workdir ${{ github.workspace }} || true
           fi
 
-      # 定时任务 → 检查所有进行中的 issue
-      - name: Scheduled Check
+      # ===== 定时扫描 =====
+
+      - name: Scheduled - Discussion convergence
         if: github.event_name == 'schedule'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 查找所有 bot:needs-discussion 的 issue
           ISSUES=$(gh issue list --label "bot:needs-discussion" --json number -q '.[].number')
           for ISSUE in $ISSUES; do
             echo "检查 issue #$ISSUE 讨论收敛..."
             ./niuma plan-final \
               --repo ${{ github.repository }} \
               --issue $ISSUE || true
+          done
+
+      - name: Scheduled - Auto implement
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUES=$(gh issue list --label "bot:plan-final" --json number -q '.[].number')
+          for ISSUE in $ISSUES; do
+            echo "自动实现 issue #$ISSUE..."
+            ./niuma fix \
+              --repo ${{ github.repository }} \
+              --issue $ISSUE \
+              --workdir ${{ github.workspace }} || true
+          done
+
+      - name: Scheduled - Auto iterate
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUES=$(gh issue list --label "bot:pr-needs-fix" --json number -q '.[].number')
+          for ISSUE in $ISSUES; do
+            echo "自动迭代 issue #$ISSUE..."
+            # 从 issue 评论中找 PR 号
+            PR_MARKER=$(gh api "repos/${{ github.repository }}/issues/$ISSUE/comments" \
+              --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -oP 'pr=\K\d+' | tail -1)
+            if [ -n "$PR_MARKER" ]; then
+              ./niuma iterate \
+                --repo ${{ github.repository }} \
+                --issue $ISSUE \
+                --pr $PR_MARKER \
+                --workdir ${{ github.workspace }} || true
+            fi
           done
