@@ -130,7 +130,7 @@ enum Commands {
         lang: String,
 
         /// 筛选级别（逗号分隔）：A(≤10行) B(10-50行) C(>50行)
-        #[arg(long, default_value = "A,B")]
+        #[arg(long, default_value = "A,B,C")]
         grade: String,
 
         /// 扫描分支（默认当前分支，不再扫全部分支）
