@@ -80,12 +80,12 @@ pub fn run(
     force: bool,
     coverage_report: Option<&str>,
 ) {
-    let target = match step {
-        Some("collect") | Some("c") => Step::Collect,
-        Some("context") | Some("x") => Step::Context,
-        Some("generate") | Some("g") => Step::Generate,
-        Some("organize") | Some("o") => Step::Organize,
-        None => Step::Organize, // 默认全跑
+    let target: Option<Step> = match step {
+        Some("collect") | Some("c") => Some(Step::Collect),
+        Some("context") | Some("x") => Some(Step::Context),
+        Some("generate") | Some("g") => Some(Step::Generate),
+        Some("organize") | Some("o") => Some(Step::Organize),
+        None => None, // 全量执行
         Some(s) => {
             eprintln!("unknown step: '{}'. Valid: collect(c), context(x), generate(g), organize(o)", s);
             std::process::exit(1);
@@ -104,20 +104,38 @@ pub fn run(
     // 确保输出目录存在
     fs::create_dir_all(output).ok();
 
-    // collect
-    collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
-    if target == Step::Collect { return; }
-
-    // context
-    context(output, repo, &grades, limit, force, lang);
-    if target == Step::Context { return; }
-
-    // generate
-    generate(output, prompt_template, force, limit);
-    if target == Step::Generate { return; }
-
-    // organize
-    organize(output, coverage_report);
+    match target {
+        None => {
+            // 全量执行
+            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
+            cleanup_stale_artifacts(output);
+            context(output, repo, force, lang);
+            generate(output, prompt_template, force, limit);
+            organize(output, coverage_report);
+        }
+        Some(Step::Collect) => {
+            collect(repo, output, branch, path, keywords, module_map, &grades, limit, force, lang);
+        }
+        Some(Step::Context) => {
+            let inv_path = format!("{}/inventory.json", output);
+            if !std::path::Path::new(&inv_path).exists() {
+                eprintln!("[context] inventory.json not found, run collect first");
+                std::process::exit(1);
+            }
+            context(output, repo, force, lang);
+        }
+        Some(Step::Generate) => {
+            let inv_path = format!("{}/inventory.json", output);
+            if !std::path::Path::new(&inv_path).exists() {
+                eprintln!("[generate] inventory.json not found, run collect first");
+                std::process::exit(1);
+            }
+            generate(output, prompt_template, force, limit);
+        }
+        Some(Step::Organize) => {
+            organize(output, coverage_report);
+        }
+    }
 }
 
 /// 语言 → 文件扩展名列表
@@ -293,6 +311,11 @@ fn collect(
     let json = serde_json::to_string_pretty(&inventory).expect("JSON serialize failed");
     fs::write(&inventory_path, &json).expect("failed to write inventory.json");
     eprintln!("[collect] wrote {} ({} commits)", inventory_path, inventory.meta.bugfix_commits);
+
+    // 清理 contexts/ 和 specs/ 中不在 inventory 的旧文件
+    let valid_hashes: Vec<String> = inventory.commits.iter().map(|c| c.hash.clone()).collect();
+    cleanup_stale_files(&format!("{}/contexts", output), &valid_hashes);
+    cleanup_stale_files(&format!("{}/specs", output), &valid_hashes);
 }
 
 /// 解析 git log --numstat 输出
@@ -469,9 +492,40 @@ fn chrono_now() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+// ─── cleanup ─────────────────────────────────────────────
+
+/// 清理目录中 hash 不在 valid_hashes 中的 .json 文件
+fn cleanup_stale_files(dir: &str, valid_hashes: &[String]) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return, // 目录不存在则跳过
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |ext| ext != "json") { continue; }
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        if !valid_hashes.contains(&stem) {
+            eprintln!("[cleanup] removing stale: {}", path.display());
+            fs::remove_file(&path).ok();
+        }
+    }
+}
+
+/// 读取 inventory.json 并清理 contexts/ 和 specs/ 中的过期文件
+fn cleanup_stale_artifacts(output: &str) {
+    let inventory_path = format!("{}/inventory.json", output);
+    if let Ok(inv_str) = fs::read_to_string(&inventory_path) {
+        if let Ok(inventory) = serde_json::from_str::<Inventory>(&inv_str) {
+            let valid_hashes: Vec<String> = inventory.commits.iter().map(|c| c.hash.clone()).collect();
+            cleanup_stale_files(&format!("{}/contexts", output), &valid_hashes);
+            cleanup_stale_files(&format!("{}/specs", output), &valid_hashes);
+        }
+    }
+}
+
 // ─── context ────────────────────────────────────────────
 
-fn context(output: &str, repo: &str, _grades: &[&str], _limit: Option<usize>, force: bool, lang: &str) {
+fn context(output: &str, repo: &str, force: bool, lang: &str) {
     let inventory_path = format!("{}/inventory.json", output);
     let inventory_str = match fs::read_to_string(&inventory_path) {
         Ok(s) => s,
@@ -656,55 +710,69 @@ fn parse_diff_hunks(
 
 // ─── generate ──────────────────────────────────────────
 
+// 连续失败熔断阈值
+const MAX_CONSECUTIVE_FAILURES: usize = 3;
+
 fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Option<usize>) {
+    let inventory_path = format!("{}/inventory.json", output);
     let contexts_dir = format!("{}/contexts", output);
     let specs_dir = format!("{}/specs", output);
     fs::create_dir_all(&specs_dir).ok();
 
+    // 读取 inventory.json（核心修复：不再扫描 contexts/ 目录）
+    let inventory_str = match fs::read_to_string(&inventory_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[generate] cannot read {}: {}", inventory_path, e);
+            std::process::exit(1);
+        }
+    };
+    let inventory: Inventory = serde_json::from_str(&inventory_str)
+        .expect("failed to parse inventory.json");
+
     // 加载 prompt 模板
     let template = load_prompt_template(prompt_template);
 
-    // 检查 codex 是否可用
-    let codex_available = Command::new("codex")
-        .args(["--version"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // 检查 codex 是否可用（BCC_FORCE_PROMPT_MODE=1 强制降级）
+    let codex_available = if std::env::var("BCC_FORCE_PROMPT_MODE").is_ok() {
+        false
+    } else {
+        Command::new("codex")
+            .args(["--version"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
 
     if !codex_available {
         eprintln!("[generate] codex not found, falling back to prompt-only mode");
     }
 
-    // 扫描 contexts/ 下所有 JSON
-    let entries = match fs::read_dir(&contexts_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("[generate] cannot read {}: {}", contexts_dir, e);
-            std::process::exit(1);
-        }
-    };
-
     let mut processed = 0;
     let mut skipped = 0;
     let mut failed = 0;
+    let mut consecutive_failures: usize = 0;
 
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+    // 遍历 inventory 中的 commits（而非扫描 contexts/ 目录）
+    for commit in &inventory.commits {
+        let context_path = format!("{}/{}.json", contexts_dir, commit.hash);
+        let out_path = format!("{}/{}.json", specs_dir, commit.hash);
 
-        let path = entry.path();
-        if path.extension().map_or(true, |ext| ext != "json") {
+        // 检查 context 文件是否存在
+        if !std::path::Path::new(&context_path).exists() {
+            eprintln!("[generate] context not found for {}, skipping", commit.hash);
             continue;
         }
-
-        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let out_path = format!("{}/{}.json", specs_dir, stem);
 
         if !force && std::path::Path::new(&out_path).exists() {
             skipped += 1;
             continue;
+        }
+
+        // 熔断检查
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+            eprintln!("[generate] circuit breaker: {} consecutive failures, aborting", MAX_CONSECUTIVE_FAILURES);
+            break;
         }
 
         // limit 检查（只计数实际处理的，不计 skip 的）
@@ -716,11 +784,12 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
         }
 
         // 读取 context JSON
-        let context_str = match fs::read_to_string(&path) {
+        let context_str = match fs::read_to_string(&context_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[generate] cannot read {:?}: {}", path, e);
+                eprintln!("[generate] cannot read {}: {}", context_path, e);
                 failed += 1;
+                consecutive_failures += 1;
                 continue;
             }
         };
@@ -730,7 +799,7 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
 
         if codex_available {
             // 通过 stdin 传入 prompt（避免大 JSON 超 ARG_MAX）
-            let tmp_out = format!("{}/{}.tmp", specs_dir, stem);
+            let tmp_out = format!("{}/{}.tmp", specs_dir, commit.hash);
 
             let result = Command::new("codex")
                 .args([
@@ -763,8 +832,9 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
 
                     let json_str = extract_json_block(&raw);
                     if json_str.trim().is_empty() {
-                        eprintln!("[generate] empty output for {}", stem);
+                        eprintln!("[generate] empty output for {}", commit.hash);
                         failed += 1;
+                        consecutive_failures += 1;
                     } else {
                         // 校验 JSON 格式
                         match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -772,13 +842,15 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
                                 let pretty = serde_json::to_string_pretty(&val).unwrap();
                                 fs::write(&out_path, &pretty).ok();
                                 processed += 1;
+                                consecutive_failures = 0;
                             }
                             Err(e) => {
-                                eprintln!("[generate] invalid JSON for {}: {}", stem, e);
+                                eprintln!("[generate] invalid JSON for {}: {}", commit.hash, e);
                                 // 保存原始输出供调试
-                                let raw_path = format!("{}/{}.raw.txt", specs_dir, stem);
+                                let raw_path = format!("{}/{}.raw.txt", specs_dir, commit.hash);
                                 fs::write(&raw_path, &json_str).ok();
                                 failed += 1;
+                                consecutive_failures += 1;
                             }
                         }
                     }
@@ -786,22 +858,25 @@ fn generate(output: &str, prompt_template: Option<&str>, force: bool, limit: Opt
                 }
                 Ok(o) => {
                     let stderr = String::from_utf8_lossy(&o.stderr);
-                    eprintln!("[generate] codex failed for {}: {}", stem, stderr.trim());
+                    eprintln!("[generate] codex failed for {}: {}", commit.hash, stderr.trim());
                     fs::remove_file(&tmp_out).ok();
                     failed += 1;
+                    consecutive_failures += 1;
                 }
                 Err(e) => {
-                    eprintln!("[generate] codex exec error for {}: {}", stem, e);
+                    eprintln!("[generate] codex exec error for {}: {}", commit.hash, e);
                     failed += 1;
+                    consecutive_failures += 1;
                 }
             }
         } else {
             // 降级模式：输出 prompt 文件供手动处理
             let prompts_dir = format!("{}/prompts", output);
             fs::create_dir_all(&prompts_dir).ok();
-            let prompt_path = format!("{}/{}.prompt.txt", prompts_dir, stem);
+            let prompt_path = format!("{}/{}.prompt.txt", prompts_dir, commit.hash);
             fs::write(&prompt_path, &prompt).ok();
             processed += 1;
+            consecutive_failures = 0;
         }
     }
 
@@ -1405,14 +1480,17 @@ class Foo {
 
     // ─── generate (集成测试) ─────────────────────────
 
-    /// 创建临时 contexts/ 目录并写入 N 个假 context JSON
+    /// 创建临时 contexts/ 目录并写入 N 个假 context JSON + inventory.json
     fn setup_generate_test(n: usize) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("create tempdir");
         let contexts = dir.path().join("contexts");
         fs::create_dir_all(&contexts).unwrap();
+
+        let mut commits = Vec::new();
         for i in 0..n {
+            let hash = format!("abc{:03}", i);
             let json = serde_json::json!({
-                "hash": format!("abc{:03}", i),
+                "hash": hash,
                 "message": format!("fix bug {}", i),
                 "grade": "A",
                 "module": "test",
@@ -1420,10 +1498,38 @@ class Foo {
                 "diffs": [],
             });
             fs::write(
-                contexts.join(format!("abc{:03}.json", i)),
+                contexts.join(format!("{}.json", hash)),
                 serde_json::to_string(&json).unwrap(),
             ).unwrap();
+            commits.push(serde_json::json!({
+                "hash": hash,
+                "message": format!("fix bug {}", i),
+                "author": "test",
+                "date": "2025-01-01",
+                "grade": "A",
+                "module": "test",
+                "tags": ["regression"],
+                "changed_files": [],
+                "total_lines": 5,
+            }));
         }
+
+        // 写 inventory.json（generate 现在读 inventory 而非扫目录）
+        let inventory = serde_json::json!({
+            "meta": {
+                "repo": "/tmp/test",
+                "scanned_at": "2025-01-01T00:00:00+0000",
+                "total_commits": n,
+                "bugfix_commits": n,
+                "by_grade": {"A": n},
+            },
+            "commits": commits,
+        });
+        fs::write(
+            dir.path().join("inventory.json"),
+            serde_json::to_string_pretty(&inventory).unwrap(),
+        ).unwrap();
+
         dir
     }
 
@@ -1446,8 +1552,15 @@ class Foo {
         spec_count + prompt_count
     }
 
+    /// 设置降级模式环境变量（避免依赖外部 codex）
+    fn force_prompt_mode() {
+        // 注意：std::env::set_var 非线程安全，但这些测试只影响 unit test 进程
+        std::env::set_var("BCC_FORCE_PROMPT_MODE", "1");
+    }
+
     #[test]
     fn generate_limit_respected() {
+        force_prompt_mode();
         // 准备 5 个 context，limit=2，应只处理 2 个
         let dir = setup_generate_test(5);
         let output = dir.path().to_str().unwrap();
@@ -1459,6 +1572,7 @@ class Foo {
 
     #[test]
     fn generate_no_limit_processes_all() {
+        force_prompt_mode();
         // 准备 3 个 context，无 limit，应全部处理
         let dir = setup_generate_test(3);
         let output = dir.path().to_str().unwrap();
@@ -1470,6 +1584,7 @@ class Foo {
 
     #[test]
     fn generate_skip_existing() {
+        force_prompt_mode();
         // 准备 3 个 context，预先创建 1 个已有 spec，应跳过
         let dir = setup_generate_test(3);
         let output = dir.path().to_str().unwrap();
@@ -1954,7 +2069,7 @@ class UserController {
         collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
 
         // 再 context
-        context(output, repo, &["A", "B"], None, false, "php");
+        context(output, repo, false, "php");
 
         let contexts_dir = output_dir.path().join("contexts");
         assert!(contexts_dir.exists(), "contexts/ should be created");
@@ -1996,7 +2111,7 @@ class UserController {
         fs::create_dir_all(output).ok();
 
         collect(repo, output, None, None, "fix,bug", None, &["A", "B"], None, false, "php");
-        context(output, repo, &["A", "B"], None, false, "php");
+        context(output, repo, false, "php");
 
         // 读取 inventory 获取 commit hash
         let inv: serde_json::Value = serde_json::from_str(
@@ -2007,7 +2122,7 @@ class UserController {
         let content1 = fs::read_to_string(&ctx_path).unwrap();
 
         // 再跑一次 context（不带 force），文件不应被覆盖
-        context(output, repo, &["A", "B"], None, false, "php");
+        context(output, repo, false, "php");
         let content2 = fs::read_to_string(&ctx_path).unwrap();
         assert_eq!(content1, content2, "without force, context file should not be overwritten");
     }
@@ -2027,7 +2142,7 @@ class UserController {
         assert!(output_dir.path().join("inventory.json").exists());
 
         // Step 2: context
-        context(output, repo, &["A", "B"], None, false, "php");
+        context(output, repo, false, "php");
         assert!(output_dir.path().join("contexts").exists());
 
         // Step 3: 模拟 generate 产出（直接写 specs，不调 codex）
