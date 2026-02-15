@@ -258,6 +258,9 @@ enum ArchAction {
         fail_on_gate: bool,
         #[arg(long, default_value_t = true, action = ArgAction::Set)]
         fail_on_forbidden: bool,
+        /// 导出 bdd seed 可消费的 YAML source 文件到指定目录
+        #[arg(long)]
+        export_bdd_source: Option<String>,
     },
 
     /// 导出 bugfix 可消费的 module_map.json
@@ -445,6 +448,7 @@ fn main() {
                 profile,
                 fail_on_gate,
                 fail_on_forbidden,
+                export_bdd_source,
             } => {
                 arch::validate(
                     &target,
@@ -455,6 +459,7 @@ fn main() {
                     &profile,
                     fail_on_gate,
                     fail_on_forbidden,
+                    export_bdd_source.as_deref(),
                 );
             }
             ArchAction::ExportModuleMap {
