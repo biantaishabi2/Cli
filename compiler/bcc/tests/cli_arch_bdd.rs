@@ -1063,3 +1063,279 @@ fn validate_export_then_bdd_seed_e2e() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ── batch extract 集成测试 ──
+
+#[test]
+fn batch_extract_typescript_smoke() {
+    let root = temp_dir("bcc_batch_ts_smoke");
+    let src = root.join("src");
+    fs::create_dir_all(src.join("utils")).expect("create dirs");
+
+    write(
+        &src.join("index.ts"),
+        r#"import { helper } from './utils/helper';
+export function main() { return helper(); }
+"#,
+    );
+    write(
+        &src.join("utils/helper.ts"),
+        r#"export function helper() { return 42; }
+"#,
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+    assert!(output.exists());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 2);
+    assert_eq!(v["records"].as_array().unwrap().len(), 2);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_excludes_test_files() {
+    let root = temp_dir("bcc_batch_exclude_tests");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+
+    write(&src.join("foo.ts"), "export const foo = 1;\n");
+    write(&src.join("foo.test.ts"), "test('foo', () => {});\n");
+    write(&src.join("foo.spec.ts"), "describe('foo', () => {});\n");
+    write(&src.join("foo.d.ts"), "declare const foo: number;\n");
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 1, "only foo.ts should be included");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_empty_dir() {
+    let root = temp_dir("bcc_batch_empty");
+    let src = root.join("empty");
+    fs::create_dir_all(&src).expect("create dirs");
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 0);
+    assert_eq!(v["skipped_count"], 0);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_wrong_lang_filter() {
+    let root = temp_dir("bcc_batch_wrong_lang");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+
+    write(&src.join("foo.ts"), "export const foo = 1;\n");
+    write(&src.join("bar.tsx"), "export const bar = 2;\n");
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 0, "no elixir files in ts directory");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_error_tolerance() {
+    let root = temp_dir("bcc_batch_error_tolerance");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+
+    write(&src.join("good.ts"), "export const good = 1;\n");
+    write(
+        &src.join("bad.ts"),
+        "export const {{{ = syntax error @@@;\n",
+    );
+    write(&src.join("ok.ts"), "export function ok() { return true; }\n");
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    // tree-sitter 是容错解析器，即使语法错误也能部分解析
+    let total = v["source_count"].as_u64().unwrap() + v["skipped_count"].as_u64().unwrap();
+    assert_eq!(total, 3, "total processed + skipped should be 3");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_then_arch_matrix_e2e() {
+    let root = temp_dir("bcc_batch_arch_e2e");
+    let src = root.join("src");
+    fs::create_dir_all(src.join("account")).expect("create account dir");
+    fs::create_dir_all(src.join("billing")).expect("create billing dir");
+
+    write(
+        &src.join("account/create.ts"),
+        r#"import { createInvoice } from '../billing/invoice';
+export function createAccount(name: string) {
+    createInvoice(name);
+    return { name };
+}
+"#,
+    );
+    write(
+        &src.join("billing/invoice.ts"),
+        r#"export function createInvoice(name: string) {
+    return { invoice: name };
+}
+"#,
+    );
+
+    // Step 1: batch extract
+    let ast_file = root.join("ast.json");
+    let extract_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(extract_status.success());
+
+    let ast_content = fs::read_to_string(&ast_file).expect("read ast.json");
+    let ast_v: serde_json::Value = serde_json::from_str(&ast_content).expect("parse ast JSON");
+    assert_eq!(ast_v["source_count"], 2);
+
+    // Step 2: arch matrix 消费 ast.json
+    let seed_file = root.join("seed.yaml");
+    write(
+        &seed_file,
+        r#"version: v3
+source_of_truth: test
+modules:
+  - module_id: ACCOUNT
+    precedence: 10
+    path_rules:
+      include: ["account/**"]
+  - module_id: BILLING
+    precedence: 10
+    path_rules:
+      include: ["billing/**"]
+relations_expected:
+  - caller: ACCOUNT
+    callee: BILLING
+    allowed: true
+"#,
+    );
+
+    let out_dir = root.join("arch_out");
+    let matrix_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed_file.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out_dir.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+        ])
+        .status()
+        .expect("run arch matrix");
+    assert!(matrix_status.success());
+
+    // arch matrix 输出 target/transition/gates YAML
+    assert!(out_dir.join("v3.target-matrix.yaml").exists());
+    assert!(out_dir.join("v3.transition-matrix.yaml").exists());
+    assert!(out_dir.join("v3.gates.yaml").exists());
+
+    // 验证 target-matrix 中包含 ACCOUNT/BILLING 模块引用
+    let target_yaml =
+        fs::read_to_string(out_dir.join("v3.target-matrix.yaml")).expect("read target matrix");
+    assert!(
+        target_yaml.contains("ACCOUNT") && target_yaml.contains("BILLING"),
+        "target matrix should reference ACCOUNT and BILLING modules"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
