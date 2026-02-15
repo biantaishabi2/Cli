@@ -95,7 +95,7 @@ pub fn run(
     // 验证语言
     let extensions = lang_extensions(lang);
     if extensions.is_empty() {
-        eprintln!("unsupported language: '{}'. Valid: php, elixir, typescript", lang);
+        eprintln!("unsupported language: '{}'. Valid: php, elixir, typescript, rust", lang);
         std::process::exit(1);
     }
 
@@ -144,6 +144,7 @@ fn lang_extensions(lang: &str) -> Vec<&'static str> {
         "php" => vec![".php"],
         "elixir" => vec![".ex", ".exs"],
         "typescript" | "ts" => vec![".ts", ".tsx"],
+        "rust" | "rs" => vec![".rs"],
         _ => vec![],
     }
 }
@@ -170,6 +171,13 @@ fn is_backend_file(path: &str, lang: &str) -> bool {
             (lower.contains("src/") || lower.contains("lib/"))
                 && !lower.contains("node_modules") && !lower.contains(".test.")
                 && !lower.contains(".spec.")
+        }
+        "rust" | "rs" => {
+            let lower = path.to_lowercase();
+            (lower.contains("src/") || lower.contains("lib/"))
+                && !lower.contains("target/") && !lower.contains("/tests/")
+                && !lower.contains("/benches/") && !lower.contains("/examples/")
+                && !lower.ends_with("build.rs")
         }
         _ => false,
     }
@@ -678,13 +686,14 @@ fn parse_diff_hunks(
             let ts_lang = if file_path.ends_with(".tsx") { "tsx" } else { "typescript" };
             crate::extract::typescript::extract(after_content, file_path, ts_lang)
         }
+        "rust" | "rs" => crate::extract::rust::extract(after_content, file_path),
         _ => return hunks,
     };
 
     // 对每个 export 函数，提取函数体并比较 before/after
     for export in &after_record.exports {
-        let before_func = extract_function_body(before_content, &export.name);
-        let after_func = extract_function_body(after_content, &export.name);
+        let before_func = extract_function_body(before_content, &export.name, lang);
+        let after_func = extract_function_body(after_content, &export.name, lang);
 
         if before_func != after_func && !after_func.is_empty() {
             // 计算函数范围内的改动行号
@@ -1125,13 +1134,17 @@ fn organize(output: &str, coverage_report: Option<&str>) {
     eprintln!("[organize] coverage report: {}", report_path);
 }
 
-/// 从 PHP 源码中提取指定函数名的函数体（简单实现：按大括号匹配）
-fn extract_function_body(content: &str, func_name: &str) -> String {
-    let pattern = format!("function {}", func_name);
+/// 从源码中提取指定函数名的函数体（按大括号匹配）
+fn extract_function_body(content: &str, func_name: &str, lang: &str) -> String {
+    let patterns: Vec<String> = match lang {
+        "rust" | "rs" => vec![format!("fn {}", func_name)],
+        "elixir" => vec![format!("def {}", func_name), format!("defp {}", func_name)],
+        _ => vec![format!("function {}", func_name)], // php, typescript
+    };
     let lines: Vec<&str> = content.lines().collect();
 
     for (i, line) in lines.iter().enumerate() {
-        if line.contains(&pattern) {
+        if patterns.iter().any(|p| line.contains(p.as_str())) {
             // 找到函数开头，按大括号平衡提取
             let mut depth = 0;
             let mut started = false;
@@ -1315,7 +1328,7 @@ class Foo {
         return 2;
     }
 }"#;
-        let body = extract_function_body(php, "bar");
+        let body = extract_function_body(php, "bar", "php");
         assert!(body.contains("function bar()"));
         assert!(body.contains("return 1;"));
         assert!(!body.contains("return 2;"));
@@ -1334,7 +1347,7 @@ class Foo {
         return true;
     }
 }"#;
-        let body = extract_function_body(php, "complex");
+        let body = extract_function_body(php, "complex", "php");
         assert!(body.contains("function complex()"));
         assert!(body.contains("foreach"));
         assert!(body.contains("return true;"));
@@ -1343,7 +1356,7 @@ class Foo {
     #[test]
     fn extract_nonexistent_function() {
         let php = "<?php\nclass Foo { public function bar() { return 1; } }";
-        let body = extract_function_body(php, "nonexistent");
+        let body = extract_function_body(php, "nonexistent", "php");
         assert!(body.is_empty());
     }
 

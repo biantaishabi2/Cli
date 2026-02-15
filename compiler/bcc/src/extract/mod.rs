@@ -4,6 +4,7 @@ use std::fs;
 pub mod elixir;
 pub mod typescript;
 pub mod php;
+pub mod rust;
 
 #[derive(Debug, Serialize)]
 pub struct FileRecord {
@@ -68,6 +69,7 @@ pub fn run(path: &str, mode: &str, output: Option<&str>) {
         "elixir" => elixir::extract(&content, path),
         "typescript" | "tsx" => typescript::extract(&content, path, &lang),
         "php" => php::extract(&content, path),
+        "rust" => rust::extract(&content, path),
         other => {
             eprintln!("unsupported language: {}", other);
             std::process::exit(1);

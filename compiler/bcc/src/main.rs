@@ -125,7 +125,7 @@ enum Commands {
         #[arg(short, long, value_name = "STEP")]
         step: Option<String>,
 
-        /// 源码语言：php, elixir, typescript [默认: php]
+        /// 源码语言：php, elixir, typescript, rust [默认: php]
         #[arg(short, long, default_value = "php")]
         lang: String,
 
