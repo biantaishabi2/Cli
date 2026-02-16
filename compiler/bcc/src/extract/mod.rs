@@ -342,7 +342,9 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         };
 
         // 解析 localDependencies：将 import specifier 转为相对路径
-        let local_deps = resolve_dependencies(&record, root, file_path, &lang_norm, &module_map, &package_map);
+        let mut local_deps = resolve_dependencies(&record, root, file_path, &lang_norm, &module_map, &package_map, &content);
+        // 过滤自引用（全文扫描会匹配到 defmodule 自身定义的模块名）
+        local_deps.retain(|d| d != &rel_path);
 
         records.push(AstSnapshotRecord {
             sourcePath: rel_path,
@@ -487,6 +489,7 @@ fn resolve_dependencies(
     lang: &str,
     module_map: &HashMap<String, String>,
     package_map: &HashMap<String, String>,
+    content: &str,
 ) -> Vec<String> {
     let mut deps = Vec::new();
 
@@ -547,6 +550,15 @@ fn resolve_dependencies(
                     }
                 }
             }
+
+            // 全文模块引用扫描：捕获 supervisor child specs、struct 引用、
+            // 模块属性、函数参数中的模块名等 tree-sitter 无法抓到的引用
+            let content_refs = scan_elixir_module_refs(content);
+            for module_ref in &content_refs {
+                if let Some(rel_path) = module_map.get(module_ref.as_str()) {
+                    deps.push(rel_path.clone());
+                }
+            }
         }
         _ => {
             // PHP/Rust: 暂不解析本地依赖
@@ -556,6 +568,55 @@ fn resolve_dependencies(
     deps.sort();
     deps.dedup();
     deps
+}
+
+/// 全文扫描 Elixir 源码中的模块引用（至少两段大写开头的 dot-separated 名称）
+/// 捕获 tree-sitter dot-call 无法覆盖的场景：
+/// - Supervisor child spec: `{Gong.Agent, opts}`
+/// - 结构体引用: `%Gong.Tape.Entry{}`
+/// - 模块属性: `@impl Gong.Extension`
+/// - 函数参数: `apply(Gong.Prompt, :build, [])`
+fn scan_elixir_module_refs(content: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let bytes = content.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // 找大写字母开头的位置
+        if bytes[i].is_ascii_uppercase() {
+            let start = i;
+            // 收集连续的 字母/数字/下划线/点
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                i += 1;
+            }
+            let raw = &content[start..i];
+            let raw = raw.trim_end_matches('.');
+            // 按 . 分段，保留从开头到最后一个大写开头段的部分
+            // 这样 Gong.Tape.Store.get → Gong.Tape.Store
+            let segments: Vec<&str> = raw.split('.').collect();
+            let mut last_upper_idx = 0;
+            for (idx, seg) in segments.iter().enumerate() {
+                if seg.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    last_upper_idx = idx;
+                } else {
+                    break;
+                }
+            }
+            if last_upper_idx >= 1 {
+                // 至少两段大写开头
+                let module_ref = segments[..=last_upper_idx].join(".");
+                if !seen.contains(&module_ref) {
+                    seen.insert(module_ref.clone());
+                    refs.push(module_ref);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    refs
 }
 
 /// 解析 TypeScript 相对导入为相对于 root 的路径
@@ -968,5 +1029,57 @@ mod tests {
         let spec = "Foo.Bar, validate: String";
         let refs = extract_nested_module_refs(spec);
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_elixir_module_refs_basic() {
+        let content = r#"
+defmodule MyApp.Worker do
+  use GenServer
+  alias Gong.Tape.Store
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts)
+  end
+
+  def init(state) do
+    children = [
+      {Gong.Agent, []},
+      {Gong.ProviderRegistry, []}
+    ]
+    Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  def handle_call(:get, _from, state) do
+    entry = %Gong.Tape.Entry{content: "hello"}
+    {:reply, entry, state}
+  end
+end
+"#;
+        let refs = scan_elixir_module_refs(content);
+        // 应捕获 supervisor child specs 和 struct 引用
+        assert!(refs.contains(&"Gong.Agent".to_string()));
+        assert!(refs.contains(&"Gong.ProviderRegistry".to_string()));
+        assert!(refs.contains(&"Gong.Tape.Entry".to_string()));
+        assert!(refs.contains(&"Gong.Tape.Store".to_string()));
+        // GenServer 是单段名（大写但无点），不应被提取
+        assert!(!refs.iter().any(|r| r == "GenServer"));
+    }
+
+    #[test]
+    fn scan_elixir_module_refs_truncates_at_lowercase() {
+        // Gong.Tape.store 中 store 小写开头 → 截断为 Gong.Tape
+        let content = "result = Gong.Tape.store.get()";
+        let refs = scan_elixir_module_refs(content);
+        assert!(refs.contains(&"Gong.Tape".to_string()));
+        assert!(!refs.iter().any(|r| r.contains("store")));
+    }
+
+    #[test]
+    fn scan_elixir_module_refs_method_call() {
+        // Gong.Tape.Store.get() → 截断到 Gong.Tape.Store（get 小写）
+        let content = "Gong.Tape.Store.get()";
+        let refs = scan_elixir_module_refs(content);
+        assert!(refs.contains(&"Gong.Tape.Store".to_string()));
     }
 }
