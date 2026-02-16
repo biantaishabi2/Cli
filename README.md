@@ -8,22 +8,22 @@
 ## 目录：工具总览
 
 ### `orchestration/`
-- **`taskctl/`**（Rust，已就绪）
+- [**`taskctl/`**](orchestration/taskctl/README.md)（Rust，已就绪）
   任务编排 CLI：支持任务增删改查、依赖关系（blockedBy/blocks）、校验、DAG 生成与导出，适配 Agent 工作流。
 
 ### `compiler/`
-- **`bddc/`**（Elixir escript，已就绪）
+- [**`bddc/`**](compiler/bddc/README.md)（Elixir escript，已就绪）
   BDD 编译器：DSL 解析 → 指令集生成 → 运行时覆盖校验 → 测试代码生成。从 shop 项目迁入。
 
-- **`bcc/`**（Rust + Elixir emit，已就绪）
-  后端编译器：六命令（compile/extract/trace/arch/bugfix/bdd seed）已就绪，覆盖新/旧代码闭环。  
-  典型链路：  
-  - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`  
-  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`  
+- [**`bcc/`**](compiler/bcc/README.md)（Rust + Elixir emit，已就绪）
+  后端编译器：六命令（compile/extract/trace/arch/bugfix/bdd seed）已就绪，覆盖新/旧代码闭环。
+  典型链路：
+  - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
+  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`
   - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/) - 完整架构分析示例（1685 文件项目，含 v0→v3 版本演进）
 
 ### `automation/`
-- **`niuma/`**（Go，已就绪）
+- [**`niuma/`**](automation/niuma/README.md)（Go，已就绪）
   AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterate。
   支持多 AI provider "左右互搏"、worktree 隔离、review-iterate 自动交流。
   给 Issue 加 `bot:fix` 标签即触发全流程，人只在 PR Review 阶段介入。
