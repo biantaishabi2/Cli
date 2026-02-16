@@ -93,14 +93,25 @@ pub fn build_index(
         let func_id = format!("{}#file#1", record.sourcePath);
         
         for target in &record.localCallTargets {
-            // 将 target 路径转换为函数 ID 格式
-            let target_func_id = format!("{}#file#1", target);
+            // 尝试多种路径格式匹配
+            let possible_targets = vec![
+                format!("{}#file#1", target),
+                // 去掉 ./src/ 前缀
+                format!("{}#file#1", target.trim_start_matches("./src/")),
+                // 去掉 src/ 前缀
+                format!("{}#file#1", target.trim_start_matches("src/")),
+                // 保留原样
+                target.clone(),
+            ];
             
-            // 只创建指向已索引函数的边
-            if func_ids.contains(&target_func_id) {
+            // 找到匹配的函数 ID
+            let matched_target = possible_targets.iter()
+                .find(|t| func_ids.contains(*t));
+            
+            if let Some(target_func_id) = matched_target {
                 let edge = CallEdge {
                     caller_id: func_id.clone(),
-                    callee_id: target_func_id,
+                    callee_id: target_func_id.clone(),
                     call_type: CallType::Direct,
                     file_path: Some(record.sourcePath.clone()),
                     line_number: None,
