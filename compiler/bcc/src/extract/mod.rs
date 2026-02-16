@@ -553,7 +553,9 @@ fn resolve_dependencies(
 
             // 全文模块引用扫描：捕获 supervisor child specs、struct 引用、
             // 模块属性、函数参数中的模块名等 tree-sitter 无法抓到的引用
-            let content_refs = scan_elixir_module_refs(content);
+            // 先剥离注释、文档字符串、普通字符串，避免假依赖
+            let cleaned_content = strip_elixir_non_code(content);
+            let content_refs = scan_elixir_module_refs(&cleaned_content);
             for module_ref in &content_refs {
                 if let Some(rel_path) = module_map.get(module_ref.as_str()) {
                     deps.push(rel_path.clone());
@@ -568,6 +570,130 @@ fn resolve_dependencies(
     deps.sort();
     deps.dedup();
     deps
+}
+
+/// 剥离 Elixir 源码中的非代码文本（注释、文档字符串、普通字符串字面量）
+/// 返回清洗后的文本，用于 scan_elixir_module_refs 避免假依赖
+fn strip_elixir_non_code(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut in_heredoc = false;
+
+    for line in content.lines() {
+        if in_heredoc {
+            // 在 @moduledoc/@doc 三引号块内，检查闭合 """
+            if line.trim() == "\"\"\"" || line.trim().ends_with("\"\"\"") {
+                in_heredoc = false;
+            }
+            result.push('\n');
+            continue;
+        }
+
+        let trimmed = line.trim();
+
+        // 检测 @moduledoc/@doc 三引号块开始
+        if trimmed.starts_with("@moduledoc \"\"\"") || trimmed.starts_with("@doc \"\"\"") {
+            // 开始行本身也是三引号块的一部分，如果同行闭合则不进入多行模式
+            let after_triple = if trimmed.starts_with("@moduledoc") {
+                &trimmed["@moduledoc \"\"\"".len()..]
+            } else {
+                &trimmed["@doc \"\"\"".len()..]
+            };
+            if after_triple.contains("\"\"\"") {
+                // 同行闭合，跳过整行
+                result.push('\n');
+                continue;
+            }
+            in_heredoc = true;
+            result.push('\n');
+            continue;
+        }
+
+        // 检测单行 @moduledoc/@doc 字符串（非三引号）
+        if (trimmed.starts_with("@moduledoc \"") || trimmed.starts_with("@doc \""))
+            && !trimmed.starts_with("@moduledoc \"\"\"")
+            && !trimmed.starts_with("@doc \"\"\"")
+        {
+            result.push('\n');
+            continue;
+        }
+
+        // 检测 @moduledoc false
+        if trimmed == "@moduledoc false" || trimmed == "@doc false" {
+            result.push('\n');
+            continue;
+        }
+
+        // 剥离行内 # 注释（排除字符串内的 #）
+        let line_no_comment = strip_line_comment(line);
+
+        // 剥离普通双引号字符串字面量内容
+        let line_no_strings = strip_string_literals(&line_no_comment);
+
+        result.push_str(&line_no_strings);
+        result.push('\n');
+    }
+
+    result
+}
+
+/// 剥离行内 # 注释（简单实现：找到不在引号内的 #，截断到行尾）
+fn strip_line_comment(line: &str) -> String {
+    let mut in_string = false;
+    let mut escaped = false;
+    let bytes = line.as_bytes();
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if b == b'\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if b == b'"' {
+            in_string = !in_string;
+            continue;
+        }
+        if b == b'#' && !in_string {
+            return line[..i].to_string();
+        }
+    }
+    line.to_string()
+}
+
+/// 将双引号字符串字面量内容替换为空（保留引号本身）
+fn strip_string_literals(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in line.chars() {
+        if escaped {
+            escaped = false;
+            // 在字符串内，跳过转义字符
+            if in_string {
+                continue;
+            }
+            result.push(ch);
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            result.push('"');
+            continue;
+        }
+        if in_string {
+            // 字符串内容，跳过
+            continue;
+        }
+        result.push(ch);
+    }
+    result
 }
 
 /// 全文扫描 Elixir 源码中的模块引用（至少两段大写开头的 dot-separated 名称）
@@ -1081,5 +1207,79 @@ end
         let content = "Gong.Tape.Store.get()";
         let refs = scan_elixir_module_refs(content);
         assert!(refs.contains(&"Gong.Tape.Store".to_string()));
+    }
+
+    // ── strip_elixir_non_code 测试 ──
+
+    #[test]
+    fn strip_moduledoc_heredoc() {
+        // 纯文档模块（Gong 复现场景）
+        let content = r#"defmodule Gong do
+  @moduledoc """
+  - `Gong.Compaction` — 上下文压缩
+  - `Gong.Truncate` — 输出截断系统
+  """
+end"#;
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(!refs.iter().any(|r| r == "Gong.Compaction"), "不应从 @moduledoc 中提取 Gong.Compaction");
+        assert!(!refs.iter().any(|r| r == "Gong.Truncate"), "不应从 @moduledoc 中提取 Gong.Truncate");
+    }
+
+    #[test]
+    fn strip_comment_module_refs() {
+        let content = "# 使用 Foo.Bar 处理数据\ndefmodule Baz do\nend";
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从注释中提取 Foo.Bar");
+    }
+
+    #[test]
+    fn strip_string_literal_module_refs() {
+        let content = r#"x = "调用 Foo.Bar.run()""#;
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从字符串字面量中提取 Foo.Bar");
+    }
+
+    #[test]
+    fn strip_preserves_real_code_deps() {
+        let content = "defmodule A do\n  def run, do: B.Worker.start()\nend";
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(refs.contains(&"B.Worker".to_string()), "应保留真实代码依赖 B.Worker");
+    }
+
+    #[test]
+    fn strip_mixed_scenario() {
+        // 混合场景：@doc 字符串 + 注释 + 真实代码
+        let content = r#"defmodule Mix do
+  @doc "See Mix.Helper"
+  # Mix.Utils 辅助
+  def run, do: Mix.Real.call()
+end"#;
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(refs.contains(&"Mix.Real".to_string()), "应保留真实依赖 Mix.Real");
+        assert!(!refs.iter().any(|r| r == "Mix.Helper"), "不应从 @doc 字符串中提取 Mix.Helper");
+        assert!(!refs.iter().any(|r| r == "Mix.Utils"), "不应从注释中提取 Mix.Utils");
+    }
+
+    #[test]
+    fn strip_doc_false() {
+        let content = "@moduledoc false\nFoo.Bar.baz()";
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(refs.contains(&"Foo.Bar".to_string()));
+    }
+
+    #[test]
+    fn strip_single_line_doc_string() {
+        let content = r#"@doc "Returns Foo.Bar result"
+def run, do: Baz.Qux.call()"#;
+        let cleaned = strip_elixir_non_code(content);
+        let refs = scan_elixir_module_refs(&cleaned);
+        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从单行 @doc 中提取");
+        assert!(refs.contains(&"Baz.Qux".to_string()), "应保留真实依赖");
     }
 }

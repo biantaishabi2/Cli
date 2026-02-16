@@ -1681,6 +1681,68 @@ fn batch_extract_elixir_multi_alias_resolution() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// #89: @moduledoc 中的模块引用不应出现在 localDependencies 中
+#[test]
+fn batch_extract_elixir_skips_moduledoc_module_refs() {
+    let root = temp_dir("bcc_batch_elixir_moduledoc_skip");
+    let lib = root.join("lib");
+    fs::create_dir_all(lib.join("gong")).expect("create dirs");
+
+    // gong.ex 只有 @moduledoc，没有真实代码依赖
+    write(
+        &lib.join("gong.ex"),
+        "defmodule Gong do\n  @moduledoc \"\"\"\n  - `Gong.Compaction` — 上下文压缩\n  - `Gong.Truncate` — 输出截断系统\n  \"\"\"\nend\n",
+    );
+    write(
+        &lib.join("gong/compaction.ex"),
+        "defmodule Gong.Compaction do\n  def run, do: :ok\nend\n",
+    );
+    write(
+        &lib.join("gong/truncate.ex"),
+        "defmodule Gong.Truncate do\n  def run, do: :ok\nend\n",
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract elixir");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+
+    let records = v["records"].as_array().unwrap();
+    let gong_record = records
+        .iter()
+        .find(|r| r["sourcePath"].as_str().unwrap() == "lib/gong.ex")
+        .expect("find gong.ex record");
+    let deps = gong_record["localDependencies"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        !deps.iter().any(|d| d.contains("compaction.ex")),
+        "gong.ex should NOT depend on compaction.ex (from @moduledoc), got: {:?}",
+        deps
+    );
+    assert!(
+        !deps.iter().any(|d| d.contains("truncate.ex")),
+        "gong.ex should NOT depend on truncate.ex (from @moduledoc), got: {:?}",
+        deps
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn batch_extract_then_arch_matrix_actual_edges_gt_zero() {
     // 端到端：batch extract → arch matrix → actual_edges > 0
