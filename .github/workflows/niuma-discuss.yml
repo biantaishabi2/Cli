@@ -41,7 +41,7 @@ jobs:
       - name: Check Discussion (event)
         if: github.event_name == 'issue_comment'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
@@ -56,7 +56,7 @@ jobs:
       - name: Check Discussion (scheduled)
         if: github.event_name == 'schedule'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
         run: |
           ISSUES=$(gh issue list --label "bot:needs-discussion" --json number -q '.[].number')

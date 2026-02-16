@@ -42,7 +42,7 @@ jobs:
       - name: Find PR Number
         id: find_pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
@@ -56,7 +56,7 @@ jobs:
       - name: Iterate on Review
         if: steps.find_pr.outputs.pr_number != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
@@ -95,7 +95,7 @@ jobs:
       - name: Extract Issue Number from PR
         id: extract
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
@@ -106,7 +106,7 @@ jobs:
       - name: Iterate on Review
         if: steps.extract.outputs.issue_number != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
           PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
