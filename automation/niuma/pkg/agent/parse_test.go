@@ -162,3 +162,53 @@ func TestParseReviewResponse_Empty(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "空响应")
 }
+
+func TestParseReviewResponse_JSONBuriedInMarkdown(t *testing.T) {
+	// 模拟真实场景：AI 输出大量 markdown 分析，JSON 埋在末尾
+	raw := `## 审查结论
+
+| # | 问题 | 状态 |
+|---|------|------|
+| 1 | shell 注入 | **已修复** |
+| 2 | 路径穿越 | **已修复** |
+
+所有问题已解决，建议合并。
+
+` + "```json" + `
+{"approved": true, "summary": "所有历史问题已解决", "resolved_items": ["shell注入：已修复", "路径穿越：已修复"], "issues": []}
+` + "```"
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "所有历史问题已解决", result.Summary)
+	assert.Len(t, result.ResolvedItems, 2)
+}
+
+func TestParseReviewResponse_NakedJSONAfterMarkdown(t *testing.T) {
+	// JSON 不在代码块中，前面有包含 {} 的 markdown 内容
+	raw := `分析 {结构体} 和 {接口} 后，结论如下：
+{"approved": true, "summary": "通过审查", "issues": []}`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "通过审查", result.Summary)
+}
+
+func TestExtractJSON_MultipleCodeBlocks(t *testing.T) {
+	// 多个 json 代码块，应取最后一个（结论 JSON）
+	text := "分析：\n```json\n{\"type\": \"analysis\"}\n```\n\n结论：\n```json\n{\"approved\": true}\n```"
+	jsonStr := extractJSON(text)
+	assert.Contains(t, jsonStr, "approved")
+	assert.NotContains(t, jsonStr, "analysis")
+}
+
+func TestExtractJSON_BracesInText(t *testing.T) {
+	// 文本中有大量 {}，但末尾有合法 JSON
+	text := `代码中 func() { return } 和 type Foo struct { Bar string } 都正常。
+{"approved": false, "summary": "有问题", "issues": ["bug1"]}`
+	jsonStr := extractJSON(text)
+	assert.Contains(t, jsonStr, `"approved"`)
+	assert.Contains(t, jsonStr, `"bug1"`)
+}

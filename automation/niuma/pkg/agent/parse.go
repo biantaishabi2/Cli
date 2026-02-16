@@ -101,20 +101,26 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 
 // extractJSON 从文本中提取 JSON，支持 ```json ... ``` 代码块和裸 JSON
 func extractJSON(text string) string {
-	// 优先尝试 ```json ``` 代码块
-	if matches := jsonBlockRe.FindStringSubmatch(text); len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+	// 优先尝试 ```json ``` 代码块（可能有多个，取最后一个——通常是结论 JSON）
+	matches := jsonBlockRe.FindAllStringSubmatch(text, -1)
+	if len(matches) > 0 {
+		return strings.TrimSpace(matches[len(matches)-1][1])
 	}
 
-	// 尝试找裸 JSON 对象
-	start := strings.Index(text, "{")
+	// 尝试找裸 JSON 对象（从后往前，因为结论 JSON 通常在末尾）
+	// 逐层尝试：从最后一个 } 开始，向前找匹配的 {
 	end := strings.LastIndex(text, "}")
-	if start >= 0 && end > start {
-		candidate := text[start : end+1]
-		// 验证是否为合法 JSON
-		var js json.RawMessage
-		if json.Unmarshal([]byte(candidate), &js) == nil {
-			return candidate
+	if end < 0 {
+		return ""
+	}
+	// 从 end 往前找每个 {，尝试解析
+	for i := end; i >= 0; i-- {
+		if text[i] == '{' {
+			candidate := text[i : end+1]
+			var js json.RawMessage
+			if json.Unmarshal([]byte(candidate), &js) == nil {
+				return candidate
+			}
 		}
 	}
 
