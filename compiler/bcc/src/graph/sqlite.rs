@@ -1,7 +1,7 @@
 //! SQLite 实现
 
 use crate::graph::schema::CREATE_SCHEMA_SQL;
-use crate::graph::store::{CodeGraphStore, GraphError, Result};
+use crate::graph::store::{CodeGraphStore, Result};
 use crate::graph::types::*;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -343,5 +343,62 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_similar_commits(&self, _commit_hash: &str, _limit: usize) -> Vec<CommitSimilarity> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_function(id: &str, name: &str, module: &str) -> FunctionRecord {
+        FunctionRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            file_path: format!("src/{}.php", module),
+            module: module.to_string(),
+            language: "php".to_string(),
+            start_line: 10,
+            end_line: 20,
+            signature: format!("function {}()", name),
+            content_hash: "abc123".to_string(),
+            indexed_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_sqlite_store_creation() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        let _ = store;
+    }
+
+    #[test]
+    fn test_function_crud() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        let func = create_test_function("test.php#foo#10", "foo", "test");
+        store.insert_function(&func).unwrap();
+        
+        let found = store.get_function("test.php#foo#10");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "foo");
+    }
+
+    #[test]
+    fn test_find_by_module() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        let func1 = create_test_function("order.php#create#10", "create", "order");
+        let func2 = create_test_function("order.php#update#20", "update", "order");
+        let func3 = create_test_function("user.php#login#10", "login", "user");
+        
+        store.insert_function(&func1).unwrap();
+        store.insert_function(&func2).unwrap();
+        store.insert_function(&func3).unwrap();
+        
+        let order_funcs = store.find_by_module("order");
+        assert_eq!(order_funcs.len(), 2);
+        
+        let user_funcs = store.find_by_module("user");
+        assert_eq!(user_funcs.len(), 1);
     }
 }

@@ -1,7 +1,6 @@
 //! CodeGraphStore trait 定义
 
 use crate::graph::types::*;
-use std::path::Path;
 
 /// 代码图谱存储接口
 pub trait CodeGraphStore {

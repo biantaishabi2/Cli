@@ -2,7 +2,6 @@
 
 use crate::graph::store::CodeGraphStore;
 use crate::graph::sqlite::SqliteGraphStore;
-use crate::graph::types::*;
 use std::path::Path;
 
 /// 查询类型
@@ -32,7 +31,7 @@ pub fn build_index(
     }
     
     // 创建存储
-    let store = SqliteGraphStore::new(db_path)
+    let _store = SqliteGraphStore::new(db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
     
     // TODO: 读取 extract 输出并构建索引
