@@ -4,9 +4,9 @@ package bdd
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
-	"github.com/biantaishabi2/Cli/automation/niuma/pkg/agent"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
@@ -222,7 +222,7 @@ type MockConvergenceChecker struct {
 	result state.ConvergeResult
 }
 
-func (m *MockConvergenceChecker) Check(input *state.ConvergenceInput) state.ConvergenceResult {
+func (m *MockConvergenceChecker) Check(input *state.ConvergenceInput) state.ConvergeResult {
 	return m.result
 }
 

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
-	"github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
