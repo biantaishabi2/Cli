@@ -53,6 +53,35 @@ pub trait CodeGraphStore {
 
     /// 查找相似 commit
     fn find_similar_commits(&self, commit_hash: &str, limit: usize) -> Vec<CommitSimilarity>;
+
+    // ==================== Phase 2: Class + Inheritance ====================
+
+    /// 获取类信息
+    fn get_class(&self, id: &str) -> Option<ClassRecord>;
+
+    /// 按名称查询类
+    fn find_class_by_name(&self, name: &str) -> Vec<ClassRecord>;
+
+    /// 查找父类（支持深度）
+    fn find_parents(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>>;
+
+    /// 查找子类（支持深度）
+    fn find_children(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>>;
+
+    /// 检测循环继承
+    fn detect_circular_inheritance(&self, class_id: &str) -> Result<Option<Vec<String>>>;
+
+    // ==================== Phase 3: Search Graph ====================
+
+    /// 多图融合搜索
+    /// 
+    /// 支持同时搜索多种关系：callers, callees, siblings, same-file, same-module
+    fn search_graph(
+        &self,
+        function_id: &str,
+        depth: usize,
+        include: &[SearchInclude],
+    ) -> Result<SearchResult>;
 }
 
 /// Commit 信息（用于增量索引）
@@ -68,4 +97,6 @@ pub trait GraphStoreInsert: CodeGraphStore {
     fn insert_call_edge(&self, edge: &CallEdge) -> Result<()>;
     fn insert_commit_function(&self, cf: &CommitFunctionRecord) -> Result<()>;
     fn insert_language_stat(&self, stat: &LanguageStat) -> Result<()>;
+    fn insert_class(&self, class: &ClassRecord) -> Result<()>;
+    fn insert_inherit_edge(&self, edge: &InheritEdge) -> Result<()>;
 }

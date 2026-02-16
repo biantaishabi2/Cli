@@ -1,9 +1,10 @@
 //! graph-index CLI 命令
 
+use crate::graph::arch::ArchValidator;
 use crate::graph::error::{GraphError, Result};
 use crate::graph::sqlite::{GraphStoreManager, SqliteGraphStore};
 use crate::graph::store::CodeGraphStore;
-use crate::graph::types::Repository;
+use crate::graph::types::{Repository, SearchInclude};
 use chrono::Utc;
 use std::path::PathBuf;
 
@@ -183,5 +184,96 @@ pub fn delete_repo(repo_id: &str) -> Result<()> {
     
     manager.delete_repo(repo_id)?;
     println!("Deleted repository index: {}", repo_id);
+    Ok(())
+}
+
+/// graph-index search 命令
+///
+/// 用法: bcc graph-index search --repo <id> --id <func-id> --depth <n> --include <types>
+pub fn search_graph(
+    repo_id: &str,
+    function_id: &str,
+    depth: usize,
+    include: &str,
+) -> Result<()> {
+    let manager = GraphStoreManager::default()?;
+    
+    if !manager.repo_exists(repo_id) {
+        return Err(GraphError::RepoNotFound(repo_id.to_string()));
+    }
+    
+    let store = manager.get_store(repo_id)?;
+    
+    // 解析包含类型
+    let include_types = SearchInclude::parse_list(include);
+    if include_types.is_empty() {
+        return Err(GraphError::InvalidArgs(
+            format!("Invalid include types: {}. Valid: callers,callees,siblings,same-file,same-module", include)
+        ));
+    }
+    
+    println!("Searching graph for '{}' (depth={})", function_id, depth);
+    println!("Include: {}", include);
+    
+    let result = store.search_graph(function_id, depth, &include_types)?;
+    
+    println!("\nFound {} functions:", result.functions.len());
+    for func in &result.functions {
+        println!("  - {} ({}:{})", func.name, func.file_path, func.start_line);
+    }
+    
+    if !result.classes.is_empty() {
+        println!("\nFound {} classes:", result.classes.len());
+        for class in &result.classes {
+            println!("  - {} ({}:{})", class.name, class.file_path, class.start_line);
+        }
+    }
+    
+    Ok(())
+}
+
+/// graph-index validate-arch 命令
+///
+/// 用法: bcc graph-index validate-arch --repo <id> --target <target-matrix.yaml> --output <json>
+pub fn validate_arch(
+    repo_id: &str,
+    target_path: &str,
+    output_path: Option<&str>,
+) -> Result<()> {
+    let manager = GraphStoreManager::default()?;
+    
+    if !manager.repo_exists(repo_id) {
+        return Err(GraphError::RepoNotFound(repo_id.to_string()));
+    }
+    
+    // 加载目标架构
+    let validator = ArchValidator::from_yaml(target_path)?;
+    let store = manager.get_store(repo_id)?;
+    
+    println!("Validating architecture for repo: {}", repo_id);
+    println!("Target matrix: {}", target_path);
+    
+    // 执行验证
+    let result = validator.validate_function(&store, "")?;
+    
+    println!("\nValidation result: {}", if result.passed { "PASSED" } else { "FAILED" });
+    println!("Total functions: {}", result.stats.total_functions);
+    println!("Checked dependencies: {}", result.stats.checked_deps);
+    println!("Violations: {}", result.violations.len());
+    
+    if !result.violations.is_empty() {
+        println!("\nViolations:");
+        for (i, v) in result.violations.iter().enumerate() {
+            println!("  {}. [{}] {}", i + 1, v.violation_type, v.message);
+        }
+    }
+    
+    // 保存结果到文件
+    if let Some(output) = output_path {
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output, json)?;
+        println!("\nResults saved to: {}", output);
+    }
+    
     Ok(())
 }

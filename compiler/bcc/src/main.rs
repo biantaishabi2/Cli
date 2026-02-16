@@ -401,6 +401,40 @@ enum GraphAction {
         #[arg(short, long)]
         repo: String,
     },
+    
+    /// 图搜索（多关系融合查询）
+    Search {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 函数ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// 搜索深度
+        #[arg(short, long, default_value = "2")]
+        depth: usize,
+        
+        /// 包含的关系类型（逗号分隔: callers,callees,siblings,same-file,same-module）
+        #[arg(short, long, default_value = "callers,callees")]
+        include: String,
+    },
+    
+    /// 架构验证
+    ValidateArch {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 目标架构 YAML 文件路径
+        #[arg(short, long)]
+        target: String,
+        
+        /// 输出 JSON 文件路径
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 fn main() {
@@ -663,6 +697,18 @@ fn main() {
             }
             GraphAction::Delete { repo } => {
                 if let Err(e) = graph::cli::delete_repo(&repo) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::Search { repo, id, depth, include } => {
+                if let Err(e) = graph::cli::search_graph(&repo, &id, depth, &include) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::ValidateArch { repo, target, output } => {
+                if let Err(e) = graph::cli::validate_arch(&repo, &target, output.as_deref()) {
                     eprintln!("[graph-index] Error: {}", e);
                     std::process::exit(e.exit_code());
                 }

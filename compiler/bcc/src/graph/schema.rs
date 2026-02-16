@@ -60,6 +60,31 @@ CREATE TABLE IF NOT EXISTS commit_functions (
     FOREIGN KEY (function_id) REFERENCES functions(id) ON DELETE CASCADE
 );
 
+-- 类表（Phase 2）
+CREATE TABLE IF NOT EXISTS classes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    module TEXT,
+    language TEXT,
+    parent_id TEXT,
+    interface_ids TEXT,  -- JSON 数组
+    start_line INTEGER,
+    end_line INTEGER,
+    indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_id) REFERENCES classes(id) ON DELETE SET NULL
+);
+
+-- 继承边表（Phase 2）
+CREATE TABLE IF NOT EXISTS inherit_edges (
+    child_id TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    edge_type TEXT DEFAULT 'extends',
+    PRIMARY KEY (child_id, parent_id),
+    FOREIGN KEY (child_id) REFERENCES classes(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES classes(id) ON DELETE CASCADE
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_functions_module ON functions(module);
 CREATE INDEX IF NOT EXISTS idx_functions_file ON functions(file_path);
@@ -68,10 +93,16 @@ CREATE INDEX IF NOT EXISTS idx_call_edges_caller ON call_edges(caller_id);
 CREATE INDEX IF NOT EXISTS idx_call_edges_callee ON call_edges(callee_id);
 CREATE INDEX IF NOT EXISTS idx_commit_functions_hash ON commit_functions(commit_hash);
 CREATE INDEX IF NOT EXISTS idx_commit_functions_func ON commit_functions(function_id);
+CREATE INDEX IF NOT EXISTS idx_classes_module ON classes(module);
+CREATE INDEX IF NOT EXISTS idx_classes_file ON classes(file_path);
+CREATE INDEX IF NOT EXISTS idx_inherit_edges_child ON inherit_edges(child_id);
+CREATE INDEX IF NOT EXISTS idx_inherit_edges_parent ON inherit_edges(parent_id);
 "#;
 
 /// 删除所有表的 SQL（用于测试）
 pub const DROP_SCHEMA_SQL: &str = r#"
+DROP TABLE IF EXISTS inherit_edges;
+DROP TABLE IF EXISTS classes;
 DROP TABLE IF EXISTS commit_functions;
 DROP TABLE IF EXISTS call_edges;
 DROP TABLE IF EXISTS functions;

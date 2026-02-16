@@ -435,6 +435,281 @@ impl CodeGraphStore for SqliteGraphStore {
     fn find_similar_commits(&self, _commit_hash: &str, _limit: usize) -> Vec<CommitSimilarity> {
         vec![]
     }
+    // ==================== Phase 2: Class + Inheritance ====================
+
+    fn get_class(&self, id: &str) -> Option<ClassRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, name, file_path, module, language, parent_id, interface_ids, start_line, end_line, indexed_at FROM classes WHERE id = ?1",
+                params![id],
+                |row| {
+                    let interface_ids_json: String = row.get(6)?;
+                    let interface_ids = serde_json::from_str(&interface_ids_json).unwrap_or_default();
+                    Ok(ClassRecord {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        file_path: row.get(2)?,
+                        module: row.get(3)?,
+                        language: row.get(4)?,
+                        parent_id: row.get(5)?,
+                        interface_ids,
+                        start_line: row.get::<_, i64>(7)? as usize,
+                        end_line: row.get::<_, i64>(8)? as usize,
+                        indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    fn find_class_by_name(&self, name: &str) -> Vec<ClassRecord> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT id, name, file_path, module, language, parent_id, interface_ids, start_line, end_line, indexed_at FROM classes WHERE name = ?1 ORDER BY file_path"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        let rows = stmt.query_map(params![name], |row| {
+            let interface_ids_json: String = row.get(6)?;
+            let interface_ids = serde_json::from_str(&interface_ids_json).unwrap_or_default();
+            Ok(ClassRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+                module: row.get(3)?,
+                language: row.get(4)?,
+                parent_id: row.get(5)?,
+                interface_ids,
+                start_line: row.get::<_, i64>(7)? as usize,
+                end_line: row.get::<_, i64>(8)? as usize,
+                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        });
+
+        match rows {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    fn find_parents(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>> {
+        self.check_depth(depth)?;
+        
+        if depth == 0 {
+            return Ok(vec![]);
+        }
+
+        let sql = r#"
+            WITH RECURSIVE parent_chain(parent_id, depth, path) AS (
+                SELECT parent_id, 1, parent_id || ','
+                FROM inherit_edges
+                WHERE child_id = ?1 AND edge_type = 'extends'
+                
+                UNION
+                
+                SELECT e.parent_id, c.depth + 1, c.path || e.parent_id || ','
+                FROM inherit_edges e
+                JOIN parent_chain c ON e.child_id = c.parent_id
+                WHERE c.depth < ?2
+                  AND e.edge_type = 'extends'
+                  AND c.path NOT LIKE '%' || e.parent_id || ',%'
+            )
+            SELECT DISTINCT cl.* FROM classes cl
+            JOIN parent_chain p ON cl.id = p.parent_id
+            ORDER BY p.depth, cl.file_path, cl.start_line
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let rows = stmt.query_map(params![class_id, depth as i64], |row| {
+            let interface_ids_json: String = row.get(6)?;
+            let interface_ids = serde_json::from_str(&interface_ids_json).unwrap_or_default();
+            Ok(ClassRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+                module: row.get(3)?,
+                language: row.get(4)?,
+                parent_id: row.get(5)?,
+                interface_ids,
+                start_line: row.get::<_, i64>(7)? as usize,
+                end_line: row.get::<_, i64>(8)? as usize,
+                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    fn find_children(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>> {
+        self.check_depth(depth)?;
+        
+        if depth == 0 {
+            return Ok(vec![]);
+        }
+
+        let sql = r#"
+            WITH RECURSIVE child_chain(child_id, depth, path) AS (
+                SELECT child_id, 1, child_id || ','
+                FROM inherit_edges
+                WHERE parent_id = ?1 AND edge_type = 'extends'
+                
+                UNION
+                
+                SELECT e.child_id, c.depth + 1, c.path || e.child_id || ','
+                FROM inherit_edges e
+                JOIN child_chain c ON e.parent_id = c.child_id
+                WHERE c.depth < ?2
+                  AND e.edge_type = 'extends'
+                  AND c.path NOT LIKE '%' || e.child_id || ',%'
+            )
+            SELECT DISTINCT cl.* FROM classes cl
+            JOIN child_chain c ON cl.id = c.child_id
+            ORDER BY c.depth, cl.file_path, cl.start_line
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let rows = stmt.query_map(params![class_id, depth as i64], |row| {
+            let interface_ids_json: String = row.get(6)?;
+            let interface_ids = serde_json::from_str(&interface_ids_json).unwrap_or_default();
+            Ok(ClassRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+                module: row.get(3)?,
+                language: row.get(4)?,
+                parent_id: row.get(5)?,
+                interface_ids,
+                start_line: row.get::<_, i64>(7)? as usize,
+                end_line: row.get::<_, i64>(8)? as usize,
+                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    fn detect_circular_inheritance(&self, class_id: &str) -> Result<Option<Vec<String>>> {
+        let sql = r#"
+            WITH RECURSIVE inheritance_chain(current_id, path, depth) AS (
+                SELECT ?1, ?1 || ',', 1
+                
+                UNION
+                
+                SELECT e.parent_id, c.path || e.parent_id || ',', c.depth + 1
+                FROM inherit_edges e
+                JOIN inheritance_chain c ON e.child_id = c.current_id
+                WHERE c.depth < 100
+                  AND e.edge_type = 'extends'
+            )
+            SELECT path FROM inheritance_chain
+            WHERE current_id = ?1 AND depth > 1
+            LIMIT 1
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let result: Option<String> = stmt.query_row(params![class_id], |row| row.get(0)).optional()?;
+        
+        if let Some(path_str) = result {
+            let path: Vec<String> = path_str.trim_end_matches(',').split(',').map(|s| s.to_string()).collect();
+            return Ok(Some(path));
+        }
+        
+        Ok(None)
+    }
+
+    // ==================== Phase 3: Search Graph ====================
+
+    fn search_graph(
+        &self,
+        function_id: &str,
+        depth: usize,
+        include: &[SearchInclude],
+    ) -> Result<SearchResult> {
+        self.check_depth(depth)?;
+        
+        let mut functions = Vec::new();
+        let mut classes = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+        
+        // 获取查询函数的基本信息
+        let query_func = self.get_function(function_id);
+        let (file_path, module, _class_id) = query_func.as_ref()
+            .map(|f| (f.file_path.clone(), f.module.clone(), None::<String>))
+            .unwrap_or_default();
+        
+        for include_type in include {
+            match include_type {
+                SearchInclude::Callers => {
+                    let callers = self.find_callers(function_id, depth)?;
+                    for func in callers {
+                        if seen_ids.insert(func.id.clone()) {
+                            functions.push(func);
+                        }
+                    }
+                }
+                SearchInclude::Callees => {
+                    let callees = self.find_callees(function_id, depth)?;
+                    for func in callees {
+                        if seen_ids.insert(func.id.clone()) {
+                            functions.push(func);
+                        }
+                    }
+                }
+                SearchInclude::Siblings => {
+                    // 查找同一文件中的其他函数（排除自己）
+                    if !file_path.is_empty() {
+                        let siblings = self.find_by_file(&file_path);
+                        for func in siblings {
+                            if func.id != function_id && seen_ids.insert(func.id.clone()) {
+                                functions.push(func);
+                            }
+                        }
+                    }
+                }
+                SearchInclude::SameFile => {
+                    // 同文件函数（与 siblings 相同）
+                    if !file_path.is_empty() {
+                        let same_file = self.find_by_file(&file_path);
+                        for func in same_file {
+                            if func.id != function_id && seen_ids.insert(func.id.clone()) {
+                                functions.push(func);
+                            }
+                        }
+                    }
+                }
+                SearchInclude::SameModule => {
+                    // 同模块函数
+                    if !module.is_empty() {
+                        let same_module = self.find_by_module(&module);
+                        for func in same_module {
+                            if func.id != function_id && seen_ids.insert(func.id.clone()) {
+                                functions.push(func);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        let include_types = include.iter().map(|i| i.to_string()).collect();
+        
+        Ok(SearchResult {
+            functions,
+            classes,
+            meta: SearchMeta {
+                query_id: function_id.to_string(),
+                depth,
+                include_types,
+                total_count: seen_ids.len(),
+            },
+        })
+    }
+
 }
 
 impl GraphStoreInsert for SqliteGraphStore {
@@ -510,6 +785,46 @@ impl GraphStoreInsert for SqliteGraphStore {
                 stat.language,
                 stat.file_count as i64,
                 stat.line_count as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_class(&self, class: &ClassRecord) -> Result<()> {
+        let interface_ids_json = serde_json::to_string(&class.interface_ids)?;
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO classes 
+            (id, name, file_path, module, language, parent_id, interface_ids, start_line, end_line, indexed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                class.id,
+                class.name,
+                class.file_path,
+                class.module,
+                class.language,
+                class.parent_id,
+                interface_ids_json,
+                class.start_line as i64,
+                class.end_line as i64,
+                class.indexed_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_inherit_edge(&self, edge: &InheritEdge) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO inherit_edges 
+            (child_id, parent_id, edge_type)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![
+                edge.child_id,
+                edge.parent_id,
+                edge.edge_type.to_string(),
             ],
         )?;
         Ok(())
@@ -622,5 +937,220 @@ mod tests {
         // 测试列出仓库
         let repos = manager.list_repos();
         assert_eq!(repos.len(), 1);
+    }
+
+
+    // ==================== Phase 2: Class + Inheritance Tests ====================
+
+    fn create_test_class(id: &str, name: &str, module: &str, parent_id: Option<&str>) -> ClassRecord {
+        ClassRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            file_path: format!("src/{}.php", module),
+            module: module.to_string(),
+            language: "php".to_string(),
+            parent_id: parent_id.map(|s| s.to_string()),
+            interface_ids: vec![],
+            start_line: 1,
+            end_line: 50,
+            indexed_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_class_crud() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        let class = create_test_class("test.php#User", "User", "models", None);
+        store.insert_class(&class).unwrap();
+        
+        let found = store.get_class("test.php#User");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "User");
+    }
+
+    #[test]
+    fn test_inheritance_chain() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        // 创建继承链: Admin -> User -> BaseModel
+        let base = create_test_class("BaseModel.php#BaseModel", "BaseModel", "models", None);
+        let user = create_test_class("User.php#User", "User", "models", Some("BaseModel.php#BaseModel"));
+        let admin = create_test_class("Admin.php#Admin", "Admin", "models", Some("User.php#User"));
+        
+        store.insert_class(&base).unwrap();
+        store.insert_class(&user).unwrap();
+        store.insert_class(&admin).unwrap();
+        
+        // 插入继承边
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "User.php#User".to_string(),
+            parent_id: "BaseModel.php#BaseModel".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "Admin.php#Admin".to_string(),
+            parent_id: "User.php#User".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        // 测试查找父类
+        let parents = store.find_parents("Admin.php#Admin", 2).unwrap();
+        assert_eq!(parents.len(), 2);
+        assert_eq!(parents[0].name, "User");
+        assert_eq!(parents[1].name, "BaseModel");
+        
+        // 测试查找子类
+        let children = store.find_children("BaseModel.php#BaseModel", 2).unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn test_circular_inheritance_detection() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        // 创建循环继承: A -> B -> C -> A
+        let class_a = create_test_class("A.php#A", "A", "models", Some("B.php#B"));
+        let class_b = create_test_class("B.php#B", "B", "models", Some("C.php#C"));
+        let class_c = create_test_class("C.php#C", "C", "models", Some("A.php#A"));
+        
+        store.insert_class(&class_a).unwrap();
+        store.insert_class(&class_b).unwrap();
+        store.insert_class(&class_c).unwrap();
+        
+        // 插入继承边
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "A.php#A".to_string(),
+            parent_id: "B.php#B".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "B.php#B".to_string(),
+            parent_id: "C.php#C".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "C.php#C".to_string(),
+            parent_id: "A.php#A".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        // 检测循环继承
+        let cycle = store.detect_circular_inheritance("A.php#A").unwrap();
+        assert!(cycle.is_some(), "Should detect circular inheritance");
+        
+        let path = cycle.unwrap();
+        assert!(path.contains(&"A.php#A".to_string()));
+        assert!(path.contains(&"B.php#B".to_string()));
+        assert!(path.contains(&"C.php#C".to_string()));
+    }
+
+    #[test]
+    fn test_no_circular_inheritance() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        // 正常继承链: A -> B (无循环)
+        let class_a = create_test_class("A.php#A", "A", "models", None);
+        let class_b = create_test_class("B.php#B", "B", "models", Some("A.php#A"));
+        
+        store.insert_class(&class_a).unwrap();
+        store.insert_class(&class_b).unwrap();
+        
+        store.insert_inherit_edge(&InheritEdge {
+            child_id: "B.php#B".to_string(),
+            parent_id: "A.php#A".to_string(),
+            edge_type: InheritType::Extends,
+        }).unwrap();
+        
+        // 不应检测到循环
+        let cycle = store.detect_circular_inheritance("A.php#A").unwrap();
+        assert!(cycle.is_none(), "Should not detect circular inheritance");
+    }
+
+    // ==================== Phase 3: Search Graph Tests ====================
+
+    #[test]
+    fn test_search_graph_callers_callees() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        // 创建函数调用链: A -> B -> C, D -> B
+        let func_a = create_test_function("a.php#a#1", "a", "test");
+        let func_b = create_test_function("b.php#b#1", "b", "test");
+        let func_c = create_test_function("c.php#c#1", "c", "test");
+        let func_d = create_test_function("d.php#d#1", "d", "test");
+        
+        store.insert_function(&func_a).unwrap();
+        store.insert_function(&func_b).unwrap();
+        store.insert_function(&func_c).unwrap();
+        store.insert_function(&func_d).unwrap();
+        
+        // A -> B
+        store.insert_call_edge(&CallEdge {
+            caller_id: "a.php#a#1".to_string(),
+            callee_id: "b.php#b#1".to_string(),
+            call_type: CallType::Direct,
+            file_path: Some("a.php".to_string()),
+            line_number: Some(10),
+        }).unwrap();
+        
+        // B -> C
+        store.insert_call_edge(&CallEdge {
+            caller_id: "b.php#b#1".to_string(),
+            callee_id: "c.php#c#1".to_string(),
+            call_type: CallType::Direct,
+            file_path: Some("b.php".to_string()),
+            line_number: Some(20),
+        }).unwrap();
+        
+        // D -> B
+        store.insert_call_edge(&CallEdge {
+            caller_id: "d.php#d#1".to_string(),
+            callee_id: "b.php#b#1".to_string(),
+            call_type: CallType::Direct,
+            file_path: Some("d.php".to_string()),
+            line_number: Some(30),
+        }).unwrap();
+        
+        // 搜索 B 的 callers 和 callees
+        let result = store.search_graph(
+            "b.php#b#1",
+            2,
+            &[SearchInclude::Callers, SearchInclude::Callees]
+        ).unwrap();
+        
+        assert_eq!(result.functions.len(), 3); // A, C, D
+        let names: Vec<_> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"c"));
+        assert!(names.contains(&"d"));
+    }
+
+    #[test]
+    fn test_search_graph_same_file() {
+        let store = SqliteGraphStore::new_in_memory().unwrap();
+        
+        // 创建同文件的多个函数
+        let func1 = create_test_function("test.php#foo#1", "foo", "test");
+        let func2 = create_test_function("test.php#bar#10", "bar", "test");
+        let func3 = create_test_function("test.php#baz#20", "baz", "test");
+        
+        store.insert_function(&func1).unwrap();
+        store.insert_function(&func2).unwrap();
+        store.insert_function(&func3).unwrap();
+        
+        // 搜索同文件函数
+        let result = store.search_graph(
+            "test.php#foo#1",
+            1,
+            &[SearchInclude::SameFile]
+        ).unwrap();
+        
+        assert_eq!(result.functions.len(), 2); // bar, baz (排除自己)
+        let names: Vec<_> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"bar"));
+        assert!(names.contains(&"baz"));
     }
 }
