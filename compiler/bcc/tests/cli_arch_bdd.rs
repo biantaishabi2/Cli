@@ -1487,3 +1487,264 @@ fn batch_extract_skips_node_modules() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ── Issue #18: 增强依赖解析测试 ──
+
+#[test]
+fn batch_extract_monorepo_package_name_resolution() {
+    // 创建两个 package 目录，包 A import 包 B 的 npm 包名
+    let root = temp_dir("bcc_batch_monorepo");
+    let pkg_a = root.join("packages/alpha");
+    let pkg_b = root.join("packages/beta");
+    fs::create_dir_all(pkg_a.join("src")).expect("create alpha");
+    fs::create_dir_all(pkg_b.join("src")).expect("create beta");
+
+    write(
+        &pkg_b.join("package.json"),
+        r#"{"name": "@test/beta", "main": "src/index.ts"}"#,
+    );
+    write(
+        &pkg_b.join("src/index.ts"),
+        "export function betaHelper() { return 42; }\n",
+    );
+
+    write(
+        &pkg_a.join("package.json"),
+        r#"{"name": "@test/alpha", "main": "src/index.ts"}"#,
+    );
+    write(
+        &pkg_a.join("src/index.ts"),
+        "import { betaHelper } from '@test/beta';\nexport function alphaMain() { return betaHelper(); }\n",
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract monorepo");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 2);
+
+    let records = v["records"].as_array().unwrap();
+    let alpha_record = records
+        .iter()
+        .find(|r| r["sourcePath"].as_str().unwrap().contains("alpha"))
+        .expect("find alpha record");
+    let deps = alpha_record["localDependencies"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        deps.iter().any(|d| d.contains("beta") && d.contains("index.ts")),
+        "alpha should depend on beta's index.ts via package name, got deps: {:?}",
+        deps
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_monorepo_with_exports_field() {
+    let root = temp_dir("bcc_batch_monorepo_exports");
+    let pkg_a = root.join("packages/alpha");
+    let pkg_b = root.join("packages/beta");
+    fs::create_dir_all(pkg_a.join("src")).expect("create alpha");
+    fs::create_dir_all(pkg_b.join("src/providers")).expect("create beta providers");
+
+    write(
+        &pkg_b.join("package.json"),
+        r#"{
+  "name": "@test/beta",
+  "exports": {
+    ".": { "import": "./src/index.ts" },
+    "./providers": { "import": "./src/providers/index.ts" }
+  }
+}"#,
+    );
+    write(&pkg_b.join("src/index.ts"), "export function betaMain() { return 1; }\n");
+    write(&pkg_b.join("src/providers/index.ts"), "export function betaProvider() { return 2; }\n");
+
+    write(
+        &pkg_a.join("package.json"),
+        r#"{"name": "@test/alpha", "main": "src/index.ts"}"#,
+    );
+    write(
+        &pkg_a.join("src/index.ts"),
+        "import { betaProvider } from '@test/beta/providers';\nexport function alphaMain() { return betaProvider(); }\n",
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+
+    let records = v["records"].as_array().unwrap();
+    let alpha_record = records
+        .iter()
+        .find(|r| r["sourcePath"].as_str().unwrap().contains("alpha"))
+        .expect("find alpha record");
+    let deps = alpha_record["localDependencies"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        deps.iter().any(|d| d.contains("providers")),
+        "alpha should depend on beta/providers via exports field, got deps: {:?}",
+        deps
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_elixir_multi_alias_resolution() {
+    let root = temp_dir("bcc_batch_elixir_multi_alias");
+    let lib = root.join("lib");
+    fs::create_dir_all(lib.join("my_app")).expect("create dirs");
+
+    write(
+        &lib.join("my_app/core.ex"),
+        "defmodule MyApp.Core do\n  alias MyApp.{Tape, Tools}\n\n  def run do\n    Tape.get()\n    Tools.execute()\n  end\nend\n",
+    );
+    write(
+        &lib.join("my_app/tape.ex"),
+        "defmodule MyApp.Tape do\n  def get, do: :ok\nend\n",
+    );
+    write(
+        &lib.join("my_app/tools.ex"),
+        "defmodule MyApp.Tools do\n  def execute, do: :ok\nend\n",
+    );
+
+    let output = root.join("ast.json");
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract elixir");
+    assert!(status.success());
+
+    let content = fs::read_to_string(&output).expect("read output");
+    let v: serde_json::Value = serde_json::from_str(&content).expect("parse JSON");
+    assert_eq!(v["source_count"], 3);
+
+    let records = v["records"].as_array().unwrap();
+    let core_record = records
+        .iter()
+        .find(|r| r["sourcePath"].as_str().unwrap().contains("core.ex"))
+        .expect("find core record");
+    let deps = core_record["localDependencies"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        deps.iter().any(|d| d.contains("tape.ex")),
+        "core.ex should depend on tape.ex via multi-alias, got: {:?}",
+        deps
+    );
+    assert!(
+        deps.iter().any(|d| d.contains("tools.ex")),
+        "core.ex should depend on tools.ex via multi-alias, got: {:?}",
+        deps
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn batch_extract_then_arch_matrix_actual_edges_gt_zero() {
+    // 端到端：batch extract → arch matrix → actual_edges > 0
+    let root = temp_dir("bcc_batch_actual_edges");
+    let src = root.join("src");
+    fs::create_dir_all(src.join("account")).expect("create account");
+    fs::create_dir_all(src.join("billing")).expect("create billing");
+
+    write(
+        &src.join("account/create.ts"),
+        "import { createInvoice } from '../billing/invoice';\nexport function createAccount(name: string) { return createInvoice(name); }\n",
+    );
+    write(
+        &src.join("billing/invoice.ts"),
+        "export function createInvoice(name: string) { return { invoice: name }; }\n",
+    );
+
+    let ast_file = root.join("ast.json");
+    let extract_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run batch extract");
+    assert!(extract_status.success());
+
+    let seed = root.join("seed.yaml");
+    write(
+        &seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: ACCOUNT\n    precedence: 10\n    path_rules:\n      include: [\"account/**\"]\n  - module_id: BILLING\n    precedence: 10\n    path_rules:\n      include: [\"billing/**\"]\nrelations_expected:\n  - caller: ACCOUNT\n    callee: BILLING\n    allowed: true\n",
+    );
+
+    let out_dir = root.join("arch_out");
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out_dir.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+        ])
+        .output()
+        .expect("run arch matrix");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("actual_edges=1"),
+        "should have actual_edges=1 (ACCOUNT->BILLING), stdout: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
