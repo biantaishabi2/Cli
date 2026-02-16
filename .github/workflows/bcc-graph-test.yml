@@ -16,8 +16,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # 单元测试 + 集成测试（PR 和 master 都跑）
-  unit-and-integration:
+  # 单元测试（PR 和 master 都跑）
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,14 +37,23 @@ jobs:
       - name: Run unit tests
         run: cargo test -p bcc graph:: --lib
 
-      - name: Run integration tests (in-memory)
-        run: cargo test -p bcc graph:: --test graph_integration
+  # 集成测试（PR 和 master 都跑）
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Run integration tests
+        run: cargo test -p bcc --test graph_integration
 
   # BDD 测试（只在 master 跑）
-  bdd:
+  bdd-tests:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
-    needs: unit-and-integration
+    needs: [unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v4
 
@@ -52,10 +61,10 @@ jobs:
         uses: dtolnay/rust-action@stable
 
       - name: Run BDD tests
-        run: cargo test -p bcc --test graph_bdd
+        run: cargo test -p bcc --test graph_bdd --features bdd
 
   # E2E 测试（手动触发）
-  e2e:
+  e2e-tests:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
