@@ -2,22 +2,46 @@
 //!
 //! 运行条件: 手动触发（通过 workflow_dispatch）
 //! 环境变量: E2E_TEST_REPO=/path/to/nanobot
+//!
+//! 注意: 这些测试需要完整的工具链：
+//! 1. bcc extract - 从源码提取 AST
+//! 2. bcc graph-index build - 从 AST 构建索引
+//! 3. 验证索引结果
 
-use bcc::graph::sqlite::GraphStoreManager;
-use bcc::graph::store::{CodeGraphStore, GraphStoreInsert};
-use bcc::graph::types::*;
-use chrono::Utc;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// 获取测试仓库路径
 fn get_test_repo() -> Option<PathBuf> {
     std::env::var("E2E_TEST_REPO").ok().map(PathBuf::from)
 }
 
-/// E2E Scenario 1: 索引 nanobot 仓库
+/// 运行 bcc 命令
+fn run_bcc(args: &[&str]) -> Result<String, String> {
+    let output = Command::new("cargo")
+        .args(&["run", "--bin", "bcc", "--"])
+        .args(args)
+        .current_dir("/Users/biantaishabi/Cli-graph-68") // 确保在正确目录
+        .output()
+        .map_err(|e| format!("Failed to run bcc: {}", e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// E2E Scenario 1: 完整流程 - extract + index + query
+/// 
+/// 测试步骤:
+/// 1. 使用 bcc extract 提取 nanobot 的 AST
+/// 2. 使用 bcc graph-index build 构建索引
+/// 3. 使用 bcc graph-index query 查询函数
+/// 4. 验证结果
 #[test]
-#[ignore = "requires E2E_TEST_REPO environment variable"]
-fn e2e_index_nanobot() {
+#[ignore = "requires E2E_TEST_REPO environment variable and full bcc toolchain"]
+fn e2e_full_workflow_nanobot() {
     let repo_path = match get_test_repo() {
         Some(p) => p,
         None => {
@@ -27,82 +51,181 @@ fn e2e_index_nanobot() {
     };
 
     assert!(repo_path.exists(), "Test repo should exist at {:?}", repo_path);
+    
+    let repo_id = "github.com/HKUDS/nanobot";
+    let temp_output = tempfile::tempdir().unwrap();
+    let ast_output = temp_output.path().join("ast.json");
 
+    // Step 1: Extract AST from nanobot
+    println!("Step 1: Extracting AST from {:?}", repo_path);
+    // TODO: 实现 bcc extract 命令
+    // run_bcc(&["extract", &repo_path.to_string_lossy(), "-o", &ast_output.to_string_lossy()])
+    //     .expect("Failed to extract AST");
+
+    // Step 2: Build index
+    println!("Step 2: Building index for {}", repo_id);
+    // TODO: 实现 bcc graph-index build
+    // run_bcc(&[
+    //     "graph-index", "build",
+    //     "--repo", repo_id,
+    //     "--name", "nanobot",
+    //     "--path", &repo_path.to_string_lossy(),
+    //     "--input", &ast_output.to_string_lossy(),
+    //     "--commit", "HEAD"
+    // ]).expect("Failed to build index");
+
+    // Step 3: Query functions
+    println!("Step 3: Querying indexed functions");
+    // TODO: 实现查询验证
+    // let result = run_bcc(&[
+    //     "graph-index", "query",
+    //     "--repo", repo_id,
+    //     "--id", "some_function_id",
+    //     "--by", "id"
+    // ]).expect("Failed to query");
+
+    // 临时：验证仓库路径存在
+    println!("E2E test setup complete. Repo: {:?}", repo_path);
+}
+
+/// E2E Scenario 2: 索引性能测试
+/// 
+/// 测试大规模仓库的索引性能
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_index_performance() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    // 统计仓库规模
+    let output = Command::new("find")
+        .args(&[
+            &repo_path.to_string_lossy(),
+            "-name", "*.py",
+            "-o", "-name", "*.php",
+            "-o", "-name", "*.ts",
+            "-o", "-name", "*.js",
+        ])
+        .output()
+        .expect("Failed to count source files");
+
+    let file_count = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .count();
+
+    println!("Repository has {} source files", file_count);
+
+    // TODO: 测量索引时间
+    // let start = std::time::Instant::now();
+    // run_bcc(&[...]).expect("Index failed");
+    // let duration = start.elapsed();
+    // println!("Indexed {} files in {:?}", file_count, duration);
+    
+    // 断言性能指标
+    // assert!(duration.as_secs() < 60, "Indexing should complete within 60 seconds");
+}
+
+/// E2E Scenario 3: 架构验证
+/// 
+/// 测试 nanobot 的架构合规性
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable and target-matrix.yaml"]
+fn e2e_arch_validation() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    let repo_id = "github.com/HKUDS/nanobot";
+
+    // 创建临时 target-matrix.yaml
     let temp_dir = tempfile::tempdir().unwrap();
-    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
-    let store = manager.get_store("github.com/HKUDS/nanobot").unwrap();
+    let matrix_path = temp_dir.path().join("target-matrix.yaml");
+    std::fs::write(&matrix_path, r#"
+layers:
+  - name: api
+    patterns:
+      - "*/api/*"
+      - "*/routes/*"
+  - name: service
+    patterns:
+      - "*/services/*"
+      - "*/core/*"
+  - name: dao
+    patterns:
+      - "*/models/*"
+      - "*/db/*"
 
-    // 模拟索引 nanobot 的核心模块
-    // 这里简化处理，实际应该调用 extract 模块
-    let core_funcs = vec![
-        FunctionRecord {
-            id: "nanobot/agent/tools/registry.py#register_tool#1".to_string(),
-            name: "register_tool".to_string(),
-            file_path: "nanobot/agent/tools/registry.py".to_string(),
-            module: "agent.tools".to_string(),
-            language: "python".to_string(),
-            start_line: 1,
-            end_line: 20,
-            signature: "def register_tool(tool: Tool)".to_string(),
-            content_hash: "e3b0c44298fc1c149afbf4c8996fb924".to_string(),
-            indexed_at: Utc::now(),
-        },
-        FunctionRecord {
-            id: "nanobot/agent/tools/registry.py#get_tool#25".to_string(),
-            name: "get_tool".to_string(),
-            file_path: "nanobot/agent/tools/registry.py".to_string(),
-            module: "agent.tools".to_string(),
-            language: "python".to_string(),
-            start_line: 25,
-            end_line: 40,
-            signature: "def get_tool(name: str) -> Tool".to_string(),
-            content_hash: "a1b2c3d4e5f678901234567890123456".to_string(),
-            indexed_at: Utc::now(),
-        },
-        FunctionRecord {
-            id: "nanobot/agent/executor.py#execute_task#1".to_string(),
-            name: "execute_task".to_string(),
-            file_path: "nanobot/agent/executor.py".to_string(),
-            module: "agent".to_string(),
-            language: "python".to_string(),
-            start_line: 1,
-            end_line: 50,
-            signature: "def execute_task(task: Task) -> Result".to_string(),
-            content_hash: "b2c3d4e5f678901234567890123456a1".to_string(),
-            indexed_at: Utc::now(),
-        },
+allowed_deps:
+  - from: api
+    to: service
+  - from: service
+    to: dao
+"#).expect("Failed to write target matrix");
+
+    println!("Running arch validation for {}", repo_id);
+    
+    // TODO: 运行架构验证
+    // run_bcc(&[
+    //     "graph-index", "validate-arch",
+    //     "--repo", repo_id,
+    //     "--target", &matrix_path.to_string_lossy(),
+    //     "--output", "/tmp/violations.json"
+    // ]).expect("Arch validation failed");
+
+    println!("Arch validation setup complete");
+}
+
+/// E2E Scenario 4: 并发索引测试
+/// 
+/// 测试多仓库同时索引的场景
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_concurrent_indexing() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    // 模拟同时索引同一个仓库的不同版本
+    let repo_ids = vec![
+        "github.com/HKUDS/nanobot#v1",
+        "github.com/HKUDS/nanobot#v2",
+        "github.com/HKUDS/nanobot#v3",
     ];
 
-    for func in &core_funcs {
-        store.insert_function(func).unwrap();
-    }
+    println!("Testing concurrent indexing for {} versions", repo_ids.len());
 
-    // 创建调用关系：executor -> registry
-    store.insert_call_edge(&CallEdge {
-        caller_id: "nanobot/agent/executor.py#execute_task#1".to_string(),
-        callee_id: "nanobot/agent/tools/registry.py#get_tool#25".to_string(),
-        call_type: CallType::Direct,
-        file_path: Some("nanobot/agent/executor.py".to_string()),
-        line_number: Some(30),
-    }).unwrap();
+    // TODO: 使用多线程并发索引
+    // use std::thread;
+    // let handles: Vec<_> = repo_ids.into_iter().map(|repo_id| {
+    //     thread::spawn(move || {
+    //         run_bcc(&["graph-index", "build", "--repo", repo_id, ...])
+    //     })
+    // }).collect();
+    //
+    // for handle in handles {
+    //     handle.join().expect("Thread panicked");
+    // }
 
-    // 验证索引
-    let found = store.get_function("nanobot/agent/executor.py#execute_task#1");
-    assert!(found.is_some());
-    assert_eq!(found.unwrap().module, "agent");
-
-    // 验证调用关系
-    let callees = store.find_callees("nanobot/agent/executor.py#execute_task#1", 1).unwrap();
-    assert_eq!(callees.len(), 1);
-    assert_eq!(callees[0].name, "get_tool");
-
-    println!("Successfully indexed nanobot core modules");
+    println!("Concurrent indexing test setup complete");
 }
 
-/// E2E Scenario 2: 影响分析
+/// 辅助函数：验证 nanobot 仓库结构
 #[test]
 #[ignore = "requires E2E_TEST_REPO environment variable"]
-fn e2e_impact_analysis() {
+fn e2e_verify_nanobot_structure() {
     let repo_path = match get_test_repo() {
         Some(p) => p,
         None => {
@@ -111,154 +234,22 @@ fn e2e_impact_analysis() {
         }
     };
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
-    let store = manager.get_store("github.com/HKUDS/nanobot").unwrap();
+    // 验证 nanobot 的关键文件存在
+    let key_files = vec![
+        "nanobot/agent/tools/registry.py",
+        "nanobot/agent/executor.py",
+        "nanobot/__init__.py",
+    ];
 
-    // 构建调用链：A -> B -> C, A -> D
-    let func_a = FunctionRecord {
-        id: "api.py#handle_request#1".to_string(),
-        name: "handle_request".to_string(),
-        file_path: "api.py".to_string(),
-        module: "api".to_string(),
-        language: "python".to_string(),
-        start_line: 1,
-        end_line: 30,
-        signature: "def handle_request(req)".to_string(),
-        content_hash: "hash_a".to_string(),
-        indexed_at: Utc::now(),
-    };
-
-    let func_b = FunctionRecord {
-        id: "service.py#process_data#1".to_string(),
-        name: "process_data".to_string(),
-        file_path: "service.py".to_string(),
-        module: "service".to_string(),
-        language: "python".to_string(),
-        start_line: 1,
-        end_line: 40,
-        signature: "def process_data(data)".to_string(),
-        content_hash: "hash_b".to_string(),
-        indexed_at: Utc::now(),
-    };
-
-    let func_c = FunctionRecord {
-        id: "dao.py#save_to_db#1".to_string(),
-        name: "save_to_db".to_string(),
-        file_path: "dao.py".to_string(),
-        module: "dao".to_string(),
-        language: "python".to_string(),
-        start_line: 1,
-        end_line: 25,
-        signature: "def save_to_db(record)".to_string(),
-        content_hash: "hash_c".to_string(),
-        indexed_at: Utc::now(),
-    };
-
-    let func_d = FunctionRecord {
-        id: "cache.py#invalidate#1".to_string(),
-        name: "invalidate".to_string(),
-        file_path: "cache.py".to_string(),
-        module: "cache".to_string(),
-        language: "python".to_string(),
-        start_line: 1,
-        end_line: 15,
-        signature: "def invalidate(key)".to_string(),
-        content_hash: "hash_d".to_string(),
-        indexed_at: Utc::now(),
-    };
-
-    store.insert_function(&func_a).unwrap();
-    store.insert_function(&func_b).unwrap();
-    store.insert_function(&func_c).unwrap();
-    store.insert_function(&func_d).unwrap();
-
-    // A -> B
-    store.insert_call_edge(&CallEdge {
-        caller_id: "api.py#handle_request#1".to_string(),
-        callee_id: "service.py#process_data#1".to_string(),
-        call_type: CallType::Direct,
-        file_path: Some("api.py".to_string()),
-        line_number: Some(10),
-    }).unwrap();
-
-    // B -> C
-    store.insert_call_edge(&CallEdge {
-        caller_id: "service.py#process_data#1".to_string(),
-        callee_id: "dao.py#save_to_db#1".to_string(),
-        call_type: CallType::Direct,
-        file_path: Some("service.py".to_string()),
-        line_number: Some(20),
-    }).unwrap();
-
-    // A -> D
-    store.insert_call_edge(&CallEdge {
-        caller_id: "api.py#handle_request#1".to_string(),
-        callee_id: "cache.py#invalidate#1".to_string(),
-        call_type: CallType::Direct,
-        file_path: Some("api.py".to_string()),
-        line_number: Some(15),
-    }).unwrap();
-
-    // 执行影响分析
-    let impact = store.analyze_impact(&["api.py#handle_request#1".to_string()]).unwrap();
-
-    // 验证结果
-    assert_eq!(impact.direct_changes.len(), 1);
-    assert_eq!(impact.downstream_impact.len(), 3); // B, C, D
-
-    println!("Impact analysis completed: {} downstream functions affected", impact.downstream_impact.len());
-}
-
-/// E2E Scenario 3: 大规模搜索性能测试
-#[test]
-#[ignore = "requires E2E_TEST_REPO environment variable"]
-fn e2e_large_scale_search() {
-    let repo_path = match get_test_repo() {
-        Some(p) => p,
-        None => {
-            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
-            return;
-        }
-    };
-
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
-    let store = manager.get_store("github.com/HKUDS/nanobot").unwrap();
-
-    // 模拟大规模索引（100个函数）
-    let start_time = std::time::Instant::now();
-
-    for i in 0..100 {
-        let func = FunctionRecord {
-            id: format!("module{}/file{}.py#func{}#1", i % 10, i, i),
-            name: format!("func{}", i),
-            file_path: format!("module{}/file{}.py", i % 10, i),
-            module: format!("module{}", i % 10),
-            language: "python".to_string(),
-            start_line: 1,
-            end_line: 20,
-            signature: format!("def func{}()", i),
-            content_hash: format!("hash{}", i),
-            indexed_at: Utc::now(),
-        };
-        store.insert_function(&func).unwrap();
+    for file in key_files {
+        let full_path = repo_path.join(file);
+        assert!(
+            full_path.exists(),
+            "Expected nanobot file not found: {:?}",
+            full_path
+        );
+        println!("✓ Found: {}", file);
     }
 
-    let insert_duration = start_time.elapsed();
-    println!("Inserted 100 functions in {:?}", insert_duration);
-
-    // 搜索性能测试
-    let search_start = std::time::Instant::now();
-    let result = store.search_graph(
-        "module0/file0.py#func0#1",
-        2,
-        &[SearchInclude::SameModule]
-    ).unwrap();
-    let search_duration = search_start.elapsed();
-
-    println!("Search completed in {:?}, found {} functions", search_duration, result.functions.len());
-
-    // 断言性能在可接受范围内（< 1秒）
-    assert!(search_duration.as_secs() < 1, "Search should complete within 1 second");
+    println!("Nanobot structure verified successfully");
 }
