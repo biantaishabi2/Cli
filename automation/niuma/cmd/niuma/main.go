@@ -48,6 +48,7 @@ func init() {
 	// 注册子命令
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(planDraftCmd)
+	rootCmd.AddCommand(discussCmd)
 	rootCmd.AddCommand(planFinalCmd)
 	rootCmd.AddCommand(fixCmd)
 	rootCmd.AddCommand(iterateCmd)
@@ -157,6 +158,40 @@ func runPlanDraft(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("方案草案已生成并发布到 issue 评论。")
+	return nil
+}
+
+// ===== discuss 命令 =====
+
+var discussCmd = &cobra.Command{
+	Use:   "discuss",
+	Short: "触发讨论检查：多 provider 左右互搏或收敛定稿",
+	RunE:  runDiscuss,
+}
+
+func runDiscuss(cmd *cobra.Command, args []string) error {
+	if flagRepo == "" || flagIssue == 0 {
+		return fmt.Errorf("必须指定 --repo 和 --issue")
+	}
+
+	ctx := context.Background()
+	client, err := gh.NewClientFromEnv(flagRepo)
+	if err != nil {
+		return err
+	}
+
+	orch, err := buildOrchestrator(client, flagIssue)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("正在为 issue #%d 进行讨论检查...\n", flagIssue)
+
+	if err := orch.DoDiscussionCheck(ctx); err != nil {
+		return fmt.Errorf("讨论检查失败: %w", err)
+	}
+
+	fmt.Println("讨论检查完成。")
 	return nil
 }
 
@@ -301,7 +336,12 @@ func runReview(cmd *cobra.Command, args []string) error {
 // buildOrchestrator 根据配置创建 Orchestrator
 // 支持多 provider 和 worktree 模式
 func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator, error) {
-	cfg := config.LoadWithDefaults(".")
+	// 优先从 --repo-dir 加载配置（CI 中 working-directory 不是仓库根目录）
+	configDir := "."
+	if flagRepoDir != "" {
+		configDir = flagRepoDir
+	}
+	cfg := config.LoadWithDefaults(configDir)
 
 	// 构建所有 provider
 	providers, err := resolveProviders(cfg)
