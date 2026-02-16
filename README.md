@@ -22,6 +22,12 @@
   - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`  
   - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/) - 完整架构分析示例（1685 文件项目，含 v0→v3 版本演进）
 
+### `automation/`
+- **`niuma/`**（Go，已就绪）
+  AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterate。
+  支持多 AI provider "左右互搏"、worktree 隔离、review-iterate 自动交流。
+  给 Issue 加 `bot:fix` 标签即触发全流程，人只在 PR Review 阶段介入。
+
 ## 快速上手
 
 ```bash
