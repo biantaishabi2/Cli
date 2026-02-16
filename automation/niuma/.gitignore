@@ -17,5 +17,5 @@ vendor/
 .DS_Store
 Thumbs.db
 
-# 配置文件（含敏感信息）
-.niuma.yml
+# 运行时数据
+.niuma/
