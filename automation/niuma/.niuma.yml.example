@@ -3,16 +3,35 @@
 
 ai:
   # 默认 AI provider
-  default: codex
+  default: claude
 
-  # AI provider 列表
+  # AI provider 列表（支持多 provider）
   providers:
-    kimi:
-      cmd: "kimi --prompt {prompt} --work-dir {workdir}"
-    opencode:
-      cmd: "opencode run {prompt}"
+    claude:
+      cmd: "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}"
     codex:
-      cmd: "codex exec {prompt}"
+      cmd: "codex exec -C {workdir} - < {prompt_file}"
+      cmd_agent: "codex exec --full-auto -C {workdir} - < {prompt_file}"
+
+  # 讨论阶段：多 provider "左右互搏"
+  # 各 provider 独立给出方案，consolidator 汇总
+  discussion:
+    providers:
+      - claude
+      - codex
+    consolidator: claude
+
+  # 实现阶段：单 provider 执行
+  implementation:
+    provider: claude
+
+# 工作流配置
+workflow:
+  require_plan_approval: false      # 方案定稿后是否需要人工审批
+  max_iterate_rounds: 3             # 最大自动迭代轮数
+  allowed_prefixes:                 # 额外允许修改的目录
+    - "automation/"
 
 # 环境变量覆盖：
-# NIUMA_AI_DEFAULT=kimi  覆盖 ai.default
+# NIUMA_AI_DEFAULT=codex  覆盖 ai.default
+# GITHUB_TOKEN=ghp_xxx   GitHub API token（必需）
