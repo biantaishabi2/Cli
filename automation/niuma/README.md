@@ -100,10 +100,10 @@ export GITHUB_TOKEN="ghp_xxx"
 
 ```bash
 # 为 Issue #123 生成 Draft Plan
-niuma plan draft --repo owner/repo --issue 123
+niuma plan-draft --repo owner/repo --issue 123
 
 # 收敛讨论并生成 Final Plan
-niuma plan final --repo owner/repo --issue 123
+niuma plan-final --repo owner/repo --issue 123
 
 # 执行修复并提 PR
 niuma fix --repo owner/repo --issue 123
@@ -227,7 +227,7 @@ go test ./...
 go build -o niuma ./cmd/niuma
 
 # 本地调试（不触发 Actions）
-./niuma plan draft --repo biantaishabi2/Cli --issue 123
+./niuma plan-draft --repo biantaishabi2/Cli --issue 123
 ```
 
 ## 许可
