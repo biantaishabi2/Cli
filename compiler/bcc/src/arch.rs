@@ -38,7 +38,11 @@ struct SeedSpec {
 struct SeedModule {
     module_id: String,
     display_name: Option<String>,
+    // TODO: 实现分层校验（api/service/dao 调用合规性）
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     layer: Option<String>,
+    // TODO: 实现领域分析（core/support 模块比例统计）
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     domain_kind: Option<String>,
     precedence: Option<i64>,
     path_rules: Option<PathRules>,
@@ -185,6 +189,8 @@ struct StructureStat {
     directed_edges_possible: i64,
     directed_edges_actual: i64,
     directed_density_pct: f64,
+    // TODO: 在 arch report 中输出模块依赖权重分析
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     total_module_edge_weight: i64,
     bidirectional_pair_count: i64,
     bidirectional_pairs_top: Vec<(String, i64, i64, i64)>,

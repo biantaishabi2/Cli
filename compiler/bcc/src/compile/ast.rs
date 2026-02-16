@@ -15,6 +15,8 @@ pub enum QuotedAST {
     Aliases { segments: Vec<String> },
     Atom(String),
     String(String),
+    // TODO: 在 Elixir AST 解析中支持整数字面量
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     Int(i64),
     List(Vec<QuotedAST>),
     Tuple(Vec<QuotedAST>),
