@@ -6,10 +6,6 @@ on:
   schedule:
     - cron: '*/15 * * * *'  # 每 15 分钟检查收敛
 
-defaults:
-  run:
-    working-directory: automation/niuma
-
 concurrency:
   group: niuma-discuss-${{ github.event.issue.number || 'schedule' }}
   cancel-in-progress: true
@@ -26,17 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache-dependency-path: automation/niuma/go.sum
-
-      - name: Tidy modules
-        run: go mod tidy
-
-      - name: Build niuma
-        run: go build -o niuma ./cmd/niuma
-
       # 事件驱动：issue 评论触发
       - name: Check Discussion (event)
         if: github.event_name == 'issue_comment'
@@ -47,7 +32,7 @@ jobs:
         run: |
           LABELS=$(gh issue view "$ISSUE_NUMBER" --json labels -q '.labels[].name')
           if echo "$LABELS" | grep -q "bot:needs-discussion"; then
-            ./niuma plan-final \
+            niuma discuss \
               --repo "$REPO" \
               --issue "$ISSUE_NUMBER" || true
           fi
@@ -62,7 +47,7 @@ jobs:
           ISSUES=$(gh issue list --label "bot:needs-discussion" --json number -q '.[].number')
           for ISSUE in $ISSUES; do
             echo "检查 issue #$ISSUE 讨论收敛..."
-            ./niuma plan-final \
+            niuma discuss \
               --repo "$REPO" \
               --issue "$ISSUE" || true
           done

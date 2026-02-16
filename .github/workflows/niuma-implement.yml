@@ -4,10 +4,6 @@ on:
   issues:
     types: [labeled]
 
-defaults:
-  run:
-    working-directory: automation/niuma
-
 concurrency:
   group: niuma-impl-${{ github.event.issue.number }}
   cancel-in-progress: true
@@ -25,17 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache-dependency-path: automation/niuma/go.sum
-
-      - name: Tidy modules
-        run: go mod tidy
-
-      - name: Build niuma
-        run: go build -o niuma ./cmd/niuma
-
       - name: Implement Code
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -43,7 +28,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          ./niuma fix \
+          niuma fix \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --repo-dir "$WORKSPACE"
