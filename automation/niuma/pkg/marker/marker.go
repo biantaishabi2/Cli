@@ -34,7 +34,8 @@ type Marker struct {
 	Type     Type
 	Issue    int
 	Revision int
-	PR       int // 仅 PR_CREATED 使用
+	PR       int  // 仅 PR_CREATED 使用
+	Finish   bool // 仅 DISCUSSION_SUMMARY 使用：AI 建议结束讨论
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->
@@ -73,6 +74,10 @@ func Parse(line string) *Marker {
 		case "pr":
 			if n, err := strconv.Atoi(val); err == nil {
 				m.PR = n
+			}
+		case "finish":
+			if val == "1" || val == "true" {
+				m.Finish = true
 			}
 		}
 	}
@@ -127,6 +132,9 @@ func Render(m *Marker) string {
 	}
 	if m.PR > 0 {
 		parts = append(parts, fmt.Sprintf("pr=%d", m.PR))
+	}
+	if m.Finish {
+		parts = append(parts, "finish=1")
 	}
 
 	return strings.Join(parts, " ") + " -->"

@@ -768,6 +768,7 @@ func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, existing *gh
 		Type:     marker.TypeDiscussionSummary,
 		Issue:    o.issueNumber,
 		Revision: rev,
+		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
@@ -825,6 +826,7 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *
 		Type:     marker.TypeDiscussionSummary,
 		Issue:    o.issueNumber,
 		Revision: rev,
+		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
