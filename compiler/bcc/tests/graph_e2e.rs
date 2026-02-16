@@ -1,7 +1,7 @@
-//! E2E 测试 - 使用真实仓库（nanobot）
+//! E2E 测试 - 使用真实仓库（openclaw）
 //!
 //! 运行条件: 手动触发（通过 workflow_dispatch）
-//! 环境变量: E2E_TEST_REPO=/path/to/nanobot
+//! 环境变量: E2E_TEST_REPO=/path/to/openclaw
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -44,7 +44,7 @@ fn run_bcc(args: &[&str]) -> Result<String, String> {
 /// E2E Scenario 1: 完整流程 - extract + index + query
 #[test]
 #[ignore = "requires E2E_TEST_REPO environment variable"]
-fn e2e_full_workflow_nanobot() {
+fn e2e_full_workflow_openclaw() {
     let repo_path = match get_test_repo() {
         Some(p) => p,
         None => {
@@ -55,11 +55,11 @@ fn e2e_full_workflow_nanobot() {
 
     assert!(repo_path.exists(), "Test repo should exist at {:?}", repo_path);
     
-    let repo_id = "github.com/HKUDS/nanobot";
+    let repo_id = "local/openclaw-full";
     let temp_dir = tempfile::tempdir().unwrap();
     let ast_output = temp_dir.path().join("ast.json");
 
-    // Step 1: Extract AST from nanobot
+    // Step 1: Extract AST from openclaw
     println!("Step 1: Extracting AST from {:?}", repo_path);
     run_bcc(&[
         "extract",
@@ -77,7 +77,7 @@ fn e2e_full_workflow_nanobot() {
     run_bcc(&[
         "graph", "build",
         "--repo", repo_id,
-        "--name", "nanobot",
+        "--name", "openclaw",
         "--path", &repo_path.to_string_lossy(),
         "--input", &ast_output.to_string_lossy(),
         "--commit", "HEAD"
@@ -96,7 +96,7 @@ fn e2e_full_workflow_nanobot() {
     // Step 4: Query a function (if any exist)
     println!("Step 4: Querying functions");
     // Note: This assumes some functions were indexed
-    // In real scenario, we'd query specific known functions from nanobot
+    // In real scenario, we'd query specific known functions from openclaw
 }
 
 /// E2E Scenario 2: 索引性能测试
@@ -129,7 +129,7 @@ fn e2e_index_performance() {
     // 测量索引时间
     let temp_dir = tempfile::tempdir().unwrap();
     let ast_output = temp_dir.path().join("ast.json");
-    let repo_id = "github.com/HKUDS/nanobot-perf";
+    let repo_id = "local/openclaw-full-perf";
 
     let start = std::time::Instant::now();
     
@@ -146,7 +146,7 @@ fn e2e_index_performance() {
     run_bcc(&[
         "graph", "build",
         "--repo", repo_id,
-        "--name", "nanobot",
+        "--name", "openclaw",
         "--path", &repo_path.to_string_lossy(),
         "--input", &ast_output.to_string_lossy(),
         "--commit", "HEAD"
@@ -176,7 +176,7 @@ fn e2e_arch_validation() {
         }
     };
 
-    let repo_id = "github.com/HKUDS/nanobot";
+    let repo_id = "local/openclaw-full";
     let temp_dir = tempfile::tempdir().unwrap();
     let ast_output = temp_dir.path().join("ast.json");
     let matrix_path = temp_dir.path().join("target-matrix.yaml");
@@ -218,7 +218,7 @@ allowed_deps:
     run_bcc(&[
         "graph", "build",
         "--repo", repo_id,
-        "--name", "nanobot",
+        "--name", "openclaw",
         "--path", &repo_path.to_string_lossy(),
         "--input", &ast_output.to_string_lossy(),
         "--commit", "HEAD"
@@ -258,7 +258,7 @@ fn e2e_search_functionality() {
         }
     };
 
-    let repo_id = "github.com/HKUDS/nanobot";
+    let repo_id = "local/openclaw-full";
     let temp_dir = tempfile::tempdir().unwrap();
     let ast_output = temp_dir.path().join("ast.json");
 
@@ -274,7 +274,7 @@ fn e2e_search_functionality() {
     run_bcc(&[
         "graph", "build",
         "--repo", repo_id,
-        "--name", "nanobot",
+        "--name", "openclaw",
         "--path", &repo_path.to_string_lossy(),
         "--input", &ast_output.to_string_lossy(),
         "--commit", "HEAD"
@@ -284,11 +284,11 @@ fn e2e_search_functionality() {
     println!("Testing search functionality");
     
     // Search for callers/callees (using a dummy function ID)
-    // In real test, we'd use actual function IDs from nanobot
+    // In real test, we'd use actual function IDs from openclaw
     let search_result = run_bcc(&[
         "graph", "search",
         "--repo", repo_id,
-        "--id", "nanobot/agent/tools/registry.py#register_tool#1",
+        "--id", "openclaw/agent/tools/registry.py#register_tool#1",
         "--depth", "2",
         "--include", "callers,callees"
     ]);
@@ -299,10 +299,10 @@ fn e2e_search_functionality() {
     }
 }
 
-/// E2E Scenario 5: 验证 nanobot 仓库结构
+/// E2E Scenario 5: 验证 openclaw 仓库结构
 #[test]
 #[ignore = "requires E2E_TEST_REPO environment variable"]
-fn e2e_verify_nanobot_structure() {
+fn e2e_verify_openclaw_structure() {
     let repo_path = match get_test_repo() {
         Some(p) => p,
         None => {
@@ -311,17 +311,17 @@ fn e2e_verify_nanobot_structure() {
         }
     };
 
-    // 验证 nanobot 的关键文件存在
+    // 验证 openclaw 的关键文件存在
     let key_files = vec![
-        "nanobot/__init__.py",
-        "nanobot/agent",
+        "src/index.ts",
+        "src/agents",
     ];
 
     for file in key_files {
         let full_path = repo_path.join(file);
         assert!(
             full_path.exists(),
-            "Expected nanobot path not found: {:?}",
+            "Expected openclaw path not found: {:?}",
             full_path
         );
         println!("✓ Found: {}", file);
