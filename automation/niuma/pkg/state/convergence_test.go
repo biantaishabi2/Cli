@@ -175,3 +175,82 @@ func TestConvergence_IgnoresBotComments(t *testing.T) {
 	// 最后一条非 bot 评论是 5 分钟前，不到 10 分钟
 	assert.Equal(t, NotConverged, checker.Check(input))
 }
+
+// === AI 建议收敛测试（修复 #77）===
+
+func TestConvergence_ShouldFinalize_AISuggestion(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			// 只有 bot 评论，没有人类评论
+			makeComment("<!-- BOT:PLAN_DRAFT issue=1 rev=1 -->\n方案草案", now.Add(-10*time.Minute)),
+		},
+		DiscussionSummary: &marker.Marker{
+			Type:     marker.TypeDiscussionSummary,
+			Issue:    1,
+			Revision: 2,
+			Finish:   true, // AI 建议结束讨论
+		},
+		AIShouldFinish: true,
+	}
+	// AI 建议应该触发定稿，即使没有人类评论
+	assert.Equal(t, ShouldFinalize, checker.Check(input))
+}
+
+func TestConvergence_HoldOverridesAI(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("/hold", now.Add(-1*time.Minute)),
+		},
+		DiscussionSummary: &marker.Marker{
+			Type:     marker.TypeDiscussionSummary,
+			Issue:    1,
+			Revision: 2,
+			Finish:   true,
+		},
+		AIShouldFinish: true,
+	}
+	// /hold 命令优先于 AI 建议
+	assert.Equal(t, NotConverged, checker.Check(input))
+}
+
+func TestConvergence_AIFalse_FallsThrough(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人的评论", now.Add(-5*time.Minute)),
+		},
+		DiscussionSummary: &marker.Marker{
+			Type:     marker.TypeDiscussionSummary,
+			Issue:    1,
+			Revision: 2,
+			Finish:   false, // AI 不建议结束
+		},
+		AIShouldFinish: false,
+	}
+	// AI 不建议结束，继续其他收敛检查（静默时间不够）
+	assert.Equal(t, NotConverged, checker.Check(input))
+}
+
+func TestConvergence_AIFalse_WithRounds(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人的评论", now.Add(-1*time.Minute)),
+		},
+		DiscussionSummary: &marker.Marker{
+			Type:     marker.TypeDiscussionSummary,
+			Issue:    1,
+			Revision: 5, // 达到轮次阈值
+			Finish:   false,
+		},
+		AIShouldFinish: false,
+	}
+	// AI 不建议结束，但轮次达到阈值，应该定稿
+	assert.Equal(t, ShouldFinalize, checker.Check(input))
+}

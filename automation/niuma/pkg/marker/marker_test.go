@@ -16,6 +16,7 @@ func TestParse_PlanDraft(t *testing.T) {
 	assert.Equal(t, 42, m.Issue)
 	assert.Equal(t, 3, m.Revision)
 	assert.Equal(t, 0, m.PR)
+	assert.False(t, m.Finish)
 }
 
 func TestParse_PRCreated(t *testing.T) {
@@ -131,4 +132,60 @@ func TestRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Type, parsed.Type)
 	assert.Equal(t, original.Issue, parsed.Issue)
 	assert.Equal(t, original.Revision, parsed.Revision)
+}
+
+// === Finish 字段测试（修复 #77）===
+
+func TestParse_DiscussionSummaryWithFinish(t *testing.T) {
+	m := Parse("<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=2 finish=1 -->")
+	require.NotNil(t, m)
+	assert.Equal(t, TypeDiscussionSummary, m.Type)
+	assert.Equal(t, 1, m.Issue)
+	assert.Equal(t, 2, m.Revision)
+	assert.True(t, m.Finish)
+}
+
+func TestParse_DiscussionSummaryWithoutFinish(t *testing.T) {
+	m := Parse("<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=2 -->")
+	require.NotNil(t, m)
+	assert.Equal(t, TypeDiscussionSummary, m.Type)
+	assert.False(t, m.Finish)
+}
+
+func TestParse_FinishTrue(t *testing.T) {
+	// 测试 finish=1
+	m := Parse("<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=1 finish=1 -->")
+	require.NotNil(t, m)
+	assert.True(t, m.Finish)
+}
+
+func TestParse_FinishFalse(t *testing.T) {
+	// 测试 finish=0 或没有 finish
+	m := Parse("<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=1 finish=0 -->")
+	require.NotNil(t, m)
+	assert.False(t, m.Finish)
+}
+
+func TestRender_WithFinish(t *testing.T) {
+	m := &Marker{Type: TypeDiscussionSummary, Issue: 1, Revision: 2, Finish: true}
+	rendered := Render(m)
+	assert.Equal(t, "<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=2 finish=1 -->", rendered)
+}
+
+func TestRender_WithoutFinish(t *testing.T) {
+	m := &Marker{Type: TypeDiscussionSummary, Issue: 1, Revision: 2, Finish: false}
+	rendered := Render(m)
+	assert.Equal(t, "<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=2 -->", rendered)
+}
+
+func TestRoundTrip_WithFinish(t *testing.T) {
+	original := &Marker{Type: TypeDiscussionSummary, Issue: 7, Revision: 2, Finish: true}
+	rendered := Render(original)
+	parsed := Parse(rendered)
+
+	require.NotNil(t, parsed)
+	assert.Equal(t, original.Type, parsed.Type)
+	assert.Equal(t, original.Issue, parsed.Issue)
+	assert.Equal(t, original.Revision, parsed.Revision)
+	assert.Equal(t, original.Finish, parsed.Finish)
 }
