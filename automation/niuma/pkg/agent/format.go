@@ -107,6 +107,13 @@ func FormatReviewResult(result *ReviewResult) string {
 	sb.WriteString("### 审查总结\n\n")
 	sb.WriteString(result.Summary)
 
+	if len(result.ResolvedItems) > 0 {
+		sb.WriteString("\n\n### 讨论共识\n\n")
+		for i, item := range result.ResolvedItems {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, item))
+		}
+	}
+
 	if len(result.Issues) > 0 {
 		sb.WriteString("\n\n### 发现的问题\n\n")
 		for i, issue := range result.Issues {

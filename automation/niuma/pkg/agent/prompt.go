@@ -201,12 +201,23 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 - 确认问题确实存在（不要猜测 build tag 或 API 行为）
 - 如果涉及外部系统行为（如 GitHub API），标明"需确认"
 
+{{- if .ReviewComment}}
+
+## 讨论回应要求
+
+PR 历史中包含之前的 review 和回复。你必须：
+1. 逐条检查之前提出的问题，确认是否已修复
+2. 对于 implementer 反驳的问题（认为不是 bug），明确表态是否接受其解释
+3. 在 resolved_items 中列出已达成共识的条目
+{{- end}}
+
 请以 JSON 格式返回审查结果：
 ` + "```json" + `
 {
   "approved": true或false,
   "summary": "审查总结",
-  "issues": ["P0/P1/P2 - 具体问题描述"]
+  "resolved_items": ["之前的问题X：已修复/接受解释/仍需修改"],
+  "issues": ["P0/P1/P2 - 具体问题描述（仅新发现的问题）"]
 }
 ` + "```"
 

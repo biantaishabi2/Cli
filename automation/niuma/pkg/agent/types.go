@@ -52,7 +52,8 @@ type IterateResult struct {
 
 // ReviewResult AI 自审结果
 type ReviewResult struct {
-	Approved bool     `json:"approved"`          // 是否通过
-	Summary  string   `json:"summary"`           // 审查总结
-	Issues   []string `json:"issues,omitempty"`  // 问题列表
+	Approved      bool     `json:"approved"`                 // 是否通过
+	Summary       string   `json:"summary"`                  // 审查总结
+	ResolvedItems []string `json:"resolved_items,omitempty"` // 之前讨论已达成共识的条目
+	Issues        []string `json:"issues,omitempty"`         // 问题列表（仅新发现）
 }
