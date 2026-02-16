@@ -93,11 +93,14 @@ pub fn build_index(
         let func_id = format!("{}#file#1", record.sourcePath);
         
         for target in &record.localCallTargets {
+            // 将 target 路径转换为函数 ID 格式
+            let target_func_id = format!("{}#file#1", target);
+            
             // 只创建指向已索引函数的边
-            if func_ids.contains(target) {
+            if func_ids.contains(&target_func_id) {
                 let edge = CallEdge {
                     caller_id: func_id.clone(),
-                    callee_id: target.clone(),
+                    callee_id: target_func_id,
                     call_type: CallType::Direct,
                     file_path: Some(record.sourcePath.clone()),
                     line_number: None,
