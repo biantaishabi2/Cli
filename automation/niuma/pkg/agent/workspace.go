@@ -41,8 +41,17 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// git worktree add -b <branch> <path> master
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "master")
+	// 确保 base 是最新的：有 origin 时用 origin/master，否则用本地 master
+	base := "master"
+	if w.hasOrigin() {
+		if err := w.fetchRef("master"); err != nil {
+			return "", fmt.Errorf("fetch master 失败: %w", err)
+		}
+		base = "origin/master"
+	}
+
+	// 基于 base 创建新分支的 worktree
+	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, base)
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -53,7 +62,8 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 }
 
 // Checkout 从已有分支创建 worktree（不创建新分支）
-// 用于 iterate 阶段重建已被清理的 worktree（分支在 implement 阶段已创建）
+// 用于 iterate 阶段重建已被清理的 worktree（分支在 implement 阶段已创建并推到远程）
+// branch 参数不带 origin/ 前缀，如 "fix/37-slug"
 func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 	wtPath := w.Path(issueNum)
 
@@ -67,8 +77,17 @@ func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// git worktree add <path> <branch>（不带 -b，使用已有分支）
-	cmd := exec.Command("git", "worktree", "add", wtPath, branch)
+	// 优先用 origin/<branch>（CI 环境），fetch 后使用远程引用避免本地分支冲突
+	// 没有 origin 时回退到本地分支（本地开发环境）
+	ref := branch
+	if w.hasOrigin() {
+		if err := w.fetchRef(branch); err != nil {
+			return "", fmt.Errorf("fetch %s 失败: %w", branch, err)
+		}
+		ref = "origin/" + branch
+	}
+
+	cmd := exec.Command("git", "worktree", "add", wtPath, ref)
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -147,4 +166,22 @@ func (w *Workspace) branchName(issueNum int, slug string) string {
 		return fmt.Sprintf("fix/%d", issueNum)
 	}
 	return fmt.Sprintf("fix/%d-%s", issueNum, slug)
+}
+
+// hasOrigin 检查是否存在 origin remote
+func (w *Workspace) hasOrigin() bool {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = w.RepoDir
+	return cmd.Run() == nil
+}
+
+// fetchRef 从 origin fetch 指定引用
+func (w *Workspace) fetchRef(ref string) error {
+	cmd := exec.Command("git", "fetch", "origin", ref)
+	cmd.Dir = w.RepoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git fetch origin %s: %w\n%s", ref, err, string(out))
+	}
+	return nil
 }
