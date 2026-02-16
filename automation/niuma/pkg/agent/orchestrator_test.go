@@ -153,6 +153,77 @@ func TestDoImplement_NoWorktree(t *testing.T) {
 	assert.Contains(t, comments[len(comments)-1].GetBody(), "无文件变更")
 }
 
+func TestDoImplement_WithWorktree(t *testing.T) {
+	// 有 worktree 模式：创建 worktree → AI 在 worktree 目录执行 → commit → push → 创建 PR
+	repoDir := initTestRepo(t)
+
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 实现代码")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		ImplementProvider: mockAI,
+		RepoDir:           repoDir,
+	})
+
+	// 模拟 AI Execute 在 worktree 中写了文件（否则 HasChanges=false）
+	// 由于 MockProvider 不实际写文件，worktree 会创建但无变更
+	// 这里重点验证 worktree 路径正确传递
+	err := orch.DoImplement(context.Background(), "/tmp/fallback")
+	require.NoError(t, err)
+
+	// 验证 AI Execute 收到的 WorkDir 是 .worktrees/fix-1（不是 /tmp/fallback）
+	expectedWT := NewWorkspace(repoDir).Path(1)
+	assert.Equal(t, expectedWT, mockAI.LastWorkDir())
+	assert.Contains(t, expectedWT, ".worktrees/fix-1")
+
+	// 验证 worktree 目录存在（无变更时会被清理，但 AI 已被调用过，路径是对的）
+}
+
+func TestDoIterate_WithWorktree(t *testing.T) {
+	// 有 worktree 模式：复用已有 worktree → AI 在 worktree 中执行
+	repoDir := initTestRepo(t)
+
+	// 先创建 worktree（模拟 implement 阶段已创建）
+	ws := NewWorkspace(repoDir)
+	_, err := ws.Create(1, "login")
+	require.NoError(t, err)
+	require.True(t, ws.Exists(1))
+
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 迭代修复代码")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRNeedsFix))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 10,
+	}, "PR created")
+	mockGH.Reviews[10] = nil
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		ImplementProvider: mockAI,
+		RepoDir:           repoDir,
+	})
+
+	err = orch.DoIterate(context.Background(), 10, "/tmp/fallback")
+	require.NoError(t, err)
+
+	// 验证 AI Execute 收到的 WorkDir 是 worktree 路径（不是 /tmp/fallback）
+	expectedWT := ws.Path(1)
+	assert.Equal(t, expectedWT, mockAI.LastWorkDir())
+	assert.Contains(t, expectedWT, ".worktrees/fix-1")
+}
+
 func TestDoIterate_HappyPath(t *testing.T) {
 	// DoIterate 现在使用 Execute
 	mockAI := ai.NewMockProvider()

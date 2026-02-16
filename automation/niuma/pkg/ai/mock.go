@@ -116,6 +116,19 @@ func (m *MockProvider) CallCount() int {
 	return len(m.calls)
 }
 
+// LastWorkDir 返回最后一次调用的 WorkDir
+func (m *MockProvider) LastWorkDir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.calls) == 0 {
+		return ""
+	}
+	if m.calls[len(m.calls)-1].Options == nil {
+		return ""
+	}
+	return m.calls[len(m.calls)-1].Options.WorkDir
+}
+
 // LastPrompt 返回最后一次调用的 prompt
 func (m *MockProvider) LastPrompt() string {
 	m.mu.Lock()
