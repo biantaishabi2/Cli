@@ -204,6 +204,27 @@ func TestExtractJSON_MultipleCodeBlocks(t *testing.T) {
 	assert.NotContains(t, jsonStr, "analysis")
 }
 
+func TestParseReviewResponse_FallbackInferApproved(t *testing.T) {
+	// AI 没输出 JSON，但文字明确说"建议合并"
+	raw := `## 审查结论
+
+所有 26 个历史问题均已修复或接受解释，无新 P0/P1 问题。
+
+**建议合并。**`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved) // 从文字推断通过
+}
+
+func TestParseReviewResponse_FallbackInferRejected(t *testing.T) {
+	raw := `审查发现 2 个问题仍需修改，不建议合并。`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.False(t, result.Approved)
+}
+
 func TestExtractJSON_BracesInText(t *testing.T) {
 	// 文本中有大量 {}，但末尾有合法 JSON
 	text := `代码中 func() { return } 和 type Foo struct { Bar string } 都正常。

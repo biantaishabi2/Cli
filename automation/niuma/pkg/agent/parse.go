@@ -92,11 +92,37 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 		}
 	}
 
-	// Fallback：无法解析 JSON，默认不通过
+	// Fallback：无法解析 JSON，从文字内容推断
+	approved := inferApprovalFromText(raw)
 	return &ReviewResult{
-		Approved: false,
+		Approved: approved,
 		Summary:  strings.TrimSpace(raw),
 	}, nil
+}
+
+// inferApprovalFromText 从纯文字内容推断是否 approved
+// 当 AI 没有输出 JSON 时作为 fallback
+func inferApprovalFromText(text string) bool {
+	lower := strings.ToLower(text)
+	// 明确的通过信号
+	approveSignals := []string{"建议合并", "approved", "approve", "✅", "通过"}
+	// 明确的拒绝信号
+	rejectSignals := []string{"不建议合并", "仍需修改", "approved=false", "未通过", "不通过"}
+
+	// 先检查拒绝（优先级更高）
+	for _, signal := range rejectSignals {
+		if strings.Contains(lower, signal) {
+			return false
+		}
+	}
+	// 再检查通过
+	for _, signal := range approveSignals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	// 都没有，默认不通过
+	return false
 }
 
 // extractJSON 从文本中提取 JSON，支持 ```json ... ``` 代码块和裸 JSON
