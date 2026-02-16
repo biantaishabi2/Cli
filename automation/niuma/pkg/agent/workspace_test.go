@@ -57,7 +57,7 @@ func initTestRepo(t *testing.T) string {
 func TestWorkspace_Path(t *testing.T) {
 	ws := NewWorkspace("/home/user/project/Cli")
 	path := ws.Path(42)
-	assert.Equal(t, "/home/user/project/Cli-fix-42", path)
+	assert.Equal(t, "/home/user/project/Cli/.worktrees/fix-42", path)
 }
 
 func TestWorkspace_BranchName(t *testing.T) {

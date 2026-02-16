@@ -30,3 +30,6 @@ compiler/bcc/docs/openclaw-backend-trace/files/
 
 # BCC scripts Node deps
 compiler/bcc/scripts/node_modules/
+
+# niuma worktrees
+.worktrees/

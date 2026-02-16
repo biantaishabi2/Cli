@@ -36,6 +36,11 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 		return wtPath, nil
 	}
 
+	// 确保 .worktrees 目录存在
+	if err := os.MkdirAll(filepath.Dir(wtPath), 0755); err != nil {
+		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
+	}
+
 	// git worktree add -b <branch> <path> master
 	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "master")
 	cmd.Dir = w.RepoDir
@@ -55,6 +60,11 @@ func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 	// 如果已存在，直接返回
 	if w.Exists(issueNum) {
 		return wtPath, nil
+	}
+
+	// 确保 .worktrees 目录存在
+	if err := os.MkdirAll(filepath.Dir(wtPath), 0755); err != nil {
+		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
 	// git worktree add <path> <branch>（不带 -b，使用已有分支）
@@ -86,11 +96,9 @@ func (w *Workspace) Remove(issueNum int) error {
 	return nil
 }
 
-// Path 返回 worktree 路径：../Cli-fix-{issueNum}
+// Path 返回 worktree 路径：{RepoDir}/.worktrees/fix-{issueNum}
 func (w *Workspace) Path(issueNum int) string {
-	parent := filepath.Dir(w.RepoDir)
-	base := filepath.Base(w.RepoDir)
-	return filepath.Join(parent, fmt.Sprintf("%s-fix-%d", base, issueNum))
+	return filepath.Join(w.RepoDir, ".worktrees", fmt.Sprintf("fix-%d", issueNum))
 }
 
 // Exists 检查 worktree 是否存在
