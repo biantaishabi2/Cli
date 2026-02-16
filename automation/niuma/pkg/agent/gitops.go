@@ -54,7 +54,9 @@ func (g *GitOps) CommitAll(message string) error {
 	// 检查暂存区是否包含敏感文件
 	if err := g.checkSensitiveFiles(); err != nil {
 		// 回滚暂存区
-		_ = exec.Command("git", "reset", "HEAD").Run()
+		resetCmd := exec.Command("git", "reset", "HEAD")
+		resetCmd.Dir = g.WorkDir
+		_ = resetCmd.Run()
 		return err
 	}
 

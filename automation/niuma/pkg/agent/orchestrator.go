@@ -128,8 +128,11 @@ func (o *Orchestrator) DoPlanDraft(ctx context.Context) error {
 		return fmt.Errorf("创建草案评论失败: %w", err)
 	}
 
-	// 6. 转状态：fix → needs-discussion（跳过中间态 plan-draft，避免两次 API 调用的竞态）
-	return o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateFixRequested), string(state.StateNeedsDiscussion))
+	// 6. 转状态：fix → plan-draft → needs-discussion
+	if err := o.transition(ctx, state.StatePlanDraft); err != nil {
+		return err
+	}
+	return o.transition(ctx, state.StateNeedsDiscussion)
 }
 
 // DoDiscussionCheck 检查讨论收敛状态
