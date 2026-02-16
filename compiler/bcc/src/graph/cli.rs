@@ -4,7 +4,7 @@ use crate::graph::arch::ArchValidator;
 use crate::graph::error::{GraphError, Result};
 use crate::graph::sqlite::GraphStoreManager;
 use crate::graph::store::{CodeGraphStore, GraphStoreInsert};
-use crate::graph::types::{CallEdge, CallType, FunctionRecord, Repository, SearchInclude};
+use crate::graph::types::{CallEdge, CallType, FunctionRecord, Repository, SearchInclude, ModuleRecord, ModuleDepEdge, DepType};
 use chrono::Utc;
 use std::path::PathBuf;
 
@@ -57,9 +57,11 @@ pub fn build_index(
     };
     store.update_repository(&repo)?;
     
-    // 从 AST 构建函数索引
+    // 从 AST 构建索引
     let mut func_count = 0;
     let mut edge_count = 0;
+    let mut module_count = 0;
+    let mut mod_dep_count = 0;
     
     // 第一步：收集所有函数 ID
     let mut func_ids = std::collections::HashSet::new();
@@ -68,7 +70,36 @@ pub fn build_index(
         func_ids.insert(func_id);
     }
     
-    // 第二步：插入所有函数
+    // 第二步：插入所有模块（文件级节点）
+    for record in &snapshot.records {
+        let module_id = record.sourcePath.clone();
+        let module_name = std::path::Path::new(&record.sourcePath)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let directory = std::path::Path::new(&record.sourcePath)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("")
+            .to_string();
+        
+        let module = ModuleRecord {
+            id: module_id,
+            name: module_name,
+            file_path: record.sourcePath.clone(),
+            directory,
+            exports_count: record.exports_count,
+            imports_count: record.imports_count,
+            loc_lines: record.loc_lines,
+            language: "typescript".to_string(),
+        };
+        
+        GraphStoreInsert::insert_module(&store, &module)?;
+        module_count += 1;
+    }
+    
+    // 第三步：插入所有函数
     for record in &snapshot.records {
         let func_id = format!("{}#file#1", record.sourcePath);
         let func = FunctionRecord {
@@ -88,7 +119,38 @@ pub fn build_index(
         func_count += 1;
     }
     
-    // 第三步：创建调用边（只创建指向已索引函数的边）
+    // 第四步：创建模块依赖边（localDependencies）
+    for record in &snapshot.records {
+        let source_id = record.sourcePath.clone();
+        
+        for dep in &record.localDependencies {
+            // 尝试多种路径格式匹配
+            let possible_targets = vec![
+                dep.clone(),
+                format!("./{}", dep),
+                dep.trim_start_matches("./").to_string(),
+                format!("src/{}", dep),
+                dep.trim_start_matches("src/").to_string(),
+            ];
+            
+            // 找到匹配的目标模块
+            let matched_target = possible_targets.iter()
+                .find(|t| snapshot.records.iter().any(|r| &r.sourcePath == *t));
+            
+            if let Some(target_id) = matched_target {
+                let edge = ModuleDepEdge {
+                    source_id: source_id.clone(),
+                    target_id: target_id.clone(),
+                    dep_type: DepType::Import,
+                    symbols: vec![], // 可以从 imports 中提取
+                };
+                GraphStoreInsert::insert_module_dep_edge(&store, &edge)?;
+                mod_dep_count += 1;
+            }
+        }
+    }
+    
+    // 第五步：创建调用边（只创建指向已索引函数的边）
     for record in &snapshot.records {
         let func_id = format!("{}#file#1", record.sourcePath);
         
@@ -122,7 +184,8 @@ pub fn build_index(
         }
     }
     
-    println!("[graph] Indexed {} functions, {} call edges", func_count, edge_count);
+    println!("[graph] Indexed {} modules, {} module deps, {} functions, {} call edges", 
+             module_count, mod_dep_count, func_count, edge_count);
     println!("[graph] Index created successfully");
     Ok(())
 }
@@ -307,6 +370,95 @@ pub fn search_graph(
         println!("\nFound {} classes:", result.classes.len());
         for class in &result.classes {
             println!("  - {} ({}:{})", class.name, class.file_path, class.start_line);
+        }
+    }
+    
+    Ok(())
+}
+
+/// 模块依赖查询类型
+#[derive(Debug, Clone)]
+pub enum ModuleQueryType {
+    ById,
+    Deps { depth: usize },
+    Dependents { depth: usize },
+    Circular,
+}
+
+/// graph-index module 命令 - 查询模块依赖
+///
+/// 用法: bcc graph-index module --repo <id> --id <module-id> [--deps|--dependents|--circular]
+pub fn query_module(
+    repo_id: &str,
+    module_id: &str,
+    query_type: ModuleQueryType,
+) -> Result<()> {
+    let manager = GraphStoreManager::default()?;
+    
+    if !manager.repo_exists(repo_id) {
+        return Err(GraphError::RepoNotFound(repo_id.to_string()));
+    }
+    
+    let store = manager.get_store(repo_id)?;
+    
+    match query_type {
+        ModuleQueryType::ById => {
+            if let Some(module) = store.get_module(module_id) {
+                println!("Found module:");
+                println!("  ID: {}", module.id);
+                println!("  Name: {}", module.name);
+                println!("  Directory: {}", module.directory);
+                println!("  Lines: {}", module.loc_lines);
+                println!("  Exports: {}", module.exports_count);
+                println!("  Imports: {}", module.imports_count);
+            } else {
+                println!("Module not found: {}", module_id);
+            }
+        }
+        ModuleQueryType::Deps { depth } => {
+            match store.find_module_deps(module_id, depth) {
+                Ok(deps) => {
+                    println!("Found {} dependencies of '{}' (depth={})", deps.len(), module_id, depth);
+                    for dep in deps {
+                        println!("  - {} ({})", dep.name, dep.file_path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error finding dependencies: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        ModuleQueryType::Dependents { depth } => {
+            match store.find_module_dependents(module_id, depth) {
+                Ok(dependents) => {
+                    println!("Found {} dependents of '{}' (depth={})", dependents.len(), module_id, depth);
+                    for dep in dependents {
+                        println!("  - {} ({})", dep.name, dep.file_path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error finding dependents: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        ModuleQueryType::Circular => {
+            match store.detect_circular_deps(module_id) {
+                Ok(Some(cycle)) => {
+                    println!("Circular dependency detected:");
+                    for (i, m) in cycle.iter().enumerate() {
+                        println!("  {}. {}", i + 1, m);
+                    }
+                }
+                Ok(None) => {
+                    println!("No circular dependencies found for '{}'", module_id);
+                }
+                Err(e) => {
+                    eprintln!("Error detecting circular deps: {}", e);
+                    return Err(e);
+                }
+            }
         }
     }
     

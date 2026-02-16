@@ -71,6 +71,20 @@ pub trait CodeGraphStore {
     /// 检测循环继承
     fn detect_circular_inheritance(&self, class_id: &str) -> Result<Option<Vec<String>>>;
 
+    // ==================== 模块依赖图 ====================
+
+    /// 获取模块信息
+    fn get_module(&self, id: &str) -> Option<ModuleRecord>;
+
+    /// 查找模块的依赖（导入的模块）
+    fn find_module_deps(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>>;
+
+    /// 查找模块的被依赖（被哪些模块导入）
+    fn find_module_dependents(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>>;
+
+    /// 查找循环依赖
+    fn detect_circular_deps(&self, module_id: &str) -> Result<Option<Vec<String>>>;
+
     // ==================== Phase 3: Search Graph ====================
 
     /// 多图融合搜索
@@ -99,4 +113,8 @@ pub trait GraphStoreInsert: CodeGraphStore {
     fn insert_language_stat(&self, stat: &LanguageStat) -> Result<()>;
     fn insert_class(&self, class: &ClassRecord) -> Result<()>;
     fn insert_inherit_edge(&self, edge: &InheritEdge) -> Result<()>;
+    
+    // ==================== 模块依赖图 ====================
+    fn insert_module(&self, module: &ModuleRecord) -> Result<()>;
+    fn insert_module_dep_edge(&self, edge: &ModuleDepEdge) -> Result<()>;
 }

@@ -435,6 +435,25 @@ enum GraphAction {
         #[arg(short, long)]
         output: Option<String>,
     },
+    
+    /// 模块依赖查询
+    Module {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 模块ID（文件路径）
+        #[arg(short, long)]
+        id: String,
+        
+        /// 查询类型
+        #[arg(short, long, default_value = "id")]
+        by: String,
+        
+        /// 查询深度
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
+    },
 }
 
 fn main() {
@@ -709,6 +728,22 @@ fn main() {
             }
             GraphAction::ValidateArch { repo, target, output } => {
                 if let Err(e) = graph::cli::validate_arch(&repo, &target, output.as_deref()) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::Module { repo, id, by, depth } => {
+                let query_type = match by.as_str() {
+                    "id" => graph::cli::ModuleQueryType::ById,
+                    "deps" => graph::cli::ModuleQueryType::Deps { depth },
+                    "dependents" => graph::cli::ModuleQueryType::Dependents { depth },
+                    "circular" => graph::cli::ModuleQueryType::Circular,
+                    _ => {
+                        eprintln!("Invalid module query type: {}", by);
+                        std::process::exit(10);
+                    }
+                };
+                if let Err(e) = graph::cli::query_module(&repo, &id, query_type) {
                     eprintln!("[graph-index] Error: {}", e);
                     std::process::exit(e.exit_code());
                 }

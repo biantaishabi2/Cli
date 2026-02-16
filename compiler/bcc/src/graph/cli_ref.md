@@ -12,9 +12,11 @@
 ### build
 
 ```bash
-bcc graph-index build \
-  --repo nanobot \
-  --input ast.json \
+bcc graph build \
+  --repo test/openclaw \
+  --name "OpenClaw" \
+  --path /Users/biantaishabi/openclaw \
+  --input openclaw-ast.json \
   --commit abc123
 ```
 
@@ -22,25 +24,41 @@ bcc graph-index build \
 
 ```bash
 # 统一用 --id，不用 positional
-bcc graph-index query --repo nanobot --id "order.php#create#42"
-bcc graph-index query --repo nanobot --name "create"
-bcc graph-index query --repo nanobot --module "order"
+bcc graph query --repo nanobot --id "order.php#create#42"
+bcc graph query --repo nanobot --by name --id "create"
+bcc graph query --repo nanobot --by module --id "order"
 ```
 
 ### search（图遍历搜索）
 
 ```bash
-bcc graph-index search \
+bcc graph search \
   --repo nanobot \
   --id "order.php#create#42" \
   --depth 2 \
   --include callers,callees,same-file,same-module
 ```
 
+### module（模块依赖查询）
+
+```bash
+# 查询模块信息
+bcc graph module --repo test/openclaw --id "src/index.ts"
+
+# 查询模块依赖（导入的模块）
+bcc graph module --repo test/openclaw --id "src/index.ts" --by deps --depth 1
+
+# 查询模块被依赖（哪些模块导入它）
+bcc graph module --repo test/openclaw --id "src/utils.ts" --by dependents --depth 1
+
+# 检测循环依赖
+bcc graph module --repo test/openclaw --id "src/utils.ts" --by circular
+```
+
 ### validate-arch
 
 ```bash
-bcc graph-index validate-arch \
+bcc graph validate-arch \
   --repo nanobot \
   --target target-matrix.yaml \
   --output violations.json

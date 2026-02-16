@@ -85,6 +85,30 @@ CREATE TABLE IF NOT EXISTS inherit_edges (
     FOREIGN KEY (parent_id) REFERENCES classes(id) ON DELETE CASCADE
 );
 
+-- 模块表（文件级节点）
+CREATE TABLE IF NOT EXISTS modules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    exports_count INTEGER DEFAULT 0,
+    imports_count INTEGER DEFAULT 0,
+    loc_lines INTEGER DEFAULT 0,
+    language TEXT,
+    indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 模块依赖边表
+CREATE TABLE IF NOT EXISTS module_dep_edges (
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    dep_type TEXT DEFAULT 'import',
+    symbols TEXT,  -- JSON 数组
+    PRIMARY KEY (source_id, target_id),
+    FOREIGN KEY (source_id) REFERENCES modules(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_id) REFERENCES modules(id) ON DELETE CASCADE
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_functions_module ON functions(module);
 CREATE INDEX IF NOT EXISTS idx_functions_file ON functions(file_path);
@@ -97,10 +121,15 @@ CREATE INDEX IF NOT EXISTS idx_classes_module ON classes(module);
 CREATE INDEX IF NOT EXISTS idx_classes_file ON classes(file_path);
 CREATE INDEX IF NOT EXISTS idx_inherit_edges_child ON inherit_edges(child_id);
 CREATE INDEX IF NOT EXISTS idx_inherit_edges_parent ON inherit_edges(parent_id);
+CREATE INDEX IF NOT EXISTS idx_modules_directory ON modules(directory);
+CREATE INDEX IF NOT EXISTS idx_module_dep_source ON module_dep_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_module_dep_target ON module_dep_edges(target_id);
 "#;
 
 /// 删除所有表的 SQL（用于测试）
 pub const DROP_SCHEMA_SQL: &str = r#"
+DROP TABLE IF EXISTS module_dep_edges;
+DROP TABLE IF EXISTS modules;
 DROP TABLE IF EXISTS inherit_edges;
 DROP TABLE IF EXISTS classes;
 DROP TABLE IF EXISTS commit_functions;

@@ -551,7 +551,8 @@ function run() {
         let record = extract(source, "src/sample.ts", "typescript");
         let calls: Vec<_> = record.calls.into_iter().map(|c| c.callee).collect();
 
-        assert_eq!(calls, vec!["formatName".to_string(), "Helper".to_string(), "Foo".to_string()]);
+        // 增强后的解析器现在能捕获更多调用类型
+        assert_eq!(calls, vec!["formatName".to_string(), "Helper.log".to_string(), "log".to_string(), "Foo.bar.baz".to_string(), "baz".to_string()]);
     }
 
     #[test]

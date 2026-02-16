@@ -710,6 +710,146 @@ impl CodeGraphStore for SqliteGraphStore {
         })
     }
 
+    // ==================== 模块依赖图 ====================
+
+    fn get_module(&self, id: &str) -> Option<ModuleRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, name, file_path, directory, exports_count, imports_count, loc_lines, language FROM modules WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(ModuleRecord {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        file_path: row.get(2)?,
+                        directory: row.get(3)?,
+                        exports_count: row.get::<_, i64>(4)? as usize,
+                        imports_count: row.get::<_, i64>(5)? as usize,
+                        loc_lines: row.get::<_, i64>(6)? as usize,
+                        language: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    fn find_module_deps(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>> {
+        self.check_depth(depth)?;
+        
+        if depth == 0 {
+            return Ok(vec![]);
+        }
+
+        let sql = r#"
+            WITH RECURSIVE dep_chain(target_id, depth, path) AS (
+                SELECT target_id, 1, target_id || ','
+                FROM module_dep_edges
+                WHERE source_id = ?1
+                
+                UNION
+                
+                SELECT e.target_id, c.depth + 1, c.path || e.target_id || ','
+                FROM module_dep_edges e
+                JOIN dep_chain c ON e.source_id = c.target_id
+                WHERE c.depth < ?2
+                  AND c.path NOT LIKE '%' || e.target_id || ',%'
+            )
+            SELECT DISTINCT m.* FROM modules m
+            JOIN dep_chain c ON m.id = c.target_id
+            ORDER BY c.depth, m.file_path
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let rows = stmt.query_map(params![module_id, depth as i64], |row| {
+            Ok(ModuleRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+                directory: row.get(3)?,
+                exports_count: row.get::<_, i64>(4)? as usize,
+                imports_count: row.get::<_, i64>(5)? as usize,
+                loc_lines: row.get::<_, i64>(6)? as usize,
+                language: row.get(7)?,
+            })
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    fn find_module_dependents(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>> {
+        self.check_depth(depth)?;
+        
+        if depth == 0 {
+            return Ok(vec![]);
+        }
+
+        let sql = r#"
+            WITH RECURSIVE dependent_chain(source_id, depth, path) AS (
+                SELECT source_id, 1, source_id || ','
+                FROM module_dep_edges
+                WHERE target_id = ?1
+                
+                UNION
+                
+                SELECT e.source_id, c.depth + 1, c.path || e.source_id || ','
+                FROM module_dep_edges e
+                JOIN dependent_chain c ON e.target_id = c.source_id
+                WHERE c.depth < ?2
+                  AND c.path NOT LIKE '%' || e.source_id || ',%'
+            )
+            SELECT DISTINCT m.* FROM modules m
+            JOIN dependent_chain c ON m.id = c.source_id
+            ORDER BY c.depth, m.file_path
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let rows = stmt.query_map(params![module_id, depth as i64], |row| {
+            Ok(ModuleRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+                directory: row.get(3)?,
+                exports_count: row.get::<_, i64>(4)? as usize,
+                imports_count: row.get::<_, i64>(5)? as usize,
+                loc_lines: row.get::<_, i64>(6)? as usize,
+                language: row.get(7)?,
+            })
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    fn detect_circular_deps(&self, module_id: &str) -> Result<Option<Vec<String>>> {
+        let sql = r#"
+            WITH RECURSIVE dep_chain(current_id, path, depth) AS (
+                SELECT ?1, ?1 || ',', 1
+                
+                UNION
+                
+                SELECT e.target_id, c.path || e.target_id || ',', c.depth + 1
+                FROM module_dep_edges e
+                JOIN dep_chain c ON e.source_id = c.current_id
+                WHERE c.depth < 100
+            )
+            SELECT path FROM dep_chain
+            WHERE current_id = ?1 AND depth > 1
+            LIMIT 1
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let result: Option<String> = stmt.query_row(params![module_id], |row| row.get(0)).optional()?;
+        
+        if let Some(path_str) = result {
+            let path: Vec<String> = path_str.trim_end_matches(',').split(',').map(|s| s.to_string()).collect();
+            return Ok(Some(path));
+        }
+        
+        Ok(None)
+    }
 }
 
 impl GraphStoreInsert for SqliteGraphStore {
@@ -825,6 +965,47 @@ impl GraphStoreInsert for SqliteGraphStore {
                 edge.child_id,
                 edge.parent_id,
                 edge.edge_type.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    // ==================== 模块依赖图 ====================
+    fn insert_module(&self, module: &ModuleRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO modules 
+            (id, name, file_path, directory, exports_count, imports_count, loc_lines, language, indexed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                module.id,
+                module.name,
+                module.file_path,
+                module.directory,
+                module.exports_count as i64,
+                module.imports_count as i64,
+                module.loc_lines as i64,
+                module.language,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_module_dep_edge(&self, edge: &ModuleDepEdge) -> Result<()> {
+        let symbols_json = serde_json::to_string(&edge.symbols)?;
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO module_dep_edges 
+            (source_id, target_id, dep_type, symbols)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                edge.source_id,
+                edge.target_id,
+                edge.dep_type.to_string(),
+                symbols_json,
             ],
         )?;
         Ok(())

@@ -377,3 +377,61 @@ pub struct ValidationStats {
     pub checked_deps: usize,
     pub violation_count: usize,
 }
+
+// ==================== 模块依赖图 ====================
+
+/// 模块依赖边（文件间的导入关系）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleDepEdge {
+    /// 源模块（导入者）
+    pub source_id: String,
+    /// 目标模块（被导入者）
+    pub target_id: String,
+    /// 依赖类型
+    pub dep_type: DepType,
+    /// 导入符号（如 import { foo } from './bar' 中的 foo）
+    pub symbols: Vec<String>,
+}
+
+/// 依赖类型
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DepType {
+    /// ES6 import / require
+    Import,
+    /// 动态导入
+    DynamicImport,
+    /// 类型导入 (TypeScript)
+    TypeImport,
+}
+
+impl std::fmt::Display for DepType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DepType::Import => write!(f, "import"),
+            DepType::DynamicImport => write!(f, "dynamic_import"),
+            DepType::TypeImport => write!(f, "type_import"),
+        }
+    }
+}
+
+/// 模块节点
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleRecord {
+    /// 模块ID（文件路径）
+    pub id: String,
+    /// 模块名（文件名）
+    pub name: String,
+    /// 文件路径
+    pub file_path: String,
+    /// 所属目录
+    pub directory: String,
+    /// 导出数量
+    pub exports_count: usize,
+    /// 导入数量
+    pub imports_count: usize,
+    /// 代码行数
+    pub loc_lines: usize,
+    /// 语言
+    pub language: String,
+}
