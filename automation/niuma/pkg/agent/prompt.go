@@ -201,6 +201,10 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 - 确认问题确实存在（不要猜测 build tag 或 API 行为）
 - 如果涉及外部系统行为（如 GitHub API），标明"需确认"
 
+**approved 判定规则（必须严格遵守）：**
+**- 存在任何 P0 或 P1 问题 → 必须设 approved=false**
+**- 只有 P2 问题或无问题 → 设 approved=true**
+
 {{- if .ReviewComment}}
 
 ## 讨论回应要求
@@ -209,10 +213,7 @@ PR 历史中包含之前的 review 和回复。你必须：
 1. 逐条检查之前提出的每个问题，确认是否已修复
 2. 对于 implementer 反驳的问题（认为不是 bug），明确表态你是否接受其解释
 3. **resolved_items 是必填字段，不能为空数组**——必须逐条列出每个历史问题的结论
-
-**approved 判定规则：**
-**- 当 resolved_items 中所有条目都是"已修复"或"接受解释"，且无新的 P0/P1 问题时 → 必须设 approved=true**
-**- 当 resolved_items 中有任何"仍需修改"的条目，或存在新的 P0/P1 问题时 → 必须设 approved=false**
+4. 当 resolved_items 中有"仍需修改"的条目 → 也必须设 approved=false
 {{- end}}
 
 **最终输出格式（必须严格遵守）：**
