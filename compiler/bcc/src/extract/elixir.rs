@@ -176,8 +176,9 @@ fn extract_recursive(
             _ => {}
         }
 
-        // 递归子节点
-        if cursor.goto_first_child() {
+        // 字符串类节点不递归子节点，防止文档字符串内的模块名被误识别为依赖
+        let skip_children = matches!(kind, "string" | "quoted_content" | "charlist" | "sigil");
+        if !skip_children && cursor.goto_first_child() {
             extract_recursive(cursor, source, exports, imports, calls,
                             module_doc, declarations, side_effects, pending_spec);
             cursor.goto_parent();
@@ -412,6 +413,55 @@ end
         assert_eq!(behaviour_imports.len(), 2);
         assert!(behaviour_imports.iter().any(|i| i.specifier == "GenServer"));
         assert!(behaviour_imports.iter().any(|i| i.specifier == "Gong.Extension"));
+    }
+
+    #[test]
+    fn test_moduledoc_module_ref_not_extracted_as_call() {
+        let source = r#"
+defmodule Gong do
+  @moduledoc """
+  - `Gong.Compaction` — 上下文压缩
+  - `Gong.Truncate` — 输出截断系统
+  """
+end
+"#;
+        let record = extract(source, "lib/gong.ex");
+        // @moduledoc 中提到的模块不应出现在 calls 中
+        assert!(record.calls.is_empty(),
+            "expected no calls, got: {:?}", record.calls);
+    }
+
+    #[test]
+    fn test_real_call_still_extracted() {
+        let source = r#"
+defmodule MyApp.Worker do
+  @moduledoc "Worker that calls Fake.Module in docs"
+
+  def run do
+    Result.ok()
+    Phoenix.PubSub.broadcast(topic, msg)
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/worker.ex");
+        let callees: Vec<&str> = record.calls.iter().map(|c| c.callee.as_str()).collect();
+        assert!(callees.contains(&"Result"), "should contain Result, got: {:?}", callees);
+        assert!(callees.contains(&"Phoenix.PubSub"), "should contain Phoenix.PubSub, got: {:?}", callees);
+        // 文档字符串中的 Fake.Module 不应被提取
+        assert!(!callees.contains(&"Fake"), "should not contain Fake from docstring, got: {:?}", callees);
+    }
+
+    #[test]
+    fn test_doc_string_module_ref_not_extracted() {
+        let source = r#"
+defmodule MyApp.Foo do
+  @doc "See `MyApp.Bar` for details"
+  def hello, do: :world
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        let callees: Vec<&str> = record.calls.iter().map(|c| c.callee.as_str()).collect();
+        assert!(!callees.contains(&"MyApp"), "should not contain MyApp.Bar from @doc, got: {:?}", callees);
     }
 
     #[test]
