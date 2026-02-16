@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ pub struct CallRecord {
 
 /// 副作用分类标签——行为检测的分类维度，标注模块的外部交互类型
 /// 通过全文关键词扫描得出，独立于 tree-sitter AST 提取
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SideEffects {
     pub has_async: bool,
@@ -253,20 +253,20 @@ fn to_pascal_case(s: &str) -> String {
 // ── batch extract ──
 
 /// AstSnapshot 输出格式（与 arch matrix 期望的格式对齐）
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AstSnapshot {
     pub source_count: usize,
     pub skipped_count: usize,
     pub records: Vec<AstSnapshotRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct AstSnapshotRecord {
     pub sourcePath: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub localDependencies: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub localCallTargets: Vec<String>,
     pub exports_count: usize,
     pub imports_count: usize,
