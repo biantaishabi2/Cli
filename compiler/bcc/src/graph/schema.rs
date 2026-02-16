@@ -2,6 +2,26 @@
 
 /// 创建所有表的 SQL
 pub const CREATE_SCHEMA_SQL: &str = r#"
+-- 仓库表
+CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    languages TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 语言统计表
+CREATE TABLE IF NOT EXISTS language_stats (
+    repo_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    file_count INTEGER DEFAULT 0,
+    line_count INTEGER DEFAULT 0,
+    PRIMARY KEY (repo_id, language),
+    FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
+
 -- 函数表
 CREATE TABLE IF NOT EXISTS functions (
     id TEXT PRIMARY KEY,
@@ -55,4 +75,6 @@ pub const DROP_SCHEMA_SQL: &str = r#"
 DROP TABLE IF EXISTS commit_functions;
 DROP TABLE IF EXISTS call_edges;
 DROP TABLE IF EXISTS functions;
+DROP TABLE IF EXISTS language_stats;
+DROP TABLE IF EXISTS repositories;
 "#;

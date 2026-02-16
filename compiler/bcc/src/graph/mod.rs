@@ -3,6 +3,7 @@
 //! 提供代码知识图谱的存储和查询能力
 //! 支持函数级别的调用关系分析和影响分析
 
+pub mod error;
 pub mod schema;
 pub mod store;
 pub mod sqlite;

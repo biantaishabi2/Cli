@@ -3,6 +3,32 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// 仓库信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Repository {
+    /// 唯一标识（如 github.com#HKUDS#nanobot）
+    pub id: String,
+    /// 仓库名称
+    pub name: String,
+    /// 根目录路径
+    pub root_path: String,
+    /// 主要编程语言（逗号分隔）
+    pub languages: String,
+    /// 创建时间
+    pub created_at: DateTime<Utc>,
+    /// 最后更新时间
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 语言统计
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageStat {
+    pub repo_id: String,
+    pub language: String,
+    pub file_count: usize,
+    pub line_count: usize,
+}
+
 /// 函数记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionRecord {
