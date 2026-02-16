@@ -84,7 +84,7 @@ func (g *GitOps) checkSensitiveFiles() error {
 	cmd.Dir = g.WorkDir
 	out, err := cmd.Output()
 	if err != nil {
-		return nil // 检查失败不阻塞
+		return fmt.Errorf("检查暂存区失败（安全检查不可跳过）: %w", err)
 	}
 
 	raw := strings.TrimSpace(string(out))
