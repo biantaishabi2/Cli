@@ -7,6 +7,7 @@ mod compile;
 mod extract;
 mod spec;
 mod trace;
+mod graph;
 
 /// BCC — Backend Compiler for YAML-driven Elixir skeleton generation
 #[derive(Parser)]
@@ -189,6 +190,12 @@ enum Commands {
         #[command(subcommand)]
         action: BddAction,
     },
+
+    /// 代码图谱索引工具（build/query/analyze）
+    Graph {
+        #[command(subcommand)]
+        action: GraphAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -332,6 +339,53 @@ enum BddAction {
         coverage_report: Option<String>,
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GraphAction {
+    /// 从 extract 输出构建索引
+    Build {
+        /// extract 输出的 JSON 文件路径
+        #[arg(short, long)]
+        input: String,
+        
+        /// commit hash
+        #[arg(short, long)]
+        commit: String,
+        
+        /// 索引数据库路径
+        #[arg(short, long, default_value = ".bcc/index.db")]
+        db: String,
+    },
+    
+    /// 查询函数信息
+    Query {
+        /// 查询内容（函数ID/名称/模块）
+        query: String,
+        
+        /// 查询类型
+        #[arg(short, long, default_value = "id")]
+        by: String,
+        
+        /// 索引数据库路径
+        #[arg(short, long, default_value = ".bcc/index.db")]
+        db: String,
+        
+        /// 查询深度（用于 callers/callees）
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
+    },
+    
+    /// 分析影响面
+    Analyze {
+        /// 函数ID
+        #[arg(short, long)]
+        function: String,
+        
+        /// 索引数据库路径
+        #[arg(short, long, default_value = ".bcc/index.db")]
+        db: String,
     },
 }
 
@@ -554,6 +608,38 @@ fn main() {
                     coverage_report.as_deref(),
                     force,
                 );
+            }
+        },
+        Some(Commands::Graph { action }) => match action {
+            GraphAction::Build { input, commit, db } => {
+                if let Err(e) = graph::cli::build_index(&input, &commit, &db) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            GraphAction::Query { query, by, db, depth } => {
+                let query_type = match by.as_str() {
+                    "id" => graph::cli::QueryType::ById,
+                    "name" => graph::cli::QueryType::ByName,
+                    "module" => graph::cli::QueryType::ByModule,
+                    "callers" => graph::cli::QueryType::Callers { depth },
+                    "callees" => graph::cli::QueryType::Callees { depth },
+                    _ => {
+                        eprintln!("Invalid query type: {}", by);
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = graph::cli::query_function(&db, &query, query_type) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            GraphAction::Analyze { function, db } => {
+                let query_type = graph::cli::QueryType::Impact;
+                if let Err(e) = graph::cli::query_function(&db, &function, query_type) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(1);
+                }
             }
         },
         None => {
