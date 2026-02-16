@@ -210,7 +210,9 @@ PR 历史中包含之前的 review 和回复。你必须：
 2. 对于 implementer 反驳的问题（认为不是 bug），明确表态你是否接受其解释
 3. **resolved_items 是必填字段，不能为空数组**——必须逐条列出每个历史问题的结论
 
-**approved 判定规则：只有 resolved_items 中所有条目都是"已修复"或"接受解释"，且无新的 P0/P1 问题，才能设 approved=true。如果有任何条目是"仍需修改"，必须设 approved=false。**
+**approved 判定规则：**
+**- 当 resolved_items 中所有条目都是"已修复"或"接受解释"，且无新的 P0/P1 问题时 → 必须设 approved=true**
+**- 当 resolved_items 中有任何"仍需修改"的条目，或存在新的 P0/P1 问题时 → 必须设 approved=false**
 {{- end}}
 
 请以 JSON 格式返回审查结果：
