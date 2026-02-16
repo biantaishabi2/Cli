@@ -77,21 +77,31 @@ func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// 优先用 origin/<branch>（CI 环境），fetch 后使用远程引用避免本地分支冲突
-	// 没有 origin 时回退到本地分支（本地开发环境）
-	ref := branch
+	// 有 origin 时先 fetch，再用 -b 创建本地分支跟踪远程（确保 push 时有本地分支）
+	// 没有 origin 时直接用本地分支
 	if w.hasOrigin() {
 		if err := w.fetchRef(branch); err != nil {
 			return "", fmt.Errorf("fetch %s 失败: %w", branch, err)
 		}
-		ref = "origin/" + branch
-	}
+		// 删除可能残留的同名本地分支（避免 -b 冲突）
+		del := exec.Command("git", "branch", "-D", branch)
+		del.Dir = w.RepoDir
+		del.Run() // 忽略错误（分支不存在时会失败）
 
-	cmd := exec.Command("git", "worktree", "add", wtPath, ref)
-	cmd.Dir = w.RepoDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+		// 创建 worktree 并建立本地分支跟踪 origin/<branch>
+		cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "origin/"+branch)
+		cmd.Dir = w.RepoDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+		}
+	} else {
+		cmd := exec.Command("git", "worktree", "add", wtPath, branch)
+		cmd.Dir = w.RepoDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+		}
 	}
 
 	return wtPath, nil
