@@ -13,12 +13,22 @@ fn get_test_repo() -> Option<PathBuf> {
 
 /// 运行 bcc 命令
 fn run_bcc(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("cargo")
-        .args(&["run", "--bin", "bcc", "--"])
-        .args(args)
-        .current_dir("/Users/biantaishabi/Cli-graph-68")
-        .output()
-        .map_err(|e| format!("Failed to run bcc: {}", e))?;
+    // 尝试使用 release 二进制，如果不存在则使用 cargo run
+    let bcc_path = "/Users/biantaishabi/Cli-graph-68/target/release/bcc";
+    
+    let output = if std::path::Path::new(bcc_path).exists() {
+        Command::new(bcc_path)
+            .args(args)
+            .output()
+            .map_err(|e| format!("Failed to run bcc binary: {}", e))?
+    } else {
+        Command::new("cargo")
+            .args(&["run", "--release", "--bin", "bcc", "--"])
+            .args(args)
+            .current_dir("/Users/biantaishabi/Cli-graph-68")
+            .output()
+            .map_err(|e| format!("Failed to run cargo: {}", e))?
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -65,7 +75,7 @@ fn e2e_full_workflow_nanobot() {
     // Step 2: Build index
     println!("Step 2: Building index for {}", repo_id);
     run_bcc(&[
-        "graph-index", "build",
+        "graph", "build",
         "--repo", repo_id,
         "--name", "nanobot",
         "--path", &repo_path.to_string_lossy(),
@@ -77,7 +87,7 @@ fn e2e_full_workflow_nanobot() {
 
     // Step 3: List repos to verify
     println!("Step 3: Verifying index");
-    let list_output = run_bcc(&["graph-index", "list"])
+    let list_output = run_bcc(&["graph", "list"])
         .expect("Failed to list repos");
     
     assert!(list_output.contains(repo_id), "Repo should be in index list");
@@ -134,7 +144,7 @@ fn e2e_index_performance() {
 
     // Build index
     run_bcc(&[
-        "graph-index", "build",
+        "graph", "build",
         "--repo", repo_id,
         "--name", "nanobot",
         "--path", &repo_path.to_string_lossy(),
@@ -206,7 +216,7 @@ allowed_deps:
     ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph-index", "build",
+        "graph", "build",
         "--repo", repo_id,
         "--name", "nanobot",
         "--path", &repo_path.to_string_lossy(),
@@ -217,7 +227,7 @@ allowed_deps:
     // Run arch validation
     println!("Running arch validation for {}", repo_id);
     let result = run_bcc(&[
-        "graph-index", "validate-arch",
+        "graph", "validate-arch",
         "--repo", repo_id,
         "--target", &matrix_path.to_string_lossy(),
         "--output", &violations_path.to_string_lossy()
@@ -262,7 +272,7 @@ fn e2e_search_functionality() {
     ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph-index", "build",
+        "graph", "build",
         "--repo", repo_id,
         "--name", "nanobot",
         "--path", &repo_path.to_string_lossy(),
@@ -276,7 +286,7 @@ fn e2e_search_functionality() {
     // Search for callers/callees (using a dummy function ID)
     // In real test, we'd use actual function IDs from nanobot
     let search_result = run_bcc(&[
-        "graph-index", "search",
+        "graph", "search",
         "--repo", repo_id,
         "--id", "nanobot/agent/tools/registry.py#register_tool#1",
         "--depth", "2",
