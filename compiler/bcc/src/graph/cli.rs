@@ -61,16 +61,22 @@ pub fn build_index(
     let mut func_count = 0;
     let mut edge_count = 0;
     
+    // 第一步：收集所有函数 ID
+    let mut func_ids = std::collections::HashSet::new();
     for record in &snapshot.records {
-        // 为每个文件创建一个函数记录（简化处理）
-        // 实际应该从 AST 详细解析函数定义
+        let func_id = format!("{}#file#1", record.sourcePath);
+        func_ids.insert(func_id);
+    }
+    
+    // 第二步：插入所有函数
+    for record in &snapshot.records {
         let func_id = format!("{}#file#1", record.sourcePath);
         let func = FunctionRecord {
             id: func_id.clone(),
             name: "__file__".to_string(),
             file_path: record.sourcePath.clone(),
             module: extract_module(&record.sourcePath),
-            language: "python".to_string(),
+            language: "typescript".to_string(),
             start_line: 1,
             end_line: record.loc_lines,
             signature: format!("module: {} ({} lines)", record.sourcePath, record.loc_lines),
@@ -80,18 +86,25 @@ pub fn build_index(
         
         GraphStoreInsert::insert_function(&store, &func)?;
         func_count += 1;
+    }
+    
+    // 第三步：创建调用边（只创建指向已索引函数的边）
+    for record in &snapshot.records {
+        let func_id = format!("{}#file#1", record.sourcePath);
         
-        // 创建调用边（从 localCallTargets）
         for target in &record.localCallTargets {
-            let edge = CallEdge {
-                caller_id: func_id.clone(),
-                callee_id: target.clone(),
-                call_type: CallType::Direct,
-                file_path: Some(record.sourcePath.clone()),
-                line_number: None,
-            };
-            GraphStoreInsert::insert_call_edge(&store, &edge)?;
-            edge_count += 1;
+            // 只创建指向已索引函数的边
+            if func_ids.contains(target) {
+                let edge = CallEdge {
+                    caller_id: func_id.clone(),
+                    callee_id: target.clone(),
+                    call_type: CallType::Direct,
+                    file_path: Some(record.sourcePath.clone()),
+                    line_number: None,
+                };
+                GraphStoreInsert::insert_call_edge(&store, &edge)?;
+                edge_count += 1;
+            }
         }
     }
     
