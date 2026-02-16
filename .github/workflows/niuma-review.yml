@@ -1,0 +1,62 @@
+name: niuma - Review
+
+on:
+  issues:
+    types: [labeled]
+
+defaults:
+  run:
+    working-directory: automation/niuma
+
+concurrency:
+  group: niuma-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: self-hosted
+    if: github.event.label.name == 'bot:pr-created'
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Tidy modules
+        run: go mod tidy
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Find PR Number
+        id: find_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # 从 PR_CREATED marker 中读取 PR 号
+          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到 PR 号"
+          fi
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: AI Self-Review
+        if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          ./niuma review \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER"

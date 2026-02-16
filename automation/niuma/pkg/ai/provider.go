@@ -1,0 +1,53 @@
+// pkg/ai/provider.go
+// AI Provider 接口定义
+package ai
+
+import "context"
+
+// Provider AI 后端抽象接口
+type Provider interface {
+	// Complete 文本模式：AI 只读代码，返回文本结果
+	Complete(ctx context.Context, prompt string, opts ...Option) (string, error)
+	// Execute agentic 模式：AI 可读写文件，实际操作代码
+	Execute(ctx context.Context, prompt string, opts ...Option) (string, error)
+	// Name 返回 provider 名称
+	Name() string
+}
+
+// Option 用于配置 Complete 调用的选项
+type Option func(*options)
+
+type options struct {
+	WorkDir     string
+	MaxTokens   int
+	Temperature float64
+}
+
+// WithWorkDir 设置工作目录
+func WithWorkDir(dir string) Option {
+	return func(o *options) {
+		o.WorkDir = dir
+	}
+}
+
+// WithMaxTokens 设置最大 token 数
+func WithMaxTokens(n int) Option {
+	return func(o *options) {
+		o.MaxTokens = n
+	}
+}
+
+// WithTemperature 设置温度参数
+func WithTemperature(t float64) Option {
+	return func(o *options) {
+		o.Temperature = t
+	}
+}
+
+func buildOptions(opts []Option) *options {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o
+}

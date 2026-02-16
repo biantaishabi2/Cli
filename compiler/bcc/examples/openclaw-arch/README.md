@@ -188,5 +188,6 @@ bcc arch matrix --seed-file my-project-arch/v3.target-matrix.yaml ...
 
 ## 相关文档
 
+- [V3 架构整改分析](./V3架构整改分析.md) - 基于 target 门禁的根因归类与整改方案
 - [架构闭环迁移计划](../../docs/架构闭环迁移计划.md) - BCC 架构设计文档
 - [技术设计文档-后端编译器](../../docs/技术设计文档-后端编译器.md) - bcc 详细设计

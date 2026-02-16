@@ -19,12 +19,27 @@ gh issue list --state open
 # 查看 issue 详情
 gh issue view <number>
 
-# 创建功能分支
-git checkout -b feat/<issue-number>-<brief-desc>
+# 创建功能分支（二选一）
+# 方式1：常规 - 从主分支切出
+git checkout master && git checkout -b feat/<N>-<slug>
+# 方式2：并行开发 - 使用 worktree
+git worktree add ../Cli-feat-<N> -b feat/<N>-<slug> master
 
 # 开发完成后提交
 gh issue comment <number> --body "已实现，见 PR #X"
+
+# 合并后清理 worktree
+git worktree remove ../Cli-feat-<N>
 ```
+
+### 并行开发（Worktree）
+
+多个 issue 同时开发时，使用 `git worktree` 避免分支切换冲突：
+
+- 每个 issue 一个独立工作目录，互不干扰
+- 从 master 切出，不受其他未合并分支影响
+- 共享同一个 git 仓库，commit/push 正常工作
+- 完成合并后及时清理 worktree
 
 ### 会话结束检查清单
 

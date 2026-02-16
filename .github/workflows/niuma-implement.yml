@@ -1,0 +1,49 @@
+name: niuma - Implement
+
+on:
+  issues:
+    types: [labeled]
+
+defaults:
+  run:
+    working-directory: automation/niuma
+
+concurrency:
+  group: niuma-impl-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  implement:
+    runs-on: self-hosted
+    if: >
+      github.event.label.name == 'bot:plan-final' ||
+      github.event.label.name == 'bot:plan-approved'
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: automation/niuma/go.sum
+
+      - name: Tidy modules
+        run: go mod tidy
+
+      - name: Build niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Implement Code
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          ./niuma fix \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --repo-dir "$WORKSPACE"

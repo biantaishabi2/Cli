@@ -1,0 +1,8 @@
+# 测试用配置
+ai:
+  default: mock
+  providers:
+    mock:
+      cmd: "echo mock-response"
+    kimi:
+      cmd: "kimi --prompt {prompt}"

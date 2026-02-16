@@ -1,0 +1,21 @@
+This is a sample issue body.
+
+<!-- BOT:PLAN_DRAFT issue=1 rev=1 -->
+
+## 方案草案
+
+这是第一版草案。
+
+---
+
+<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=3 -->
+
+## 讨论汇总
+
+经过 3 轮讨论，共识如下...
+
+---
+
+<!-- BOT:CONVERGE_WARNING issue=1 rev=1 -->
+
+30 分钟内无回复将自动定稿。发送 `/hold` 暂缓，`/finalize` 立即定稿。
