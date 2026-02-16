@@ -343,7 +343,9 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	return o.transition(ctx, state.StatePRCreated)
 }
 
-// doImplementInner 执行实现的内部逻辑，返回 PR 号（0 表示无变更）
+// doImplementInner 执行实现的内部逻辑，返回 PR 号（0 表示无变更或无 worktree）
+// 有 worktree 时：创建 worktree → AI 执行 → commit → push → 创建 PR
+// 无 worktree 时：AI 在 workDir 中执行，返回 prNumber=0（调用方回滚状态）
 func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput, workDir string) (int, error) {
 	actualWorkDir := workDir
 	var gitOps *GitOps
@@ -507,6 +509,8 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 }
 
 // doIterateInner 执行迭代的内部逻辑
+// 有 worktree 时：复用/重建 worktree → AI 修改 → commit → push
+// 无 worktree 时：AI 修改 workDir 中的文件，不做 git 操作（用户需手动 push）
 func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, prNumber int, workDir string) error {
 	actualWorkDir := workDir
 	var gitOps *GitOps
@@ -628,8 +632,10 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	}
 
 	// 发 PR review
-	// 注意：GitHub 不允许对自己的 PR 提 REQUEST_CHANGES，
-	// 所以不通过时用 COMMENT，通过时尝试 APPROVE 失败则回退到 COMMENT
+	// 注意：GitHub 不允许对自己的 PR 提 REQUEST_CHANGES，也可能不允许 APPROVE。
+	// 策略：通过时尝试 APPROVE，失败（403 权限/422 规则限制）则回退到 COMMENT。
+	// 不通过时直接用 COMMENT（避免 REQUEST_CHANGES 权限问题）。
+	// 如果 APPROVE 因网络错误失败，COMMENT 也会失败，此时返回两个错误供排查。
 	reviewBody := FormatReviewResult(result)
 	event := "COMMENT"
 	if result.Approved {
@@ -637,7 +643,6 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	}
 	_, reviewErr := o.github.CreatePRReview(ctx, prNumber, reviewBody, event)
 	if reviewErr != nil && result.Approved {
-		// APPROVE 失败（可能是自己的 PR），回退到 COMMENT
 		_, fallbackErr := o.github.CreatePRReview(ctx, prNumber, reviewBody, "COMMENT")
 		if fallbackErr != nil {
 			return fmt.Errorf("发布审查结果失败（APPROVE: %v, COMMENT: %v）", reviewErr, fallbackErr)

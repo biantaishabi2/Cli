@@ -95,3 +95,50 @@ func TestFormatValidationError_Clean(t *testing.T) {
 	}
 	assert.Empty(t, FormatValidationError(result))
 }
+
+func TestValidateChanges_PathTraversal(t *testing.T) {
+	changes := []FileChange{
+		{Path: "src/../etc/passwd", Action: "modify"}, // 伪装成 src 下但实际穿越
+		{Path: "../../etc/shadow", Action: "modify"},
+		{Path: "src/safe.go", Action: "modify"},
+	}
+
+	result := ValidateChanges(changes)
+	assert.False(t, result.IsClean())
+	assert.Len(t, result.Rejected, 2)
+	assert.Contains(t, result.Rejected, "src/../etc/passwd")
+	assert.Contains(t, result.Rejected, "../../etc/shadow")
+	assert.Len(t, result.Allowed, 1)
+}
+
+func TestValidateChanges_ExtraPrefixes(t *testing.T) {
+	changes := []FileChange{
+		{Path: "automation/niuma/main.go", Action: "modify"},
+		{Path: "src/core.go", Action: "modify"},
+	}
+
+	// 没有额外前缀时，automation/ 被拒绝
+	result := ValidateChanges(changes)
+	assert.False(t, result.IsClean())
+	assert.Len(t, result.Rejected, 1)
+
+	// 添加额外前缀后通过
+	result = ValidateChanges(changes, "automation/")
+	assert.True(t, result.IsClean())
+	assert.Len(t, result.Allowed, 2)
+}
+
+func TestFormatHighRiskWarning(t *testing.T) {
+	result := &ValidationResult{
+		HighRisk: []string{".github/workflows/ci.yml", "Dockerfile"},
+	}
+	warning := FormatHighRiskWarning(result)
+	assert.Contains(t, warning, "高风险路径警告")
+	assert.Contains(t, warning, ".github/workflows/ci.yml")
+	assert.Contains(t, warning, "Dockerfile")
+}
+
+func TestFormatHighRiskWarning_Empty(t *testing.T) {
+	result := &ValidationResult{}
+	assert.Empty(t, FormatHighRiskWarning(result))
+}

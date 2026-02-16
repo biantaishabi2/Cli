@@ -5,6 +5,7 @@ package agent
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -29,16 +30,22 @@ func (g *GitOps) HasChanges() (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
-// sensitivePatterns 敏感文件模式（commit 前检查，拒绝提交）
-var sensitivePatterns = []string{
-	".env",
-	".env.local",
-	".env.production",
+// sensitiveExactNames 精确匹配的敏感文件名（commit 前检查，拒绝提交）
+var sensitiveExactNames = []string{
 	"credentials.json",
 	"secrets.yml",
 	"secrets.yaml",
 	"id_rsa",
 	"id_ed25519",
+	"id_ecdsa",
+}
+
+// sensitiveSuffixes 敏感文件后缀
+var sensitiveSuffixes = []string{
+	".key",
+	".pem",
+	".p12",
+	".pfx",
 }
 
 // CommitAll 将所有变更加入暂存区并提交
@@ -80,18 +87,15 @@ func (g *GitOps) checkSensitiveFiles() error {
 		return nil // 检查失败不阻塞
 	}
 
-	files := strings.Split(strings.TrimSpace(string(out)), "\n")
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil // 无暂存文件
+	}
+
+	files := strings.Split(raw, "\n")
 	var found []string
 	for _, f := range files {
-		name := strings.ToLower(f)
-		for _, pattern := range sensitivePatterns {
-			if strings.HasSuffix(name, pattern) || strings.Contains(name, pattern+".") {
-				found = append(found, f)
-				break
-			}
-		}
-		// 检查 *.key, *.pem 后缀
-		if strings.HasSuffix(name, ".key") || strings.HasSuffix(name, ".pem") {
+		if isSensitiveFile(f) {
 			found = append(found, f)
 		}
 	}
@@ -100,6 +104,32 @@ func (g *GitOps) checkSensitiveFiles() error {
 		return fmt.Errorf("暂存区包含敏感文件，已阻止提交: %v", found)
 	}
 	return nil
+}
+
+// isSensitiveFile 检查文件是否为敏感文件（基于文件名，不含路径）
+func isSensitiveFile(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+
+	// .env 文件（.env, .env.local, .env.staging, .env.production 等）
+	if name == ".env" || strings.HasPrefix(name, ".env.") {
+		return true
+	}
+
+	// 精确匹配已知敏感文件名
+	for _, pattern := range sensitiveExactNames {
+		if name == pattern {
+			return true
+		}
+	}
+
+	// 危险后缀
+	for _, suffix := range sensitiveSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Push 推送到远程

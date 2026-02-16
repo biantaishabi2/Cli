@@ -54,13 +54,13 @@ func ValidateChanges(changes []FileChange, extraPrefixes ...string) *ValidationR
 	result := &ValidationResult{}
 
 	for _, c := range changes {
-		path := filepath.Clean(c.Path)
-
-		// 拒绝包含 .. 的路径穿越
-		if strings.Contains(path, "..") {
+		// 先检查原始路径中的 .. （防止 filepath.Clean 将 src/../etc/passwd 解析为 etc/passwd）
+		if strings.Contains(c.Path, "..") {
 			result.Rejected = append(result.Rejected, c.Path)
 			continue
 		}
+
+		path := filepath.Clean(c.Path)
 
 		if IsHighRiskChange(path) {
 			result.HighRisk = append(result.HighRisk, path)

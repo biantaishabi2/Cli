@@ -96,10 +96,13 @@ func (p *CLIProvider) executeWithCmd(ctx context.Context, prompt string, o *opti
 	tmpFile.Close()
 
 	// 模板替换（对路径进行 shell 转义，防止路径含空格导致命令注入）
+	// {prompt_file} → prompt 内容写入的临时文件路径（推荐）
+	// {prompt} → 同 {prompt_file}（旧模板兼容，注意：是文件路径而非 prompt 文本）
+	// {workdir} → 工作目录路径
 	cmdStr := cmdTemplate
 	escaped := shellQuote(tmpFile.Name())
 	cmdStr = strings.ReplaceAll(cmdStr, "{prompt_file}", escaped)
-	cmdStr = strings.ReplaceAll(cmdStr, "{prompt}", escaped) // 兼容旧模板
+	cmdStr = strings.ReplaceAll(cmdStr, "{prompt}", escaped)
 	if o.WorkDir != "" {
 		cmdStr = strings.ReplaceAll(cmdStr, "{workdir}", shellQuote(o.WorkDir))
 	}
