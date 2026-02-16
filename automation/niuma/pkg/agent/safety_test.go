@@ -151,3 +151,29 @@ func TestParseFileChangesFromComment_None(t *testing.T) {
 	changes := ParseFileChangesFromComment(body)
 	assert.Nil(t, changes)
 }
+
+func TestCheckDiff_PathTraversal(t *testing.T) {
+	// 计划中包含 .. 路径遍历的条目会被忽略（不加入白名单）
+	plan := []FileChange{
+		{Path: "src/main.go", Action: "modify"},
+		{Path: "src/../etc/passwd", Action: "modify"}, // 路径遍历，应被忽略
+	}
+	diff := []string{"src/main.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.True(t, result.IsClean()) // etc/passwd 不在白名单也不算 Missing
+}
+
+func TestContainsPathTraversal(t *testing.T) {
+	assert.True(t, ContainsPathTraversal("src/../etc/passwd"))
+	assert.True(t, ContainsPathTraversal("../../etc/shadow"))
+	assert.False(t, ContainsPathTraversal("src/main.go"))
+	assert.False(t, ContainsPathTraversal("pkg/agent/safety.go"))
+}
+
+func TestDefaultBranch_Fallback(t *testing.T) {
+	// 在无 origin/HEAD 的目录中应回退到 master
+	g := NewGitOps(t.TempDir())
+	branch := g.DefaultBranch()
+	assert.Equal(t, "master", branch)
+}

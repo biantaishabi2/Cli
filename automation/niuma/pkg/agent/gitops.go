@@ -181,8 +181,8 @@ func (g *GitOps) DefaultBranch() string {
 	// 输出格式：refs/remotes/origin/main
 	ref := strings.TrimSpace(string(out))
 	parts := strings.Split(ref, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
+	if branch := parts[len(parts)-1]; branch != "" {
+		return branch
 	}
 	return "master"
 }

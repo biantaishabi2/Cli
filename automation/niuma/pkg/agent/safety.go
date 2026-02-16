@@ -66,8 +66,14 @@ func (r *DiffCheckResult) IsClean() bool {
 	return len(r.Extra) == 0 && len(r.Missing) == 0
 }
 
+// ContainsPathTraversal 检查路径是否包含 .. 路径遍历
+func ContainsPathTraversal(path string) bool {
+	return strings.Contains(path, "..")
+}
+
 // CheckDiffAgainstPlan 对比实际 diff 和计划声明的文件
 // 路径统一用 filepath.Clean 规范化，处理 ./ 前缀等格式差异
+// 包含 .. 的路径会被标记为 Extra（路径遍历防护）
 // plannedChanges 为空时跳过对比（避免空计划触发假警告）
 func CheckDiffAgainstPlan(actualFiles []string, plannedChanges []FileChange) *DiffCheckResult {
 	if len(plannedChanges) == 0 {
@@ -75,6 +81,10 @@ func CheckDiffAgainstPlan(actualFiles []string, plannedChanges []FileChange) *Di
 	}
 	planned := make(map[string]bool)
 	for _, fc := range plannedChanges {
+		// 路径遍历防护：包含 .. 的计划路径直接跳过（不加入白名单）
+		if ContainsPathTraversal(fc.Path) {
+			continue
+		}
 		planned[filepath.Clean(fc.Path)] = true
 	}
 	actual := make(map[string]bool)
