@@ -172,13 +172,13 @@ const finalPlanTmpl = `你是一个高级软件架构师。请根据以下讨论
     "recovery_strategy": "恢复策略"
   }
 }
-` + "```"
+` + "```" + `
 
 注意：
 1. test_strategy 必须明确单元测试、集成测试、BDD 测试的分层
 2. ci_inclusion 必须说明每种测试是否纳入 CI，以及原因
 3. cli_interface 必须检查参数风格一致性
-4. error_handling 必须定义错误码和恢复策略"
+4. error_handling 必须定义错误码和恢复策略`
 
 const implementTmpl = `你是一个高级软件工程师。请根据以下方案实现代码。
 
