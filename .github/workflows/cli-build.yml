@@ -1,0 +1,57 @@
+name: CLI - Build
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'automation/niuma/**'
+      - 'orchestration/taskctl/**'
+      - 'compiler/bcc/**'
+      - 'compiler/bddc/**'
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go: niuma
+      - name: Build niuma
+        working-directory: automation/niuma
+        run: go build -o niuma ./cmd/niuma
+
+      - name: Install niuma
+        run: |
+          sudo cp automation/niuma/niuma /usr/local/bin/niuma
+          sudo chmod +x /usr/local/bin/niuma
+          niuma --help
+
+      # Rust: taskctl + bcc (同一 workspace)
+      - name: Build Rust binaries (taskctl, bcc)
+        run: cargo build --release
+
+      - name: Install taskctl
+        run: |
+          sudo cp target/release/taskctl /usr/local/bin/taskctl
+          sudo chmod +x /usr/local/bin/taskctl
+          taskctl --help
+
+      - name: Install bcc
+        run: |
+          sudo cp target/release/bcc /usr/local/bin/bcc
+          sudo chmod +x /usr/local/bin/bcc
+          bcc --help
+
+      # Elixir: bddc (escript)
+      - name: Build bddc
+        working-directory: compiler/bddc
+        run: |
+          mix deps.get
+          mix escript.build
+
+      - name: Install bddc
+        run: |
+          sudo cp compiler/bddc/bdd_compiler /usr/local/bin/bdd_compiler
+          sudo chmod +x /usr/local/bin/bdd_compiler
+          sudo ln -sfn /usr/local/bin/bdd_compiler /usr/local/bin/bddc
+          bddc --help
