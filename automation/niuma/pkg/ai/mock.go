@@ -116,6 +116,16 @@ func (m *MockProvider) CallCount() int {
 	return len(m.calls)
 }
 
+// LastPrompt 返回最后一次调用的 prompt
+func (m *MockProvider) LastPrompt() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.calls) == 0 {
+		return ""
+	}
+	return m.calls[len(m.calls)-1].Prompt
+}
+
 // Reset 重置调用记录和响应索引
 func (m *MockProvider) Reset() {
 	m.mu.Lock()

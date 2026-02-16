@@ -10,6 +10,7 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
+	"github.com/google/go-github/v68/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -479,4 +480,128 @@ func TestBuildImplementContext(t *testing.T) {
 	ctx := BuildImplementContext(input)
 	assert.Contains(t, ctx, "Fix bug")
 	assert.Contains(t, ctx, "Something is broken")
+}
+
+// ===== 交流机制测试 =====
+
+func TestBuildPRHistory_WithReviewsAndComments(t *testing.T) {
+	mockAI := ai.NewMockProvider("unused")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRCreated))
+
+	// 设置 PR reviews
+	mockGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("R1: 缺少错误处理"), State: github.Ptr("COMMENT")},
+		{Body: github.Ptr("R2: 已修复"), State: github.Ptr("APPROVE")},
+		{Body: github.Ptr(""), State: github.Ptr("COMMENT")}, // 空 body 应被跳过
+	}
+
+	// 设置 PR comments（GitHub 中 PR 也是 issue，ListComments(prNumber) 能读到）
+	mockGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("修复了第一个问题")},
+		{Body: github.Ptr("")}, // 空 body 应被跳过
+		{Body: github.Ptr("第二轮修复完成")},
+	}
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+
+	// 验证包含 review 内容
+	assert.Contains(t, history, "[Review - COMMENT]")
+	assert.Contains(t, history, "R1: 缺少错误处理")
+	assert.Contains(t, history, "[Review - APPROVE]")
+	assert.Contains(t, history, "R2: 已修复")
+
+	// 验证包含 PR comment 内容
+	assert.Contains(t, history, "[PR Comment]")
+	assert.Contains(t, history, "修复了第一个问题")
+	assert.Contains(t, history, "第二轮修复完成")
+
+	// 验证分隔符
+	assert.Contains(t, history, "---")
+}
+
+func TestBuildPRHistory_Empty(t *testing.T) {
+	mockAI := ai.NewMockProvider("unused")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, history)
+}
+
+func TestBuildPRHistory_ReviewError(t *testing.T) {
+	mockAI := ai.NewMockProvider("unused")
+	mockGH := NewMockGitHub()
+	mockGH.Error = fmt.Errorf("API rate limit")
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	_, err := orch.buildPRHistory(context.Background(), 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "获取 PR reviews 失败")
+}
+
+func TestDoReview_ReadsPRHistory(t *testing.T) {
+	// 验证 DoReview 将 PR 历史传递给 AI
+	mockAI := ai.NewMockProvider(`{"approved": true, "summary": "代码良好", "issues": []}`)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePRCreated))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	mockGH.PRDiffs[10] = "diff content"
+
+	// 设置 PR 上已有的交流历史
+	mockGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("上一轮 review: 变量命名问题"), State: github.Ptr("COMMENT")},
+	}
+	mockGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("已修复命名问题")},
+	}
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.NoError(t, err)
+
+	// 验证 AI 收到的 prompt 包含历史上下文
+	lastPrompt := mockAI.LastPrompt()
+	assert.Contains(t, lastPrompt, "上一轮 review: 变量命名问题")
+	assert.Contains(t, lastPrompt, "已修复命名问题")
+}
+
+func TestDoIterate_PostsOnPR(t *testing.T) {
+	// 验证 DoIterate 将修复结果评论发在 PR 上，而不是 issue 上
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("修复了 XSS 漏洞")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix XSS", "Body")
+	mockGH.SetLabel(1, string(state.StatePRNeedsFix))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案")
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 20,
+	}, "PR created")
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoIterate(context.Background(), 20, "/tmp/work")
+	require.NoError(t, err)
+
+	// 验证 PR 上有评论（prNumber=20）
+	prComments := mockGH.Comments[20]
+	require.NotEmpty(t, prComments, "PR 上应该有迭代修复评论")
+	assert.Contains(t, prComments[0].GetBody(), "迭代修复")
+	assert.Contains(t, prComments[0].GetBody(), "修复了 XSS 漏洞")
+
+	// 验证 issue 上没有迭代修复评论（只有可能的失败通知等，但不应该有修复详情）
+	issueComments := mockGH.Comments[1]
+	for _, c := range issueComments {
+		assert.NotContains(t, c.GetBody(), "迭代修复", "issue 上不应该有迭代修复评论")
+	}
 }
