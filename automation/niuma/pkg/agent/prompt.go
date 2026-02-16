@@ -209,6 +209,8 @@ PR 历史中包含之前的 review 和回复。你必须：
 1. 逐条检查之前提出的问题，确认是否已修复
 2. 对于 implementer 反驳的问题（认为不是 bug），明确表态是否接受其解释
 3. 在 resolved_items 中列出已达成共识的条目
+
+**approved 判定规则：只有所有历史问题都达成共识（已修复或你接受对方解释），且无新的 P0/P1 问题，才能设 approved=true。如果有任何未解决的分歧，必须设 approved=false 并在 issues 中说明。**
 {{- end}}
 
 请以 JSON 格式返回审查结果：
