@@ -8,52 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestValidateChanges_AllAllowed(t *testing.T) {
-	changes := []FileChange{
-		{Path: "src/auth.go", Action: "modify"},
-		{Path: "lib/utils.go", Action: "modify"},
-		{Path: "tests/auth_test.go", Action: "create"},
-		{Path: "pkg/core/core.go", Action: "modify"},
-	}
-
-	result := ValidateChanges(changes)
-	assert.True(t, result.IsClean())
-	assert.Len(t, result.Allowed, 4)
-	assert.Empty(t, result.Rejected)
-	assert.Empty(t, result.HighRisk)
-}
-
-func TestValidateChanges_Rejected(t *testing.T) {
-	changes := []FileChange{
-		{Path: "src/auth.go", Action: "modify"},
-		{Path: "config/database.yml", Action: "modify"}, // 不在白名单
-		{Path: "scripts/deploy.sh", Action: "create"},    // 不在白名单
-	}
-
-	result := ValidateChanges(changes)
-	assert.False(t, result.IsClean())
-	assert.Len(t, result.Allowed, 1)
-	assert.Len(t, result.Rejected, 2)
-	assert.Contains(t, result.Rejected, "config/database.yml")
-	assert.Contains(t, result.Rejected, "scripts/deploy.sh")
-}
-
-func TestValidateChanges_HighRisk(t *testing.T) {
-	changes := []FileChange{
-		{Path: "src/main.go", Action: "modify"},
-		{Path: ".github/workflows/ci.yml", Action: "modify"},
-		{Path: "Dockerfile", Action: "modify"},
-		{Path: "auth/login.go", Action: "modify"},
-	}
-
-	result := ValidateChanges(changes)
-	assert.True(t, result.IsClean()) // 高风险不会被拒绝
-	assert.Len(t, result.HighRisk, 3)
-	assert.Contains(t, result.HighRisk, ".github/workflows/ci.yml")
-	assert.Contains(t, result.HighRisk, "Dockerfile")
-	assert.Contains(t, result.HighRisk, "auth/login.go")
-}
-
 func TestIsHighRiskChange(t *testing.T) {
 	tests := []struct {
 		path     string
@@ -77,68 +31,123 @@ func TestIsHighRiskChange(t *testing.T) {
 	}
 }
 
-func TestFormatValidationError(t *testing.T) {
-	result := &ValidationResult{
-		Rejected: []string{"config/db.yml", "scripts/hack.sh"},
-		HighRisk: []string{".github/workflows/ci.yml"},
-	}
-
-	formatted := FormatValidationError(result)
-	assert.Contains(t, formatted, "路径校验失败")
-	assert.Contains(t, formatted, "config/db.yml")
-	assert.Contains(t, formatted, "高风险")
-}
-
-func TestFormatValidationError_Clean(t *testing.T) {
-	result := &ValidationResult{
-		Allowed: []string{"src/main.go"},
-	}
-	assert.Empty(t, FormatValidationError(result))
-}
-
-func TestValidateChanges_PathTraversal(t *testing.T) {
-	changes := []FileChange{
-		{Path: "src/../etc/passwd", Action: "modify"}, // 伪装成 src 下但实际穿越
-		{Path: "../../etc/shadow", Action: "modify"},
-		{Path: "src/safe.go", Action: "modify"},
-	}
-
-	result := ValidateChanges(changes)
-	assert.False(t, result.IsClean())
-	assert.Len(t, result.Rejected, 2)
-	assert.Contains(t, result.Rejected, "src/../etc/passwd")
-	assert.Contains(t, result.Rejected, "../../etc/shadow")
-	assert.Len(t, result.Allowed, 1)
-}
-
-func TestValidateChanges_ExtraPrefixes(t *testing.T) {
-	changes := []FileChange{
-		{Path: "automation/niuma/main.go", Action: "modify"},
-		{Path: "src/core.go", Action: "modify"},
-	}
-
-	// 没有额外前缀时，automation/ 被拒绝
-	result := ValidateChanges(changes)
-	assert.False(t, result.IsClean())
-	assert.Len(t, result.Rejected, 1)
-
-	// 添加额外前缀后通过
-	result = ValidateChanges(changes, "automation/")
-	assert.True(t, result.IsClean())
-	assert.Len(t, result.Allowed, 2)
-}
-
 func TestFormatHighRiskWarning(t *testing.T) {
-	result := &ValidationResult{
-		HighRisk: []string{".github/workflows/ci.yml", "Dockerfile"},
-	}
-	warning := FormatHighRiskWarning(result)
+	paths := []string{".github/workflows/ci.yml", "Dockerfile"}
+	warning := FormatHighRiskWarning(paths)
 	assert.Contains(t, warning, "高风险路径警告")
 	assert.Contains(t, warning, ".github/workflows/ci.yml")
 	assert.Contains(t, warning, "Dockerfile")
 }
 
 func TestFormatHighRiskWarning_Empty(t *testing.T) {
-	result := &ValidationResult{}
-	assert.Empty(t, FormatHighRiskWarning(result))
+	assert.Empty(t, FormatHighRiskWarning(nil))
+}
+
+func TestCheckDiff_Match(t *testing.T) {
+	plan := []FileChange{
+		{Path: "a.go", Action: "modify"},
+		{Path: "b.go", Action: "create"},
+	}
+	diff := []string{"a.go", "b.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.True(t, result.IsClean())
+}
+
+func TestCheckDiff_Extra(t *testing.T) {
+	plan := []FileChange{
+		{Path: "a.go", Action: "modify"},
+	}
+	diff := []string{"a.go", "c.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.False(t, result.IsClean())
+	assert.Equal(t, []string{"c.go"}, result.Extra)
+	assert.Empty(t, result.Missing)
+}
+
+func TestCheckDiff_Missing(t *testing.T) {
+	plan := []FileChange{
+		{Path: "a.go", Action: "modify"},
+		{Path: "b.go", Action: "modify"},
+	}
+	diff := []string{"a.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.False(t, result.IsClean())
+	assert.Empty(t, result.Extra)
+	assert.Equal(t, []string{"b.go"}, result.Missing)
+}
+
+func TestCheckDiff_Both(t *testing.T) {
+	plan := []FileChange{
+		{Path: "a.go", Action: "modify"},
+		{Path: "b.go", Action: "modify"},
+	}
+	diff := []string{"a.go", "c.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.False(t, result.IsClean())
+	assert.Equal(t, []string{"c.go"}, result.Extra)
+	assert.Equal(t, []string{"b.go"}, result.Missing)
+}
+
+func TestCheckDiff_Empty(t *testing.T) {
+	result := CheckDiffAgainstPlan(nil, nil)
+	assert.True(t, result.IsClean())
+}
+
+func TestCheckDiff_EmptyPlan(t *testing.T) {
+	// 空计划跳过检查，即使有实际改动也不报错
+	result := CheckDiffAgainstPlan([]string{"a.go"}, nil)
+	assert.True(t, result.IsClean())
+}
+
+func TestCheckDiff_PathNormalize(t *testing.T) {
+	plan := []FileChange{
+		{Path: "./src/a.go", Action: "modify"},
+	}
+	diff := []string{"src/a.go"}
+
+	result := CheckDiffAgainstPlan(diff, plan)
+	assert.True(t, result.IsClean())
+}
+
+func TestFormatDiffCheckComment(t *testing.T) {
+	result := &DiffCheckResult{
+		Extra:   []string{"c.go"},
+		Missing: []string{"b.go"},
+	}
+	comment := FormatDiffCheckComment(result)
+	assert.Contains(t, comment, "计划 vs 实际 diff 对比")
+	assert.Contains(t, comment, "c.go")
+	assert.Contains(t, comment, "不在计划内")
+	assert.Contains(t, comment, "b.go")
+	assert.Contains(t, comment, "计划中但未修改")
+}
+
+func TestFormatDiffCheckComment_Clean(t *testing.T) {
+	result := &DiffCheckResult{}
+	assert.Empty(t, FormatDiffCheckComment(result))
+}
+
+func TestParseFileChangesFromComment(t *testing.T) {
+	body := `## 最终方案
+
+一些内容
+
+<!-- PLAN_FILES:[{"path":"src/main.go","action":"modify","description":"修改入口"},{"path":"pkg/util.go","action":"create","description":"新增工具"}] -->`
+
+	changes := ParseFileChangesFromComment(body)
+	assert.Len(t, changes, 2)
+	assert.Equal(t, "src/main.go", changes[0].Path)
+	assert.Equal(t, "modify", changes[0].Action)
+	assert.Equal(t, "pkg/util.go", changes[1].Path)
+	assert.Equal(t, "create", changes[1].Action)
+}
+
+func TestParseFileChangesFromComment_None(t *testing.T) {
+	body := "## 最终方案\n\n一些内容，没有 PLAN_FILES 标记"
+	changes := ParseFileChangesFromComment(body)
+	assert.Nil(t, changes)
 }

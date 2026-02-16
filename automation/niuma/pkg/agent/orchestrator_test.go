@@ -105,27 +105,7 @@ func TestDoPlanFinal_HappyPath(t *testing.T) {
 	assert.Contains(t, labels, string(state.StatePlanFinal))
 }
 
-func TestDoPlanFinal_PathValidationFailure(t *testing.T) {
-	// AI 返回的方案包含不在白名单的路径
-	mockAI := ai.NewMockProvider(`{
-		"title": "危险操作",
-		"approach": "修改系统文件",
-		"file_changes": [{"path": "etc/passwd", "action": "modify", "description": "hack"}],
-		"test_scenarios": []
-	}`)
-	mockGH := NewMockGitHub()
-	mockGH.SetIssue(1, "Bad plan", "Body")
-	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
-
-	orch := NewOrchestrator(mockGH, mockAI, 1)
-	err := orch.DoPlanFinal(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "路径校验失败")
-
-	// 验证没有转状态
-	labels := mockGH.Labels[1]
-	assert.Contains(t, labels, string(state.StateNeedsDiscussion))
-}
+// 路径校验从静态白名单改为 implement 阶段 diff 对比（#60），旧测试已删除
 
 func TestDoImplement_NoWorktree(t *testing.T) {
 	// 无 worktree 模式：AI 执行完成但无 git 操作，状态回滚

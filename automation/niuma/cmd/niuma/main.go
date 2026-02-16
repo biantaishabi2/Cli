@@ -366,7 +366,6 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		RepoDir:             flagRepoDir,
 		RequirePlanApproval: cfg.Workflow.RequirePlanApproval,
 		MaxIterateRounds:    cfg.Workflow.GetMaxIterateRounds(),
-		AllowedPrefixes:     cfg.Workflow.AllowedPrefixes,
 	}
 
 	// 讨论 provider

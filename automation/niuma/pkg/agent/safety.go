@@ -1,25 +1,15 @@
 // pkg/agent/safety.go
-// 安全校验：路径白名单、高风险变更检测
+// 安全校验：高风险变更检测、计划 vs 实际 diff 对比
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 )
-
-// defaultAllowedPrefixes 默认允许修改的目录前缀
-var defaultAllowedPrefixes = []string{
-	"src/",
-	"lib/",
-	"pkg/",
-	"app/",
-	"cmd/",
-	"internal/",
-	"tests/",
-	"test/",
-	"spec/",
-}
 
 // 高风险路径（需要额外审查）
 var highRiskPrefixes = []string{
@@ -35,48 +25,6 @@ var highRiskFiles = []string{
 	"Makefile",
 	".env",
 	".env.example",
-}
-
-// ValidationResult 路径校验结果
-type ValidationResult struct {
-	Allowed  []string // 允许的路径
-	Rejected []string // 被拒绝的路径
-	HighRisk []string // 高风险但允许的路径
-}
-
-// IsClean 是否全部通过校验（无拒绝项）
-func (r *ValidationResult) IsClean() bool {
-	return len(r.Rejected) == 0
-}
-
-// ValidateChanges 校验文件变更路径，extraPrefixes 为额外允许的目录前缀
-func ValidateChanges(changes []FileChange, extraPrefixes ...string) *ValidationResult {
-	result := &ValidationResult{}
-
-	for _, c := range changes {
-		// 先检查原始路径中的 .. （防止 filepath.Clean 将 src/../etc/passwd 解析为 etc/passwd）
-		if strings.Contains(c.Path, "..") {
-			result.Rejected = append(result.Rejected, c.Path)
-			continue
-		}
-
-		path := filepath.Clean(c.Path)
-
-		if IsHighRiskChange(path) {
-			result.HighRisk = append(result.HighRisk, path)
-			// 高风险路径仍然允许（只是标记）
-			result.Allowed = append(result.Allowed, path)
-			continue
-		}
-
-		if isAllowedPath(path, extraPrefixes) {
-			result.Allowed = append(result.Allowed, path)
-		} else {
-			result.Rejected = append(result.Rejected, path)
-		}
-	}
-
-	return result
 }
 
 // IsHighRiskChange 检测是否为高风险变更路径
@@ -95,52 +43,90 @@ func IsHighRiskChange(path string) bool {
 	return false
 }
 
-func isAllowedPath(path string, extraPrefixes []string) bool {
-	for _, prefix := range defaultAllowedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	for _, prefix := range extraPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // FormatHighRiskWarning 格式化高风险路径警告
-func FormatHighRiskWarning(result *ValidationResult) string {
-	if len(result.HighRisk) == 0 {
+func FormatHighRiskWarning(paths []string) string {
+	if len(paths) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## ⚠️ 高风险路径警告\n\n以下 %d 个路径需要人工审查：\n\n", len(result.HighRisk)))
-	for _, p := range result.HighRisk {
+	sb.WriteString(fmt.Sprintf("## ⚠️ 高风险路径警告\n\n以下 %d 个路径需要人工审查：\n\n", len(paths)))
+	for _, p := range paths {
 		sb.WriteString(fmt.Sprintf("- `%s`\n", p))
 	}
 	return sb.String()
 }
 
-// FormatValidationError 格式化校验错误信息
-func FormatValidationError(result *ValidationResult) string {
+// DiffCheckResult diff 对比结果
+type DiffCheckResult struct {
+	Extra   []string // 实际改了但不在计划中的文件
+	Missing []string // 计划中但实际没改的文件
+}
+
+func (r *DiffCheckResult) IsClean() bool {
+	return len(r.Extra) == 0 && len(r.Missing) == 0
+}
+
+// CheckDiffAgainstPlan 对比实际 diff 和计划声明的文件
+// 路径统一用 filepath.Clean 规范化，处理 ./ 前缀等格式差异
+// plannedChanges 为空时跳过对比（避免空计划触发假警告）
+func CheckDiffAgainstPlan(actualFiles []string, plannedChanges []FileChange) *DiffCheckResult {
+	if len(plannedChanges) == 0 {
+		return &DiffCheckResult{} // 空计划不检查
+	}
+	planned := make(map[string]bool)
+	for _, fc := range plannedChanges {
+		planned[filepath.Clean(fc.Path)] = true
+	}
+	actual := make(map[string]bool)
+	for _, f := range actualFiles {
+		actual[filepath.Clean(f)] = true
+	}
+	result := &DiffCheckResult{}
+	for f := range actual {
+		if !planned[f] {
+			result.Extra = append(result.Extra, f)
+		}
+	}
+	for p := range planned {
+		if !actual[p] {
+			result.Missing = append(result.Missing, p)
+		}
+	}
+	// 排序保证输出稳定（方便测试）
+	sort.Strings(result.Extra)
+	sort.Strings(result.Missing)
+	return result
+}
+
+// FormatDiffCheckComment 格式化为 PR comment，用表格展示计划 vs 实际
+func FormatDiffCheckComment(result *DiffCheckResult) string {
 	if result.IsClean() {
 		return ""
 	}
-
 	var sb strings.Builder
-	sb.WriteString("## 路径校验失败\n\n")
-	sb.WriteString(fmt.Sprintf("以下 %d 个路径不在允许列表中：\n\n", len(result.Rejected)))
-	for _, p := range result.Rejected {
-		sb.WriteString(fmt.Sprintf("- `%s`\n", p))
+	sb.WriteString("## 📋 计划 vs 实际 diff 对比\n\n")
+	sb.WriteString("| 文件 | 状态 |\n|------|------|\n")
+	for _, f := range result.Extra {
+		sb.WriteString(fmt.Sprintf("| `%s` | ⚠️ 不在计划内 |\n", f))
 	}
-
-	if len(result.HighRisk) > 0 {
-		sb.WriteString(fmt.Sprintf("\n以下 %d 个高风险路径需要人工审查：\n\n", len(result.HighRisk)))
-		for _, p := range result.HighRisk {
-			sb.WriteString(fmt.Sprintf("- ⚠️ `%s`\n", p))
-		}
+	for _, f := range result.Missing {
+		sb.WriteString(fmt.Sprintf("| `%s` | ⚠️ 计划中但未修改 |\n", f))
 	}
-
 	return sb.String()
+}
+
+// planFilesRe 匹配嵌入在 HTML comment 中的 FileChanges JSON
+var planFilesRe = regexp.MustCompile(`<!-- PLAN_FILES:(.*?) -->`)
+
+// ParseFileChangesFromComment 从 marker comment body 中提取嵌入的 FileChanges
+func ParseFileChangesFromComment(body string) []FileChange {
+	m := planFilesRe.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return nil
+	}
+	var changes []FileChange
+	if err := json.Unmarshal([]byte(m[1]), &changes); err != nil {
+		return nil
+	}
+	return changes
 }

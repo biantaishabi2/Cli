@@ -143,6 +143,21 @@ func (g *GitOps) Push(branch string) error {
 	return nil
 }
 
+// ChangedFiles 获取当前分支相对于 base 的改动文件列表
+func (g *GitOps) ChangedFiles(base string) ([]string, error) {
+	cmd := exec.Command("git", "diff", "--name-only", base+"...HEAD")
+	cmd.Dir = g.WorkDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only 失败: %w", err)
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil, nil
+	}
+	return strings.Split(raw, "\n"), nil
+}
+
 // CurrentBranch 返回当前分支名
 func (g *GitOps) CurrentBranch() (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
