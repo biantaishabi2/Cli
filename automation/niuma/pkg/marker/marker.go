@@ -132,6 +132,17 @@ func Render(m *Marker) string {
 	return strings.Join(parts, " ") + " -->"
 }
 
+// StripMarkerLines 从文本中移除所有 marker HTML 注释行，返回干净内容
+func StripMarkerLines(text string) string {
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		if !markerRe.MatchString(line) {
+			lines = append(lines, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 func isValidType(t Type) bool {
 	for _, vt := range AllTypes {
 		if t == vt {

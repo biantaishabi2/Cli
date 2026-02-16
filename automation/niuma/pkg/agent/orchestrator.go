@@ -128,13 +128,8 @@ func (o *Orchestrator) DoPlanDraft(ctx context.Context) error {
 		return fmt.Errorf("创建草案评论失败: %w", err)
 	}
 
-	// 6. 转状态：fix → plan-draft
-	if err := o.transition(ctx, state.StatePlanDraft); err != nil {
-		return err
-	}
-
-	// 7. 继续转到 needs-discussion
-	return o.transition(ctx, state.StateNeedsDiscussion)
+	// 6. 转状态：fix → needs-discussion（跳过中间态 plan-draft，避免两次 API 调用的竞态）
+	return o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateFixRequested), string(state.StateNeedsDiscussion))
 }
 
 // DoDiscussionCheck 检查讨论收敛状态
@@ -244,10 +239,13 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 	}
 	validation := ValidateChanges(finalPlan.FileChanges, extraPrefixes...)
 	if !validation.IsClean() {
-		// 发评论告知校验失败，但不转状态
 		errorBody := FormatValidationError(validation)
 		_, _ = o.github.AddComment(ctx, o.issueNumber, errorBody)
 		return fmt.Errorf("方案路径校验失败: %d 个路径被拒绝", len(validation.Rejected))
+	}
+	// 高风险路径警告（允许通过但提醒）
+	if len(validation.HighRisk) > 0 {
+		_, _ = o.github.AddComment(ctx, o.issueNumber, FormatHighRiskWarning(validation))
 	}
 
 	// 发评论 + 创建 marker
@@ -299,7 +297,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if err != nil {
 		return err
 	}
-	input.FinalPlan = finalMC.Comment.GetBody()
+	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
 
 	// 记录进入前的状态，用于失败回滚
 	prevState := currentState
@@ -467,7 +465,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	if err != nil {
 		return err
 	}
-	input.FinalPlan = finalMC.Comment.GetBody()
+	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
 	input.ReviewComment = reviewText
 
 	// 转状态到 iterating
@@ -513,14 +511,21 @@ func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, p
 
 	if o.config != nil && o.config.RepoDir != "" {
 		ws := NewWorkspace(o.config.RepoDir)
-		// 复用已有 worktree
 		if ws.Exists(o.issueNumber) {
+			// 复用已有 worktree
 			actualWorkDir = ws.Path(o.issueNumber)
 			gitOps = NewGitOps(actualWorkDir)
-			// 从 git 获取实际分支名，避免 issue 标题变化导致 slug 不匹配
 			branchName, _ = gitOps.CurrentBranch()
 		} else {
-			return fmt.Errorf("worktree 不存在（issue #%d），请先执行 fix 创建 worktree", o.issueNumber)
+			// worktree 不存在（CI runner 重启等），从远程分支重建
+			slug := slugFromTitle(input.IssueTitle)
+			wtPath, err := ws.Create(o.issueNumber, slug)
+			if err != nil {
+				return fmt.Errorf("重建 worktree 失败: %w", err)
+			}
+			actualWorkDir = wtPath
+			branchName = ws.BranchName(o.issueNumber, slug)
+			gitOps = NewGitOps(actualWorkDir)
 		}
 	}
 
@@ -598,7 +603,7 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	if err != nil {
 		return err
 	}
-	input.FinalPlan = finalMC.Comment.GetBody()
+	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
 	input.PRDiff = diff
 
 	// 构建 review prompt
@@ -627,13 +632,17 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	if result.Approved {
 		event = "APPROVE"
 	}
-	_, err = o.github.CreatePRReview(ctx, prNumber, reviewBody, event)
-	if err != nil && result.Approved {
+	_, reviewErr := o.github.CreatePRReview(ctx, prNumber, reviewBody, event)
+	if reviewErr != nil && result.Approved {
 		// APPROVE 失败（可能是自己的 PR），回退到 COMMENT
-		_, err = o.github.CreatePRReview(ctx, prNumber, reviewBody, "COMMENT")
+		_, fallbackErr := o.github.CreatePRReview(ctx, prNumber, reviewBody, "COMMENT")
+		if fallbackErr != nil {
+			return fmt.Errorf("发布审查结果失败（APPROVE: %v, COMMENT: %v）", reviewErr, fallbackErr)
+		}
+		reviewErr = nil
 	}
-	if err != nil {
-		return fmt.Errorf("发布审查结果失败: %w", err)
+	if reviewErr != nil {
+		return fmt.Errorf("发布审查结果失败: %w", reviewErr)
 	}
 
 	// 根据审查结果转状态

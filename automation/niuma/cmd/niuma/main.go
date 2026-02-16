@@ -42,6 +42,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagRepo, "repo", "", "GitHub 仓库 (owner/repo)")
 	rootCmd.PersistentFlags().IntVar(&flagIssue, "issue", 0, "Issue 编号")
 	rootCmd.PersistentFlags().StringVar(&flagRepoDir, "repo-dir", "", "主仓库本地路径（用于 worktree 隔离）")
+	rootCmd.PersistentFlags().IntVar(&flagPR, "pr", 0, "PR 编号")
+	rootCmd.PersistentFlags().StringVar(&flagWorkDir, "workdir", ".", "工作目录（无 --repo-dir 时使用）")
 
 	// 注册子命令
 	rootCmd.AddCommand(statusCmd)
@@ -200,10 +202,6 @@ var fixCmd = &cobra.Command{
 	RunE:  runFix,
 }
 
-func init() {
-	fixCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录（无 --repo-dir 时使用）")
-}
-
 func runFix(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 {
 		return fmt.Errorf("必须指定 --repo 和 --issue")
@@ -238,11 +236,6 @@ var iterateCmd = &cobra.Command{
 	RunE:  runIterate,
 }
 
-func init() {
-	iterateCmd.Flags().IntVar(&flagPR, "pr", 0, "PR 编号")
-	iterateCmd.Flags().StringVar(&flagWorkDir, "workdir", ".", "工作目录（无 --repo-dir 时使用）")
-}
-
 func runIterate(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 || flagPR == 0 {
 		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
@@ -275,10 +268,6 @@ var reviewCmd = &cobra.Command{
 	Use:   "review",
 	Short: "AI 自审 PR（需要 AI provider）",
 	RunE:  runReview,
-}
-
-func init() {
-	reviewCmd.Flags().IntVar(&flagPR, "pr", 0, "PR 编号")
 }
 
 func runReview(cmd *cobra.Command, args []string) error {

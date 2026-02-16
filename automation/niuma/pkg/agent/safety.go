@@ -109,6 +109,19 @@ func isAllowedPath(path string, extraPrefixes []string) bool {
 	return false
 }
 
+// FormatHighRiskWarning 格式化高风险路径警告
+func FormatHighRiskWarning(result *ValidationResult) string {
+	if len(result.HighRisk) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## ⚠️ 高风险路径警告\n\n以下 %d 个路径需要人工审查：\n\n", len(result.HighRisk)))
+	for _, p := range result.HighRisk {
+		sb.WriteString(fmt.Sprintf("- `%s`\n", p))
+	}
+	return sb.String()
+}
+
 // FormatValidationError 格式化校验错误信息
 func FormatValidationError(result *ValidationResult) string {
 	if result.IsClean() {
