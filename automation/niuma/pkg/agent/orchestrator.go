@@ -574,8 +574,8 @@ func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, p
 		}
 	}
 
-	// 发布修复结果
-	_, err = o.github.AddComment(ctx, o.issueNumber,
+	// 在 PR 上发回复评论（reviewer 在 PR 上看到回复，形成对话）
+	_, err = o.github.AddComment(ctx, prNumber,
 		fmt.Sprintf("## 🔄 迭代修复\n\n根据 review 意见进行了修改。\n\n<details>\n<summary>修复详情</summary>\n\n%s\n\n</details>", result))
 	if err != nil {
 		return fmt.Errorf("发布修复结果失败: %w", err)
@@ -617,6 +617,16 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	}
 	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
 	input.PRDiff = diff
+
+	// 读取 PR 完整历史（reviews + comments），让 reviewer 看到之前的讨论
+	prHistory, err := o.buildPRHistory(ctx, prNumber)
+	if err != nil {
+		// 非致命，记录但继续
+		prHistory = fmt.Sprintf("(读取 PR 历史失败: %v)", err)
+	}
+	if prHistory != "" {
+		input.ReviewComment = prHistory
+	}
 
 	// 构建 review prompt
 	reviewPrompt, err := BuildReviewPrompt(input)
@@ -805,6 +815,39 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *
 	}
 	body := FormatDiscussionSummary(summary, m)
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+}
+
+// buildPRHistory 读取 PR 上的全部 reviews 和 comments，构建完整历史上下文
+// GitHub 中 PR 也是 issue，ListComments(prNumber) 能读到 PR 上的普通评论
+func (o *Orchestrator) buildPRHistory(ctx context.Context, prNumber int) (string, error) {
+	reviews, err := o.github.ListPRReviews(ctx, prNumber)
+	if err != nil {
+		return "", fmt.Errorf("获取 PR reviews 失败: %w", err)
+	}
+
+	comments, err := o.github.ListComments(ctx, prNumber)
+	if err != nil {
+		return "", fmt.Errorf("获取 PR comments 失败: %w", err)
+	}
+
+	var parts []string
+	for _, r := range reviews {
+		body := r.GetBody()
+		if body != "" {
+			parts = append(parts, fmt.Sprintf("[Review - %s]\n%s", r.GetState(), body))
+		}
+	}
+	for _, c := range comments {
+		body := c.GetBody()
+		if body != "" {
+			parts = append(parts, fmt.Sprintf("[PR Comment]\n%s", body))
+		}
+	}
+
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return strings.Join(parts, "\n\n---\n\n"), nil
 }
 
 // getImplementProvider 获取实现用的 provider
