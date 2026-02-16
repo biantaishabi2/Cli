@@ -140,11 +140,45 @@ const finalPlanTmpl = `你是一个高级软件架构师。请根据以下讨论
   "file_changes": [
     {"path": "path/to/file.go", "action": "modify", "description": "变更描述"}
   ],
+  "test_strategy": {
+    "unit_tests": [
+      {"name": "单元测试名", "scenario": "测试场景", "assertions": ["断言1", "断言2"]}
+    ],
+    "integration_tests": [
+      {"name": "集成测试名", "setup": "前置条件", "verification": "验证点"}
+    ],
+    "bdd_tests": [
+      {"name": "BDD 场景名", "given": "前置条件", "when": "操作", "then": "预期结果"}
+    ],
+    "ci_inclusion": {
+      "unit": "是否纳入 CI（是/否，原因）",
+      "integration": "是否纳入 CI（是/否，原因）",
+      "bdd": "是否纳入 CI（是/否，原因）"
+    }
+  },
   "test_scenarios": [
     {"name": "测试场景名", "input": "输入", "expected": "预期输出"}
-  ]
+  ],
+  "cli_interface": {
+    "commands": [
+      {"name": "命令名", "args": ["--flag", "value"], "description": "功能描述"}
+    ],
+    "consistency": "CLI 参数风格是否统一（是/否，说明）"
+  },
+  "error_handling": {
+    "error_types": [
+      {"name": "错误类型", "exit_code": 1, "description": "触发场景"}
+    ],
+    "recovery_strategy": "恢复策略"
+  }
 }
 ` + "```"
+
+注意：
+1. test_strategy 必须明确单元测试、集成测试、BDD 测试的分层
+2. ci_inclusion 必须说明每种测试是否纳入 CI，以及原因
+3. cli_interface 必须检查参数风格一致性
+4. error_handling 必须定义错误码和恢复策略"
 
 const implementTmpl = `你是一个高级软件工程师。请根据以下方案实现代码。
 
@@ -182,9 +216,25 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 
 ## 审查要求
 
-只报告**确定的 bug 和安全漏洞**，不要报告以下内容：
+### 必须检查（严格）
+
+1. **测试覆盖缺口**
+   - 并发安全测试（如多线程访问同一资源）
+   - 边界条件测试（空值、极值、循环边界）
+   - 深度/递归限制测试（搜索深度、继承链深度）
+
+2. **CLI 接口一致性**
+   - 参数风格是否统一（全用 --flag 或混合 positional）
+   - 命名是否一致（--id vs --from vs --input）
+
+3. **错误处理完整性**
+   - 错误码是否定义
+   - 恢复策略是否说明
+   - 边界错误是否处理
+
+### 不报告（避免噪音）
+
 - 设计选择和代码风格偏好（除非明显违反 Go 惯例）
-- build tag、测试组织方式、CI 配置（这些是项目维护者的决定）
 - 理论上的竞态条件（GitHub Actions concurrency group 已在 workflow 层面防护）
 - 你不确定的推测（如"可能会..."、"也许..."）
 
