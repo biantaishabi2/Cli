@@ -31,6 +31,9 @@ jobs:
           go-version: '1.24'
           cache-dependency-path: automation/niuma/go.sum
 
+      - name: Tidy modules
+        run: go mod tidy
+
       - name: Build niuma
         run: go build -o niuma ./cmd/niuma
 
