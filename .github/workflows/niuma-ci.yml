@@ -5,9 +5,11 @@ on:
     branches: [master]
     paths:
       - 'automation/niuma/**'
+      - '.github/workflows/niuma-ci.yml'
   pull_request:
     paths:
       - 'automation/niuma/**'
+      - '.github/workflows/niuma-ci.yml'
 
 defaults:
   run:
