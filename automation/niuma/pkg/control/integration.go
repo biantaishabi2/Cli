@@ -47,6 +47,8 @@ func (b *IntegrationBuilder) Build(branches []BranchInfo, deps map[int][]int) (*
 	if err := b.git("checkout", "-b", branchName); err != nil {
 		return nil, fmt.Errorf("创建 integration 分支失败: %w", err)
 	}
+	// Build 结束后恢复到 baseBranch，避免后续操作（CleanOld 等）停留在 integration 分支
+	defer b.git("checkout", b.baseBranch)
 
 	result := &IntegrationResult{Branch: branchName}
 

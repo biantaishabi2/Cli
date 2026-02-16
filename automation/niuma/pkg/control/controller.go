@@ -81,8 +81,12 @@ func (c *Controller) Run(ctx context.Context) error {
 	// ② 对比 taskctl store：找出新 issue
 	existingTasks, err := c.taskctl.List("")
 	if err != nil {
-		// store 不存在时可能报错，忽略
-		existingTasks = nil
+		// 区分 store 不存在（首次运行）和真实错误
+		if strings.Contains(err.Error(), "no such file") || strings.Contains(err.Error(), "not found") {
+			existingTasks = nil
+		} else {
+			return fmt.Errorf("列出现有任务失败: %w", err)
+		}
 	}
 
 	existingIssues := make(map[int]string) // issueNum → taskID

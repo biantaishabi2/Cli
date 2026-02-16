@@ -2,6 +2,8 @@
 // 控制层核心类型定义
 package control
 
+import "strconv"
+
 // TaskStatus 任务状态
 type TaskStatus string
 
@@ -32,11 +34,9 @@ func (t *Task) IssueNum() int {
 	if !ok {
 		return 0
 	}
-	n := 0
-	for _, c := range v {
-		if c >= '0' && c <= '9' {
-			n = n*10 + int(c-'0')
-		}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
 	}
 	return n
 }
@@ -50,11 +50,9 @@ func (t *Task) PRNum() int {
 	if !ok {
 		return 0
 	}
-	n := 0
-	for _, c := range v {
-		if c >= '0' && c <= '9' {
-			n = n*10 + int(c-'0')
-		}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
 	}
 	return n
 }
