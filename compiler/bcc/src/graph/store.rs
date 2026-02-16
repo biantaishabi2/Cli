@@ -10,13 +10,13 @@ pub trait CodeGraphStore {
         &self,
         snapshot: &crate::extract::AstSnapshot,
         commit_hash: &str,
-    ) -> Result<(), GraphError>;
+    ) -> Result<()>;
 
     /// 增量索引（只处理新 commit）
-    fn index_incremental(&self, commits: &[CommitInfo]) -> Result<(), GraphError>;
+    fn index_incremental(&self, commits: &[CommitInfo]) -> Result<()>;
 
     /// 标记需要重新索引的函数
-    fn mark_stale(&self, file_paths: &[String]) -> Result<(), GraphError>;
+    fn mark_stale(&self, file_paths: &[String]) -> Result<()>;
 
     /// 获取函数信息
     fn get_function(&self, id: &str) -> Option<FunctionRecord>;
