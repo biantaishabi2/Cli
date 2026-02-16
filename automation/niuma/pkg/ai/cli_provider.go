@@ -28,6 +28,10 @@ func (p *CLIProvider) Name() string {
 
 // Complete 文本模式：使用 Cmd 模板执行，AI 只返回文本
 func (p *CLIProvider) Complete(ctx context.Context, prompt string, opts ...Option) (string, error) {
+	if p.Cmd == "" {
+		return "", fmt.Errorf("CLIProvider %q 未配置 Cmd（文本模式命令模板）", p.ProviderName)
+	}
+
 	o := buildOptions(opts)
 
 	maxRetries := p.MaxRetries
@@ -58,6 +62,9 @@ func (p *CLIProvider) Execute(ctx context.Context, prompt string, opts ...Option
 	cmdTemplate := p.CmdAgent
 	if cmdTemplate == "" {
 		cmdTemplate = p.Cmd // 回退到文本模式
+	}
+	if cmdTemplate == "" {
+		return "", fmt.Errorf("CLIProvider %q 未配置 CmdAgent 或 Cmd", p.ProviderName)
 	}
 
 	maxRetries := p.MaxRetries

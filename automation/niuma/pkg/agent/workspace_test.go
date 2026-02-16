@@ -92,6 +92,32 @@ func TestWorkspace_CreateAndRemove(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWorkspace_Checkout(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+
+	// 先创建一个分支（模拟 implement 阶段已创建分支）
+	git := gitBin()
+	cmd := exec.Command(git, "branch", "fix/1-checkout-test")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 使用 Checkout 从已有分支创建 worktree
+	wtPath, err := ws.Checkout(1, "fix/1-checkout-test")
+	require.NoError(t, err)
+	assert.DirExists(t, wtPath)
+	assert.True(t, ws.Exists(1))
+
+	// 验证分支正确
+	gitOps := NewGitOps(wtPath)
+	branch, err := gitOps.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "fix/1-checkout-test", branch)
+
+	// 清理
+	require.NoError(t, ws.Remove(1))
+}
+
 func TestWorkspace_Exists_NotExist(t *testing.T) {
 	ws := NewWorkspace("/tmp/nonexistent-repo")
 	assert.False(t, ws.Exists(999))

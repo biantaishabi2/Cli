@@ -61,11 +61,15 @@ func NewOrchestrator(ghOps GitHubOps, provider ai.Provider, issueNumber int) *Or
 }
 
 // NewOrchestratorWithConfig 创建支持多 provider 的编排器
+// 至少需要 ImplementProvider 或 DiscussionProviders 中有一个 provider
 func NewOrchestratorWithConfig(ghOps GitHubOps, issueNumber int, cfg *OrchestratorConfig) *Orchestrator {
 	// 确定默认 provider：优先 ImplementProvider，否则用第一个讨论 provider
 	defaultProvider := cfg.ImplementProvider
 	if defaultProvider == nil && len(cfg.DiscussionProviders) > 0 {
 		defaultProvider = cfg.DiscussionProviders[0]
+	}
+	if defaultProvider == nil {
+		panic("OrchestratorConfig 必须提供至少一个 provider（ImplementProvider 或 DiscussionProviders）")
 	}
 
 	// consolidator 默认用 defaultProvider
@@ -524,14 +528,15 @@ func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, p
 			gitOps = NewGitOps(actualWorkDir)
 			branchName, _ = gitOps.CurrentBranch()
 		} else {
-			// worktree 不存在（CI runner 重启等），从远程分支重建
+			// worktree 不存在（CI runner 重启等），checkout 已有远程分支重建
 			slug := slugFromTitle(input.IssueTitle)
-			wtPath, err := ws.Create(o.issueNumber, slug)
+			branch := ws.BranchName(o.issueNumber, slug)
+			wtPath, err := ws.Checkout(o.issueNumber, branch)
 			if err != nil {
 				return fmt.Errorf("重建 worktree 失败: %w", err)
 			}
 			actualWorkDir = wtPath
-			branchName = ws.BranchName(o.issueNumber, slug)
+			branchName = branch
 			gitOps = NewGitOps(actualWorkDir)
 		}
 	}
@@ -619,8 +624,8 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return fmt.Errorf("构建 review prompt 失败: %w", err)
 	}
 
-	// AI 审查
-	raw, err := o.provider.Complete(ctx, reviewPrompt)
+	// AI 审查（使用实现 provider，不是讨论汇总用的 consolidator）
+	raw, err := o.getImplementProvider().Complete(ctx, reviewPrompt)
 	if err != nil {
 		return fmt.Errorf("AI 审查失败: %w", err)
 	}

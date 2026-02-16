@@ -233,6 +233,15 @@ func TestNewOrchestratorWithConfig(t *testing.T) {
 	assert.Equal(t, implProvider, orch.getImplementProvider())
 }
 
+func TestNewOrchestratorWithConfig_PanicsWithNoProvider(t *testing.T) {
+	mockGH := NewMockGitHub()
+	cfg := &OrchestratorConfig{} // 没有任何 provider
+
+	assert.Panics(t, func() {
+		NewOrchestratorWithConfig(mockGH, 1, cfg)
+	})
+}
+
 func TestDoDiscussionCheck_MultiProvider(t *testing.T) {
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")

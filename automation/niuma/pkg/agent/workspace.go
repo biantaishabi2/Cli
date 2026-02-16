@@ -47,6 +47,27 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 	return wtPath, nil
 }
 
+// Checkout 从已有分支创建 worktree（不创建新分支）
+// 用于 iterate 阶段重建已被清理的 worktree（分支在 implement 阶段已创建）
+func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
+	wtPath := w.Path(issueNum)
+
+	// 如果已存在，直接返回
+	if w.Exists(issueNum) {
+		return wtPath, nil
+	}
+
+	// git worktree add <path> <branch>（不带 -b，使用已有分支）
+	cmd := exec.Command("git", "worktree", "add", wtPath, branch)
+	cmd.Dir = w.RepoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+	}
+
+	return wtPath, nil
+}
+
 // Remove 移除 worktree
 func (w *Workspace) Remove(issueNum int) error {
 	wtPath := w.Path(issueNum)
