@@ -20,6 +20,9 @@ func (c *Client) GetIssue(ctx context.Context, number int) (*github.Issue, error
 
 // CreateIssue 创建新 issue
 func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []string) (*github.Issue, error) {
+	if labels == nil {
+		labels = []string{}
+	}
 	req := &github.IssueRequest{
 		Title:  &title,
 		Body:   &body,
