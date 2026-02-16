@@ -29,8 +29,14 @@ ai:
 workflow:
   require_plan_approval: false      # 方案定稿后是否需要人工审批
   max_iterate_rounds: 3             # 最大自动迭代轮数
-  allowed_prefixes:                 # 额外允许修改的目录
-    - "automation/"
+
+# 控制层配置（Phase 3）
+control:
+  taskctl_bin: ""                   # taskctl 二进制路径（可选，默认自动发现）
+  merge_strategy: "merge"           # PR 合并策略：merge 或 squash
+  integration_branch_prefix: "integration/batch-"  # Integration 分支前缀
+  max_old_branches: 3               # 保留的旧 integration 分支数
+  min_prs_for_integration: 2        # 触发 integration 构建的最小 PR 数
 
 # 环境变量覆盖：
 # NIUMA_AI_DEFAULT=codex  覆盖 ai.default
