@@ -412,8 +412,12 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 
 			// diff 对比：计划声明 vs 实际改动
 			if len(plannedChanges) > 0 {
-				changedFiles, err := gitOps.ChangedFiles("master")
-				if err == nil {
+				baseBranch := gitOps.DefaultBranch()
+				changedFiles, err := gitOps.ChangedFiles(baseBranch)
+				if err != nil {
+					_, _ = o.github.AddComment(ctx, prNumber,
+						fmt.Sprintf("## ⚠️ diff 对比失败\n\n无法获取改动文件列表: %v", err))
+				} else {
 					diffResult := CheckDiffAgainstPlan(changedFiles, plannedChanges)
 					if !diffResult.IsClean() {
 						comment := FormatDiffCheckComment(diffResult)

@@ -144,8 +144,19 @@ func (g *GitOps) Push(branch string) error {
 }
 
 // ChangedFiles 获取当前分支相对于 base 的改动文件列表
+// 使用 merge-base 找到分叉点，再用两点号 diff 获取精确改动
 func (g *GitOps) ChangedFiles(base string) ([]string, error) {
-	cmd := exec.Command("git", "diff", "--name-only", base+"...HEAD")
+	// 先找 merge-base（分叉点）
+	mbCmd := exec.Command("git", "merge-base", base, "HEAD")
+	mbCmd.Dir = g.WorkDir
+	mbOut, err := mbCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git merge-base 失败: %w", err)
+	}
+	mergeBase := strings.TrimSpace(string(mbOut))
+
+	// 用两点号 diff：merge-base..HEAD
+	cmd := exec.Command("git", "diff", "--name-only", mergeBase+"..HEAD")
 	cmd.Dir = g.WorkDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -156,6 +167,24 @@ func (g *GitOps) ChangedFiles(base string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(raw, "\n"), nil
+}
+
+// DefaultBranch 获取远程默认分支名（origin/HEAD 指向）
+// 失败时回退到 "master"
+func (g *GitOps) DefaultBranch() string {
+	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd.Dir = g.WorkDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "master"
+	}
+	// 输出格式：refs/remotes/origin/main
+	ref := strings.TrimSpace(string(out))
+	parts := strings.Split(ref, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return "master"
 }
 
 // CurrentBranch 返回当前分支名
