@@ -14,6 +14,16 @@ import (
 type Config struct {
 	AI       AIConfig       `yaml:"ai"`
 	Workflow WorkflowConfig `yaml:"workflow"`
+	Control  ControlConfig  `yaml:"control"`
+}
+
+// ControlConfig 多 Issue 协调配置
+type ControlConfig struct {
+	TaskCtlBin              string `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
+	MergeStrategy           string `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix string `yaml:"integration_branch_prefix"` // 默认 integration/batch-
+	MaxOldBranches          int    `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
+	MinPRsForIntegration    int    `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
 }
 
 // WorkflowConfig 工作流配置

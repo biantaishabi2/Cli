@@ -17,5 +17,8 @@ vendor/
 .DS_Store
 Thumbs.db
 
+# 运行时数据（taskctl store 等）
+.niuma/
+
 # 配置文件（含敏感信息）
 .niuma.yml
