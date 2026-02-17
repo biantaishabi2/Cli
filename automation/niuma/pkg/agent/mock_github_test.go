@@ -83,6 +83,7 @@ func (m *MockGitHub) AddComment(_ context.Context, issueNumber int, body string)
 		Body: github.Ptr(body),
 	}
 	m.Comments[issueNumber] = append(m.Comments[issueNumber], comment)
+	m.updateMarkersFromComment(issueNumber, m.commentID, body)
 	return comment, nil
 }
 
@@ -107,15 +108,29 @@ func (m *MockGitHub) CreateOrUpdateMarker(_ context.Context, issueNumber int, mk
 	}
 
 	key := fmt.Sprintf("%s:%d", mk.Type, issueNumber)
+	if existing := m.Markers[key]; existing != nil {
+		existing.Marker = mk
+		existing.Comment.Body = github.Ptr(body)
+		for _, c := range m.Comments[issueNumber] {
+			if c.GetID() == existing.CommentID {
+				c.Body = github.Ptr(body)
+				break
+			}
+		}
+		return nil
+	}
+
 	m.commentID++
+	comment := &github.IssueComment{
+		ID:   github.Ptr(m.commentID),
+		Body: github.Ptr(body),
+	}
 	m.Markers[key] = &gh.MarkerComment{
 		Marker:    mk,
 		CommentID: m.commentID,
-		Comment: &github.IssueComment{
-			ID:   github.Ptr(m.commentID),
-			Body: github.Ptr(body),
-		},
+		Comment:   comment,
 	}
+	m.Comments[issueNumber] = append(m.Comments[issueNumber], comment)
 	return nil
 }
 
@@ -310,4 +325,27 @@ func (m *MockGitHub) GetMarker(issueNumber int, t marker.Type) *gh.MarkerComment
 
 	key := fmt.Sprintf("%s:%d", t, issueNumber)
 	return m.Markers[key]
+}
+
+// updateMarkersFromComment 从评论正文中解析 marker，并更新最新 revision
+func (m *MockGitHub) updateMarkersFromComment(issueNumber int, commentID int64, body string) {
+	markers := marker.ParseAll(body)
+	for _, mk := range markers {
+		if mk == nil || mk.Issue != issueNumber {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", mk.Type, issueNumber)
+		existing := m.Markers[key]
+		if existing != nil && existing.Marker.Revision >= mk.Revision {
+			continue
+		}
+		m.Markers[key] = &gh.MarkerComment{
+			Marker:    mk,
+			CommentID: commentID,
+			Comment: &github.IssueComment{
+				ID:   github.Ptr(commentID),
+				Body: github.Ptr(body),
+			},
+		}
+	}
 }

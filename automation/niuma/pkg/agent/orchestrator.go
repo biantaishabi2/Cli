@@ -775,7 +775,8 @@ func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, existing *gh
 		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
-	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+	_, err = o.github.AddComment(ctx, o.issueNumber, body)
+	return err
 }
 
 // hasMultipleDiscussionProviders 检查是否配置了多个讨论 provider
@@ -833,7 +834,8 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *
 		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
-	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+	_, err = o.github.AddComment(ctx, o.issueNumber, body)
+	return err
 }
 
 // buildPRHistory 读取 PR 上的全部 reviews 和 comments，构建完整历史上下文
