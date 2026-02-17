@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -262,10 +262,25 @@ pub struct AstSnapshotRecord {
     pub localDependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub localCallTargets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<AstSnapshotCallRecord>,
+    #[serde(default)]
+    pub imports: Vec<AstSnapshotImportRecord>,
     pub exports_count: usize,
     pub imports_count: usize,
     pub loc_lines: usize,
     pub side_effects: SideEffects,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AstSnapshotCallRecord {
+    pub callee: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AstSnapshotImportRecord {
+    pub specifier: String,
+    pub kind: String,
 }
 
 /// 需要排除的通用目录
@@ -352,6 +367,8 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
             sourcePath: rel_path,
             localDependencies: local_deps,
             localCallTargets: record.local_call_targets.clone(),
+            calls: normalized_snapshot_calls(&record),
+            imports: normalized_snapshot_imports(&record),
             exports_count: record.exports.len(),
             imports_count: record.imports.len(),
             loc_lines: record.loc_lines,
@@ -381,6 +398,39 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         "[batch] written {} records ({} skipped) → {}",
         snapshot.source_count, snapshot.skipped_count, output
     );
+}
+
+fn normalized_snapshot_calls(record: &FileRecord) -> Vec<AstSnapshotCallRecord> {
+    let mut set = BTreeSet::new();
+    for call in &record.calls {
+        let callee = call.callee.trim();
+        if !callee.is_empty() {
+            set.insert(callee.to_string());
+        }
+    }
+
+    set.into_iter()
+        .map(|callee| AstSnapshotCallRecord { callee })
+        .collect()
+}
+
+fn normalized_snapshot_imports(record: &FileRecord) -> Vec<AstSnapshotImportRecord> {
+    let mut set = BTreeSet::new();
+    for import in &record.imports {
+        let kind = import.kind.trim();
+        let specifier = normalize_spaces(import.specifier.trim());
+        if !kind.is_empty() && !specifier.is_empty() {
+            set.insert((kind.to_string(), specifier));
+        }
+    }
+
+    set.into_iter()
+        .map(|(kind, specifier)| AstSnapshotImportRecord { specifier, kind })
+        .collect()
+}
+
+fn normalize_spaces(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 对单个文件调用对应语言的 extract，返回 FileRecord 或错误

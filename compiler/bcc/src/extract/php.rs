@@ -118,6 +118,11 @@ fn extract_php_recursive(
                 }
             }
 
+            // 文件级 namespace use：use A\B; use C\D as E;
+            "namespace_use_declaration" => {
+                extract_namespace_use_declaration(node, source, imports);
+            }
+
             // use trait 语句
             "use_declaration" => {
                 // use Trait1, Trait2;
@@ -283,6 +288,96 @@ fn get_method_visibility(node: &tree_sitter::Node, source: &[u8]) -> String {
     "public".into()
 }
 
+fn extract_namespace_use_declaration(
+    node: tree_sitter::Node,
+    source: &[u8],
+    imports: &mut Vec<ImportRecord>,
+) {
+    let mut prefix: Option<String> = None;
+    let mut clauses: Vec<tree_sitter::Node> = Vec::new();
+
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i) else { continue };
+        if !child.is_named() {
+            continue;
+        }
+
+        match child.kind() {
+            "namespace_name" => {
+                let p = common::node_text(child, source);
+                if !p.is_empty() {
+                    prefix = Some(p);
+                }
+            }
+            "namespace_use_clause" => clauses.push(child),
+            "namespace_use_group" => {
+                for j in 0..child.child_count() {
+                    let Some(grand_child) = child.child(j) else {
+                        continue;
+                    };
+                    if grand_child.is_named() && grand_child.kind() == "namespace_use_clause" {
+                        clauses.push(grand_child);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for clause in clauses {
+        if let Some(specifier) =
+            format_namespace_use_clause(clause, source, prefix.as_deref())
+        {
+            imports.push(ImportRecord {
+                specifier,
+                kind: "use".into(),
+            });
+        }
+    }
+}
+
+fn format_namespace_use_clause(
+    clause: tree_sitter::Node,
+    source: &[u8],
+    prefix: Option<&str>,
+) -> Option<String> {
+    let mut target: Option<String> = None;
+    for i in 0..clause.child_count() {
+        let Some(child) = clause.child(i) else { continue };
+        if !child.is_named() {
+            continue;
+        }
+        if child.kind() == "name" || child.kind() == "qualified_name" {
+            target = Some(common::node_text(child, source));
+            break;
+        }
+    }
+
+    let mut full = target?;
+    if let Some(base) = prefix {
+        if !base.is_empty() {
+            full = format!("{}\\{}", base.trim_matches('\\'), full.trim_matches('\\'));
+        }
+    }
+    full = full.trim().trim_matches('\\').to_string();
+    if full.is_empty() {
+        return None;
+    }
+
+    let alias = clause
+        .child_by_field_name("alias")
+        .map(|n| common::node_text(n, source))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if alias.is_empty() {
+        Some(full)
+    } else {
+        Some(format!("{} as {}", full, alias))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +433,31 @@ class UserController {
             calls.iter().filter(|callee| *callee == "Service").count(),
             1
         );
+    }
+
+    #[test]
+    fn extracts_namespace_use_and_keeps_extends_trait_and_new_behavior() {
+        let source = r#"<?php
+use A\B;
+use C\D as E;
+
+class X extends Base {
+    use LoggerTrait;
+
+    public function f() {
+        $v = new E();
+        return $v;
+    }
+}
+"#;
+
+        let record = extract(source, "app/controllers/X.php");
+        testing::assert_import_contains(&record, "A\\B", "use");
+        testing::assert_import_contains(&record, "C\\D as E", "use");
+        testing::assert_import_contains(&record, "Base", "extends");
+        testing::assert_import_contains(&record, "LoggerTrait", "trait");
+
+        let calls = testing::call_names(&record);
+        testing::assert_contains(&calls, "E", "calls");
     }
 }
