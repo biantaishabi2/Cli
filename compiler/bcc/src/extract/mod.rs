@@ -281,15 +281,29 @@ const EXCLUDED_DIRS: &[&str] = &[
     "vendor",
 ];
 
+/// 规范化 batch 语言参数并校验支持集（大小写不敏感）。
+pub fn normalize_batch_lang(lang: &str) -> Result<String, String> {
+    let raw = lang.trim();
+    let normalized = raw.to_ascii_lowercase();
+    match normalized.as_str() {
+        "elixir" | "typescript" | "rust" | "php" => Ok(normalized),
+        _ => Err(format!("unsupported language: {}", raw)),
+    }
+}
+
 /// 批量提取：递归遍历目录，按语言过滤，输出 AstSnapshot JSON
 pub fn run_batch(dir: &str, lang: &str, output: &str) {
+    let lang_norm = normalize_batch_lang(lang).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        std::process::exit(1);
+    });
+
     let root = Path::new(dir);
     if !root.is_dir() {
         eprintln!("'{}' is not a directory", dir);
         std::process::exit(1);
     }
 
-    let lang_norm = lang.to_ascii_lowercase();
     let files = collect_files(root, &lang_norm);
     eprintln!("[batch] found {} files for lang={}", files.len(), lang_norm);
 
@@ -1074,6 +1088,23 @@ fn strip_keyword_options(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_batch_lang_accepts_supported_values_case_insensitive() {
+        assert_eq!(
+            normalize_batch_lang("TyPeScRiPt"),
+            Ok("typescript".to_string())
+        );
+        assert_eq!(normalize_batch_lang("RUST"), Ok("rust".to_string()));
+    }
+
+    #[test]
+    fn normalize_batch_lang_rejects_unsupported_value() {
+        assert_eq!(
+            normalize_batch_lang("go"),
+            Err("unsupported language: go".to_string())
+        );
+    }
 
     #[test]
     fn expand_simple_module() {

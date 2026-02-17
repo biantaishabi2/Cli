@@ -632,7 +632,10 @@ fn validate_export_bdd_source_generates_yaml() {
 
     // forbidden 边 X->Y 生成 YAML（edge_class: blocked）
     let forbidden_yaml = bdd_dir.join("X_Y.yaml");
-    assert!(forbidden_yaml.exists(), "X_Y.yaml should exist for forbidden edge");
+    assert!(
+        forbidden_yaml.exists(),
+        "X_Y.yaml should exist for forbidden edge"
+    );
     let content = fs::read_to_string(&forbidden_yaml).expect("read X_Y.yaml");
     assert!(content.contains("module: X"));
     assert!(content.contains("edge_class: blocked"));
@@ -642,7 +645,10 @@ fn validate_export_bdd_source_generates_yaml() {
 
     // unexpected 边 B->A 生成 YAML（edge_class: temporary）
     let unexpected_yaml = bdd_dir.join("B_A.yaml");
-    assert!(unexpected_yaml.exists(), "B_A.yaml should exist for unexpected edge");
+    assert!(
+        unexpected_yaml.exists(),
+        "B_A.yaml should exist for unexpected edge"
+    );
     let content2 = fs::read_to_string(&unexpected_yaml).expect("read B_A.yaml");
     assert!(content2.contains("module: B"));
     assert!(content2.contains("edge_class: temporary"));
@@ -783,12 +789,7 @@ profiles:
     let yaml_count = fs::read_dir(&bdd_dir)
         .expect("read bdd_dir")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
     assert_eq!(yaml_count, 0, "no yaml files expected for clean actual");
 
@@ -809,10 +810,7 @@ fn validate_truncate_removed_full_output() {
     let mut forbid_edges = String::new();
     let mut actual_entries = Vec::new();
     for i in 0..15 {
-        forbid_edges.push_str(&format!(
-            "  - caller: M{}\n    callee: N{}\n",
-            i, i
-        ));
+        forbid_edges.push_str(&format!("  - caller: M{}\n    callee: N{}\n", i, i));
         actual_entries.push(format!(
             r#"  {{"caller":"M{}","callee":"N{}","import_edges":{},"call_edges":0,"total_edges":{}}}"#,
             i, i, i + 1, i + 1
@@ -873,10 +871,7 @@ profiles:
     max_bidirectional_pair_count: 999
 "#,
     );
-    write(
-        &actual,
-        &format!("[\n{}\n]", actual_entries.join(",\n")),
-    );
+    write(&actual, &format!("[\n{}\n]", actual_entries.join(",\n")));
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
@@ -907,12 +902,7 @@ profiles:
     let yaml_count = fs::read_dir(&bdd_dir)
         .expect("read bdd_dir")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
     assert!(
         yaml_count > 10,
@@ -921,8 +911,7 @@ profiles:
     );
 
     // 验证 markdown 报告中包含 "showing top 20 of" 标注
-    let report = fs::read_to_string(out.join("v3-validation-report.md"))
-        .expect("read report");
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
     assert!(
         report.contains("showing top 20 of"),
         "report should contain 'showing top 20 of' annotation"
@@ -970,14 +959,13 @@ fn validate_export_then_bdd_seed_e2e() {
     let yaml_count = fs::read_dir(&bdd_source)
         .expect("read bdd_source")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
-    assert!(yaml_count >= 2, "expected >= 2 yaml files, got {}", yaml_count);
+    assert!(
+        yaml_count >= 2,
+        "expected >= 2 yaml files, got {}",
+        yaml_count
+    );
 
     // 第二步：bdd seed --source <bdd_source> --step organize --force
     let seed_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -999,22 +987,29 @@ fn validate_export_then_bdd_seed_e2e() {
     assert!(seed_status.success());
 
     // 验证 bdd seed 输出结构
-    assert!(bdd_output.join("contexts").exists(), "contexts dir should exist");
-    assert!(bdd_output.join("scenarios").exists(), "scenarios dir should exist");
-    assert!(bdd_output.join("features").exists(), "features dir should exist");
-    assert!(bdd_output.join("coverage.md").exists(), "coverage.md should exist");
+    assert!(
+        bdd_output.join("contexts").exists(),
+        "contexts dir should exist"
+    );
+    assert!(
+        bdd_output.join("scenarios").exists(),
+        "scenarios dir should exist"
+    );
+    assert!(
+        bdd_output.join("features").exists(),
+        "features dir should exist"
+    );
+    assert!(
+        bdd_output.join("coverage.md").exists(),
+        "coverage.md should exist"
+    );
 
     // 验证 context JSON 被正确生成（X_Y.yaml → module=X, B_A.yaml → module=B）
     let contexts_dir = bdd_output.join("contexts");
     let context_files: Vec<_> = fs::read_dir(&contexts_dir)
         .expect("read contexts")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "json")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
         .collect();
     assert!(
         context_files.len() >= 2,
@@ -1034,26 +1029,31 @@ fn validate_export_then_bdd_seed_e2e() {
             found_module_b = true;
         }
     }
-    assert!(found_module_x, "should have a context with module=X (from X_Y.yaml)");
-    assert!(found_module_b, "should have a context with module=B (from B_A.yaml)");
+    assert!(
+        found_module_x,
+        "should have a context with module=X (from X_Y.yaml)"
+    );
+    assert!(
+        found_module_b,
+        "should have a context with module=B (from B_A.yaml)"
+    );
 
     // 验证 coverage.md 包含模块名
     let coverage = fs::read_to_string(bdd_output.join("coverage.md")).expect("read coverage");
-    assert!(coverage.contains("| X |") || coverage.contains("| x |"),
-        "coverage should mention module X");
-    assert!(coverage.contains("| B |") || coverage.contains("| b |"),
-        "coverage should mention module B");
+    assert!(
+        coverage.contains("| X |") || coverage.contains("| x |"),
+        "coverage should mention module X"
+    );
+    assert!(
+        coverage.contains("| B |") || coverage.contains("| b |"),
+        "coverage should mention module B"
+    );
 
     // 验证 features 目录下生成了 DSL 文件
     let feature_files: Vec<_> = fs::read_dir(bdd_output.join("features"))
         .expect("read features")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "dsl")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "dsl").unwrap_or(false))
         .collect();
     assert!(
         feature_files.len() >= 2,
@@ -1202,6 +1202,92 @@ fn batch_extract_wrong_lang_filter() {
 }
 
 #[test]
+fn batch_extract_unsupported_lang_fails_fast() {
+    let root = temp_dir("bcc_batch_unsupported_lang");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+    write(&src.join("foo.ts"), "export const foo = 1;\n");
+
+    let output = root.join("ast.json");
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "go",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .output()
+        .expect("run batch extract");
+    assert_eq!(result.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("unsupported language: go"),
+        "stderr should contain unsupported language message, got: {}",
+        stderr
+    );
+    assert!(
+        !output.exists(),
+        "unsupported batch lang should fail before writing output snapshot"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn extract_single_and_batch_keep_same_unsupported_lang_semantics() {
+    let root = temp_dir("bcc_extract_unsupported_lang_semantics");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+    let go_file = src.join("main.go");
+    write(
+        &go_file,
+        r#"package main
+func main() {}
+"#,
+    );
+
+    let single = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args(["extract", &go_file.to_string_lossy(), "--mode", "ast"])
+        .output()
+        .expect("run single-file extract");
+    assert_eq!(single.status.code(), Some(1));
+
+    let batch_output = root.join("ast.json");
+    let batch = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "go",
+            "--output",
+            &batch_output.to_string_lossy(),
+        ])
+        .output()
+        .expect("run batch extract");
+    assert_eq!(batch.status.code(), Some(1));
+
+    let single_stderr = String::from_utf8_lossy(&single.stderr);
+    let batch_stderr = String::from_utf8_lossy(&batch.stderr);
+    assert!(
+        single_stderr.contains("unsupported language: go"),
+        "single-file stderr should contain unsupported language message, got: {}",
+        single_stderr
+    );
+    assert!(
+        batch_stderr.contains("unsupported language: go"),
+        "batch stderr should contain unsupported language message, got: {}",
+        batch_stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn batch_extract_error_tolerance() {
     let root = temp_dir("bcc_batch_error_tolerance");
     let src = root.join("src");
@@ -1212,7 +1298,10 @@ fn batch_extract_error_tolerance() {
         &src.join("bad.ts"),
         "export const {{{ = syntax error @@@;\n",
     );
-    write(&src.join("ok.ts"), "export function ok() { return true; }\n");
+    write(
+        &src.join("ok.ts"),
+        "export function ok() { return true; }\n",
+    );
 
     let output = root.join("ast.json");
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -1380,10 +1469,13 @@ end
 end
 "#,
     );
-    write(&root.join("mix.exs"), r#"defmodule MyApp.MixProject do
+    write(
+        &root.join("mix.exs"),
+        r#"defmodule MyApp.MixProject do
   use Mix.Project
 end
-"#);
+"#,
+    );
 
     let output = root.join("ast.json");
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -1543,10 +1635,15 @@ fn batch_extract_monorepo_package_name_resolution() {
         .expect("find alpha record");
     let deps = alpha_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
-        deps.iter().any(|d| d.contains("beta") && d.contains("index.ts")),
+        deps.iter()
+            .any(|d| d.contains("beta") && d.contains("index.ts")),
         "alpha should depend on beta's index.ts via package name, got deps: {:?}",
         deps
     );
@@ -1572,8 +1669,14 @@ fn batch_extract_monorepo_with_exports_field() {
   }
 }"#,
     );
-    write(&pkg_b.join("src/index.ts"), "export function betaMain() { return 1; }\n");
-    write(&pkg_b.join("src/providers/index.ts"), "export function betaProvider() { return 2; }\n");
+    write(
+        &pkg_b.join("src/index.ts"),
+        "export function betaMain() { return 1; }\n",
+    );
+    write(
+        &pkg_b.join("src/providers/index.ts"),
+        "export function betaProvider() { return 2; }\n",
+    );
 
     write(
         &pkg_a.join("package.json"),
@@ -1609,7 +1712,11 @@ fn batch_extract_monorepo_with_exports_field() {
         .expect("find alpha record");
     let deps = alpha_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         deps.iter().any(|d| d.contains("providers")),
@@ -1665,7 +1772,11 @@ fn batch_extract_elixir_multi_alias_resolution() {
         .expect("find core record");
     let deps = core_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         deps.iter().any(|d| d.contains("tape.ex")),
@@ -1727,7 +1838,11 @@ fn batch_extract_elixir_skips_moduledoc_module_refs() {
         .expect("find gong.ex record");
     let deps = gong_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         !deps.iter().any(|d| d.contains("compaction.ex")),
