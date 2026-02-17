@@ -501,6 +501,10 @@ fn main() {
                     eprintln!("--lang is required in --batch mode");
                     std::process::exit(1);
                 });
+                let lang = extract::normalize_batch_lang(&lang).unwrap_or_else(|err| {
+                    eprintln!("{}", err);
+                    std::process::exit(1);
+                });
                 let output = output.unwrap_or_else(|| {
                     eprintln!("--output is required in --batch mode");
                     std::process::exit(1);

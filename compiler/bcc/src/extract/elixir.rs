@@ -172,15 +172,18 @@ fn extract_recursive(
             }
             // dot 调用: Module.func(...)
             "dot" => {
-                if let Some(left) = node.child_by_field_name("left") {
-                    let module = common::node_text(left, source);
-                    if !module.is_empty()
-                        && module.chars().next().map_or(false, |c| c.is_uppercase())
-                    {
-                        calls.push(CallRecord {
-                            callee: module,
-                            line: node.start_position().row + 1,
-                        });
+                // alias/import/use/require 声明语境中的 dot 不是运行时调用，需过滤。
+                if !is_declaration_dot_context(node, source) {
+                    if let Some(left) = node.child_by_field_name("left") {
+                        let module = common::node_text(left, source);
+                        if !module.is_empty()
+                            && module.chars().next().map_or(false, |c| c.is_uppercase())
+                        {
+                            calls.push(CallRecord {
+                                callee: module,
+                                line: node.start_position().row + 1,
+                            });
+                        }
                     }
                 }
             }
@@ -208,6 +211,23 @@ fn extract_recursive(
             break;
         }
     }
+}
+
+/// 判断 dot 是否位于 alias/import/use/require 声明语境中。
+fn is_declaration_dot_context(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "call" {
+            if let Some(target) = parent.child_by_field_name("target") {
+                let target_text = common::node_text(target, source);
+                if matches!(target_text.as_str(), "alias" | "import" | "use" | "require") {
+                    return true;
+                }
+            }
+        }
+        current = parent;
+    }
+    false
 }
 
 /// 处理 @moduledoc / @spec / @behaviour 等模块属性
@@ -823,6 +843,64 @@ end
         // specifier 应该包含完整的 use 参数文本
         let spec = &use_imports[0].specifier;
         assert!(spec.contains("Jido.AI.ReActAgent"));
+    }
+
+    #[test]
+    fn alias_declaration_dot_not_extracted_as_call() {
+        let source = r#"defmodule Demo do
+  alias Foo.{Bar, Baz}
+  def run, do: :ok
+end
+"#;
+        let record = extract(source, "lib/demo.ex");
+        assert!(
+            record.calls.is_empty(),
+            "alias declaration should not create calls, got: {:?}",
+            record.calls
+        );
+    }
+
+    #[test]
+    fn alias_and_real_call_only_tracks_runtime_call() {
+        let source = r#"defmodule Demo do
+  alias Foo.Bar
+  def run, do: Foo.Bar.execute()
+end
+"#;
+        let record = extract(source, "lib/demo.ex");
+        let call_lines: Vec<usize> = record.calls.iter().map(|call| call.line).collect();
+        assert!(
+            !record.calls.is_empty(),
+            "real runtime call should be extracted, got empty calls"
+        );
+        assert!(
+            !call_lines.contains(&2),
+            "alias declaration line should not emit calls, got lines: {:?}",
+            call_lines
+        );
+    }
+
+    #[test]
+    fn import_use_require_declaration_dot_not_extracted_as_call() {
+        let cases = vec![
+            ("import", "import Foo.Bar"),
+            ("use", "use Foo.Bar"),
+            ("require", "require Foo.Bar"),
+        ];
+
+        for (name, declaration) in cases {
+            let source = format!(
+                "defmodule Demo do\n  {}\n  def run, do: :ok\nend\n",
+                declaration
+            );
+            let record = extract(&source, "lib/demo.ex");
+            assert!(
+                record.calls.is_empty(),
+                "{} declaration should not create calls, got: {:?}",
+                name,
+                record.calls
+            );
+        }
     }
 
     #[test]

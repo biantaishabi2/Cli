@@ -1336,6 +1336,92 @@ fn batch_extract_wrong_lang_filter() {
 }
 
 #[test]
+fn batch_extract_unsupported_lang_fails_fast() {
+    let root = temp_dir("bcc_batch_unsupported_lang");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+    write(&src.join("foo.ts"), "export const foo = 1;\n");
+
+    let output = root.join("ast.json");
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "go",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .output()
+        .expect("run batch extract");
+    assert_eq!(result.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("unsupported language: go"),
+        "stderr should contain unsupported language message, got: {}",
+        stderr
+    );
+    assert!(
+        !output.exists(),
+        "unsupported batch lang should fail before writing output snapshot"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn extract_single_and_batch_keep_same_unsupported_lang_semantics() {
+    let root = temp_dir("bcc_extract_unsupported_lang_semantics");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create dirs");
+    let go_file = src.join("main.go");
+    write(
+        &go_file,
+        r#"package main
+func main() {}
+"#,
+    );
+
+    let single = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args(["extract", &go_file.to_string_lossy(), "--mode", "ast"])
+        .output()
+        .expect("run single-file extract");
+    assert_eq!(single.status.code(), Some(1));
+
+    let batch_output = root.join("ast.json");
+    let batch = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &src.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "go",
+            "--output",
+            &batch_output.to_string_lossy(),
+        ])
+        .output()
+        .expect("run batch extract");
+    assert_eq!(batch.status.code(), Some(1));
+
+    let single_stderr = String::from_utf8_lossy(&single.stderr);
+    let batch_stderr = String::from_utf8_lossy(&batch.stderr);
+    assert!(
+        single_stderr.contains("unsupported language: go"),
+        "single-file stderr should contain unsupported language message, got: {}",
+        single_stderr
+    );
+    assert!(
+        batch_stderr.contains("unsupported language: go"),
+        "batch stderr should contain unsupported language message, got: {}",
+        batch_stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn batch_extract_error_tolerance() {
     let root = temp_dir("bcc_batch_error_tolerance");
     let src = root.join("src");

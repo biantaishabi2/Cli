@@ -176,11 +176,6 @@ fn extract_recursive(
                         });
                     }
                 }
-                // 不递归进入 call_expression 内部，避免重复
-                if !cursor.goto_next_sibling() {
-                    break;
-                }
-                continue;
             }
             // 宏调用: println!(), vec![], format!()
             "macro_invocation" => {
@@ -201,7 +196,7 @@ fn extract_recursive(
             _ => {}
         }
 
-        // 递归子节点（已处理的 impl_item 和 call/macro 跳过）
+        // 递归子节点（impl_item 已在分支内手动处理，macro_invocation 直接跳过）
         if kind != "impl_item" {
             if cursor.goto_first_child() {
                 extract_recursive(cursor, source, exports, imports, calls, declarations);
@@ -256,19 +251,38 @@ fn build_fn_signature(node: &tree_sitter::Node, source: &[u8]) -> String {
 }
 
 /// 提取调用名：identifier → "foo", scoped_identifier → "module::func",
-/// field_expression → "obj.method"
+/// field_expression → "method"（稳定方法名）
 fn extract_call_name(node: tree_sitter::Node, source: &[u8]) -> String {
+    let raw_node = extract_raw_call_name(node);
+    raw_node
+        .and_then(|n| normalize_call_name(n, source))
+        .unwrap_or_default()
+}
+
+/// 先抽取可规范化的 callee 节点，避免直接回退为表达式文本。
+fn extract_raw_call_name(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     match node.kind() {
-        "identifier" => common::node_text(node, source),
-        "scoped_identifier" => common::node_text(node, source),
-        "field_expression" => {
-            // obj.method → 提取根对象名
-            if let Some(value) = node.child_by_field_name("value") {
-                return common::node_text(value, source);
-            }
-            common::node_text(node, source)
-        }
-        _ => common::node_text(node, source),
+        // generic_function 包裹真实函数节点（如 foo::<T>()）
+        "generic_function" => node.child_by_field_name("function"),
+        _ => Some(node),
+    }
+}
+
+/// 规范化调用名为稳定标识符：
+/// identifier/scoped_identifier 原样，field_expression 取 field（方法名）。
+fn normalize_call_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let name = match node.kind() {
+        "identifier" | "scoped_identifier" => common::node_text(node, source),
+        "field_expression" => node
+            .child_by_field_name("field")
+            .map(|field| common::node_text(field, source))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
     }
 }
 
@@ -443,5 +457,40 @@ pub fn login() {}
         let record = extract(source, "src/auth.rs");
         assert!(record.module_doc.is_some());
         assert!(record.module_doc.unwrap().contains("用户认证"));
+    }
+
+    #[test]
+    fn normalizes_index_then_method_call_to_method_name() {
+        let source = r#"
+pub fn parse(args: Vec<String>) {
+    let _ = args[0].as_str();
+}
+"#;
+        let record = extract(source, "src/lib.rs");
+        let call_names = testing::call_names(&record);
+        testing::assert_contains(&call_names, "as_str", "calls");
+        assert!(
+            !call_names.iter().any(|name| name == "args[0]"),
+            "should not keep expression noise in calls: {:?}",
+            call_names
+        );
+    }
+
+    #[test]
+    fn keeps_chain_method_names_without_expression_noise() {
+        let source = r#"
+pub fn parse(rest: Vec<String>) {
+    let _ = rest.get(0).and_then(|x| Some(x));
+}
+"#;
+        let record = extract(source, "src/lib.rs");
+        let call_names = testing::call_names(&record);
+        testing::assert_contains(&call_names, "get", "calls");
+        testing::assert_contains(&call_names, "and_then", "calls");
+        assert!(
+            !call_names.iter().any(|name| name.contains("rest.get(0)")),
+            "should not keep chain expression as callee: {:?}",
+            call_names
+        );
     }
 }
