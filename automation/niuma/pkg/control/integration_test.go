@@ -300,6 +300,22 @@ func TestCanAutoResolveConflict_DoesNotTreatLeadingAsteriskCodeAsComment(t *test
 	assert.Contains(t, reason, "语义差异")
 }
 
+func TestCanAutoResolveConflict_DoesNotDropCodeAfterLeadingBlockComment(t *testing.T) {
+	fileSummary := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{
+				ours:   "/*note*/ return 1",
+				theirs: "/*note*/ return 2",
+			},
+		},
+	}
+
+	auto, reason := canAutoResolveConflict("pkg/service.go", fileSummary)
+	assert.False(t, auto)
+	assert.Contains(t, reason, "语义差异")
+}
+
 func splitNonEmpty(s string) []string {
 	var result []string
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {

@@ -320,16 +320,8 @@ func normalizeConflictSide(file, text string) string {
 		if line == "" {
 			continue
 		}
-		if inBlockComment {
-			if strings.Contains(line, "*/") {
-				inBlockComment = false
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "/*") {
-			if !strings.Contains(line, "*/") {
-				inBlockComment = true
-			}
+		line, inBlockComment = trimLeadingBlockComment(line, inBlockComment)
+		if line == "" {
 			continue
 		}
 		if strings.HasPrefix(line, "//") ||
@@ -346,6 +338,33 @@ func normalizeConflictSide(file, text string) string {
 	}
 
 	return sb.String()
+}
+
+func trimLeadingBlockComment(line string, inBlockComment bool) (string, bool) {
+	for {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return "", inBlockComment
+		}
+		if inBlockComment {
+			end := strings.Index(line, "*/")
+			if end < 0 {
+				return "", true
+			}
+			line = line[end+2:]
+			inBlockComment = false
+			continue
+		}
+		if strings.HasPrefix(line, "/*") {
+			end := strings.Index(line, "*/")
+			if end < 0 {
+				return "", true
+			}
+			line = line[end+2:]
+			continue
+		}
+		return line, false
+	}
 }
 
 func supportsHashComments(file string) bool {
