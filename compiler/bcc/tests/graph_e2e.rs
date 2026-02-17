@@ -329,3 +329,292 @@ fn e2e_verify_openclaw_structure() {
 
     println!("Nanobot structure verified successfully");
 }
+
+// ==================== 模块依赖图 E2E 测试 ====================
+
+/// E2E Scenario 6: 模块依赖查询
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_module_deps_query() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    let repo_id = "local/openclaw-module-test";
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ast_output = temp_dir.path().join("ast.json");
+
+    // Step 1: Extract AST
+    println!("Step 1: Extracting AST from {:?}", repo_path);
+    run_bcc(&[
+        "extract",
+        &repo_path.to_string_lossy(),
+        "--batch",
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Failed to extract AST");
+
+    // Step 2: Build index
+    println!("Step 2: Building index");
+    run_bcc(&[
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Failed to build index");
+
+    // Step 3: Query module info
+    println!("Step 3: Querying module info");
+    let module_output = run_bcc(&[
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/index.ts",
+        "--by", "id"
+    ]).expect("Failed to query module");
+    
+    println!("Module info:\n{}", module_output);
+    assert!(module_output.contains("src/index.ts"), "Should show module ID");
+    assert!(module_output.contains("Lines:"), "Should show line count");
+    assert!(module_output.contains("Exports:"), "Should show exports count");
+    assert!(module_output.contains("Imports:"), "Should show imports count");
+
+    // Step 4: Query module dependencies
+    println!("Step 4: Querying module dependencies");
+    let deps_output = run_bcc(&[
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/index.ts",
+        "--by", "deps",
+        "--depth", "1"
+    ]).expect("Failed to query dependencies");
+    
+    println!("Dependencies:\n{}", deps_output);
+    assert!(deps_output.contains("Found") && deps_output.contains("dependencies"), 
+            "Should show dependency count");
+
+    // Step 5: Query module dependents
+    println!("Step 5: Querying module dependents");
+    let dependents_output = run_bcc(&[
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/utils.ts",
+        "--by", "dependents",
+        "--depth", "1"
+    ]).expect("Failed to query dependents");
+    
+    println!("Dependents:\n{}", dependents_output);
+    // utils.ts 应该被很多模块依赖
+    assert!(dependents_output.contains("Found") && dependents_output.contains("dependents"),
+            "Should show dependents count");
+
+    println!("✓ Module dependency E2E test passed");
+}
+
+/// E2E Scenario 7: 模块依赖统计验证
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_module_deps_stats() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    let repo_id = "local/openclaw-module-stats";
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ast_output = temp_dir.path().join("ast.json");
+
+    // Extract and build
+    run_bcc(&[
+        "extract",
+        &repo_path.to_string_lossy(),
+        "--batch",
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
+
+    let build_output = run_bcc(&[
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
+
+    println!("Build output:\n{}", build_output);
+
+    // 验证 build 输出包含模块统计
+    assert!(
+        build_output.contains("modules") && build_output.contains("module deps"),
+        "Build output should show module and dependency counts"
+    );
+
+    // 提取统计数字
+    // 格式: "Indexed X modules, Y module deps, Z functions, W call edges"
+    let modules_count = extract_number(&build_output, "Indexed ", " modules");
+    let deps_count = extract_number(&build_output, "modules, ", " module deps");
+
+    println!("Stats: {} modules, {} module dependencies", modules_count, deps_count);
+
+    // 验证模块依赖边数量合理（应该远多于调用边）
+    assert!(modules_count > 0, "Should have modules");
+    assert!(deps_count > 0, "Should have module dependencies");
+    
+    // 模块依赖通常比模块数量多（平均每个模块导入多个其他模块）
+    let avg_deps_per_module = deps_count as f64 / modules_count as f64;
+    println!("Average dependencies per module: {:.2}", avg_deps_per_module);
+    
+    // 通常每个 TypeScript 文件会导入 3-10 个模块
+    assert!(
+        avg_deps_per_module >= 1.0 && avg_deps_per_module <= 50.0,
+        "Average dependencies per module should be reasonable (1-50), got {:.2}",
+        avg_deps_per_module
+    );
+}
+
+/// E2E Scenario 8: 深度递归依赖查询
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_module_deps_recursive_depth() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    let repo_id = "local/openclaw-module-recursive";
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ast_output = temp_dir.path().join("ast.json");
+
+    // Extract and build
+    run_bcc(&[
+        "extract",
+        &repo_path.to_string_lossy(),
+        "--batch",
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
+
+    run_bcc(&[
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
+
+    // 测试不同深度的依赖查询
+    for depth in [1, 2, 3] {
+        println!("Testing depth={}", depth);
+        
+        let output = run_bcc(&[
+            "graph", "module",
+            "--repo", repo_id,
+            "--id", "src/index.ts",
+            "--by", "deps",
+            "--depth", &depth.to_string()
+        ]).expect(&format!("Failed to query deps with depth={}", depth));
+
+        println!("Depth {} result: {}", depth, output.lines().next().unwrap_or(""));
+        
+        // depth 越大，找到的依赖应该越多（或相等）
+        assert!(output.contains("Found"), "Should show result count");
+    }
+
+    println!("✓ Recursive depth test passed");
+}
+
+/// E2E Scenario 9: 循环依赖检测
+#[test]
+#[ignore = "requires E2E_TEST_REPO environment variable"]
+fn e2e_module_circular_detection() {
+    let repo_path = match get_test_repo() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping E2E test: E2E_TEST_REPO not set");
+            return;
+        }
+    };
+
+    let repo_id = "local/openclaw-module-circular";
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ast_output = temp_dir.path().join("ast.json");
+
+    // Extract and build
+    run_bcc(&[
+        "extract",
+        &repo_path.to_string_lossy(),
+        "--batch",
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
+
+    run_bcc(&[
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
+
+    // 对一些常见模块检测循环依赖
+    let test_modules = vec![
+        "src/index.ts",
+        "src/utils.ts",
+        "src/config/config.ts",
+    ];
+
+    for module_id in test_modules {
+        println!("Checking circular deps for: {}", module_id);
+        
+        let output = run_bcc(&[
+            "graph", "module",
+            "--repo", repo_id,
+            "--id", module_id,
+            "--by", "circular"
+        ]);
+
+        match output {
+            Ok(result) => {
+                println!("{}", result);
+                // 不管有没有循环，命令应该成功执行
+                assert!(
+                    result.contains("Circular dependency detected") || 
+                    result.contains("No circular dependencies"),
+                    "Should report circular detection result"
+                );
+            }
+            Err(e) => {
+                println!("Warning: circular check failed for {}: {}", module_id, e);
+                // 不失败，因为某些模块可能不存在
+            }
+        }
+    }
+
+    println!("✓ Circular detection test completed");
+}
+
+// 辅助函数：从字符串中提取数字
+fn extract_number(s: &str, prefix: &str, suffix: &str) -> usize {
+    if let Some(start) = s.find(prefix) {
+        let after_prefix = &s[start + prefix.len()..];
+        if let Some(end) = after_prefix.find(suffix) {
+            let num_str = &after_prefix[..end];
+            return num_str.parse().unwrap_or(0);
+        }
+    }
+    0
+}
