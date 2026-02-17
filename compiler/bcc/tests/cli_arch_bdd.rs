@@ -1,3 +1,4 @@
+use bcc::extract::testing as extract_testing;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,6 +19,43 @@ fn write(path: &Path, content: &str) {
         fs::create_dir_all(parent).expect("create parent");
     }
     fs::write(path, content).expect("write file");
+}
+
+fn run_extract_ast_json(input: &Path, output: &Path) -> serde_json::Value {
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &input.to_string_lossy(),
+            "--mode",
+            "ast",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run extract --mode ast");
+    assert!(status.success());
+
+    let raw = fs::read_to_string(output).expect("read ast output");
+    serde_json::from_str(&raw).expect("parse ast output json")
+}
+
+fn run_extract_batch_json(dir: &Path, lang: &str, output: &Path) -> serde_json::Value {
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &dir.to_string_lossy(),
+            "--batch",
+            "--lang",
+            lang,
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run extract --batch");
+    assert!(status.success());
+
+    let raw = fs::read_to_string(output).expect("read batch output");
+    serde_json::from_str(&raw).expect("parse batch output json")
 }
 
 #[test]
@@ -1065,6 +1103,79 @@ fn validate_export_then_bdd_seed_e2e() {
 }
 
 // ── batch extract 集成测试 ──
+
+#[test]
+fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
+    let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/extract");
+    let ts_root = fixture_root.join("typescript");
+    let php_root = fixture_root.join("php");
+    let ts_file = ts_root.join("export_calls.ts");
+    let php_file = php_root.join("namespace_use.php");
+
+    assert!(ts_file.exists(), "missing fixture: {}", ts_file.display());
+    assert!(php_file.exists(), "missing fixture: {}", php_file.display());
+
+    let work = temp_dir("bcc_extract_accuracy_gate");
+
+    // 1) TS AST：export 内调用不漏提
+    let ts_ast = run_extract_ast_json(&ts_file, &work.join("ts.ast.json"));
+    let ts_calls = extract_testing::normalized_call_set_from_json(&ts_ast);
+    assert!(ts_calls.contains("foo"), "ts calls should contain foo");
+    assert!(ts_calls.contains("bar"), "ts calls should contain bar");
+    assert!(ts_calls.contains("baz"), "ts calls should contain baz");
+
+    // 2) PHP AST：namespace use/use as 不漏提，同时 extends/trait/new 不回归
+    let php_ast = run_extract_ast_json(&php_file, &work.join("php.ast.json"));
+    let php_imports = extract_testing::normalized_import_set_from_json(&php_ast);
+    assert!(php_imports.contains("use:A\\B"), "php imports should contain use:A\\B");
+    assert!(
+        php_imports.contains("use:C\\D as E"),
+        "php imports should contain use:C\\D as E"
+    );
+    assert!(
+        php_imports.contains("extends:Base"),
+        "php imports should contain extends:Base"
+    );
+    assert!(
+        php_imports.contains("trait:LoggerTrait"),
+        "php imports should contain trait:LoggerTrait"
+    );
+    let php_calls = extract_testing::normalized_call_set_from_json(&php_ast);
+    assert!(php_calls.contains("E"), "php calls should contain E");
+
+    // 3) AST vs Batch 一致性（文件集合 + 计数 + 关键字段集合）
+    let ts_batch = run_extract_batch_json(&ts_root, "typescript", &work.join("ts.batch.json"));
+    assert_eq!(ts_batch["source_count"].as_u64(), Some(1));
+    let ts_records = ts_batch["records"].as_array().expect("ts records array");
+    assert_eq!(ts_records.len(), 1);
+    assert_eq!(ts_records[0]["sourcePath"].as_str(), Some("export_calls.ts"));
+    assert_eq!(
+        ts_records[0]["imports_count"].as_u64(),
+        Some(ts_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
+    );
+    let ts_batch_ast = run_extract_ast_json(
+        &ts_root.join(ts_records[0]["sourcePath"].as_str().expect("ts sourcePath")),
+        &work.join("ts.batch.ast.json"),
+    );
+    extract_testing::assert_semantic_sets_equal_json(&ts_ast, &ts_batch_ast, "typescript");
+
+    let php_batch = run_extract_batch_json(&php_root, "php", &work.join("php.batch.json"));
+    assert_eq!(php_batch["source_count"].as_u64(), Some(1));
+    let php_records = php_batch["records"].as_array().expect("php records array");
+    assert_eq!(php_records.len(), 1);
+    assert_eq!(php_records[0]["sourcePath"].as_str(), Some("namespace_use.php"));
+    assert_eq!(
+        php_records[0]["imports_count"].as_u64(),
+        Some(php_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
+    );
+    let php_batch_ast = run_extract_ast_json(
+        &php_root.join(php_records[0]["sourcePath"].as_str().expect("php sourcePath")),
+        &work.join("php.batch.ast.json"),
+    );
+    extract_testing::assert_semantic_sets_equal_json(&php_ast, &php_batch_ast, "php");
+
+    let _ = fs::remove_dir_all(&work);
+}
 
 #[test]
 fn batch_extract_typescript_smoke() {

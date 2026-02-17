@@ -209,6 +209,9 @@ fn extract_ts_recursive(
                         }
                     }
                 }
+
+                // 修复：export 子树内同样需要提取 call_expression（函数体、类方法、对象方法等）。
+                collect_ts_calls_in_subtree(node, source, calls, local_call_symbols);
             }
             // import_statement
             "import_statement" => {
@@ -291,6 +294,36 @@ fn extract_ts_recursive(
 
         if !cursor.goto_next_sibling() {
             break;
+        }
+    }
+}
+
+fn collect_ts_calls_in_subtree(
+    node: tree_sitter::Node,
+    source: &[u8],
+    calls: &mut Vec<CallRecord>,
+    local_call_symbols: &mut HashSet<String>,
+) {
+    if node.kind() == "call_expression" {
+        if let Some(func_node) = node.child_by_field_name("function") {
+            let callees = extract_call_targets(func_node, source);
+            for callee in callees {
+                local_call_symbols.insert(callee.clone());
+                calls.push(CallRecord {
+                    callee,
+                    line: node.start_position().row + 1,
+                });
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            collect_ts_calls_in_subtree(cursor.node(), source, calls, local_call_symbols);
+            if !cursor.goto_next_sibling() {
+                break;
+            }
         }
     }
 }
@@ -613,5 +646,30 @@ function run() {
         let record = extract(source, "src/sample.ts", "typescript");
 
         assert!(record.calls.is_empty());
+    }
+
+    #[test]
+    fn extracts_calls_inside_export_function_and_class_methods() {
+        let source = r#"
+export function run() {
+  foo();
+}
+
+export class A {
+  m() {
+    this.bar();
+    baz();
+  }
+}
+"#;
+
+        let record = extract(source, "src/export_calls.ts", "typescript");
+        let calls = testing::call_names(&record);
+
+        testing::assert_contains(&calls, "foo", "calls");
+        testing::assert_contains(&calls, "bar", "calls");
+        testing::assert_contains(&calls, "baz", "calls");
+
+        assert_eq!(calls.iter().filter(|callee| *callee == "bar").count(), 1);
     }
 }
