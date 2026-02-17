@@ -1,8 +1,69 @@
 ai:
   default: claude
-  providers:
+
+  # 预定义模板，简化 provider 切换
+  templates:
     claude:
+      type: claude
       cmd: "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}"
+
+    codex:
+      type: openai
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      # api_key 从环境变量 OPENAI_API_KEY 读取
+
+    openrouter:
+      type: openai
+      base_url: "https://openrouter.ai/api/v1"
+      model: "anthropic/claude-3.5-sonnet"
+      # api_key 从环境变量 OPENROUTER_API_KEY 读取
+
+    ollama:
+      type: ollama
+      base_url: "http://localhost:11434"
+      model: "qwen2.5-coder:14b"
+
+  # 实际使用的 provider，引用模板
+  providers:
+    # Claude Code（默认）
+    claude:
+      template: claude
+
+    # OpenAI Codex
+    codex:
+      template: codex
+      model: "gpt-4o"
+
+    # OpenRouter - Claude 3.5 Sonnet
+    openrouter-claude:
+      template: openrouter
+      model: "anthropic/claude-3.5-sonnet"
+
+    # OpenRouter - GPT-4o
+    openrouter-gpt4:
+      template: openrouter
+      model: "openai/gpt-4o"
+
+    # 本地 Ollama
+    local:
+      template: ollama
+      model: "qwen2.5-coder:14b"
+
+  # 讨论阶段：多 provider 左右互搏
+  discussion:
+    providers:
+      - claude
+      - codex
+    consolidator: claude
+
+  # 实现阶段：切换 provider 只需改这里
+  # 可选: claude | codex | openrouter-claude | openrouter-gpt4 | local
+  implementation:
+    provider: claude
+
 workflow:
+  require_plan_approval: false
+  max_iterate_rounds: 3
   allowed_prefixes:
     - "automation/"
