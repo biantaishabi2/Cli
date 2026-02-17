@@ -2,8 +2,12 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
@@ -509,4 +513,237 @@ func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *tes
 	require.Len(t, mockGH.replaceLabelCalls, 3)
 	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
 	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
+}
+
+func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                         "41",
+			metaKeyIntegrationGateRetryCount:    "0",
+			metaKeyIntegrationGateAttemptKey:    "old",
+			metaKeyIntegrationGateStatus:        integrationGateStatusPassed,
+			metaKeyIntegrationGateLastError:     "",
+			metaKeyIntegrationGateLastCheckedAt: "2026-02-17T10:00:00Z",
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-1", errors.New("gate failed once"))
+	require.NoError(t, err)
+
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
+	assert.Equal(t, 0, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel))
+}
+
+func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                      "41",
+			metaKeyIntegrationGateRetryCount: "2",
+			metaKeyIntegrationGateAttemptKey: "old-attempt",
+			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-3", errors.New("gate failed third time"))
+	require.NoError(t, err)
+
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, needsHumanLabel), 0)
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel), 0)
+}
+
+func TestHandleIntegrationGateFailure_DuplicateAttemptNoop(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                      "41",
+			metaKeyIntegrationGateRetryCount: "1",
+			metaKeyIntegrationGateAttemptKey: "attempt-same",
+			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-same", errors.New("duplicate fail"))
+	require.NoError(t, err)
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+}
+
+func TestBuildIntegrationGateAttemptKey_IgnoresIntegrationHeadChanges(t *testing.T) {
+	dir := setupGitRepo(t)
+	createBranch(t, dir, "feat/41-gate", "feature.txt", "feature v1\n")
+
+	runGit(t, dir, "checkout", "master")
+	runGit(t, dir, "checkout", "-b", "integration/main")
+	runGit(t, dir, "merge", "--no-ff", "feat/41-gate", "-m", "merge feat/41-gate")
+	runGit(t, dir, "checkout", "master")
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir: dir,
+		},
+	}
+	outcome := MergeOutcome{
+		IntegrationBranch: "integration/main",
+		SourceBranch:      "feat/41-gate",
+	}
+	firstKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
+	require.NoError(t, err)
+
+	createBranch(t, dir, "feat/99-other", "unrelated.txt", "other change\n")
+	runGit(t, dir, "checkout", "integration/main")
+	runGit(t, dir, "merge", "--no-ff", "feat/99-other", "-m", "merge feat/99-other")
+	runGit(t, dir, "checkout", "master")
+
+	secondKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
+	require.NoError(t, err)
+	assert.Equal(t, firstKey, secondKey)
+}
+
+func TestRunIntegrationGateAndDecide_FirstFailThenPass_MarksIntegrated(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	runGit(t, dir, "checkout", "-b", "feat/41-gate")
+	niumaDir := filepath.Join(dir, "automation", "niuma")
+	require.NoError(t, os.MkdirAll(filepath.Join(niumaDir, "gate"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "go.mod"), []byte("module example.com/niuma\n\ngo 1.20\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "gate", "gate_test.go"), []byte(`package gate
+
+import "testing"
+
+func TestIntegrationGate(t *testing.T) {
+	t.Fatalf("gate failed")
+}
+`), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add failing integration gate test")
+
+	runGit(t, dir, "checkout", "-b", "integration/main")
+	runGit(t, dir, "checkout", "master")
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "taskctl.log")
+	binPath := filepath.Join(binDir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$*\" >> %q\nexit 0\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   binPath,
+			StorePath: filepath.Join(dir, ".niuma", "tasks.json"),
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   dir,
+		},
+	}
+
+	outcome := MergeOutcome{
+		Status:            MergeStatusMerged,
+		IntegrationBranch: "integration/main",
+		SourceBranch:      "feat/41-gate",
+		IssueNum:          41,
+		PRNum:             410,
+		ExecutorVersion:   "integration-merge-executor/v1",
+		ExecutedAt:        "2026-02-17T10:00:00Z",
+	}
+
+	firstTask := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num": "41",
+		},
+	}
+	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), firstTask, outcome)
+	require.NoError(t, err)
+	assert.False(t, integrated)
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
+
+	firstAttemptKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
+	require.NoError(t, err)
+
+	runGit(t, dir, "checkout", "feat/41-gate")
+	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "gate", "gate_test.go"), []byte(`package gate
+
+import "testing"
+
+func TestIntegrationGate(t *testing.T) {}
+`), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "fix integration gate test")
+	runGit(t, dir, "checkout", "integration/main")
+	runGit(t, dir, "merge", "--ff-only", "feat/41-gate")
+	runGit(t, dir, "checkout", "master")
+
+	secondAttemptKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstAttemptKey, secondAttemptKey)
+
+	retryTask := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                      "41",
+			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
+			metaKeyIntegrationGateRetryCount: "1",
+			metaKeyIntegrationGateAttemptKey: firstAttemptKey,
+		},
+	}
+	integrated, err = ctrl.runIntegrationGateAndDecide(context.Background(), retryTask, outcome)
+	require.NoError(t, err)
+	assert.True(t, integrated)
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
+}
+
+func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
+	count := 0
+	for _, call := range calls {
+		if call.newLabel == label {
+			count++
+		}
+	}
+	return count
 }

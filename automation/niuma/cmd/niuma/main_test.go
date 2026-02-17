@@ -88,3 +88,49 @@ func TestValidateMaxDiscussionRounds(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
+	tests := []struct {
+		name     string
+		flag     int
+		env      string
+		expected int
+	}{
+		{
+			name:     "flag 优先",
+			flag:     5,
+			env:      "2",
+			expected: 5,
+		},
+		{
+			name:     "env 生效",
+			flag:     -1,
+			env:      "4",
+			expected: 4,
+		},
+		{
+			name:     "env 非法时回退默认",
+			flag:     -1,
+			env:      "bad",
+			expected: 2,
+		},
+		{
+			name:     "env 负数时回退默认",
+			flag:     -1,
+			env:      "-1",
+			expected: 2,
+		},
+		{
+			name:     "全缺省回退默认",
+			flag:     -1,
+			env:      "",
+			expected: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, resolveIntegrationGateMaxRetries(tt.flag, tt.env))
+		})
+	}
+}
