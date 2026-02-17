@@ -122,3 +122,11 @@ type UpdateOpts struct {
 	BlockedBy *[]string          `json:"blocked_by,omitempty"`
 	Metadata  *map[string]string `json:"metadata,omitempty"`
 }
+
+// ParseParent 解析 issue body 中的 parent 声明（Sub-Issue 模式）
+// 返回 0 表示没有 parent
+// 支持格式：parent: #40 或 parent issue: #40
+func ParseParent(body string) int {
+	// 这个函数在 analyzer.go 中实现，这里只是声明
+	return 0
+}

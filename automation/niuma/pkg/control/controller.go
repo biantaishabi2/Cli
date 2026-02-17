@@ -135,16 +135,37 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// ③ AI 分析依赖
-	var analysis *AnalysisResult
-	if len(issues) > 1 {
-		analysis, err = c.analyzer.Analyze(ctx, issues)
-		if err != nil {
-			fmt.Printf("[control] 依赖分析失败: %v\n", err)
-			analysis = &AnalysisResult{Dependencies: make(map[int][]int)}
+	// ③ 分析依赖（包括 depends-on 和 parent 关系）
+	analysis := &AnalysisResult{Dependencies: make(map[int][]int)}
+
+	// 先解析 parent 关系（Sub-Issue 模式）
+	for _, issue := range issues {
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			// 检查 parent 是否也在处理列表中
+			for _, other := range issues {
+				if other.Number == parentNum {
+					// sub-issue 依赖 parent
+					analysis.Dependencies[issue.Number] = append(analysis.Dependencies[issue.Number], parentNum)
+					fmt.Printf("[control] 发现 Sub-Issue 关系: #%d → parent #%d\n", issue.Number, parentNum)
+					break
+				}
+			}
 		}
-	} else {
-		analysis = &AnalysisResult{Dependencies: make(map[int][]int)}
+	}
+
+	// 再调 AI 分析（补充 depends-on 和其他依赖）
+	if len(issues) > 1 && c.analyzer != nil {
+		aiAnalysis, err := c.analyzer.Analyze(ctx, issues)
+		if err != nil {
+			fmt.Printf("[control] AI 依赖分析失败: %v\n", err)
+		} else {
+			// 合并 AI 结果（parent 关系优先）
+			for issueNum, deps := range aiAnalysis.Dependencies {
+				if _, hasParent := analysis.Dependencies[issueNum]; !hasParent {
+					analysis.Dependencies[issueNum] = deps
+				}
+			}
+		}
 	}
 
 	// ④ 为新 issue 创建 task + 设 blocked_by
@@ -271,7 +292,54 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
+	// ⑦ 检查父 issue 进度（Sub-Issue 模式）
+	c.checkParentProgress(ctx, issues)
+
 	return nil
+}
+
+// checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
+func (c *Controller) checkParentProgress(ctx context.Context, issues []IssueInfo) {
+	// 构建 parent → sub-issues 映射
+	parentToSubs := make(map[int][]int) // parentNum → []subNum
+	for _, issue := range issues {
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			parentToSubs[parentNum] = append(parentToSubs[parentNum], issue.Number)
+		}
+	}
+
+	if len(parentToSubs) == 0 {
+		return
+	}
+
+	// 获取所有 task 状态
+	tasks, err := c.taskctl.List("")
+	if err != nil {
+		return
+	}
+
+	taskStatus := make(map[int]TaskStatus)
+	for _, t := range tasks {
+		if n := t.IssueNum(); n > 0 {
+			taskStatus[n] = t.Status
+		}
+	}
+
+	// 检查每个 parent 的 sub-issues 是否都完成
+	for parentNum, subNums := range parentToSubs {
+		allCompleted := true
+		for _, subNum := range subNums {
+			if status, ok := taskStatus[subNum]; !ok || status != TaskStatusCompleted {
+				allCompleted = false
+				break
+			}
+		}
+
+		if allCompleted {
+			fmt.Printf("[control] 父 issue #%d 的所有 sub-issues 已完成: %v\n", parentNum, subNums)
+			// TODO: 可以在这里关闭父 issue 或添加评论
+		}
+	}
 }
 
 // Status 返回全局控制状态
