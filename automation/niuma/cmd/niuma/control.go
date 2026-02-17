@@ -37,12 +37,19 @@ var controlMergeCmd = &cobra.Command{
 	RunE:  runControlMerge,
 }
 
+var controlCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "检查 issue 是否在编排队列中",
+	RunE:  runControlCheck,
+}
+
 var flagControlIssues string // --issues "40,41,42"
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
 	controlCmd.AddCommand(controlStatusCmd)
 	controlCmd.AddCommand(controlMergeCmd)
+	controlCmd.AddCommand(controlCheckCmd)
 
 	controlMergeCmd.Flags().StringVar(&flagControlIssues, "issues", "", "要合并的 issue 编号列表（逗号分隔）")
 	controlMergeCmd.MarkFlagRequired("issues")
@@ -210,4 +217,49 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("合并完成。")
 	return nil
+}
+
+func runControlCheck(cmd *cobra.Command, args []string) error {
+	if flagRepo == "" || flagIssue == 0 {
+		return fmt.Errorf("必须指定 --repo 和 --issue")
+	}
+
+	// 确定 repo 目录
+	repoDir := flagWorkDir
+	if flagRepoDir != "" {
+		repoDir = flagRepoDir
+	}
+
+	// 加载配置
+	configDir := "."
+	if flagRepoDir != "" {
+		configDir = flagRepoDir
+	}
+	cfg := config.LoadWithDefaults(configDir)
+
+	// 创建 taskctl client
+	taskctlBin := ""
+	if cfg.Control.TaskCtlBin != "" {
+		taskctlBin = cfg.Control.TaskCtlBin
+	}
+	taskctl, err := control.NewTaskCtlClient(taskctlBin, repoDir)
+	if err != nil {
+		return fmt.Errorf("初始化 taskctl 失败: %w", err)
+	}
+
+	// 查找 issue 是否在 taskctl 中
+	task, err := taskctl.FindByIssueNum(flagIssue)
+	if err != nil {
+		return fmt.Errorf("查询 taskctl 失败: %w", err)
+	}
+
+	if task != nil {
+		fmt.Printf("Issue #%d 在编排队列中 (task: %s, status: %s)\n", flagIssue, task.ID, task.Status)
+		// 返回 exit code 0 表示在队列中
+		return nil
+	}
+
+	fmt.Printf("Issue #%d 不在编排队列中\n", flagIssue)
+	// 返回 exit code 1 表示不在队列中（用于 workflow 判断）
+	return fmt.Errorf("not in queue")
 }
