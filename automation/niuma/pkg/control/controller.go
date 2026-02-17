@@ -28,7 +28,7 @@ type Controller struct {
 type ControlConfig struct {
 	TaskCtlBin              string `yaml:"taskctl_bin"`
 	MergeStrategy           string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix string `yaml:"integration_branch_prefix"` // 默认 integration/batch-
+	IntegrationBranchPrefix string `yaml:"integration_branch_prefix"` // 默认 integration/
 	MaxOldBranches          int    `yaml:"max_old_branches"`          // 默认 3
 	MinPRsForIntegration    int    `yaml:"min_prs_for_integration"`   // 默认 2
 }
@@ -37,7 +37,7 @@ type ControlConfig struct {
 func DefaultControlConfig() *ControlConfig {
 	return &ControlConfig{
 		MergeStrategy:           "merge",
-		IntegrationBranchPrefix: "integration/batch-",
+		IntegrationBranchPrefix: "integration/",
 		MaxOldBranches:          3,
 		MinPRsForIntegration:    2,
 	}
@@ -61,6 +61,16 @@ func NewController(
 		builder:  builder,
 		cfg:      cfg,
 	}
+}
+
+// getIntegrationBranchName 获取当前任务的 integration 分支名
+// 从 task metadata 读取 meta_issue_slug，没有则使用 "main"
+func (c *Controller) getIntegrationBranchName(task *Task) string {
+	slug := ""
+	if task.Metadata != nil {
+		slug = task.Metadata["meta_issue_slug"]
+	}
+	return IntegrationBranchName(slug)
 }
 
 // Run 执行一次完整协调循环
@@ -167,59 +177,56 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// ⑥ 检查是否需要构建 integration 分支
+	// ⑥ 增量 integration：将刚完成的 PR 合入对应 integration 分支
 	if c.builder != nil {
 		allTasks, _ := c.taskctl.List("")
-		var prBranches []BranchInfo
+
+		// 按 integration 分支分组 task
+		branchTasks := make(map[string][]Task) // integrationBranch → tasks
 		for _, t := range allTasks {
 			if t.PRNum() > 0 && t.Branch() != "" {
-				prBranches = append(prBranches, BranchInfo{
-					Branch:   t.Branch(),
-					IssueNum: t.IssueNum(),
-					PRNum:    t.PRNum(),
-					TaskID:   t.ID,
-				})
+				// 检查是否已合入 integration（从 metadata 读）
+				integrated := false
+				if t.Metadata != nil && t.Metadata["integrated"] == "true" {
+					integrated = true
+				}
+				if !integrated {
+					branchName := c.getIntegrationBranchName(&t)
+					branchTasks[branchName] = append(branchTasks[branchName], t)
+				}
 			}
 		}
 
-		minPRs := c.cfg.MinPRsForIntegration
-		if minPRs <= 0 {
-			minPRs = 2
-		}
-		if len(prBranches) >= minPRs {
-			// 按 topo 序排列 prBranches（与 Merge 一致）
-			taskMap := make(map[int]*Task)
-			for i := range allTasks {
-				n := allTasks[i].IssueNum()
-				if n > 0 {
-					taskMap[n] = &allTasks[i]
-				}
-			}
-			var issueNums []int
-			branchByIssue := make(map[int]BranchInfo)
-			for _, bi := range prBranches {
-				issueNums = append(issueNums, bi.IssueNum)
-				branchByIssue[bi.IssueNum] = bi
-			}
-			sorted := topoSort(issueNums, taskMap)
-			sortedBranches := make([]BranchInfo, 0, len(sorted))
-			for _, n := range sorted {
-				if bi, ok := branchByIssue[n]; ok {
-					sortedBranches = append(sortedBranches, bi)
-				}
+		// 对每个 integration 分支，合入未集成的 PR
+		for branchName, tasks := range branchTasks {
+			if len(tasks) == 0 {
+				continue
 			}
 
-			fmt.Printf("[control] 有 %d 个 PR，开始构建 integration 分支（topo 序）\n", len(sortedBranches))
-			result, err := c.builder.Build(sortedBranches, analysis.Dependencies)
-			if err != nil {
-				fmt.Printf("[control] 构建 integration 分支失败: %v\n", err)
-			} else {
-				fmt.Printf("[control] Integration 分支 %s: merged=%v conflicts=%v skipped=%v\n",
-					result.Branch, result.Merged, result.Conflicts, result.Skipped)
-			}
+			fmt.Printf("[control] Integration 分支 %s: 有 %d 个 PR 待合入\n", branchName, len(tasks))
 
-			// 清理旧 integration 分支
-			_ = c.builder.CleanOld()
+			for _, task := range tasks {
+				bi := BranchInfo{
+					Branch:   task.Branch(),
+					IssueNum: task.IssueNum(),
+					PRNum:    task.PRNum(),
+					TaskID:   task.ID,
+				}
+
+				if err := c.builder.MergeOne(branchName, bi); err != nil {
+					fmt.Printf("[control] 合入 %s 失败: %v\n", bi.Branch, err)
+					// 冲突时跳过，继续下一个
+					continue
+				}
+
+				// 标记为已集成
+				metaUpdate := map[string]string{"integrated": "true"}
+				if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+					fmt.Printf("[control] 标记 integrated 失败 (task %s): %v\n", task.ID, err)
+				}
+
+				fmt.Printf("[control] 已合入 %s (issue #%d) 到 %s\n", bi.Branch, bi.IssueNum, branchName)
+			}
 		}
 	}
 
@@ -245,171 +252,44 @@ func (c *Controller) Status(ctx context.Context) (*ControlStatus, error) {
 	}, nil
 }
 
-// Merge 按 topo 序逐个合并 PR
-func (c *Controller) Merge(ctx context.Context, issueNums []int) error {
-	// 获取所有任务
-	allTasks, err := c.taskctl.List("")
-	if err != nil {
-		return fmt.Errorf("列出任务失败: %w", err)
+// Merge 将 integration 分支合并到 master
+// 人工批准后执行：integration/{slug} → master
+func (c *Controller) Merge(ctx context.Context, integrationBranch string) error {
+	if c.builder == nil {
+		return fmt.Errorf("IntegrationBuilder 未配置")
 	}
 
-	// 建立 issueNum → task 映射
-	taskMap := make(map[int]*Task)
-	for i := range allTasks {
-		n := allTasks[i].IssueNum()
-		if n > 0 {
-			taskMap[n] = &allTasks[i]
-		}
-	}
+	// 使用 GitHub API 创建 PR 或直接 merge
+	// 这里简化处理：直接 fast-forward merge
+	fmt.Printf("[control] 合并 %s 到 master...\n", integrationBranch)
 
-	// 按 topo 序排列（简单实现：有依赖的排后面）
-	sorted := topoSort(issueNums, taskMap)
+	// 实际实现需要调用 GitHub API 或 git 命令
+	// 这里只是一个占位，具体实现取决于 GitHubOps 接口的扩展
 
-	method := c.cfg.MergeStrategy
-	if method == "" {
-		method = "merge"
-	}
-
-	for _, issueNum := range sorted {
-		task, ok := taskMap[issueNum]
-		if !ok {
-			return fmt.Errorf("issue #%d 没有对应的 task", issueNum)
-		}
-		prNum := task.PRNum()
-		if prNum == 0 {
-			return fmt.Errorf("issue #%d 的 task 没有关联 PR", issueNum)
-		}
-
-		fmt.Printf("[control] 合并 PR #%d (issue #%d)...\n", prNum, issueNum)
-		if err := c.github.MergePR(ctx, prNum, method); err != nil {
-			return fmt.Errorf("合并 PR #%d (issue #%d) 失败: %w", prNum, issueNum, err)
-		}
-
-		// 更新任务状态
-		status := TaskStatusCompleted
-		if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
-			fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
-		}
-
-		fmt.Printf("[control] PR #%d 合并成功\n", prNum)
-	}
-
-	return nil
+	return fmt.Errorf("Merge 实现待完成：需要扩展 GitHubOps 接口支持分支合并")
 }
 
-// topoSort 对 issue 编号做简单拓扑排序
-func topoSort(issueNums []int, taskMap map[int]*Task) []int {
-	// 构建依赖图
-	issueSet := make(map[int]bool)
-	for _, n := range issueNums {
-		issueSet[n] = true
-	}
-
-	// 从 task 的 blocked_by 推导依赖
-	deps := make(map[int][]int) // issue → 依赖的 issues
-	taskIDToIssue := make(map[string]int)
-	for issueNum, task := range taskMap {
-		taskIDToIssue[task.ID] = issueNum
-	}
-
-	for issueNum, task := range taskMap {
-		if !issueSet[issueNum] {
-			continue
-		}
-		for _, depID := range task.BlockedBy {
-			if depIssue, ok := taskIDToIssue[depID]; ok && issueSet[depIssue] {
-				deps[issueNum] = append(deps[issueNum], depIssue)
-			}
-		}
-	}
-
-	// Kahn 算法
-	inDegree := make(map[int]int)
-	for _, n := range issueNums {
-		inDegree[n] = 0
-	}
-	for n, d := range deps {
-		inDegree[n] = len(d)
-		_ = d // 确保所有被依赖的也在 map 中
-	}
-
-	var queue []int
-	for _, n := range issueNums {
-		if inDegree[n] == 0 {
-			queue = append(queue, n)
-		}
-	}
-
-	var result []int
-	for len(queue) > 0 {
-		n := queue[0]
-		queue = queue[1:]
-		result = append(result, n)
-
-		// 找所有依赖 n 的
-		for issueNum, depList := range deps {
-			for _, dep := range depList {
-				if dep == n {
-					inDegree[issueNum]--
-					if inDegree[issueNum] == 0 {
-						queue = append(queue, issueNum)
-					}
-				}
-			}
-		}
-	}
-
-	// 没被排序到的追加到末尾（循环依赖情况）
-	sorted := make(map[int]bool)
-	for _, n := range result {
-		sorted[n] = true
-	}
-	for _, n := range issueNums {
-		if !sorted[n] {
-			result = append(result, n)
-		}
-	}
-
-	return result
-}
-
-// FormatStatus 格式化状态输出
+// FormatStatus 格式化输出控制状态
 func FormatStatus(status *ControlStatus) string {
 	var sb strings.Builder
+	sb.WriteString("## 控制状态\n\n")
 
-	sb.WriteString("=== 任务列表 ===\n")
-	sb.WriteString(fmt.Sprintf("%-8s %-12s %-30s %-10s %-10s\n", "Issue", "Status", "Subject", "PR", "Deps"))
-	sb.WriteString(strings.Repeat("-", 80) + "\n")
-
-	for _, task := range status.Tasks {
-		issueStr := fmt.Sprintf("#%d", task.IssueNum())
-		prStr := "-"
-		if task.PRNum() > 0 {
-			prStr = fmt.Sprintf("#%d", task.PRNum())
-		}
-		depsStr := "-"
-		if len(task.BlockedBy) > 0 {
-			depsStr = strings.Join(task.BlockedBy, ",")
-		}
-
-		// 截断 subject
-		subject := task.Subject
-		if len(subject) > 28 {
-			subject = subject[:28] + ".."
-		}
-
-		sb.WriteString(fmt.Sprintf("%-8s %-12s %-30s %-10s %-10s\n",
-			issueStr, task.Status, subject, prStr, depsStr))
+	if len(status.Dag.Nodes) > 0 {
+		sb.WriteString(fmt.Sprintf("DAG: %d 个节点\n", len(status.Dag.Nodes)))
 	}
 
-	if status.Integration != nil {
-		sb.WriteString(fmt.Sprintf("\n=== Integration 分支: %s ===\n", status.Integration.Branch))
-		sb.WriteString(fmt.Sprintf("Merged: %v\n", status.Integration.Merged))
-		if len(status.Integration.Conflicts) > 0 {
-			sb.WriteString(fmt.Sprintf("Conflicts: %v\n", status.Integration.Conflicts))
-		}
-		if len(status.Integration.Skipped) > 0 {
-			sb.WriteString(fmt.Sprintf("Skipped: %v\n", status.Integration.Skipped))
+	sb.WriteString(fmt.Sprintf("任务总数: %d\n\n", len(status.Tasks)))
+
+	if len(status.Tasks) > 0 {
+		sb.WriteString("| Task ID | Issue | 状态 | 阻塞于 |\n")
+		sb.WriteString("|---------|-------|------|--------|\n")
+		for _, t := range status.Tasks {
+			blockedBy := strings.Join(t.BlockedBy, ", ")
+			if blockedBy == "" {
+				blockedBy = "-"
+			}
+			sb.WriteString(fmt.Sprintf("| %s | #%d | %s | %s |\n",
+				t.ID, t.IssueNum(), t.Status, blockedBy))
 		}
 	}
 

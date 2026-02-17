@@ -287,38 +287,6 @@ func TestController_ReadyTaskAdvance(t *testing.T) {
 	}
 }
 
-func TestTopoSort_NoDeps(t *testing.T) {
-	taskMap := map[int]*Task{
-		40: {ID: "t1"},
-		41: {ID: "t2"},
-		42: {ID: "t3"},
-	}
-	result := topoSort([]int{42, 40, 41}, taskMap)
-	assert.Len(t, result, 3)
-}
-
-func TestTopoSort_WithDeps(t *testing.T) {
-	taskMap := map[int]*Task{
-		40: {ID: "t1"},
-		41: {ID: "t2"},
-		42: {ID: "t3", BlockedBy: []string{"t1"}}, // 42 依赖 40
-	}
-	result := topoSort([]int{42, 40, 41}, taskMap)
-
-	// 40 应在 42 之前
-	idx40 := -1
-	idx42 := -1
-	for i, n := range result {
-		if n == 40 {
-			idx40 = i
-		}
-		if n == 42 {
-			idx42 = i
-		}
-	}
-	assert.Less(t, idx40, idx42, "40 should come before 42")
-}
-
 func TestFormatStatus(t *testing.T) {
 	status := &ControlStatus{
 		Dag: &DagGraph{},

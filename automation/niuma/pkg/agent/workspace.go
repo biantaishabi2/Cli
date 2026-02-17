@@ -26,8 +26,9 @@ func NewWorkspace(repoDir string) *Workspace {
 }
 
 // Create 创建 worktree 并切出新分支
+// base 指定从哪个分支切出，为空时默认从 master
 // 返回 worktree 的绝对路径
-func (w *Workspace) Create(issueNum int, slug string) (string, error) {
+func (w *Workspace) Create(issueNum int, slug string, base string) (string, error) {
 	wtPath := w.Path(issueNum)
 	branch := w.branchName(issueNum, slug)
 
@@ -41,8 +42,23 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// git worktree add -b <branch> <path> master
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "master")
+	// base 为空时默认 master
+	if base == "" {
+		base = "master"
+	}
+
+	// 确保 base 是最新的（有 origin 时 fetch）
+	if w.hasOrigin() {
+		// fetch 失败不阻断，使用本地分支
+		_ = w.fetchRef(base)
+		// 优先使用 origin/base，不存在时回退到本地 base
+		if out, err := w.gitOutput("branch", "--list", "-r", "origin/"+base); err == nil && strings.TrimSpace(out) != "" {
+			base = "origin/" + base
+		}
+	}
+
+	// git worktree add -b <branch> <path> <base>
+	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, base)
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -147,4 +163,33 @@ func (w *Workspace) branchName(issueNum int, slug string) string {
 		return fmt.Sprintf("fix/%d", issueNum)
 	}
 	return fmt.Sprintf("fix/%d-%s", issueNum, slug)
+}
+
+// hasOrigin 检查是否存在 origin remote
+func (w *Workspace) hasOrigin() bool {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = w.RepoDir
+	return cmd.Run() == nil
+}
+
+// fetchRef 从 origin fetch 指定引用
+func (w *Workspace) fetchRef(ref string) error {
+	cmd := exec.Command("git", "fetch", "origin", ref)
+	cmd.Dir = w.RepoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git fetch origin %s: %w\n%s", ref, err, string(out))
+	}
+	return nil
+}
+
+// gitOutput 执行 git 命令并返回输出
+func (w *Workspace) gitOutput(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = w.RepoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }

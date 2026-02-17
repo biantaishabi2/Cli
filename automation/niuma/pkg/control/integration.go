@@ -1,56 +1,111 @@
 // pkg/control/integration.go
-// IntegrationBuilder 构建 integration 分支（从 master 按 topo 序逐个 merge）
+// IntegrationBuilder 构建 integration 分支
+// 支持两种模式：增量模式（EnsureBranch + MergeOne）和批量模式（Build，作为 fallback）
 package control
 
 import (
 	"fmt"
 	"os/exec"
-	"sort"
 	"strings"
-	"time"
 )
 
 // IntegrationBuilder 构建 integration 分支
 type IntegrationBuilder struct {
-	repoDir        string
-	baseBranch     string
-	branchPrefix   string // 默认 "integration/batch-"
-	maxOldBranches int    // 保留最近 N 个旧分支，默认 3
+	repoDir    string
+	baseBranch string
 }
 
 // NewIntegrationBuilder 创建构建器
-func NewIntegrationBuilder(repoDir, baseBranch, branchPrefix string, maxOldBranches int) *IntegrationBuilder {
-	if branchPrefix == "" {
-		branchPrefix = "integration/batch-"
-	}
-	if maxOldBranches <= 0 {
-		maxOldBranches = 3
-	}
+func NewIntegrationBuilder(repoDir, baseBranch string) *IntegrationBuilder {
 	return &IntegrationBuilder{
-		repoDir:        repoDir,
-		baseBranch:     baseBranch,
-		branchPrefix:   branchPrefix,
-		maxOldBranches: maxOldBranches,
+		repoDir:    repoDir,
+		baseBranch: baseBranch,
 	}
 }
 
-// Build 按 topo 序构建 integration 分支
-// branches 应已按 topo 序排列
-// deps 记录依赖关系：key 的分支依赖 value 列表中的 issue
-func (b *IntegrationBuilder) Build(branches []BranchInfo, deps map[int][]int) (*IntegrationResult, error) {
-	branchName := b.branchPrefix + time.Now().Format("20060102-150405")
+// IntegrationBranchName 生成 integration 分支名
+// metaIssueSlug: 总任务的 slug，如 "phase-3"，生成 "integration/phase-3"
+func IntegrationBranchName(metaIssueSlug string) string {
+	if metaIssueSlug == "" {
+		return "integration/main"
+	}
+	return "integration/" + metaIssueSlug
+}
 
-	// 从 baseBranch 创建新分支
-	if err := b.git("checkout", b.baseBranch); err != nil {
-		return nil, fmt.Errorf("checkout %s 失败: %w", b.baseBranch, err)
+// EnsureBranch 确保 integration 分支存在（首次从 master 创建）
+// branchName: integration 分支名，如 "integration/phase-3"
+func (b *IntegrationBuilder) EnsureBranch(branchName string) (string, error) {
+	// 检查 integration 分支是否已存在
+	out, err := b.gitOutput("branch", "--list", branchName)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return branchName, nil
 	}
-	if err := b.git("checkout", "-b", branchName); err != nil {
-		return nil, fmt.Errorf("创建 integration 分支失败: %w", err)
+
+	// 从 baseBranch 创建 integration 分支
+	if err := b.git("branch", branchName, b.baseBranch); err != nil {
+		return "", fmt.Errorf("创建 integration 分支 %s 失败: %w", branchName, err)
 	}
-	// Build 结束后恢复到 baseBranch，避免后续操作（CleanOld 等）停留在 integration 分支
+
+	return branchName, nil
+}
+
+// MergeOne 将单个完成的 PR 分支 merge 进 integration
+// integrationBranch: 目标 integration 分支名
+func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo) error {
+	// 确保 integration 分支存在
+	if _, err := b.EnsureBranch(integrationBranch); err != nil {
+		return err
+	}
+
+	// checkout integration 分支
+	if err := b.git("checkout", integrationBranch); err != nil {
+		return fmt.Errorf("checkout %s 失败: %w", integrationBranch, err)
+	}
 	defer b.git("checkout", b.baseBranch)
 
-	result := &IntegrationResult{Branch: branchName}
+	// merge PR 分支
+	msg := fmt.Sprintf("Merge %s (issue #%d)", bi.Branch, bi.IssueNum)
+	if err := b.git("merge", "--no-ff", bi.Branch, "-m", msg); err != nil {
+		_ = b.git("merge", "--abort")
+		return fmt.Errorf("merge %s 冲突: %w", bi.Branch, err)
+	}
+
+	return nil
+}
+
+// Reset 从 master 重建 integration 分支（冲突无法解决时）
+// branchName: 要重建的 integration 分支名
+func (b *IntegrationBuilder) Reset(branchName string) error {
+	// 确保不在 integration 分支上
+	_ = b.git("checkout", b.baseBranch)
+
+	// 删除旧的 integration 分支（如果存在）
+	_ = b.git("branch", "-D", branchName)
+
+	// 从 baseBranch 重新创建
+	if err := b.git("branch", branchName, b.baseBranch); err != nil {
+		return fmt.Errorf("重建 integration 分支 %s 失败: %w", branchName, err)
+	}
+
+	return nil
+}
+
+// Build 按 topo 序构建 integration 分支（批量模式，作为 fallback）
+// integrationBranch: 目标 integration 分支名
+// branches: 应已按 topo 序排列
+// deps: 依赖关系，key 的分支依赖 value 列表中的 issue
+func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchInfo, deps map[int][]int) (*IntegrationResult, error) {
+	// 重置 integration 分支，从头开始批量 merge
+	if err := b.Reset(integrationBranch); err != nil {
+		return nil, fmt.Errorf("重置 integration 分支失败: %w", err)
+	}
+
+	if err := b.git("checkout", integrationBranch); err != nil {
+		return nil, fmt.Errorf("checkout %s 失败: %w", integrationBranch, err)
+	}
+	defer b.git("checkout", b.baseBranch)
+
+	result := &IntegrationResult{Branch: integrationBranch}
 
 	// 构建 issue → 是否失败的映射（用于级联跳过）
 	failed := make(map[int]bool)
@@ -87,35 +142,33 @@ func shouldSkip(issueNum int, deps map[int][]int, failed map[int]bool) bool {
 	return false
 }
 
-// CleanOld 清理旧的 integration 分支，保留最近 N 个
+// CleanOld 清理旧的 integration 分支，保留最近 3 个
+// 删除 pattern: integration/batch-* 或 integration/test-* 的旧分支
 func (b *IntegrationBuilder) CleanOld() error {
-	out, err := b.gitOutput("branch", "--list", b.branchPrefix+"*")
+	// 获取所有 integration/batch-* 和 integration/test-* 分支，按创建时间排序
+	out, err := b.gitOutput("branch", "--list", "integration/batch-*", "integration/test-*", "--sort=-creatordate")
 	if err != nil {
-		return nil // 没有匹配的分支
+		return fmt.Errorf("列出 integration 分支失败: %w", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	var branches []string
 	for _, line := range lines {
-		branch := strings.TrimSpace(line)
-		branch = strings.TrimPrefix(branch, "* ") // 当前分支标记
-		if branch != "" {
-			branches = append(branches, branch)
+		line = strings.TrimSpace(line)
+		// 移除开头的 * (当前分支标记)
+		line = strings.TrimPrefix(line, "* ")
+		if line != "" {
+			branches = append(branches, line)
 		}
 	}
 
-	if len(branches) <= b.maxOldBranches {
-		return nil
-	}
-
-	// 按名称排序（时间戳在名称中，所以字典序即时间序）
-	sort.Strings(branches)
-
-	// 删除最老的
-	toDelete := branches[:len(branches)-b.maxOldBranches]
-	for _, branch := range toDelete {
-		if err := b.git("branch", "-D", branch); err != nil {
-			fmt.Printf("[control] 删除旧分支 %s 失败: %v\n", branch, err)
+	// 保留最近 3 个，删除其余的
+	if len(branches) > 3 {
+		for _, branch := range branches[3:] {
+			if err := b.git("branch", "-D", branch); err != nil {
+				// 忽略删除失败（可能分支不存在）
+				continue
+			}
 		}
 	}
 

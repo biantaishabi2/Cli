@@ -17,26 +17,18 @@ func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	cmds := [][]string{
-		{"git", "init"},
-		{"git", "config", "user.email", "test@test.com"},
-		{"git", "config", "user.name", "Test"},
-		{"git", "checkout", "-b", "master"},
-	}
+	// 初始化仓库
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@test.com")
+	runGit(t, dir, "config", "user.name", "Test")
 
-	// 创建初始提交
+	// 创建初始文件并提交（在创建分支之前）
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644))
-	cmds = append(cmds,
-		[]string{"git", "add", "."},
-		[]string{"git", "commit", "-m", "initial commit"},
-	)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "initial commit")
 
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "cmd=%v output=%s", args, string(out))
-	}
+	// 确保在 master 分支上（某些 git 版本默认是 main）
+	runGit(t, dir, "branch", "-m", "master")
 
 	return dir
 }
@@ -77,7 +69,7 @@ func TestIntegrationBuilder_NoConflict(t *testing.T) {
 	createBranch(t, dir, "feat/41-payment", "payment.go", "package payment\n")
 	createBranch(t, dir, "feat/42-tests", "tests.go", "package tests\n")
 
-	builder := NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := NewIntegrationBuilder(dir, "master")
 
 	branches := []BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -85,12 +77,12 @@ func TestIntegrationBuilder_NoConflict(t *testing.T) {
 		{Branch: "feat/42-tests", IssueNum: 42},
 	}
 
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/test", branches, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []int{40, 41, 42}, result.Merged)
 	assert.Empty(t, result.Conflicts)
 	assert.Empty(t, result.Skipped)
-	assert.Contains(t, result.Branch, "integration/batch-")
+	assert.Equal(t, "integration/test", result.Branch)
 }
 
 func TestIntegrationBuilder_WithConflict(t *testing.T) {
@@ -101,7 +93,7 @@ func TestIntegrationBuilder_WithConflict(t *testing.T) {
 	createBranchModifyFile(t, dir, "feat/41-payment", "shared.go", "package shared // version B\n")
 	createBranch(t, dir, "feat/42-tests", "tests.go", "package tests\n")
 
-	builder := NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := NewIntegrationBuilder(dir, "master")
 
 	branches := []BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -109,7 +101,7 @@ func TestIntegrationBuilder_WithConflict(t *testing.T) {
 		{Branch: "feat/42-tests", IssueNum: 42},
 	}
 
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/test", branches, nil)
 	require.NoError(t, err)
 	assert.Contains(t, result.Merged, 40)
 	// 41 和 40 都创建 shared.go（冲突）
@@ -125,7 +117,7 @@ func TestIntegrationBuilder_CascadeSkip(t *testing.T) {
 	createBranchModifyFile(t, dir, "feat/41-payment", "shared.go", "package shared // version B\n")
 	createBranch(t, dir, "feat/42-tests", "tests.go", "package tests\n")
 
-	builder := NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := NewIntegrationBuilder(dir, "master")
 
 	branches := []BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -136,7 +128,7 @@ func TestIntegrationBuilder_CascadeSkip(t *testing.T) {
 	// 42 依赖 41
 	deps := map[int][]int{42: {41}}
 
-	result, err := builder.Build(branches, deps)
+	result, err := builder.Build("integration/test", branches, deps)
 	require.NoError(t, err)
 	assert.Contains(t, result.Merged, 40)
 	assert.Contains(t, result.Conflicts, 41)
@@ -151,7 +143,7 @@ func TestIntegrationBuilder_CleanOld(t *testing.T) {
 		runGit(t, dir, "branch", fmt.Sprintf("integration/batch-2024010%d-120000", i))
 	}
 
-	builder := NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := NewIntegrationBuilder(dir, "master")
 	err := builder.CleanOld()
 	require.NoError(t, err)
 

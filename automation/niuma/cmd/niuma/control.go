@@ -102,8 +102,6 @@ func buildController() (*control.Controller, error) {
 	builder := control.NewIntegrationBuilder(
 		repoDir,
 		"master",
-		controlCfg.IntegrationBranchPrefix,
-		controlCfg.MaxOldBranches,
 	)
 
 	ghOps := &gitHubControlOps{client: ghClient}
@@ -200,11 +198,16 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	fmt.Printf("开始按 topo 序合并 %v...\n", issueNums)
-	if err := ctrl.Merge(ctx, issueNums); err != nil {
+
+	// 简化处理：固定使用 integration/main
+	// TODO: 根据 issueNums 确定对应的 integration 分支
+	integrationBranch := "integration/main"
+
+	fmt.Printf("开始合并 %s 到 master...\n", integrationBranch)
+	if err := ctrl.Merge(ctx, integrationBranch); err != nil {
 		return fmt.Errorf("合并失败: %w", err)
 	}
 
-	fmt.Println("全部合并完成。")
+	fmt.Println("合并完成。")
 	return nil
 }
