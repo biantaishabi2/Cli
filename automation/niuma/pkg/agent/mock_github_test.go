@@ -245,6 +245,25 @@ func (m *MockGitHub) ListPRReviews(_ context.Context, number int) ([]*github.Pul
 	return m.Reviews[number], nil
 }
 
+func (m *MockGitHub) ListIssuesWithLabel(_ context.Context, _ string) ([]*github.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return nil, m.Error
+	}
+
+	var result []*github.Issue
+	for _, issue := range m.Issues {
+		result = append(result, issue)
+	}
+	return result, nil
+}
+
+func (m *MockGitHub) MergePR(_ context.Context, _ int, _ string) error {
+	return m.Error
+}
+
 // 辅助方法
 
 // SetIssue 设置 mock issue

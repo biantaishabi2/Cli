@@ -35,6 +35,35 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 	return issue, nil
 }
 
+// ListIssuesWithLabel 列出带指定 label 的所有 open issue
+func (c *Client) ListIssuesWithLabel(ctx context.Context, label string) ([]*github.Issue, error) {
+	var allIssues []*github.Issue
+	opts := &github.IssueListByRepoOptions{
+		Labels:      []string{label},
+		State:       "open",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	for {
+		issues, resp, err := c.gh.Issues.ListByRepo(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return nil, fmt.Errorf("列出 label=%s 的 issues 失败: %w", label, err)
+		}
+		// 过滤掉 PR（GitHub API 把 PR 也算 issue）
+		for _, issue := range issues {
+			if issue.PullRequestLinks == nil {
+				allIssues = append(allIssues, issue)
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allIssues, nil
+}
+
 // CloseIssue 关闭指定 issue
 func (c *Client) CloseIssue(ctx context.Context, number int) error {
 	state := "closed"

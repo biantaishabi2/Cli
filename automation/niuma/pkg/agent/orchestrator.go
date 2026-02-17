@@ -358,7 +358,10 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 		// 使用 worktree 隔离
 		ws := NewWorkspace(o.config.RepoDir)
 		slug := slugFromTitle(input.IssueTitle)
-		wtPath, err := ws.Create(o.issueNumber, slug)
+		// TODO: 从 task metadata 读取 base_branch（meta issue 支持）
+		// 目前独立 issue 从 master 切出，base 传空字符串
+		baseBranch := "" // 空字符串表示从 master
+		wtPath, err := ws.Create(o.issueNumber, slug, baseBranch)
 		if err != nil {
 			return 0, fmt.Errorf("创建 worktree 失败: %w", err)
 		}

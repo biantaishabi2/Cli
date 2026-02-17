@@ -53,6 +53,7 @@ func init() {
 	rootCmd.AddCommand(fixCmd)
 	rootCmd.AddCommand(iterateCmd)
 	rootCmd.AddCommand(reviewCmd)
+	rootCmd.AddCommand(controlCmd)
 }
 
 // ===== status 命令：完整实现 =====

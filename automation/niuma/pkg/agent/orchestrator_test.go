@@ -172,7 +172,7 @@ func TestDoIterate_WithWorktree(t *testing.T) {
 
 	// 先创建 worktree（模拟 implement 阶段已创建）
 	ws := NewWorkspace(repoDir)
-	_, err := ws.Create(1, "login")
+	_, err := ws.Create(1, "login", "")
 	require.NoError(t, err)
 	require.True(t, ws.Exists(1))
 

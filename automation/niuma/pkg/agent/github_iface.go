@@ -36,4 +36,8 @@ type GitHubOps interface {
 	GetPRDiff(ctx context.Context, number int) (string, error)
 	CreatePRReview(ctx context.Context, number int, body, event string) (*github.PullRequestReview, error)
 	ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error)
+
+	// 批量操作（Phase 3 control）
+	ListIssuesWithLabel(ctx context.Context, label string) ([]*github.Issue, error)
+	MergePR(ctx context.Context, number int, method string) error
 }

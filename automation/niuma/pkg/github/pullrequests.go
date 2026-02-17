@@ -54,6 +54,19 @@ func (c *Client) CreatePRReview(ctx context.Context, number int, body, event str
 	return review, nil
 }
 
+// MergePR 合并 Pull Request
+// method: "merge", "squash", "rebase"
+func (c *Client) MergePR(ctx context.Context, number int, method string) error {
+	opts := &github.PullRequestOptions{
+		MergeMethod: method,
+	}
+	_, _, err := c.gh.PullRequests.Merge(ctx, c.owner, c.repo, number, "", opts)
+	if err != nil {
+		return fmt.Errorf("合并 PR #%d 失败: %w", number, err)
+	}
+	return nil
+}
+
 // ListPRReviews 列出 PR 的所有 review
 func (c *Client) ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error) {
 	var allReviews []*github.PullRequestReview
