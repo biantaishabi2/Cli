@@ -29,6 +29,7 @@ ai:
 
 workflow:
   max_discussion_rounds: 5
+  discuss_timeout_minutes: 20
   max_iterate_rounds: 10
   allowed_prefixes:
     - "automation/"

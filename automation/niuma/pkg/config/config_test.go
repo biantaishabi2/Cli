@@ -55,6 +55,7 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	assert.Equal(t, "codex", cfg.AI.Default)
 	assert.NotNil(t, cfg.AI.Providers)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
+	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
 }
 
 func TestLoad_WorkflowConfig(t *testing.T) {
@@ -68,6 +69,7 @@ workflow:
   require_plan_approval: true
   max_iterate_rounds: 5
   max_discussion_rounds: 7
+  discuss_timeout_minutes: 25
 `
 	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
 	require.NoError(t, err)
@@ -79,6 +81,7 @@ workflow:
 	assert.Equal(t, 5, cfg.Workflow.GetMaxIterateRounds())
 	assert.Equal(t, 7, cfg.Workflow.MaxDiscussionRounds)
 	assert.Equal(t, 7, cfg.Workflow.GetMaxDiscussionRounds())
+	assert.Equal(t, 25, cfg.Workflow.GetDiscussTimeoutMinutes())
 }
 
 func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
@@ -94,6 +97,14 @@ func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
 
 	w.MaxDiscussionRounds = -1
 	assert.Equal(t, 5, w.GetMaxDiscussionRounds())
+
+	assert.Equal(t, 20, w.GetDiscussTimeoutMinutes())
+	w.DiscussTimeoutMinutes = 121
+	assert.Equal(t, 20, w.GetDiscussTimeoutMinutes())
+	w.DiscussTimeoutMinutes = -1
+	assert.Equal(t, 20, w.GetDiscussTimeoutMinutes())
+	w.DiscussTimeoutMinutes = 30
+	assert.Equal(t, 30, w.GetDiscussTimeoutMinutes())
 }
 
 func TestLoad_EnvOverride(t *testing.T) {

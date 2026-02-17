@@ -55,5 +55,7 @@ ai:
 workflow:
   # discuss 单次 run 内最大轮次（1-20，默认 5）
   max_discussion_rounds: 5
+  # discuss 命令超时（分钟，1-120，默认 20）
+  discuss_timeout_minutes: 20
   allowed_prefixes:
     - "automation/"

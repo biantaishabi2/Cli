@@ -29,10 +29,11 @@ type ControlConfig struct {
 
 // WorkflowConfig 工作流配置
 type WorkflowConfig struct {
-	RequirePlanApproval bool     `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
-	MaxIterateRounds    int      `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
-	MaxDiscussionRounds int      `yaml:"max_discussion_rounds"` // discuss 单次 run 的最大讨论轮数（默认 5）
-	AllowedPrefixes     []string `yaml:"allowed_prefixes"`      // 允许修改的路径前缀
+	RequirePlanApproval   bool     `yaml:"require_plan_approval"`   // 方案定稿后是否需要人工审批
+	MaxIterateRounds      int      `yaml:"max_iterate_rounds"`      // 最大自动迭代轮数（0=默认3）
+	MaxDiscussionRounds   int      `yaml:"max_discussion_rounds"`   // discuss 单次 run 的最大讨论轮数（默认 5）
+	DiscussTimeoutMinutes int      `yaml:"discuss_timeout_minutes"` // discuss 命令超时（分钟，默认 20）
+	AllowedPrefixes       []string `yaml:"allowed_prefixes"`        // 允许修改的路径前缀
 }
 
 // GetMaxIterateRounds 获取最大迭代轮数，默认3
@@ -50,6 +51,15 @@ func (w *WorkflowConfig) GetMaxDiscussionRounds() int {
 		return 5
 	}
 	return w.MaxDiscussionRounds
+}
+
+// GetDiscussTimeoutMinutes 获取 discuss 超时分钟数。
+// 合法范围 1-120，越界或未配置都回退默认值 20。
+func (w *WorkflowConfig) GetDiscussTimeoutMinutes() int {
+	if w.DiscussTimeoutMinutes < 1 || w.DiscussTimeoutMinutes > 120 {
+		return 20
+	}
+	return w.DiscussTimeoutMinutes
 }
 
 // AIConfig AI 相关配置
@@ -230,8 +240,9 @@ func defaultConfig() *Config {
 			Templates: map[string]TemplateConfig{},
 		},
 		Workflow: WorkflowConfig{
-			MaxIterateRounds:    3,
-			MaxDiscussionRounds: 5,
+			MaxIterateRounds:      3,
+			MaxDiscussionRounds:   5,
+			DiscussTimeoutMinutes: 20,
 		},
 	}
 }

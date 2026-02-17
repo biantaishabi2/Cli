@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/agent"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
@@ -179,7 +180,16 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("必须指定 --repo 和 --issue")
 	}
 
-	ctx := context.Background()
+	configDir := "."
+	if flagRepoDir != "" {
+		configDir = flagRepoDir
+	}
+	cfg := config.LoadWithDefaults(configDir)
+
+	discussTimeout := time.Duration(cfg.Workflow.GetDiscussTimeoutMinutes()) * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), discussTimeout)
+	defer cancel()
+
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
 		return err
@@ -194,14 +204,9 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	configDir := "."
-	if flagRepoDir != "" {
-		configDir = flagRepoDir
-	}
-	cfg := config.LoadWithDefaults(configDir)
 	maxRounds := resolveDiscussMaxRounds(flagMaxDiscussionRounds, cfg.Workflow.GetMaxDiscussionRounds())
 
-	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d）...\n", flagIssue, maxRounds)
+	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d timeout=%s）...\n", flagIssue, maxRounds, discussTimeout)
 
 	if err := orch.DoDiscuss(ctx, maxRounds); err != nil {
 		return fmt.Errorf("讨论检查失败: %w", err)
