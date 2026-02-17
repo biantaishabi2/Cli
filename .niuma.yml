@@ -8,12 +8,12 @@ ai:
     
     # OpenAI Codex（需要 OPENAI_API_KEY）
     codex:
-      cmd: "codex exec -C {workdir} - < {prompt_file}"
-      cmd_agent: "codex exec -C {workdir} - < {prompt_file}"
+      cmd: "codex exec --sandbox workspace-write -C {workdir} - < {prompt_file}"
+      cmd_agent: "codex exec --sandbox workspace-write -C {workdir} - < {prompt_file}"
     
     # Kimi（Moonshot AI）
     kimi:
-      cmd: "cat {prompt_file} | kimi -w {workdir} -p -"
+      cmd: "cat {prompt_file} | kimi --print --input-format text --output-format text --final-message-only -w {workdir}"
   
   # 讨论阶段：多 provider 左右互搏
   discussion:
