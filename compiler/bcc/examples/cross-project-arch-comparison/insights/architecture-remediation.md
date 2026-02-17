@@ -19,51 +19,54 @@
 
 | 边 | 严重程度 | 原因 | 整改建议 |
 |---|---------|------|---------|
-| INFRA → PROVIDERS | ⚠️ 轻微 | Application 硬编码 DeepSeek | 改为配置驱动 |
+| INFRA → PROVIDERS | ✅ **非违反** | Seed 漏定义 | 补充 seed 定义 |
 | TOOLS → COMPACTION | ⚠️ 轻微 | truncate 是通用工具 | 移到 utils |
 
-### 修复 1：Provider 配置化
+### 分析：INFRA → PROVIDERS
 
-**文件**: `lib/gong/application.ex`
+**重要发现**：这不是架构违反，而是 **BCC 提取问题 + Seed 漏定义**！
 
-**当前代码**:
+**代码分析**:
 ```elixir
-def start(_type, _args) do
-  # ... children ...
-  
-  # 硬编码注册
-  ReqLLM.Providers.register(Gong.Providers.DeepSeek)
-  
-  Supervisor.start_link(children, opts)
-end
+# application.ex
+ReqLLM.Providers.register(Gong.Providers.DeepSeek)
 ```
 
-**修复后**:
-```elixir
-def start(_type, _args) do
-  # ... children ...
-  
-  # 从配置读取
-  providers = Application.get_env(:gong, :providers, [Gong.Providers.DeepSeek])
-  Enum.each(providers, &ReqLLM.Providers.register/1)
-  
-  Supervisor.start_link(children, opts)
-end
+**依赖关系**:
+- `ReqLLM` 是 **外部依赖库**（`{:req_llm, "~> 1.5"}`）
+- `Gong.Providers.DeepSeek` 是 **内部模块**
+
+**正确的架构理解**:
+```
+INFRA (Application) ──> PROVIDERS (Gong.Providers.DeepSeek)
+                              │
+                              └── use ReqLLM.Provider (外部库)
 ```
 
-**配置** (`config/config.exs`):
-```elixir
-config :gong, :providers, [
-  Gong.Providers.DeepSeek,
-  # 可以轻松添加其他 provider
-  # Gong.Providers.OpenAI,
-]
+**问题根源**:
+1. BCC AST 提取可能混淆了 `ReqLLM.Providers` 和 `gong/providers`
+2. Seed 漏定义了 `INFRA → PROVIDERS` 这条正当依赖
+
+**修复方案**：补充 Seed 定义（不是修改代码）
+
+```yaml
+# seed.yaml 补充
+relations_expected:
+  - caller: INFRA
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Application 启动时需要注册 Provider"
 ```
 
-**收益**:
-- 解除 INFRA 对具体 PROVIDER 的硬编码依赖
-- 支持多 provider 配置
-- 测试时可注入 mock provider
+**可选优化**（配置化，非必须）:
+如果希望更灵活，可以将 Provider 配置化：
+```elixir
+# 从配置读取
+providers = Application.get_env(:gong, :providers, [Gong.Providers.DeepSeek])
+Enum.each(providers, &ReqLLM.Providers.register/1)
+```
+
+但这属于功能增强，不是架构修复。
 
 ---
 
@@ -437,10 +440,11 @@ CORE -> MODES
 
 | 天数 | 任务 | 产出 |
 |-----|------|------|
-| 1 | Provider 配置化 | PR #1 |
+| 1 | Seed 补充（AGENT→TOOLS, INFRA→PROVIDERS） | PR #1 |
 | 2 | Truncate 移动 | PR #2 |
-| 3 | Seed 更新 | PR #3 |
-| 4-5 | 验证 & 合并 | 完成 |
+| 3-4 | 验证 & 合并 | 完成 |
+
+**注意**：INFRA→PROVIDERS 不是架构违反，是 Seed 漏定义！
 
 ### PI-Mono（1 个月内完成）
 
@@ -506,5 +510,6 @@ diff analysis/gong-matrix/v3.transition-matrix.yaml \
 ```
 
 **期望结果**:
-- Gong: 额外边从 3 条减少到 0 条
+- Gong: 额外边从 3 条减少到 1 条（TOOLS→COMPACTION）
+  - INFRA→PROVIDERS 和 AGENT→TOOLS 是 Seed 漏定义，不是违反
 - PI-Mono: 额外边从 15 条减少到 5 条以内

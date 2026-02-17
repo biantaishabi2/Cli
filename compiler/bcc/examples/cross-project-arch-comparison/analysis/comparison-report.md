@@ -58,9 +58,15 @@
 
 | 边 | 分析 | 判定 | 建议 |
 |---|------|------|------|
-| AGENT → TOOLS | Seed 漏定义，正当依赖 | ✅ 非违反 | 补充 seed 定义 |
-| INFRA → PROVIDERS | Application 硬编码 provider | ⚠️ 轻微违反 | 改为配置驱动 |
-| TOOLS → COMPACTION | truncate 是通用工具 | ⚠️ 职责不清 | 移到 utils |
+| AGENT → TOOLS | Seed 漏定义，正当依赖 | ✅ **非违反** | 补充 seed 定义 |
+| INFRA → PROVIDERS | Seed 漏定义 + BCC 提取问题 | ✅ **非违反** | 补充 seed 定义 |
+| TOOLS → COMPACTION | truncate 是通用工具 | ⚠️ 轻微违反 | 移到 utils |
+
+**重要发现**：Gong 的 3 条"额外边"中，**2 条是 Seed 漏定义，不是架构违反**！
+
+- **AGENT → TOOLS**: Agent 需要调用工具，正当依赖
+- **INFRA → PROVIDERS**: Application 启动时注册 Provider，正当依赖（ReqLLM 是外部库）
+- **TOOLS → COMPACTION**: 唯一真正的轻微违反（模块职责不清）
 
 ### PI-Mono 的依赖边
 
@@ -89,9 +95,9 @@
 4. 显式定义 DATA 层，职责清晰
 
 **问题**：
-1. Seed 漏定义 AGENT → TOOLS（已识别）
-2. Application 硬编码 Provider（轻微）
-3. truncate 模块位置不当（轻微）
+1. Seed 漏定义 AGENT → TOOLS（已识别，非违反）
+2. Seed 漏定义 INFRA → PROVIDERS（已识别，非违反，ReqLLM 是外部库）
+3. truncate 模块位置不当（轻微违反）
 
 ### PI-Mono：⚠️ 需要关注
 
