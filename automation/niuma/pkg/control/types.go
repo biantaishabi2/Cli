@@ -9,20 +9,24 @@ type TaskStatus string
 
 const (
 	TaskStatusPending    TaskStatus = "pending"
-	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusInProgress TaskStatus = "in-progress"
 	TaskStatusCompleted  TaskStatus = "completed"
+	TaskStatusDeleted    TaskStatus = "deleted"
 	TaskStatusBlocked    TaskStatus = "blocked"
 	TaskStatusFailed     TaskStatus = "failed"
 )
 
 // Task 表示一个受 taskctl 管理的任务
 type Task struct {
-	ID        string            `json:"id"`
-	Subject   string            `json:"subject"`
-	Desc      string            `json:"desc,omitempty"`
-	Status    TaskStatus        `json:"status"`
-	BlockedBy []string          `json:"blocked_by,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	ID          string            `json:"id"`
+	Subject     string            `json:"subject"`
+	Description string            `json:"description,omitempty"`
+	Desc        string            `json:"desc,omitempty"` // 兼容旧字段
+	ActiveForm  string            `json:"active_form,omitempty"`
+	Status      TaskStatus        `json:"status"`
+	BlockedBy   []string          `json:"blocked_by,omitempty"`
+	Blocks      []string          `json:"blocks,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // IssueNum 从 metadata 获取 issue 编号

@@ -304,5 +304,5 @@ func TestFormatStatus(t *testing.T) {
 	assert.Contains(t, output, "#40")
 	assert.Contains(t, output, "#41")
 	assert.Contains(t, output, "completed")
-	assert.Contains(t, output, "in_progress")
+	assert.Contains(t, output, string(TaskStatusInProgress))
 }
