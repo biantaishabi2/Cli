@@ -1,24 +1,33 @@
 name: niuma - Discussion Check
 
 on:
+  issues:
+    types: [labeled]
   issue_comment:
     types: [created]
 
 concurrency:
   group: niuma-discuss-${{ github.event.issue.number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   discussion-check:
     runs-on: self-hosted
-    if: github.event.issue.pull_request == null && !contains(github.event.comment.body, '<!-- BOT:')
+    if: >
+      github.event.issue.pull_request == null &&
+      (
+        (github.event_name == 'issues' && github.event.label.name == 'bot:needs-discussion') ||
+        (github.event_name == 'issue_comment' &&
+          !endsWith(github.actor, '[bot]') &&
+          !contains(github.event.comment.body || '', '<!-- BOT:'))
+      )
     permissions:
       issues: write
       contents: read
     steps:
       - uses: actions/checkout@v4
 
-      # 事件驱动：Issue 评论触发（仅在讨论状态）
+      # 事件驱动启动一次 discuss，后续轮次在进程内循环推进
       - name: Check Discussion
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}

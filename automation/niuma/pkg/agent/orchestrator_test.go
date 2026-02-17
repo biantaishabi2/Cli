@@ -274,6 +274,41 @@ func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
 	assert.Equal(t, 2, mc.Marker.Revision)
 }
 
+func TestDoDiscussionCheck_Converged_Finalizes(t *testing.T) {
+	mockAI := ai.NewMockProvider(
+		`{"consensus":"已达成一致","open_items":[],"should_finish":true}`,
+		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoDiscussionCheck(context.Background())
+	require.NoError(t, err)
+
+	finalMC := mockGH.GetMarker(1, marker.TypePlanFinal)
+	require.NotNil(t, finalMC)
+	assert.Contains(t, mockGH.Labels[1], string(state.StatePlanFinal))
+}
+
+func TestDoDiscussionCheck_Converged_FinalizeFailed(t *testing.T) {
+	mockAI := ai.NewMockProvider(
+		`{"consensus":"已达成一致","open_items":[],"should_finish":true}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "existing final")
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoDiscussionCheck(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "讨论已收敛但定稿失败")
+}
+
 func TestDoDiscussionCheck_WrongState(t *testing.T) {
 	mockAI := ai.NewMockProvider("unused")
 	mockGH := NewMockGitHub()

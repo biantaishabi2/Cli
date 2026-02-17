@@ -26,7 +26,6 @@ func fixedChecker(now time.Time) *ConvergenceChecker {
 		Now:             func() time.Time { return now },
 		SilenceWarn:     10 * time.Minute,
 		SilenceFinalize: 30 * time.Minute,
-		MaxRounds:       5,
 	}
 }
 
@@ -80,7 +79,41 @@ func TestConvergence_NotConverged_WarningTooRecent(t *testing.T) {
 	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
-func TestConvergence_ShouldFinalize_RoundBased(t *testing.T) {
+func TestConvergence_NotFinalize_WhenHumanCommentAfterWarning(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	warnTime := now.Add(-40 * time.Minute)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人工补充了新的信息", now.Add(-5*time.Minute)),
+		},
+		ConvergeWarning: &marker.Marker{Type: marker.TypeConvergeWarning, Issue: 1, Revision: 1},
+		WarningTime:     warnTime,
+	}
+
+	decision := checker.CheckWithDecision(input)
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.Equal(t, "warning_invalidated_by_new_human_comment", decision.Reason)
+}
+
+func TestConvergence_StaleWarningFallsBackToSilenceWarn(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	warnTime := now.Add(-40 * time.Minute)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人工补充了新的信息", now.Add(-15*time.Minute)),
+		},
+		ConvergeWarning: &marker.Marker{Type: marker.TypeConvergeWarning, Issue: 1, Revision: 1},
+		WarningTime:     warnTime,
+	}
+
+	decision := checker.CheckWithDecision(input)
+	assert.Equal(t, ShouldWarn, decision.Result)
+	assert.Equal(t, "silence_warn", decision.Reason)
+}
+
+func TestConvergence_NotConverged_RoundBasedNoAutoFinalize(t *testing.T) {
 	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	checker := fixedChecker(now)
 	input := &ConvergenceInput{
@@ -93,7 +126,7 @@ func TestConvergence_ShouldFinalize_RoundBased(t *testing.T) {
 			Revision: 5, // ≥ 5 轮次
 		},
 	}
-	assert.Equal(t, ShouldFinalize, checker.Check(input))
+	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
 func TestConvergence_NotConverged_RoundInsufficient(t *testing.T) {
@@ -251,6 +284,14 @@ func TestConvergence_AIFalse_WithRounds(t *testing.T) {
 		},
 		AIShouldFinish: false,
 	}
-	// AI 不建议结束，但轮次达到阈值，应该定稿
-	assert.Equal(t, ShouldFinalize, checker.Check(input))
+	// AI 不建议结束，轮次本身不触发定稿
+	assert.Equal(t, NotConverged, checker.Check(input))
+}
+
+func TestReachedDiscussionRoundLimit(t *testing.T) {
+	assert.True(t, ReachedDiscussionRoundLimit(5, 5))
+	assert.True(t, ReachedDiscussionRoundLimit(6, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(4, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(0, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(1, 0))
 }

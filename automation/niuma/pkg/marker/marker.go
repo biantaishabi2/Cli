@@ -9,15 +9,16 @@ import (
 	"strings"
 )
 
-// Type 定义 Marker 的五种类型
+// Type 定义 Marker 类型
 type Type string
 
 const (
-	TypePlanDraft         Type = "BOT:PLAN_DRAFT"
-	TypeDiscussionSummary Type = "BOT:DISCUSSION_SUMMARY"
-	TypePlanFinal         Type = "BOT:PLAN_FINAL"
-	TypePRCreated         Type = "BOT:PR_CREATED"
-	TypeConvergeWarning   Type = "BOT:CONVERGE_WARNING"
+	TypePlanDraft                  Type = "BOT:PLAN_DRAFT"
+	TypeDiscussionSummary          Type = "BOT:DISCUSSION_SUMMARY"
+	TypePlanFinal                  Type = "BOT:PLAN_FINAL"
+	TypePRCreated                  Type = "BOT:PR_CREATED"
+	TypeConvergeWarning            Type = "BOT:CONVERGE_WARNING"
+	TypeDiscussionRoundLimitNotice Type = "BOT:DISCUSSION_ROUND_LIMIT_NOTICE"
 )
 
 // AllTypes 返回所有有效的 Marker 类型
@@ -27,6 +28,7 @@ var AllTypes = []Type{
 	TypePlanFinal,
 	TypePRCreated,
 	TypeConvergeWarning,
+	TypeDiscussionRoundLimitNotice,
 }
 
 // Marker 表示一个嵌入在 GitHub 评论中的幂等标记

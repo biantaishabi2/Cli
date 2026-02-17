@@ -28,8 +28,9 @@ type OrchestratorConfig struct {
 	RepoDir string
 
 	// 工作流配置
-	RequirePlanApproval bool     // 方案定稿后是否需要人工审批
-	MaxIterateRounds    int      // 最大自动迭代轮数（0=默认3）
+	RequirePlanApproval bool // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int  // 最大自动迭代轮数（0=默认3）
+	MaxDiscussionRounds int  // discuss 单次 run 内最大轮数（0=默认5）
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -38,6 +39,14 @@ func (c *OrchestratorConfig) getMaxIterateRounds() int {
 		return 3
 	}
 	return c.MaxIterateRounds
+}
+
+// getMaxDiscussionRounds 获取 discuss 最大轮数，默认 5
+func (c *OrchestratorConfig) getMaxDiscussionRounds() int {
+	if c == nil || c.MaxDiscussionRounds < 1 || c.MaxDiscussionRounds > 20 {
+		return 5
+	}
+	return c.MaxDiscussionRounds
 }
 
 // Orchestrator 核心编排器
@@ -138,37 +147,105 @@ func (o *Orchestrator) DoPlanDraft(ctx context.Context) error {
 	return o.transition(ctx, state.StateNeedsDiscussion)
 }
 
-// DoDiscussionCheck 检查讨论收敛状态
-// 支持多 provider "左右互搏"：每个 provider 独立出方案，consolidator 汇总
+// DoDiscuss 在单次 run 内循环推进讨论，直到收敛或达到轮次上限
+func (o *Orchestrator) DoDiscuss(ctx context.Context, maxRounds int) error {
+	if maxRounds <= 0 {
+		if o.config != nil {
+			maxRounds = o.config.getMaxDiscussionRounds()
+		} else {
+			maxRounds = 5
+		}
+	}
+
+	for round := 1; round <= maxRounds; round++ {
+		decision, err := o.runDiscussionRound(ctx, round, maxRounds)
+		if err != nil {
+			return fmt.Errorf("讨论轮次失败 (issue=%d round=%d max=%d): %w", o.issueNumber, round, maxRounds, err)
+		}
+
+		fmt.Printf("[discuss] issue=%d round=%d max=%d converged=%t result=%s reason=%s\n",
+			o.issueNumber, round, maxRounds, decision.Converged(), decision.Result.String(), decision.Reason)
+
+		if decision.Converged() {
+			if err := o.DoPlanFinal(ctx); err != nil {
+				return fmt.Errorf("讨论已收敛但定稿失败: %w", err)
+			}
+			return nil
+		}
+	}
+
+	fmt.Printf("[discuss] issue=%d round=%d max=%d converged=false reason=max_rounds_reached\n",
+		o.issueNumber, maxRounds, maxRounds)
+
+	if err := o.notifyMaxDiscussionRoundsReached(ctx, maxRounds); err != nil {
+		return fmt.Errorf("写入讨论轮次上限提醒失败: %w", err)
+	}
+	return nil
+}
+
+// DoDiscussionCheck 执行单轮讨论检查（兼容旧接口）
 func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
+	decision, err := o.runDiscussionRound(ctx, 1, 1)
+	if err != nil {
+		return err
+	}
+
+	if decision.Converged() {
+		if err := o.DoPlanFinal(ctx); err != nil {
+			return fmt.Errorf("讨论已收敛但定稿失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// runDiscussionRound 执行单轮讨论推进，返回结构化收敛判定
+func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds int) (*state.ConvergenceDecision, error) {
 	currentState, err := o.currentState(ctx)
 	if err != nil {
-		return fmt.Errorf("读取状态失败: %w", err)
+		return nil, fmt.Errorf("读取状态失败: %w", err)
 	}
 	if currentState != state.StateNeedsDiscussion {
-		return fmt.Errorf("当前状态 %s 不是讨论中（需要 %s）", currentState, state.StateNeedsDiscussion)
+		return nil, fmt.Errorf("当前状态 %s 不是讨论中（需要 %s）", currentState, state.StateNeedsDiscussion)
 	}
 
-	// 获取评论和 markers
-	comments, err := o.github.ListComments(ctx, o.issueNumber)
-	if err != nil {
-		return fmt.Errorf("获取评论失败: %w", err)
-	}
-
+	// 每轮都先更新 DISCUSSION_SUMMARY（同一条 marker upsert）
 	summaryMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionSummary)
 	if err != nil {
-		return fmt.Errorf("查找汇总 marker 失败: %w", err)
+		return nil, fmt.Errorf("查找汇总 marker 失败: %w", err)
+	}
+
+	if o.hasMultipleDiscussionProviders() {
+		if err := o.doMultiProviderDiscussion(ctx, summaryMC); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := o.updateDiscussionSummary(ctx, summaryMC); err != nil {
+			return nil, err
+		}
+	}
+
+	// 读取最新上下文，进行收敛判定
+	comments, err := o.github.ListComments(ctx, o.issueNumber)
+	if err != nil {
+		return nil, fmt.Errorf("获取评论失败: %w", err)
+	}
+
+	summaryMC, err = o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionSummary)
+	if err != nil {
+		return nil, fmt.Errorf("刷新汇总 marker 失败: %w", err)
 	}
 
 	warningMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeConvergeWarning)
 	if err != nil {
-		return fmt.Errorf("查找预警 marker 失败: %w", err)
+		return nil, fmt.Errorf("查找预警 marker 失败: %w", err)
 	}
 
 	// 构建收敛检查输入
 	checker := state.DefaultChecker()
 	input := &state.ConvergenceInput{
 		Comments: comments,
+		Round:    round,
+		MaxRound: maxRounds,
 	}
 	if summaryMC != nil {
 		input.DiscussionSummary = summaryMC.Marker
@@ -179,33 +256,51 @@ func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
 		input.WarningTime = warningMC.Comment.GetCreatedAt().Time
 	}
 
-	result := checker.Check(input)
-
-	switch result {
-	case state.ShouldFinalize:
-		return o.DoPlanFinal(ctx)
-
-	case state.ShouldWarn:
-		rev := 1
-		if warningMC != nil {
-			rev = warningMC.Marker.Revision + 1
+	decision := checker.CheckWithDecision(input)
+	if decision.Result == state.ShouldWarn {
+		if err := o.upsertConvergeWarning(ctx, warningMC, FormatConvergeWarning); err != nil {
+			return nil, err
 		}
-		m := &marker.Marker{
-			Type:     marker.TypeConvergeWarning,
-			Issue:    o.issueNumber,
-			Revision: rev,
-		}
-		body := FormatConvergeWarning(m)
-		return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
-
-	default: // NotConverged
-		// 多 provider 讨论模式
-		if o.hasMultipleDiscussionProviders() {
-			return o.doMultiProviderDiscussion(ctx, summaryMC)
-		}
-		// 单 provider 模式
-		return o.updateDiscussionSummary(ctx, summaryMC)
 	}
+	return decision, nil
+}
+
+func (o *Orchestrator) upsertConvergeWarning(ctx context.Context, existing *gh.MarkerComment, formatter func(*marker.Marker) string) error {
+	rev := 1
+	if existing != nil {
+		rev = existing.Marker.Revision + 1
+	}
+	m := &marker.Marker{
+		Type:     marker.TypeConvergeWarning,
+		Issue:    o.issueNumber,
+		Revision: rev,
+	}
+	body := formatter(m)
+	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+}
+
+func (o *Orchestrator) upsertDiscussionRoundLimitNotice(ctx context.Context, existing *gh.MarkerComment, formatter func(*marker.Marker) string) error {
+	rev := 1
+	if existing != nil {
+		rev = existing.Marker.Revision + 1
+	}
+	m := &marker.Marker{
+		Type:     marker.TypeDiscussionRoundLimitNotice,
+		Issue:    o.issueNumber,
+		Revision: rev,
+	}
+	body := formatter(m)
+	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+}
+
+func (o *Orchestrator) notifyMaxDiscussionRoundsReached(ctx context.Context, maxRounds int) error {
+	noticeMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionRoundLimitNotice)
+	if err != nil {
+		return fmt.Errorf("读取预警 marker 失败: %w", err)
+	}
+	return o.upsertDiscussionRoundLimitNotice(ctx, noticeMC, func(m *marker.Marker) string {
+		return FormatDiscussionRoundLimitWarning(m, maxRounds)
+	})
 }
 
 // DoPlanFinal 生成最终方案

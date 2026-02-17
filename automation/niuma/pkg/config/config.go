@@ -31,6 +31,7 @@ type ControlConfig struct {
 type WorkflowConfig struct {
 	RequirePlanApproval bool     `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
 	MaxIterateRounds    int      `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+	MaxDiscussionRounds int      `yaml:"max_discussion_rounds"` // discuss 单次 run 的最大讨论轮数（默认 5）
 	AllowedPrefixes     []string `yaml:"allowed_prefixes"`      // 允许修改的路径前缀
 }
 
@@ -40,6 +41,15 @@ func (w *WorkflowConfig) GetMaxIterateRounds() int {
 		return 3
 	}
 	return w.MaxIterateRounds
+}
+
+// GetMaxDiscussionRounds 获取 discuss 最大轮数。
+// 合法范围是 1-20，越界或未配置都回退到默认值 5。
+func (w *WorkflowConfig) GetMaxDiscussionRounds() int {
+	if w.MaxDiscussionRounds < 1 || w.MaxDiscussionRounds > 20 {
+		return 5
+	}
+	return w.MaxDiscussionRounds
 }
 
 // AIConfig AI 相关配置
@@ -53,21 +63,21 @@ type AIConfig struct {
 
 // TemplateConfig 模板配置
 type TemplateConfig struct {
-	Type     string `yaml:"type"`      // 模板类型: claude | openai | ollama
-	Cmd      string `yaml:"cmd"`       // 文本模式命令（可选，用于 claude 等）
-	BaseURL  string `yaml:"base_url"`  // API 基础 URL（用于 openai/ollama）
-	Model    string `yaml:"model"`     // 模型名称
-	APIKey   string `yaml:"api_key"`   // API Key（可选，优先从环境变量读取）
+	Type    string `yaml:"type"`     // 模板类型: claude | openai | ollama
+	Cmd     string `yaml:"cmd"`      // 文本模式命令（可选，用于 claude 等）
+	BaseURL string `yaml:"base_url"` // API 基础 URL（用于 openai/ollama）
+	Model   string `yaml:"model"`    // 模型名称
+	APIKey  string `yaml:"api_key"`  // API Key（可选，优先从环境变量读取）
 }
 
 // ProviderConfig 单个 AI Provider 配置
 type ProviderConfig struct {
-	Template string `yaml:"template"` // 引用的模板名称
-	Cmd      string `yaml:"cmd"`      // 覆盖模板的 cmd（可选）
+	Template string `yaml:"template"`  // 引用的模板名称
+	Cmd      string `yaml:"cmd"`       // 覆盖模板的 cmd（可选）
 	CmdAgent string `yaml:"cmd_agent"` // 向后兼容：agentic 模式命令
-	BaseURL  string `yaml:"base_url"` // 覆盖模板的 base_url（可选）
-	Model    string `yaml:"model"`    // 覆盖模板的 model（可选）
-	APIKey   string `yaml:"api_key"`  // 覆盖模板的 api_key（可选）
+	BaseURL  string `yaml:"base_url"`  // 覆盖模板的 base_url（可选）
+	Model    string `yaml:"model"`     // 覆盖模板的 model（可选）
+	APIKey   string `yaml:"api_key"`   // 覆盖模板的 api_key（可选）
 }
 
 // DiscussionConfig 讨论（左右互搏）配置
@@ -83,11 +93,11 @@ type ImplementationConfig struct {
 
 // ResolvedProvider 解析后的 provider 配置（包含模板解析）
 type ResolvedProvider struct {
-	Type     string // claude | openai | ollama
-	Cmd      string // 最终命令
-	BaseURL  string
-	Model    string
-	APIKey   string
+	Type    string // claude | openai | ollama
+	Cmd     string // 最终命令
+	BaseURL string
+	Model   string
+	APIKey  string
 }
 
 // GetProvider 获取解析后的 provider 配置
@@ -220,7 +230,8 @@ func defaultConfig() *Config {
 			Templates: map[string]TemplateConfig{},
 		},
 		Workflow: WorkflowConfig{
-			MaxIterateRounds: 3,
+			MaxIterateRounds:    3,
+			MaxDiscussionRounds: 5,
 		},
 	}
 }

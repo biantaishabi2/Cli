@@ -145,3 +145,18 @@ func FormatConvergeWarning(m *marker.Marker) string {
 
 	return sb.String()
 }
+
+// FormatDiscussionRoundLimitWarning 格式化 discuss 达到轮次上限提醒
+func FormatDiscussionRoundLimitWarning(m *marker.Marker, maxRounds int) string {
+	var sb strings.Builder
+
+	sb.WriteString(marker.Render(m))
+	sb.WriteString("\n\n")
+	sb.WriteString("## ⚠️ 讨论已达自动轮次上限\n\n")
+	sb.WriteString(fmt.Sprintf("当前自动讨论已达到 **%d** 轮，仍未收敛，已停止本次自动推进。\n\n", maxRounds))
+	sb.WriteString("- 当前状态保持为 `bot:needs-discussion`\n")
+	sb.WriteString("- 请补充更多上下文、边界条件或明确人工决策\n")
+	sb.WriteString("- 新增一条非 BOT 评论后会触发新一轮 discuss")
+
+	return sb.String()
+}
