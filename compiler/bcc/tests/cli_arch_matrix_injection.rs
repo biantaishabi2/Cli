@@ -210,6 +210,88 @@ relations_expected: []
 }
 
 #[test]
+fn arch_matrix_switch_on_appends_classification_reason_when_relations_expected_exists() {
+    let root = temp_dir("bcc_arch_injection_relations_expected_reason");
+    let seed = root.join("seed.yaml");
+    let ast = root.join("ast.json");
+    let out = root.join("out");
+
+    write(
+        &seed,
+        r#"version: v3
+source_of_truth: test
+modules:
+  - module_id: INFRA
+    precedence: 10
+    path_rules:
+      include: ["src/infra/**"]
+  - module_id: PROVIDERS
+    precedence: 10
+    path_rules:
+      include: ["src/providers/**"]
+relations_expected:
+  - caller: INFRA
+    callee: PROVIDERS
+    allowed: true
+"#,
+    );
+    write(
+        &ast,
+        r#"{
+  "source_count": 2,
+  "records": [
+    {
+      "sourcePath": "src/infra/req_llm.ex",
+      "localDependencies": ["src/providers/anthropic.ex"],
+      "localCallTargets": [],
+      "relationHints": [
+        {
+          "target": "src/providers/anthropic.ex",
+          "call_type_hint": "external_registration",
+          "via": "ReqLLM.Providers.register",
+          "confidence": 0.99,
+          "detector": "elixir.external_register",
+          "reason": "register"
+        }
+      ]
+    },
+    {
+      "sourcePath": "src/providers/anthropic.ex",
+      "localDependencies": [],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix on with relations_expected");
+    assert!(status.success());
+
+    let target = fs::read_to_string(out.join("v3.target-matrix.yaml")).expect("read target");
+    assert!(target.contains("from relations_expected"));
+    assert!(target.contains("call_type=external_registration"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn arch_matrix_injection_accuracy_is_above_ninety_percent() {
     let root = temp_dir("bcc_arch_injection_accuracy");
     let seed = root.join("seed.yaml");

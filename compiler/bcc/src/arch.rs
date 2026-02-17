@@ -595,10 +595,16 @@ fn matrix_impl(
     } else {
         for rel in &seed.relations_expected {
             if rel.allowed {
+                let key = edge_key(&rel.caller, &rel.callee);
+                let rationale = if let Some(row) = classification_map.get(&key) {
+                    append_classification_reason("from relations_expected", row, detect_injection)
+                } else {
+                    "from relations_expected".to_string()
+                };
                 allow_edges.push(Edge {
                     caller: rel.caller.clone(),
                     callee: rel.callee.clone(),
-                    rationale: "from relations_expected".to_string(),
+                    rationale,
                 });
             } else {
                 forbid_edges.push(Edge {
