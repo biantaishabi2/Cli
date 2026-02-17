@@ -25,11 +25,14 @@ bcc-seed-authoring/
 
 ## 适用范围
 
-- 新项目：从零创建 seed 文件
-- 存量项目：根据代码反推完善 seed
-- 迭代维护：根据 BCC 反馈更新 seed
+- **新项目**：从零创建 seed 文件
+- **存量项目**：根据代码反推完善 seed
+- **迭代维护**：根据 BCC 反馈更新 seed
+- **从 AST 创建**：基于 `bcc extract` 输出的 AST 数据创建 seed
 
 ## 用法
+
+### 模式 1：从代码分析创建（新项目/存量项目）
 
 ```
 /bcc-seed-authoring <项目路径> [--lang <语言>] [--reference <参考项目>]
@@ -40,6 +43,27 @@ bcc-seed-authoring/
 /bcc-seed-authoring /home/wangbo/document/gong --lang elixir
 /bcc-seed-authoring /home/wangbo/document/pi-mono --lang typescript --reference openclaw-arch
 ```
+
+### 模式 2：从 AST 数据创建（推荐）
+
+```
+/bcc-seed-authoring --from-ast <ast.json> [--lang <语言>]
+```
+
+示例：
+```bash
+# 1. 先提取 AST
+bcc extract /path/to/project/lib --batch --lang elixir --output project-ast.json
+
+# 2. 基于 AST 创建 seed
+/bcc-seed-authoring --from-ast project-ast.json --lang elixir
+```
+
+**为什么推荐从 AST 创建？**
+- AST 已经包含完整的依赖关系（imports, exports, localDependencies）
+- 可以自动识别模块间的调用关系
+- 减少人工分析代码的工作量
+- 避免遗漏隐式依赖
 
 ## Seed 文件结构
 
@@ -72,7 +96,65 @@ relations_expected:
 
 ## 执行步骤
 
-### 1. 项目结构分析
+### 模式 A：从 AST 数据创建（推荐）
+
+#### 1. 提取 AST（如果还没有）
+
+```bash
+bcc extract /path/to/project/lib \
+  --batch \
+  --lang <elixir|typescript|go|rust|php> \
+  --output project-ast.json
+```
+
+#### 2. 分析 AST 结构
+
+```bash
+# 查看 AST 结构
+head -100 project-ast.json
+
+# 统计文件数
+jq '.source_count' project-ast.json
+
+# 查看模块依赖关系
+jq '.records[] | select(.localDependencies | length > 0) | {file: .sourcePath, deps: .localDependencies}' project-ast.json | head -50
+```
+
+#### 3. 从 AST 反推模块划分
+
+根据 AST 中的 `sourcePath` 和 `localDependencies`：
+
+```
+AST 数据：
+  sourcePath: "gong/agent.ex"
+  localDependencies: ["gong/tools/bash.ex", "gong/prompt.ex"]
+  
+推断模块：
+  - AGENT (gong/agent*.ex)
+  - TOOLS (gong/tools/*.ex)
+  - PROMPT (gong/prompt*.ex)
+  
+推断依赖：
+  - AGENT -> TOOLS
+  - AGENT -> PROMPT
+```
+
+#### 4. 生成初步 seed
+
+基于 AST 分析生成 seed.yaml：
+- 从文件路径推断模块划分
+- 从 localDependencies 推断依赖关系
+- 标注依赖类型（direct/framework/external）
+
+#### 5. 人工审查和修正
+
+- 调整模块粒度（合并/拆分）
+- 补充 rationale
+- 标注 injection_type
+
+### 模式 B：从代码分析创建（备选）
+
+#### 1. 项目结构分析
 
 ```bash
 # 分析项目结构
@@ -84,6 +166,36 @@ grep -r "defmodule\|export class" <项目路径>/lib --include="*.ex" | head -30
 ```
 
 ### 2. 模块定义（modules）
+
+#### 从 AST 推断模块（模式 A）
+
+**分析文件路径模式**：
+
+```bash
+# 提取所有文件路径
+jq '.records[].sourcePath' project-ast.json | sort | uniq
+
+# 分析目录结构
+# gong/agent.ex
+# gong/tools/bash.ex
+# gong/tools/write.ex
+# gong/prompt.ex
+# gong/compaction.ex
+# ...
+```
+
+**推断模块**：
+
+| 文件路径模式 | 推断模块 | module_id |
+|-------------|---------|-----------|
+| `gong/agent*.ex` | Agent 运行时 | AGENT |
+| `gong/tools/*.ex` | 工具集 | TOOLS |
+| `gong/prompt*.ex` | Prompt 系统 | PROMPT |
+| `gong/compaction*.ex` | 压缩系统 | COMPACTION |
+| `gong/extension*.ex` | 扩展系统 | EXTENSIONS |
+| `gong/application.ex` | 基础设施 | INFRA |
+
+#### 从代码推断模块（模式 B）
 
 **原则**：
 - 一个模块对应一个**业务/技术领域**
@@ -99,6 +211,55 @@ grep -r "defmodule\|export class" <项目路径>/lib --include="*.ex" | head -30
 | 接入层 | CLI, API, WEB |
 
 ### 3. 依赖定义（relations_expected）
+
+#### 从 AST 推断依赖（模式 A）
+
+**分析 localDependencies**：
+
+```bash
+# 查看依赖关系
+jq '.records[] | select(.sourcePath | contains("agent")) | {file: .sourcePath, deps: .localDependencies}' project-ast.json
+```
+
+输出示例：
+```json
+{
+  "file": "gong/agent.ex",
+  "deps": ["gong/tools/bash.ex", "gong/tools/write.ex"]
+}
+{
+  "file": "gong/agent_loop.ex",
+  "deps": ["gong/tool_result.ex", "gong/prompt.ex"]
+}
+```
+
+**推断依赖**：
+
+| 源文件 | 依赖文件 | 推断依赖 |
+|-------|---------|---------|
+| `gong/agent.ex` | `gong/tools/*.ex` | AGENT → TOOLS |
+| `gong/agent_loop.ex` | `gong/tool_result.ex` | AGENT → DATA |
+| `gong/agent_loop.ex` | `gong/prompt.ex` | AGENT → PROMPT |
+
+**生成 relations_expected**：
+
+```yaml
+relations_expected:
+  - caller: AGENT
+    callee: TOOLS
+    allowed: true
+    rationale: "Agent 调用工具完成用户任务"
+  - caller: AGENT
+    callee: DATA
+    allowed: true
+    rationale: "Agent 处理 tool_result"
+  - caller: AGENT
+    callee: PROMPT
+    allowed: true
+    rationale: "Agent 构建 system prompt"
+```
+
+#### 从代码推断依赖（模式 B）
 
 **关键原则**：
 
