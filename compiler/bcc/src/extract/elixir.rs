@@ -1,18 +1,9 @@
 use super::common;
 use super::*;
-use tree_sitter::Parser;
 
 /// 使用 tree-sitter-elixir 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
-    let mut parser = Parser::new();
-    let language = tree_sitter_elixir::LANGUAGE;
-    parser
-        .set_language(&language.into())
-        .expect("failed to set elixir grammar");
-
-    let tree = parser
-        .parse(content, None)
-        .expect("failed to parse elixir source");
+    let tree = common::parse_tree(content, tree_sitter_elixir::LANGUAGE, "elixir");
     let root = tree.root_node();
     let source = content.as_bytes();
 

@@ -201,7 +201,7 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 `extract` 模块已拆分为三层，降低多语言实现重复代码：
 
 - `extract/adapter.rs`：语言适配器注册与分发，统一入口调度。
-- `extract/common.rs`：通用工具（AST 节点取值、调用去重/排序、副作用默认值）。
+- `extract/common.rs`：通用工具（Parser 初始化与解析、AST 节点取值、调用去重/排序、副作用默认值）。
 - `extract/testing.rs`：跨语言测试辅助函数，减少重复断言代码。
 
 新增语言时可按以下最小步骤接入：

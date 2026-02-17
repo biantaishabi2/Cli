@@ -4,24 +4,15 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
-use tree_sitter::Parser;
 
 /// 使用 tree-sitter-typescript 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
-    let mut parser = Parser::new();
-
     let language = if lang == "tsx" {
         tree_sitter_typescript::LANGUAGE_TSX
     } else {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT
     };
-    parser
-        .set_language(&language.into())
-        .expect("failed to set typescript grammar");
-
-    let tree = parser
-        .parse(content, None)
-        .expect("failed to parse typescript source");
+    let tree = common::parse_tree(content, language, "typescript");
     let root = tree.root_node();
     let source = content.as_bytes();
 

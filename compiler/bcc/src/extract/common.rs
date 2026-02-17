@@ -1,7 +1,21 @@
 use std::collections::HashSet;
-use tree_sitter::Node;
+use tree_sitter::{Node, Parser, Tree};
 
 use super::{CallRecord, SideEffects};
+
+/// 统一 Parser 初始化与语法树解析逻辑。
+pub fn parse_tree<T>(content: &str, language: T, lang_name: &str) -> Tree
+where
+    T: Into<tree_sitter::Language>,
+{
+    let mut parser = Parser::new();
+    parser
+        .set_language(&language.into())
+        .unwrap_or_else(|_| panic!("failed to set {} grammar", lang_name));
+    parser
+        .parse(content, None)
+        .unwrap_or_else(|| panic!("failed to parse {} source", lang_name))
+}
 
 /// 统一读取 AST 节点文本，避免各语言实现重复样板代码。
 pub fn node_text(node: Node, source: &[u8]) -> String {
@@ -40,6 +54,12 @@ mod tests {
         let mut calls = Vec::new();
         dedup_calls_by_callee(&mut calls);
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn parse_tree_parses_minimal_rust_source() {
+        let tree = parse_tree("fn main() {}", tree_sitter_rust::LANGUAGE, "rust");
+        assert!(!tree.root_node().is_error());
     }
 
     #[test]

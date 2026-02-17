@@ -21,6 +21,25 @@ pub fn export_names(record: &FileRecord) -> Vec<String> {
         .collect()
 }
 
+/// 统一断言 imports 中存在指定 specifier+kind 组合。
+#[cfg(test)]
+pub fn assert_import_contains(record: &FileRecord, specifier: &str, kind: &str) {
+    assert!(
+        record
+            .imports
+            .iter()
+            .any(|item| item.specifier == specifier && item.kind == kind),
+        "imports should contain ({}, {}), actual: {:?}",
+        specifier,
+        kind,
+        record
+            .imports
+            .iter()
+            .map(|item| format!("{}:{}", item.kind, item.specifier))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// 统一断言列表包含目标值，失败信息带上下文。
 #[cfg(test)]
 pub fn assert_contains(items: &[String], expected: &str, label: &str) {
@@ -98,5 +117,11 @@ mod tests {
             assert_contains(&items, "Demo.Worker.stop", "calls");
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn assert_import_contains_accepts_expected_import() {
+        let record = sample_record(&[], &[]);
+        assert_import_contains(&record, "Demo.Helper", "alias");
     }
 }

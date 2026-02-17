@@ -1,18 +1,9 @@
 use super::common;
 use super::*;
-use tree_sitter::Parser;
 
 /// 使用 tree-sitter-php 解析 PHP 源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
-    let mut parser = Parser::new();
-    let language = tree_sitter_php::LANGUAGE_PHP;
-    parser
-        .set_language(&language.into())
-        .expect("failed to set php grammar");
-
-    let tree = parser
-        .parse(content, None)
-        .expect("failed to parse php source");
+    let tree = common::parse_tree(content, tree_sitter_php::LANGUAGE_PHP, "php");
     let root = tree.root_node();
     let source = content.as_bytes();
 
@@ -220,7 +211,21 @@ fn extract_php_recursive(
             // 普通函数调用（非方法调用）— 可能是全局函数或 new Class
             "object_creation_expression" => {
                 // new SomeClass(...)
-                if let Some(class_node) = node.child_by_field_name("class") {
+                let class_node = node.child_by_field_name("class").or_else(|| {
+                    // tree-sitter-php 不同版本下 object_creation_expression 的 field 可能不一致，
+                    // 兜底按子节点 kind 提取类名节点。
+                    for i in 0..node.child_count() {
+                        if let Some(child) = node.child(i) {
+                            let kind = child.kind();
+                            if kind == "name" || kind == "qualified_name" {
+                                return Some(child);
+                            }
+                        }
+                    }
+                    None
+                });
+
+                if let Some(class_node) = class_node {
                     let callee = common::node_text(class_node, source);
                     if callee.chars().next().map_or(false, |c| c.is_uppercase()) {
                         let line = node.start_position().row + 1;
@@ -276,4 +281,62 @@ fn get_method_visibility(node: &tree_sitter::Node, source: &[u8]) -> String {
     }
     // PHP 默认 public
     "public".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extract::testing;
+
+    #[test]
+    fn extracts_public_method_and_ignores_private_method() {
+        let source = r#"<?php
+class UserController {
+    public function save($name) { return $name; }
+    private function hidden() { return null; }
+}
+"#;
+
+        let record = extract(source, "app/controllers/UserController.php");
+        let exports = testing::export_names(&record);
+        testing::assert_contains(&exports, "save", "exports");
+        assert!(!exports.iter().any(|name| name == "hidden"));
+        assert_eq!(record.module_doc.as_deref(), Some("UserController"));
+    }
+
+    #[test]
+    fn extracts_extends_and_trait_imports() {
+        let source = r#"<?php
+class UserController extends BaseController {
+    use LoggerTrait;
+    public function save($name) { return $name; }
+}
+"#;
+
+        let record = extract(source, "app/controllers/UserController.php");
+        testing::assert_import_contains(&record, "BaseController", "extends");
+        testing::assert_import_contains(&record, "LoggerTrait", "trait");
+    }
+
+    #[test]
+    fn extracts_static_and_object_creation_calls_with_dedup() {
+        let source = r#"<?php
+class UserController {
+    public function save($id) {
+        Service::run($id);
+        Service::run($id);
+        $worker = new Worker();
+    }
+}
+"#;
+
+        let record = extract(source, "app/controllers/UserController.php");
+        let calls = testing::call_names(&record);
+        testing::assert_contains(&calls, "Service", "calls");
+        testing::assert_contains(&calls, "Worker", "calls");
+        assert_eq!(
+            calls.iter().filter(|callee| *callee == "Service").count(),
+            1
+        );
+    }
 }

@@ -1,18 +1,9 @@
 use super::common;
 use super::*;
-use tree_sitter::Parser;
 
 /// 使用 tree-sitter-rust 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust::LANGUAGE;
-    parser
-        .set_language(&language.into())
-        .expect("failed to set rust grammar");
-
-    let tree = parser
-        .parse(content, None)
-        .expect("failed to parse rust source");
+    let tree = common::parse_tree(content, tree_sitter_rust::LANGUAGE, "rust");
     let root = tree.root_node();
     let source = content.as_bytes();
 
@@ -326,6 +317,7 @@ fn detect_side_effects(content: &str) -> SideEffects {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::testing;
 
     #[test]
     fn extracts_pub_functions_and_structs() {
@@ -341,31 +333,22 @@ pub fn run(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
-fn private_helper() {}
+        fn private_helper() {}
 "#;
         let record = extract(source, "src/lib.rs");
-        let export_names: Vec<_> = record.exports.iter().map(|e| e.name.as_str()).collect();
-        assert!(
-            export_names.contains(&"Config"),
-            "should export Config struct"
-        );
-        assert!(export_names.contains(&"run"), "should export run function");
+        let export_names = testing::export_names(&record);
+        testing::assert_contains(&export_names, "Config", "exports");
+        testing::assert_contains(&export_names, "run", "exports");
         // private_helper 不应出现在 exports
-        assert!(
-            !export_names.contains(&"private_helper"),
-            "should not export private fn"
-        );
+        assert!(!export_names.iter().any(|name| name == "private_helper"));
 
         // 验证 imports
         assert_eq!(record.imports.len(), 1);
         assert_eq!(record.imports[0].specifier, "std::collections::HashMap");
 
         // 验证 calls 包含 println! 宏
-        let call_names: Vec<_> = record.calls.iter().map(|c| c.callee.as_str()).collect();
-        assert!(
-            call_names.contains(&"println!"),
-            "should detect println! macro call"
-        );
+        let call_names = testing::call_names(&record);
+        testing::assert_contains(&call_names, "println!", "calls");
 
         // 验证签名
         let run_export = record.exports.iter().find(|e| e.name == "run").unwrap();
