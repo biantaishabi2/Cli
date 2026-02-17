@@ -18,11 +18,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Implement Code
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          NIUMA_IMPLEMENTATION_PROVIDER: codex
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           WORKSPACE: ${{ github.workspace }}
@@ -31,3 +32,38 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --repo-dir "$WORKSPACE"
+
+      - name: Find PR Number
+        id: find_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&sort=created&direction=desc" \
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | head -1)
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到 PR 号"
+          fi
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Run PR Gate
+        id: gate
+        if: steps.find_pr.outputs.pr_number != ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
+
+      - name: Mark Needs Fix On Gate Failure
+        if: steps.gate.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
+            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n实现后自动测试门禁失败，已回退为 \`bot:pr-needs-fix\`，请继续迭代修复。"
+          exit 1

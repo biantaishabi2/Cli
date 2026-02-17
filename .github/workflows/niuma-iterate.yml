@@ -55,6 +55,27 @@ jobs:
             --pr "$PR_NUMBER" \
             --repo-dir "$WORKSPACE"
 
+      - name: Run PR Gate
+        id: gate
+        if: steps.find_pr.outputs.pr_number != ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
+
+      - name: Keep Needs-Fix On Gate Failure
+        if: steps.gate.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
+            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n迭代后自动测试门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
+          exit 1
+
   # 人工 PR review changes_requested → 迭代
   iterate-from-human:
     runs-on: self-hosted
@@ -95,3 +116,24 @@ jobs:
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
             --repo-dir "$WORKSPACE"
+
+      - name: Run PR Gate
+        id: gate_human
+        if: steps.extract.outputs.issue_number != ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
+        run: |
+          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
+
+      - name: Keep Needs-Fix On Gate Failure
+        if: steps.gate_human.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
+            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n根据人工 review 迭代后门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
+          exit 1

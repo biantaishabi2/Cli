@@ -17,6 +17,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Find PR Number
         id: find_pr
@@ -32,6 +34,14 @@ jobs:
             echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到 PR 号"
           fi
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Run PR Gate
+        if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
 
       - name: AI Self-Review
         if: steps.find_pr.outputs.pr_number != ''
