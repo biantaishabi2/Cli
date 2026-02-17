@@ -141,6 +141,31 @@ func TestIntegrationBuilder_CascadeSkip(t *testing.T) {
 	assert.Contains(t, result.Skipped, 42) // 因依赖 41 失败被跳过
 }
 
+func TestIntegrationBuilder_Build_UsesUnifiedExecutorForAutoResolvedConflict(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "guide.md"), []byte("# guide\nline\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add docs guide")
+
+	createBranchModifyFile(t, dir, "feat/40-doc-a", "docs/guide.md", "# guide\nline from A\n")
+	createBranchModifyFile(t, dir, "feat/41-doc-b", "docs/guide.md", "# guide\nline from B\n")
+
+	builder := NewIntegrationBuilder(dir, "master")
+	branches := []BranchInfo{
+		{Branch: "feat/40-doc-a", IssueNum: 40},
+		{Branch: "feat/41-doc-b", IssueNum: 41},
+	}
+
+	result, err := builder.Build("integration/test-build-auto", branches, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []int{40, 41}, result.Merged)
+	assert.Empty(t, result.Conflicts)
+
+	content := runGitOutput(t, dir, "show", "integration/test-build-auto:docs/guide.md")
+	assert.Contains(t, content, "line from B")
+}
+
 func TestIntegrationBuilder_CleanOld(t *testing.T) {
 	dir := setupGitRepo(t)
 
@@ -241,6 +266,22 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConf
 	content := runGitOutput(t, dir, "show", "integration/test-escalated:pkg/service.go")
 	assert.Contains(t, content, "return 1")
 	assert.NotContains(t, content, "return 2")
+}
+
+func TestCanAutoResolveConflict_DoesNotStripCommentMarkersInsideStringLiteral(t *testing.T) {
+	fileSummary := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{
+				ours:   `const endpoint = "http://service-a/*v1*/"` + "\n" + `const path = "api//v1"`,
+				theirs: `const endpoint = "http://service-b/*v2*/"` + "\n" + `const path = "api//v2"`,
+			},
+		},
+	}
+
+	auto, reason := canAutoResolveConflict("pkg/service.go", fileSummary)
+	assert.False(t, auto)
+	assert.Contains(t, reason, "语义差异")
 }
 
 func splitNonEmpty(s string) []string {

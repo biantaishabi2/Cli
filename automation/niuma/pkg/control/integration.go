@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,8 +25,6 @@ const (
 	integrationMergeExecutorVersion = "integration-merge-executor/v1"
 	maxWhitelistConflictHunks       = 3
 )
-
-var blockCommentPattern = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 type conflictBlock struct {
 	ours   string
@@ -313,18 +310,29 @@ func isCommentWhitespaceEquivalent(file, ours, theirs string) bool {
 }
 
 func normalizeConflictSide(file, text string) string {
-	noBlockComments := blockCommentPattern.ReplaceAllString(text, "")
-	lines := strings.Split(noBlockComments, "\n")
+	lines := strings.Split(text, "\n")
 	hashComments := supportsHashComments(file)
 
 	var sb strings.Builder
+	inBlockComment := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+		if inBlockComment {
+			if strings.Contains(line, "*/") {
+				inBlockComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "/*") {
+			if !strings.Contains(line, "*/") {
+				inBlockComment = true
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "//") ||
-			strings.HasPrefix(line, "/*") ||
 			strings.HasPrefix(line, "*") ||
 			strings.HasPrefix(line, "*/") ||
 			strings.HasPrefix(line, "<!--") ||
@@ -332,18 +340,6 @@ func normalizeConflictSide(file, text string) string {
 			continue
 		}
 		if hashComments && strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		if idx := strings.Index(line, "//"); idx >= 0 {
-			line = strings.TrimSpace(line[:idx])
-		}
-		if hashComments {
-			if idx := strings.Index(line, "#"); idx >= 0 {
-				line = strings.TrimSpace(line[:idx])
-			}
-		}
-		if line == "" {
 			continue
 		}
 
@@ -432,11 +428,6 @@ func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchIn
 		return nil, fmt.Errorf("重置 integration 分支失败: %w", err)
 	}
 
-	if err := b.git("checkout", integrationBranch); err != nil {
-		return nil, fmt.Errorf("checkout %s 失败: %w", integrationBranch, err)
-	}
-	defer b.git("checkout", b.baseBranch)
-
 	result := &IntegrationResult{Branch: integrationBranch}
 
 	// 构建 issue → 是否失败的映射（用于级联跳过）
@@ -449,16 +440,21 @@ func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchIn
 			continue
 		}
 
-		// 尝试 merge
-		if err := b.git("merge", "--no-ff", bi.Branch, "-m", fmt.Sprintf("Merge %s (issue #%d)", bi.Branch, bi.IssueNum)); err != nil {
-			// merge 冲突，abort 并记录
-			_ = b.git("merge", "--abort")
-			result.Conflicts = append(result.Conflicts, bi.IssueNum)
-			failed[bi.IssueNum] = true
-			continue
+		outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi)
+		if err != nil {
+			return nil, err
 		}
 
-		result.Merged = append(result.Merged, bi.IssueNum)
+		switch outcome.Status {
+		case MergeStatusMerged, MergeStatusAutoResolved:
+			result.Merged = append(result.Merged, bi.IssueNum)
+		case MergeStatusEscalated:
+			result.Conflicts = append(result.Conflicts, bi.IssueNum)
+			failed[bi.IssueNum] = true
+		default:
+			result.Conflicts = append(result.Conflicts, bi.IssueNum)
+			failed[bi.IssueNum] = true
+		}
 	}
 
 	return result, nil

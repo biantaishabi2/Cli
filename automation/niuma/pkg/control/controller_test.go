@@ -13,9 +13,16 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues     []IssueInfo
-	mergedPRs  []int
-	mergeError map[int]error
+	issues            []IssueInfo
+	mergedPRs         []int
+	mergeError        map[int]error
+	replaceLabelCalls []replaceLabelCall
+}
+
+type replaceLabelCall struct {
+	issueNumber int
+	oldLabel    string
+	newLabel    string
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
@@ -37,7 +44,12 @@ func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
 	return nil
 }
 
-func (m *mockGitHubOps) ReplaceLabel(_ context.Context, _ int, _, _ string) error {
+func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
+		issueNumber: issueNumber,
+		oldLabel:    oldLabel,
+		newLabel:    newLabel,
+	})
 	return nil
 }
 
@@ -360,4 +372,51 @@ func TestBuildEscalationMetadata_IdempotentRetry(t *testing.T) {
 
 	second := buildEscalationMetadata(existing, outcome)
 	assert.Empty(t, second)
+}
+
+func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+	}
+
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		SourceBranch:    "feat/41-core-b",
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"pkg/service.go"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	firstTask := Task{
+		ID:       "task-1",
+		Metadata: map[string]string{"issue_num": "41"},
+	}
+	ctrl.escalateIntegrationConflict(context.Background(), firstTask, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[1].newLabel)
+
+	retryTask := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                           "41",
+			metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+			metaKeyIntegrationMergeExecutedAt:     outcome.ExecutedAt,
+			metaKeyIntegrationExecutorVersion:     outcome.ExecutorVersion,
+			metaKeyIntegrationConflictRecordedAt:  "2026-02-17T10:00:01Z",
+			metaKeyIntegrationConflictLabelSynced: "true",
+		},
+	}
+	ctrl.escalateIntegrationConflict(context.Background(), retryTask, outcome)
+	assert.Len(t, mockGH.replaceLabelCalls, 2)
 }
