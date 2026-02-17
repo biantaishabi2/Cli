@@ -185,8 +185,17 @@ func (o *Orchestrator) DoDiscuss(ctx context.Context, maxRounds int) error {
 
 // DoDiscussionCheck 执行单轮讨论检查（兼容旧接口）
 func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
-	_, err := o.runDiscussionRound(ctx, 1, 1)
-	return err
+	decision, err := o.runDiscussionRound(ctx, 1, 1)
+	if err != nil {
+		return err
+	}
+
+	if decision.Converged() {
+		if err := o.DoPlanFinal(ctx); err != nil {
+			return fmt.Errorf("讨论已收敛但定稿失败: %w", err)
+		}
+	}
+	return nil
 }
 
 // runDiscussionRound 执行单轮讨论推进，返回结构化收敛判定

@@ -194,9 +194,16 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
 	}
 
-	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d）...\n", flagIssue, flagMaxDiscussionRounds)
+	configDir := "."
+	if flagRepoDir != "" {
+		configDir = flagRepoDir
+	}
+	cfg := config.LoadWithDefaults(configDir)
+	maxRounds := resolveDiscussMaxRounds(flagMaxDiscussionRounds, cfg.Workflow.GetMaxDiscussionRounds())
 
-	if err := orch.DoDiscuss(ctx, flagMaxDiscussionRounds); err != nil {
+	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d）...\n", flagIssue, maxRounds)
+
+	if err := orch.DoDiscuss(ctx, maxRounds); err != nil {
 		return fmt.Errorf("讨论检查失败: %w", err)
 	}
 
@@ -426,4 +433,15 @@ func resolveProviders(cfg *config.Config) (map[string]ai.Provider, error) {
 	}
 
 	return providers, nil
+}
+
+// resolveDiscussMaxRounds 解析 discuss 最大轮次优先级：CLI > 配置 > 默认值。
+func resolveDiscussMaxRounds(cliRounds, configRounds int) int {
+	if cliRounds > 0 {
+		return cliRounds
+	}
+	if configRounds >= 1 && configRounds <= 20 {
+		return configRounds
+	}
+	return 5
 }
