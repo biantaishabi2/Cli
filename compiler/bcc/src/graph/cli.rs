@@ -6,7 +6,7 @@ use crate::graph::sqlite::GraphStoreManager;
 use crate::graph::store::{CodeGraphStore, GraphStoreInsert};
 use crate::graph::types::{CallEdge, CallType, FunctionRecord, Repository, SearchInclude, ModuleRecord, ModuleDepEdge, DepType};
 use chrono::Utc;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
 
 /// 查询类型
 #[derive(Debug, Clone)]
@@ -46,12 +46,14 @@ pub fn build_index(
     let manager = GraphStoreManager::default()?;
     let store = manager.get_store(repo_id)?;
     
+    let languages = detect_snapshot_languages(&snapshot);
+
     // 创建/更新仓库信息
     let repo = Repository {
         id: repo_id.to_string(),
         name: repo_name.to_string(),
         root_path: root_path.to_string(),
-        languages: "python".to_string(), // 从 extract 输出检测
+        languages,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -92,7 +94,7 @@ pub fn build_index(
             exports_count: record.exports_count,
             imports_count: record.imports_count,
             loc_lines: record.loc_lines,
-            language: "typescript".to_string(),
+            language: detect_language_from_path(&record.sourcePath),
         };
         
         GraphStoreInsert::insert_module(&store, &module)?;
@@ -107,7 +109,7 @@ pub fn build_index(
             name: "__file__".to_string(),
             file_path: record.sourcePath.clone(),
             module: extract_module(&record.sourcePath),
-            language: "typescript".to_string(),
+            language: detect_language_from_path(&record.sourcePath),
             start_line: 1,
             end_line: record.loc_lines,
             signature: format!("module: {} ({} lines)", record.sourcePath, record.loc_lines),
@@ -198,6 +200,39 @@ fn extract_module(file_path: &str) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("root")
         .to_string()
+}
+
+fn detect_snapshot_languages(snapshot: &crate::extract::AstSnapshot) -> String {
+    let mut langs = BTreeSet::new();
+    for record in &snapshot.records {
+        langs.insert(detect_language_from_path(&record.sourcePath));
+    }
+    if langs.is_empty() {
+        "unknown".to_string()
+    } else {
+        langs.into_iter().collect::<Vec<_>>().join(",")
+    }
+}
+
+fn detect_language_from_path(file_path: &str) -> String {
+    let path = file_path.to_ascii_lowercase();
+    if path.ends_with(".py") {
+        "python".to_string()
+    } else if path.ends_with(".ts") || path.ends_with(".tsx") {
+        "typescript".to_string()
+    } else if path.ends_with(".js") || path.ends_with(".jsx") {
+        "javascript".to_string()
+    } else if path.ends_with(".rs") {
+        "rust".to_string()
+    } else if path.ends_with(".php") {
+        "php".to_string()
+    } else if path.ends_with(".ex") || path.ends_with(".exs") {
+        "elixir".to_string()
+    } else if path.ends_with(".go") {
+        "go".to_string()
+    } else {
+        "unknown".to_string()
+    }
 }
 
 /// graph-index query 命令
@@ -486,8 +521,8 @@ pub fn validate_arch(
     println!("Validating architecture for repo: {}", repo_id);
     println!("Target matrix: {}", target_path);
     
-    // 执行验证
-    let result = validator.validate_function(&store, "")?;
+    // 执行仓库级验证
+    let result = validator.validate(&store)?;
     
     println!("\nValidation result: {}", if result.passed { "PASSED" } else { "FAILED" });
     println!("Total functions: {}", result.stats.total_functions);

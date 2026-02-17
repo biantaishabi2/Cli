@@ -1,9 +1,10 @@
 //! Graph 模块集成测试
 
 use bcc::graph::error::GraphError;
+use bcc::graph::arch::ArchValidator;
 use bcc::graph::sqlite::GraphStoreManager;
 use bcc::graph::store::{CodeGraphStore, GraphStoreInsert};
-use bcc::graph::types::{FunctionRecord, Repository, ModuleRecord, ModuleDepEdge, DepType};
+use bcc::graph::types::{FunctionRecord, Repository, ModuleRecord, ModuleDepEdge, DepType, CallEdge, CallType};
 use chrono::Utc;
 use std::thread;
 
@@ -458,4 +459,71 @@ fn test_module_depth_limit() {
     // 测试 dependents 深度限制
     let result = store.find_module_dependents("src/test.ts", 101);
     assert!(matches!(result, Err(GraphError::DepthLimitExceeded(100))));
+}
+
+#[test]
+fn test_arch_validation_violation_count_matches_len() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("arch-validate").unwrap();
+
+    let api_func = FunctionRecord {
+        id: "app/Controllers/UserController.php#create#10".to_string(),
+        name: "create".to_string(),
+        file_path: "app/Controllers/UserController.php".to_string(),
+        module: "Controllers".to_string(),
+        language: "php".to_string(),
+        start_line: 10,
+        end_line: 20,
+        signature: "public function create()".to_string(),
+        content_hash: "hash-api".to_string(),
+        indexed_at: Utc::now(),
+    };
+    let dao_func = FunctionRecord {
+        id: "app/Models/UserModel.php#insert#5".to_string(),
+        name: "insert".to_string(),
+        file_path: "app/Models/UserModel.php".to_string(),
+        module: "Models".to_string(),
+        language: "php".to_string(),
+        start_line: 5,
+        end_line: 12,
+        signature: "public function insert()".to_string(),
+        content_hash: "hash-dao".to_string(),
+        indexed_at: Utc::now(),
+    };
+    GraphStoreInsert::insert_function(&store, &api_func).unwrap();
+    GraphStoreInsert::insert_function(&store, &dao_func).unwrap();
+    GraphStoreInsert::insert_call_edge(&store, &CallEdge {
+        caller_id: api_func.id.clone(),
+        callee_id: dao_func.id.clone(),
+        call_type: CallType::Direct,
+        file_path: Some("app/Controllers/UserController.php".to_string()),
+        line_number: Some(12),
+    }).unwrap();
+
+    let matrix_file = temp_dir.path().join("target-matrix.yaml");
+    std::fs::write(&matrix_file, r#"
+layers:
+  - name: api
+    patterns:
+      - "*/Controllers/*"
+  - name: service
+    patterns:
+      - "*/Services/*"
+  - name: dao
+    patterns:
+      - "*/Models/*"
+allowed_deps:
+  - from: api
+    to: service
+  - from: service
+    to: dao
+"#).unwrap();
+
+    let validator = ArchValidator::from_yaml(&matrix_file).unwrap();
+    let result = validator.validate(&store).unwrap();
+
+    assert_eq!(result.violations.len(), result.stats.violation_count);
+    assert_eq!(result.stats.violation_count, 1);
+    assert!(!result.passed);
 }

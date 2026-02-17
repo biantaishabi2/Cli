@@ -66,13 +66,14 @@ impl ArchValidator {
             }
         }
 
+        let violation_count = violations.len();
         Ok(ArchValidationResult {
             passed: violations.is_empty(),
             violations,
             stats: ValidationStats {
                 total_functions,
                 checked_deps,
-                violation_count: 0, // 会在下面更新
+                violation_count,
             },
         })
     }
@@ -179,11 +180,9 @@ impl ArchValidator {
         }
     }
 
-    /// 获取所有函数（通过模块查询）
-    fn get_all_functions(&self, _store: &dyn CodeGraphStore) -> Vec<FunctionRecord> {
-        // 简化实现：返回空列表，实际应该遍历所有模块
-        // 这里依赖调用者提供函数列表
-        vec![]
+    /// 获取所有函数
+    fn get_all_functions(&self, store: &dyn CodeGraphStore) -> Vec<FunctionRecord> {
+        store.list_functions()
     }
 
     /// 验证指定函数的架构合规性
