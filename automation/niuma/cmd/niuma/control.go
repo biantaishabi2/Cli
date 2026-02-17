@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,7 @@ var controlCheckCmd = &cobra.Command{
 }
 
 var flagControlIssues string // --issues "40,41,42"
+var flagIntegrationGateMaxRetries int
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
@@ -53,6 +55,7 @@ func init() {
 
 	controlMergeCmd.Flags().StringVar(&flagControlIssues, "issues", "", "要合并的 issue 编号列表（逗号分隔）")
 	controlMergeCmd.MarkFlagRequired("issues")
+	controlRunCmd.Flags().IntVar(&flagIntegrationGateMaxRetries, "integration-gate-max-retries", -1, "integration gate 最大重试次数（flag > env > default=2）")
 }
 
 func buildController() (*control.Controller, error) {
@@ -100,10 +103,12 @@ func buildController() (*control.Controller, error) {
 	analyzer := control.NewDependencyAnalyzer(defaultProvider)
 
 	controlCfg := &control.ControlConfig{
-		MergeStrategy:           cfg.Control.MergeStrategy,
-		IntegrationBranchPrefix: cfg.Control.IntegrationBranchPrefix,
-		MaxOldBranches:          cfg.Control.MaxOldBranches,
-		MinPRsForIntegration:    cfg.Control.MinPRsForIntegration,
+		MergeStrategy:             cfg.Control.MergeStrategy,
+		IntegrationBranchPrefix:   cfg.Control.IntegrationBranchPrefix,
+		MaxOldBranches:            cfg.Control.MaxOldBranches,
+		MinPRsForIntegration:      cfg.Control.MinPRsForIntegration,
+		IntegrationGateMaxRetries: resolveIntegrationGateMaxRetries(flagIntegrationGateMaxRetries, os.Getenv("NIUMA_INTEGRATION_GATE_MAX_RETRIES")),
+		RepoDir:                   repoDir,
 	}
 
 	builder := control.NewIntegrationBuilder(
@@ -114,6 +119,17 @@ func buildController() (*control.Controller, error) {
 	ghOps := &gitHubControlOps{client: ghClient}
 
 	return control.NewController(taskctl, analyzer, ghOps, builder, controlCfg), nil
+}
+
+func resolveIntegrationGateMaxRetries(flagValue int, envValue string) int {
+	defaultValue := 2
+	if parsed, err := strconv.Atoi(strings.TrimSpace(envValue)); err == nil && parsed >= 0 {
+		defaultValue = parsed
+	}
+	if flagValue >= 0 {
+		return flagValue
+	}
+	return defaultValue
 }
 
 // gitHubControlOps 适配 gh.Client 到 control.GitHubOps

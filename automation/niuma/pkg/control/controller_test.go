@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"testing"
@@ -509,4 +510,107 @@ func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *tes
 	require.Len(t, mockGH.replaceLabelCalls, 3)
 	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
 	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
+}
+
+func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                         "41",
+			metaKeyIntegrationGateRetryCount:    "0",
+			metaKeyIntegrationGateAttemptKey:    "old",
+			metaKeyIntegrationGateStatus:        integrationGateStatusPassed,
+			metaKeyIntegrationGateLastError:     "",
+			metaKeyIntegrationGateLastCheckedAt: "2026-02-17T10:00:00Z",
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-1", errors.New("gate failed once"))
+	require.NoError(t, err)
+
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
+	assert.Equal(t, 0, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel))
+}
+
+func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                      "41",
+			metaKeyIntegrationGateRetryCount: "2",
+			metaKeyIntegrationGateAttemptKey: "old-attempt",
+			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-3", errors.New("gate failed third time"))
+	require.NoError(t, err)
+
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, needsHumanLabel), 0)
+	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel), 0)
+}
+
+func TestHandleIntegrationGateFailure_DuplicateAttemptNoop(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: &ControlConfig{
+			IntegrationGateMaxRetries: 2,
+			RepoDir:                   t.TempDir(),
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                      "41",
+			metaKeyIntegrationGateRetryCount: "1",
+			metaKeyIntegrationGateAttemptKey: "attempt-same",
+			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
+		},
+	}
+
+	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-same", errors.New("duplicate fail"))
+	require.NoError(t, err)
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+}
+
+func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
+	count := 0
+	for _, call := range calls {
+		if call.newLabel == label {
+			count++
+		}
+	}
+	return count
 }

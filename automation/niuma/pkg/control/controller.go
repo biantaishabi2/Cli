@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ type GitHubOps interface {
 
 const (
 	integrationConflictLabel = "integration-conflict"
+	integrationGateFailLabel = "integration-gate-failed"
 	needsHumanLabel          = "needs-human"
 
 	metaKeyIntegrated                     = "integrated"
@@ -35,6 +38,21 @@ const (
 	metaKeyIntegrationConflictSuggestion  = "integration_conflict_suggestion"
 	metaKeyIntegrationConflictRecordedAt  = "integration_conflict_recorded_at"
 	metaKeyIntegrationConflictLabelSynced = "integration_conflict_labeled"
+
+	metaKeyIntegrationGateStatus                = "integration_gate_status"
+	metaKeyIntegrationGateRetryCount            = "integration_gate_retry_count"
+	metaKeyIntegrationGateLastError             = "integration_gate_last_error"
+	metaKeyIntegrationGateLastCheckedAt         = "integration_gate_last_checked_at"
+	metaKeyIntegrationGateAttemptKey            = "integration_gate_attempt_key"
+	metaKeyIntegrationGateEscalationLabelSynced = "integration_gate_escalation_labeled"
+
+	integrationGateStatusPending   = "pending"
+	integrationGateStatusPassed    = "passed"
+	integrationGateStatusRetrying  = "retrying"
+	integrationGateStatusEscalated = "escalated"
+
+	integrationGateDefaultMaxRetries = 2
+	integrationGateErrorLimit        = 800
 )
 
 // Controller 多 Issue 协调控制器
@@ -48,20 +66,24 @@ type Controller struct {
 
 // ControlConfig 控制层配置
 type ControlConfig struct {
-	TaskCtlBin              string `yaml:"taskctl_bin"`
-	MergeStrategy           string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix string `yaml:"integration_branch_prefix"` // 默认 integration/
-	MaxOldBranches          int    `yaml:"max_old_branches"`          // 默认 3
-	MinPRsForIntegration    int    `yaml:"min_prs_for_integration"`   // 默认 2
+	TaskCtlBin                string `yaml:"taskctl_bin"`
+	MergeStrategy             string `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix   string `yaml:"integration_branch_prefix"` // 默认 integration/
+	MaxOldBranches            int    `yaml:"max_old_branches"`          // 默认 3
+	MinPRsForIntegration      int    `yaml:"min_prs_for_integration"`   // 默认 2
+	IntegrationGateMaxRetries int    `yaml:"integration_gate_max_retries"`
+	RepoDir                   string `yaml:"-"`
 }
 
 // DefaultControlConfig 返回默认配置
 func DefaultControlConfig() *ControlConfig {
 	return &ControlConfig{
-		MergeStrategy:           "merge",
-		IntegrationBranchPrefix: "integration/",
-		MaxOldBranches:          3,
-		MinPRsForIntegration:    2,
+		MergeStrategy:             "merge",
+		IntegrationBranchPrefix:   "integration/",
+		MaxOldBranches:            3,
+		MinPRsForIntegration:      2,
+		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
+		RepoDir:                   ".",
 	}
 }
 
@@ -75,6 +97,12 @@ func NewController(
 ) *Controller {
 	if cfg == nil {
 		cfg = DefaultControlConfig()
+	}
+	if cfg.RepoDir == "" {
+		cfg.RepoDir = "."
+	}
+	if cfg.IntegrationGateMaxRetries < 0 {
+		cfg.IntegrationGateMaxRetries = integrationGateDefaultMaxRetries
 	}
 	return &Controller{
 		taskctl:  taskctl,
@@ -244,8 +272,9 @@ func (c *Controller) Run(ctx context.Context) error {
 		allTasks, _ := c.taskctl.List("")
 
 		// 按 integration 分支分组 task
-		branchTasks := make(map[string][]Task)          // integrationBranch → 待合入 tasks
-		escalationRetryTasks := make(map[string][]Task) // integrationBranch → 待补打标签 tasks
+		branchTasks := make(map[string][]Task)              // integrationBranch → 待合入 tasks
+		escalationRetryTasks := make(map[string][]Task)     // integrationBranch → merge 冲突升级待补打标签 tasks
+		gateEscalationRetryTasks := make(map[string][]Task) // integrationBranch → gate 升级待补打标签 tasks
 		for _, t := range allTasks {
 			if t.PRNum() > 0 && t.Branch() != "" {
 				// 检查是否已合入 integration（从 metadata 读）
@@ -262,9 +291,17 @@ func (c *Controller) Run(ctx context.Context) error {
 					escalationRetryTasks[branchName] = append(escalationRetryTasks[branchName], t)
 					continue
 				}
+				if shouldRetryIntegrationGateEscalationLabels(t.Metadata) {
+					gateEscalationRetryTasks[branchName] = append(gateEscalationRetryTasks[branchName], t)
+					continue
+				}
 
 				if isEscalatedIntegrationTask(t.Metadata) && isEscalationLabelSynced(t.Metadata) {
 					fmt.Printf("[control] 跳过已升级人工且已完成打标 task %s (issue #%d)\n", t.ID, t.IssueNum())
+					continue
+				}
+				if isEscalatedIntegrationGateTask(t.Metadata) && isIntegrationGateEscalationLabelSynced(t.Metadata) {
+					fmt.Printf("[control] 跳过 gate 已升级人工 task %s (issue #%d)\n", t.ID, t.IssueNum())
 					continue
 				}
 
@@ -281,6 +318,16 @@ func (c *Controller) Run(ctx context.Context) error {
 			for _, task := range tasks {
 				outcome := mergeOutcomeFromEscalatedTask(task, branchName)
 				c.escalateIntegrationConflict(ctx, task, outcome)
+			}
+		}
+		for branchName, tasks := range gateEscalationRetryTasks {
+			if len(tasks) == 0 {
+				continue
+			}
+
+			fmt.Printf("[control] Integration 分支 %s: 有 %d 个 gate 升级任务待补打标签\n", branchName, len(tasks))
+			for _, task := range tasks {
+				c.syncIntegrationGateEscalationLabels(ctx, task)
 			}
 		}
 
@@ -308,11 +355,16 @@ func (c *Controller) Run(ctx context.Context) error {
 
 				switch outcome.Status {
 				case MergeStatusMerged, MergeStatusAutoResolved:
-					if err := c.markTaskIntegrated(task, outcome); err != nil {
-						fmt.Printf("[control] 标记 integrated 失败 (task %s): %v\n", task.ID, err)
+					integrated, err := c.runIntegrationGateAndDecide(ctx, task, outcome)
+					if err != nil {
+						fmt.Printf("[control] integration gate 决策失败 (task %s): %v\n", task.ID, err)
 						continue
 					}
-					fmt.Printf("[control] 已合入 %s (issue #%d) 到 %s, status=%s\n", bi.Branch, bi.IssueNum, branchName, outcome.Status)
+					if integrated {
+						fmt.Printf("[control] 已合入 %s (issue #%d) 到 %s, status=%s gate=passed\n", bi.Branch, bi.IssueNum, branchName, outcome.Status)
+						continue
+					}
+					fmt.Printf("[control] 合入 %s 后 gate 未通过，等待修复 (issue #%d)\n", bi.Branch, bi.IssueNum)
 
 				case MergeStatusEscalated:
 					c.escalateIntegrationConflict(ctx, task, outcome)
@@ -446,6 +498,320 @@ func hasLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+var integrationAutomationLabels = []string{
+	"bot:orchestrate",
+	"bot:queued",
+	"bot:fix",
+	"bot:plan-draft",
+	"bot:needs-discussion",
+	"bot:plan-final",
+	"bot:plan-approved",
+	"bot:implementing",
+	"bot:pr-created",
+	"bot:pr-reviewable",
+	"bot:pr-needs-fix",
+	"bot:iterating",
+}
+
+func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task, outcome MergeOutcome) (bool, error) {
+	attemptKey, err := c.buildIntegrationGateAttemptKey(outcome)
+	if err != nil {
+		return false, err
+	}
+	if shouldSkipProcessedIntegrationGateAttempt(task.Metadata, attemptKey) {
+		return false, nil
+	}
+
+	if err := c.markIntegrationGatePending(task, attemptKey); err != nil {
+		return false, err
+	}
+
+	if err := c.runIntegrationGate(ctx, outcome); err != nil {
+		if err := c.handleIntegrationGateFailure(ctx, task, attemptKey, err); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	if err := c.markIntegrationGatePassed(task, attemptKey); err != nil {
+		return false, err
+	}
+	if err := c.markTaskIntegrated(task, outcome); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *Controller) buildIntegrationGateAttemptKey(outcome MergeOutcome) (string, error) {
+	if outcome.IntegrationBranch == "" {
+		return "", fmt.Errorf("integration branch 为空，无法生成 attempt_key")
+	}
+
+	headSHA, err := c.currentIntegrationHeadSHA(outcome.IntegrationBranch)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s:%s:%s", outcome.IntegrationBranch, outcome.SourceBranch, headSHA), nil
+}
+
+func (c *Controller) currentIntegrationHeadSHA(branch string) (string, error) {
+	out, err := c.runCommand(context.Background(), c.cfg.RepoDir, "git", "rev-parse", "--verify", branch)
+	if err != nil {
+		return "", fmt.Errorf("获取 %s HEAD 失败: %w", branch, err)
+	}
+	sha := strings.TrimSpace(out)
+	if sha == "" {
+		return "", fmt.Errorf("分支 %s HEAD 为空", branch)
+	}
+	return sha, nil
+}
+
+func (c *Controller) runIntegrationGate(ctx context.Context, outcome MergeOutcome) error {
+	if outcome.IntegrationBranch == "" {
+		return fmt.Errorf("integration branch 为空")
+	}
+
+	originalRefOut, err := c.runCommand(ctx, c.cfg.RepoDir, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return fmt.Errorf("读取当前分支失败: %w", err)
+	}
+	originalRef := strings.TrimSpace(originalRefOut)
+	if originalRef == "" {
+		originalRef = "master"
+	}
+
+	if _, err := c.runCommand(ctx, c.cfg.RepoDir, "git", "checkout", outcome.IntegrationBranch); err != nil {
+		return fmt.Errorf("切换到 integration 分支失败: %w", err)
+	}
+	defer func() {
+		if _, restoreErr := c.runCommand(context.Background(), c.cfg.RepoDir, "git", "checkout", originalRef); restoreErr != nil {
+			fmt.Printf("[control] 恢复分支 %s 失败: %v\n", originalRef, restoreErr)
+		}
+	}()
+
+	runGo, runRust, err := c.resolveIntegrationGateScopes(ctx, outcome.SourceBranch)
+	if err != nil {
+		return err
+	}
+	if !runGo && !runRust {
+		fmt.Printf("[control] integration gate: source=%s 无 niuma/bcc 变更，跳过项目 gate\n", outcome.SourceBranch)
+		return nil
+	}
+
+	if runGo {
+		goDir := filepath.Join(c.cfg.RepoDir, "automation", "niuma")
+		if _, err := c.runCommand(ctx, goDir, "go", "test", "./..."); err != nil {
+			return fmt.Errorf("integration gate(go) 失败: %w", err)
+		}
+	}
+
+	if runRust {
+		if _, err := c.runCommand(ctx, c.cfg.RepoDir, "cargo", "test", "-p", "bcc", "--no-run"); err != nil {
+			return fmt.Errorf("integration gate(rust) 失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Controller) resolveIntegrationGateScopes(ctx context.Context, sourceBranch string) (bool, bool, error) {
+	if sourceBranch == "" {
+		return true, true, nil
+	}
+
+	out, err := c.runCommand(ctx, c.cfg.RepoDir, "git", "diff", "--name-only", "master..."+sourceBranch)
+	if err != nil {
+		// 差异读取失败时按全量 gate 执行，避免误放过失败。
+		return true, true, nil
+	}
+
+	runGo := false
+	runRust := false
+	for _, file := range splitNonEmptyLines(out) {
+		if strings.HasPrefix(file, "automation/niuma/") {
+			runGo = true
+		}
+		if strings.HasPrefix(file, "compiler/bcc/") {
+			runRust = true
+		}
+	}
+
+	return runGo, runRust, nil
+}
+
+func (c *Controller) runCommand(ctx context.Context, dir, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w\noutput: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (c *Controller) markIntegrationGatePending(task Task, attemptKey string) error {
+	metaUpdate := map[string]string{
+		metaKeyIntegrationGateStatus:        integrationGateStatusPending,
+		metaKeyIntegrationGateAttemptKey:    attemptKey,
+		metaKeyIntegrationGateLastCheckedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
+}
+
+func (c *Controller) markIntegrationGatePassed(task Task, attemptKey string) error {
+	metaUpdate := map[string]string{
+		metaKeyIntegrationGateStatus:        integrationGateStatusPassed,
+		metaKeyIntegrationGateAttemptKey:    attemptKey,
+		metaKeyIntegrationGateLastCheckedAt: time.Now().UTC().Format(time.RFC3339),
+		metaKeyIntegrationGateLastError:     "",
+	}
+	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
+}
+
+func shouldSkipProcessedIntegrationGateAttempt(meta map[string]string, attemptKey string) bool {
+	if attemptKey == "" {
+		return false
+	}
+	if valueOrEmpty(meta, metaKeyIntegrationGateAttemptKey) != attemptKey {
+		return false
+	}
+	status := valueOrEmpty(meta, metaKeyIntegrationGateStatus)
+	return status == integrationGateStatusRetrying || status == integrationGateStatusEscalated
+}
+
+func (c *Controller) handleIntegrationGateFailure(ctx context.Context, task Task, attemptKey string, gateErr error) error {
+	if shouldSkipProcessedIntegrationGateAttempt(task.Metadata, attemptKey) {
+		return nil
+	}
+
+	maxRetries := c.integrationGateMaxRetries()
+	retryCount := integrationGateRetryCount(task.Metadata) + 1
+	status := integrationGateStatusRetrying
+	if retryCount > maxRetries {
+		status = integrationGateStatusEscalated
+	}
+
+	metaUpdate := map[string]string{
+		metaKeyIntegrationGateStatus:        status,
+		metaKeyIntegrationGateRetryCount:    strconv.Itoa(retryCount),
+		metaKeyIntegrationGateLastError:     trimIntegrationGateError(gateErr),
+		metaKeyIntegrationGateLastCheckedAt: time.Now().UTC().Format(time.RFC3339),
+		metaKeyIntegrationGateAttemptKey:    attemptKey,
+	}
+	if status == integrationGateStatusEscalated {
+		metaUpdate[metaKeyIntegrationGateEscalationLabelSynced] = "false"
+	}
+
+	if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+		return fmt.Errorf("写入 gate 失败 metadata 失败: %w", err)
+	}
+
+	if status == integrationGateStatusRetrying {
+		c.signalIntegrationGateRetry(ctx, task, retryCount, maxRetries)
+		return nil
+	}
+
+	c.syncIntegrationGateEscalationLabels(ctx, task)
+	return nil
+}
+
+func integrationGateRetryCount(meta map[string]string) int {
+	raw := valueOrEmpty(meta, metaKeyIntegrationGateRetryCount)
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func trimIntegrationGateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if len(msg) <= integrationGateErrorLimit {
+		return msg
+	}
+	return msg[:integrationGateErrorLimit]
+}
+
+func (c *Controller) integrationGateMaxRetries() int {
+	if c.cfg == nil {
+		return integrationGateDefaultMaxRetries
+	}
+	if c.cfg.IntegrationGateMaxRetries < 0 {
+		return integrationGateDefaultMaxRetries
+	}
+	return c.cfg.IntegrationGateMaxRetries
+}
+
+func (c *Controller) signalIntegrationGateRetry(ctx context.Context, task Task, retryCount, maxRetries int) {
+	if task.IssueNum() <= 0 {
+		return
+	}
+	if err := c.syncIssueStateLabel(ctx, task.IssueNum(), "bot:pr-needs-fix"); err != nil {
+		fmt.Printf("[control] issue #%d gate retrying 打标失败: %v\n", task.IssueNum(), err)
+		return
+	}
+	fmt.Printf("[control] issue #%d gate 失败，触发自动修复 retry=%d/%d\n", task.IssueNum(), retryCount, maxRetries)
+}
+
+func shouldRetryIntegrationGateEscalationLabels(meta map[string]string) bool {
+	return isEscalatedIntegrationGateTask(meta) && !isIntegrationGateEscalationLabelSynced(meta)
+}
+
+func isEscalatedIntegrationGateTask(meta map[string]string) bool {
+	return valueOrEmpty(meta, metaKeyIntegrationGateStatus) == integrationGateStatusEscalated
+}
+
+func isIntegrationGateEscalationLabelSynced(meta map[string]string) bool {
+	return valueOrEmpty(meta, metaKeyIntegrationGateEscalationLabelSynced) == "true"
+}
+
+func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, task Task) {
+	if task.IssueNum() <= 0 {
+		fmt.Printf("[control] issue 编号缺失，无法升级 gate 失败 (task %s)\n", task.ID)
+		return
+	}
+
+	if task.Metadata != nil && task.Metadata[metaKeyIntegrationGateEscalationLabelSynced] == "true" {
+		return
+	}
+
+	if err := c.syncIssueStateLabel(ctx, task.IssueNum(), needsHumanLabel); err != nil {
+		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
+		return
+	}
+	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", integrationGateFailLabel); err != nil {
+		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationGateFailLabel, err)
+		return
+	}
+
+	meta := map[string]string{metaKeyIntegrationGateEscalationLabelSynced: "true"}
+	if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &meta}); err != nil {
+		fmt.Printf("[control] 写入 gate 升级打标状态失败 (task %s): %v\n", task.ID, err)
+		return
+	}
+	fmt.Printf("[control] issue #%d gate 超限升级人工\n", task.IssueNum())
+}
+
+func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targetLabel string) error {
+	var firstErr error
+	for _, oldLabel := range integrationAutomationLabels {
+		if err := c.github.ReplaceLabel(ctx, issueNum, oldLabel, targetLabel); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	return nil
 }
 
 func shouldRetryEscalationLabels(meta map[string]string) bool {
