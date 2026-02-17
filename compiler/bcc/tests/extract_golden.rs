@@ -47,6 +47,7 @@ struct ExecutedCase {
 fn default_compare_fields() -> Vec<String> {
     vec![
         "calls".to_string(),
+        "imports".to_string(),
         "exports".to_string(),
         "declarations".to_string(),
     ]
@@ -186,33 +187,42 @@ fn assert_cross_lang_consistency(executed_cases: &[ExecutedCase], rules: &CrossL
             continue;
         }
 
-        let baseline = members[0];
-        let baseline_fields = cross_lang_fields(&baseline.core, rules);
+        let projected: Vec<(&ExecutedCase, HashMap<String, Value>)> = members
+            .iter()
+            .map(|case| (*case, cross_lang_fields(&case.core, rules)))
+            .collect();
 
-        for current in members.iter().skip(1) {
-            let current_fields = cross_lang_fields(&current.core, rules);
-            for field in &rules.compare_fields {
-                let left = baseline_fields.get(field).cloned().unwrap_or(Value::Null);
-                let right = current_fields.get(field).cloned().unwrap_or(Value::Null);
-                if left == right {
+        for field in &rules.compare_fields {
+            for i in 0..projected.len() {
+                let (left_case, left_fields) = &projected[i];
+                if is_field_whitelisted(field, &left_case.case, rules) {
                     continue;
                 }
 
-                if is_field_whitelisted(field, &current.case, rules) {
-                    continue;
-                }
+                for j in (i + 1)..projected.len() {
+                    let (right_case, right_fields) = &projected[j];
+                    if is_field_whitelisted(field, &right_case.case, rules) {
+                        continue;
+                    }
 
-                panic!(
-                    "cross-lang mismatch\ngroup={}\nfield={}\nbaseline_case={}\nbaseline_fixture={}\ncurrent_case={}\ncurrent_fixture={}\nexpected={}\nactual={}",
-                    group_name,
-                    field,
-                    baseline.case.name,
-                    baseline.fixture_path,
-                    current.case.name,
-                    current.fixture_path,
-                    serde_json::to_string_pretty(&left).unwrap_or_else(|_| left.to_string()),
-                    serde_json::to_string_pretty(&right).unwrap_or_else(|_| right.to_string()),
-                );
+                    let left = left_fields.get(field).cloned().unwrap_or(Value::Null);
+                    let right = right_fields.get(field).cloned().unwrap_or(Value::Null);
+                    if left == right {
+                        continue;
+                    }
+
+                    panic!(
+                        "cross-lang mismatch\ngroup={}\nfield={}\nleft_case={}\nleft_fixture={}\nright_case={}\nright_fixture={}\nleft={}\nright={}",
+                        group_name,
+                        field,
+                        left_case.case.name,
+                        left_case.fixture_path,
+                        right_case.case.name,
+                        right_case.fixture_path,
+                        serde_json::to_string_pretty(&left).unwrap_or_else(|_| left.to_string()),
+                        serde_json::to_string_pretty(&right).unwrap_or_else(|_| right.to_string()),
+                    );
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 compare_fields:
   - calls
+  - imports
   - exports
   - declarations
 

@@ -9,6 +9,10 @@
     {
       "kind": "extends",
       "specifier": "BaseController"
+    },
+    {
+      "kind": "use",
+      "specifier": "App\\Support\\Helper"
     }
   ],
   "exports": [
