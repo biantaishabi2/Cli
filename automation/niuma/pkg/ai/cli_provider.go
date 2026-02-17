@@ -110,9 +110,18 @@ func (p *CLIProvider) executeWithCmd(ctx context.Context, prompt string, o *opti
 	escaped := shellQuote(tmpFile.Name())
 	cmdStr = strings.ReplaceAll(cmdStr, "{prompt_file}", escaped)
 	cmdStr = strings.ReplaceAll(cmdStr, "{prompt}", escaped)
-	if o.WorkDir != "" {
-		cmdStr = strings.ReplaceAll(cmdStr, "{workdir}", shellQuote(o.WorkDir))
+	// 对于未显式传入 workdir 的场景（如 review/plan），回退到当前目录，
+	// 避免命令模板中的 {workdir} 残留为字面量导致执行失败。
+	workDir := o.WorkDir
+	if workDir == "" {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr == nil {
+			workDir = cwd
+		} else {
+			workDir = "."
+		}
 	}
+	cmdStr = strings.ReplaceAll(cmdStr, "{workdir}", shellQuote(workDir))
 
 	// 执行命令
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
