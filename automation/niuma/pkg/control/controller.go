@@ -13,6 +13,7 @@ import (
 type GitHubOps interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]IssueInfo, error)
 	MergePR(ctx context.Context, prNum int, method string) error
+	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 }
 
 // Controller 多 Issue 协调控制器
@@ -75,18 +76,39 @@ func (c *Controller) getIntegrationBranchName(task *Task) string {
 
 // Run 执行一次完整协调循环
 func (c *Controller) Run(ctx context.Context) error {
-	// ① 扫描 GitHub：ListIssuesWithLabel("bot:fix")
-	issues, err := c.github.ListIssuesWithLabel(ctx, "bot:fix")
+	// ① 扫描 GitHub：ListIssuesWithLabel("bot:orchestrate") 和 ListIssuesWithLabel("bot:fix")
+	orchestrateIssues, err := c.github.ListIssuesWithLabel(ctx, "bot:orchestrate")
 	if err != nil {
-		return fmt.Errorf("扫描 GitHub issues 失败: %w", err)
+		return fmt.Errorf("扫描 bot:orchestrate issues 失败: %w", err)
 	}
 
-	if len(issues) == 0 {
-		fmt.Println("[control] 没有发现 bot:fix issues")
+	fixIssues, err := c.github.ListIssuesWithLabel(ctx, "bot:fix")
+	if err != nil {
+		return fmt.Errorf("扫描 bot:fix issues 失败: %w", err)
+	}
+
+	// 合并所有需要处理的 issues
+	allIssues := make(map[int]IssueInfo)
+	for _, issue := range orchestrateIssues {
+		allIssues[issue.Number] = issue
+	}
+	for _, issue := range fixIssues {
+		allIssues[issue.Number] = issue
+	}
+
+	if len(allIssues) == 0 {
+		fmt.Println("[control] 没有发现 bot:orchestrate 或 bot:fix issues")
 		return nil
 	}
 
-	fmt.Printf("[control] 发现 %d 个 bot:fix issues\n", len(issues))
+	// 转换为 slice
+	var issues []IssueInfo
+	for _, issue := range allIssues {
+		issues = append(issues, issue)
+	}
+
+	fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate: %d, bot:fix: %d)\n",
+		len(issues), len(orchestrateIssues), len(fixIssues))
 
 	// ② 对比 taskctl store：找出新 issue
 	existingTasks, err := c.taskctl.List("")
@@ -113,16 +135,37 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// ③ AI 分析依赖
-	var analysis *AnalysisResult
-	if len(issues) > 1 {
-		analysis, err = c.analyzer.Analyze(ctx, issues)
-		if err != nil {
-			fmt.Printf("[control] 依赖分析失败: %v\n", err)
-			analysis = &AnalysisResult{Dependencies: make(map[int][]int)}
+	// ③ 分析依赖（包括 depends-on 和 parent 关系）
+	analysis := &AnalysisResult{Dependencies: make(map[int][]int)}
+
+	// 先解析 parent 关系（Sub-Issue 模式）
+	for _, issue := range issues {
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			// 检查 parent 是否也在处理列表中
+			for _, other := range issues {
+				if other.Number == parentNum {
+					// sub-issue 依赖 parent
+					analysis.Dependencies[issue.Number] = append(analysis.Dependencies[issue.Number], parentNum)
+					fmt.Printf("[control] 发现 Sub-Issue 关系: #%d → parent #%d\n", issue.Number, parentNum)
+					break
+				}
+			}
 		}
-	} else {
-		analysis = &AnalysisResult{Dependencies: make(map[int][]int)}
+	}
+
+	// 再调 AI 分析（补充 depends-on 和其他依赖）
+	if len(issues) > 1 && c.analyzer != nil {
+		aiAnalysis, err := c.analyzer.Analyze(ctx, issues)
+		if err != nil {
+			fmt.Printf("[control] AI 依赖分析失败: %v\n", err)
+		} else {
+			// 合并 AI 结果（parent 关系优先）
+			for issueNum, deps := range aiAnalysis.Dependencies {
+				if _, hasParent := analysis.Dependencies[issueNum]; !hasParent {
+					analysis.Dependencies[issueNum] = deps
+				}
+			}
+		}
 	}
 
 	// ④ 为新 issue 创建 task + 设 blocked_by
@@ -142,6 +185,15 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 		issueToTask[issue.Number] = task.ID
 		fmt.Printf("[control] 创建任务 %s (issue #%d)\n", task.ID, issue.Number)
+
+		// 如果 issue 有 bot:orchestrate 标签，替换为 bot:queued
+		if hasLabel(issue.Labels, "bot:orchestrate") {
+			if err := c.github.ReplaceLabel(ctx, issue.Number, "bot:orchestrate", "bot:queued"); err != nil {
+				fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issue.Number, err)
+			} else {
+				fmt.Printf("[control] 已将 issue #%d 标签 bot:orchestrate → bot:queued\n", issue.Number)
+			}
+		}
 	}
 
 	// 设置 blocked_by
@@ -169,10 +221,20 @@ func (c *Controller) Run(ctx context.Context) error {
 		fmt.Printf("[control] 获取 ready tasks 失败: %v\n", err)
 	} else {
 		for _, task := range readyTasks {
-			fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, task.IssueNum())
+			issueNum := task.IssueNum()
+			fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
 			status := TaskStatusInProgress
 			if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
 				fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
+				continue
+			}
+			// 将 bot:queued 改为 bot:fix，触发单issue流程
+			if issueNum > 0 {
+				if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
+					fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
+				} else {
+					fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+				}
 			}
 		}
 	}
@@ -230,7 +292,54 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
+	// ⑦ 检查父 issue 进度（Sub-Issue 模式）
+	c.checkParentProgress(ctx, issues)
+
 	return nil
+}
+
+// checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
+func (c *Controller) checkParentProgress(ctx context.Context, issues []IssueInfo) {
+	// 构建 parent → sub-issues 映射
+	parentToSubs := make(map[int][]int) // parentNum → []subNum
+	for _, issue := range issues {
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			parentToSubs[parentNum] = append(parentToSubs[parentNum], issue.Number)
+		}
+	}
+
+	if len(parentToSubs) == 0 {
+		return
+	}
+
+	// 获取所有 task 状态
+	tasks, err := c.taskctl.List("")
+	if err != nil {
+		return
+	}
+
+	taskStatus := make(map[int]TaskStatus)
+	for _, t := range tasks {
+		if n := t.IssueNum(); n > 0 {
+			taskStatus[n] = t.Status
+		}
+	}
+
+	// 检查每个 parent 的 sub-issues 是否都完成
+	for parentNum, subNums := range parentToSubs {
+		allCompleted := true
+		for _, subNum := range subNums {
+			if status, ok := taskStatus[subNum]; !ok || status != TaskStatusCompleted {
+				allCompleted = false
+				break
+			}
+		}
+
+		if allCompleted {
+			fmt.Printf("[control] 父 issue #%d 的所有 sub-issues 已完成: %v\n", parentNum, subNums)
+			// TODO: 可以在这里关闭父 issue 或添加评论
+		}
+	}
 }
 
 // Status 返回全局控制状态
@@ -294,4 +403,14 @@ func FormatStatus(status *ControlStatus) string {
 	}
 
 	return sb.String()
+}
+
+// hasLabel 检查 label 列表中是否包含指定 label
+func hasLabel(labels []string, target string) bool {
+	for _, l := range labels {
+		if l == target {
+			return true
+		}
+	}
+	return false
 }

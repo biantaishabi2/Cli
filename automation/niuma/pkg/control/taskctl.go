@@ -174,6 +174,22 @@ func (c *TaskCtlClient) Get(taskID string) (*Task, error) {
 	return &task, nil
 }
 
+// FindByIssueNum 根据 issue 编号查找任务
+// 返回 nil 表示未找到
+func (c *TaskCtlClient) FindByIssueNum(issueNum int) (*Task, error) {
+	tasks, err := c.List("")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, t := range tasks {
+		if t.IssueNum() == issueNum {
+			return &t, nil
+		}
+	}
+	return nil, nil
+}
+
 // run 执行 taskctl 命令
 func (c *TaskCtlClient) run(args ...string) (string, error) {
 	cmd := exec.Command(c.BinPath, args...)
