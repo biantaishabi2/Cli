@@ -113,6 +113,37 @@ type IntegrationResult struct {
 	Skipped   []int  `json:"skipped,omitempty"`
 }
 
+// MergeStatus integration 合并执行状态
+type MergeStatus string
+
+const (
+	MergeStatusMerged       MergeStatus = "merged"
+	MergeStatusAutoResolved MergeStatus = "auto_resolved"
+	MergeStatusEscalated    MergeStatus = "escalated"
+)
+
+// ConflictSummary 冲突摘要（用于 metadata、日志和审计）
+type ConflictSummary struct {
+	Files           []string       `json:"files"`
+	FileHunkCount   map[string]int `json:"file_hunk_count,omitempty"`
+	TotalHunkCount  int            `json:"total_hunk_count"`
+	Reason          string         `json:"reason,omitempty"`
+	SuggestedAction string         `json:"suggested_action,omitempty"`
+}
+
+// MergeOutcome 统一 merge 执行结果
+type MergeOutcome struct {
+	Status            MergeStatus      `json:"status"`
+	IntegrationBranch string           `json:"integration_branch"`
+	SourceBranch      string           `json:"source_branch"`
+	IssueNum          int              `json:"issue_num,omitempty"`
+	PRNum             int              `json:"pr_num,omitempty"`
+	AutoResolvedFiles []string         `json:"auto_resolved_files,omitempty"`
+	Conflict          *ConflictSummary `json:"conflict,omitempty"`
+	ExecutorVersion   string           `json:"executor_version,omitempty"`
+	ExecutedAt        string           `json:"executed_at,omitempty"`
+}
+
 // ControlStatus 全局控制状态
 type ControlStatus struct {
 	Dag         *DagGraph          `json:"dag"`

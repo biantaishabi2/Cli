@@ -13,15 +13,26 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues     []IssueInfo
-	mergedPRs  []int
-	mergeError map[int]error
+	issues            []IssueInfo
+	mergedPRs         []int
+	mergeError        map[int]error
+	replaceLabelCalls []replaceLabelCall
+	replaceLabelError map[string]error
+	replaceLabelFails map[string]int
+}
+
+type replaceLabelCall struct {
+	issueNumber int
+	oldLabel    string
+	newLabel    string
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	return &mockGitHubOps{
-		issues:     issues,
-		mergeError: make(map[int]error),
+		issues:            issues,
+		mergeError:        make(map[int]error),
+		replaceLabelError: make(map[string]error),
+		replaceLabelFails: make(map[string]int),
 	}
 }
 
@@ -37,7 +48,20 @@ func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
 	return nil
 }
 
-func (m *mockGitHubOps) ReplaceLabel(_ context.Context, _ int, _, _ string) error {
+func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
+		issueNumber: issueNumber,
+		oldLabel:    oldLabel,
+		newLabel:    newLabel,
+	})
+
+	if remaining := m.replaceLabelFails[newLabel]; remaining > 0 {
+		m.replaceLabelFails[newLabel] = remaining - 1
+		return fmt.Errorf("replace label %q temporary failed", newLabel)
+	}
+	if err, ok := m.replaceLabelError[newLabel]; ok {
+		return err
+	}
 	return nil
 }
 
@@ -314,4 +338,175 @@ func TestFormatStatus(t *testing.T) {
 	assert.Contains(t, output, "#41")
 	assert.Contains(t, output, "completed")
 	assert.Contains(t, output, string(TaskStatusInProgress))
+}
+
+func TestBuildEscalationMetadata_FirstWrite(t *testing.T) {
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"docs/b.md", "docs/a.md"},
+			TotalHunkCount:  3,
+			Reason:          "核心文件语义冲突",
+			SuggestedAction: "请人工处理",
+		},
+	}
+
+	update := buildEscalationMetadata(nil, outcome)
+	assert.Equal(t, string(MergeStatusEscalated), update[metaKeyIntegrationMergeStatus])
+	assert.Equal(t, "integration-merge-executor/v1", update[metaKeyIntegrationExecutorVersion])
+	assert.Equal(t, "2026-02-17T10:00:00Z", update[metaKeyIntegrationMergeExecutedAt])
+	assert.Equal(t, "docs/a.md,docs/b.md", update[metaKeyIntegrationConflictFiles])
+	assert.Equal(t, "3", update[metaKeyIntegrationConflictTotalHunks])
+	assert.NotEmpty(t, update[metaKeyIntegrationConflictSummary])
+	assert.NotEmpty(t, update[metaKeyIntegrationConflictRecordedAt])
+}
+
+func TestBuildEscalationMetadata_IdempotentRetry(t *testing.T) {
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"docs/a.md"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	first := buildEscalationMetadata(nil, outcome)
+	existing := make(map[string]string, len(first))
+	for k, v := range first {
+		existing[k] = v
+	}
+
+	second := buildEscalationMetadata(existing, outcome)
+	assert.Empty(t, second)
+}
+
+func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+	}
+
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		SourceBranch:    "feat/41-core-b",
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"pkg/service.go"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	firstTask := Task{
+		ID:       "task-1",
+		Metadata: map[string]string{"issue_num": "41"},
+	}
+	ctrl.escalateIntegrationConflict(context.Background(), firstTask, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[1].newLabel)
+
+	retryTask := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                           "41",
+			metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+			metaKeyIntegrationMergeExecutedAt:     outcome.ExecutedAt,
+			metaKeyIntegrationExecutorVersion:     outcome.ExecutorVersion,
+			metaKeyIntegrationConflictRecordedAt:  "2026-02-17T10:00:01Z",
+			metaKeyIntegrationConflictLabelSynced: "true",
+		},
+	}
+	ctrl.escalateIntegrationConflict(context.Background(), retryTask, outcome)
+	assert.Len(t, mockGH.replaceLabelCalls, 2)
+}
+
+func TestShouldRetryEscalationLabels(t *testing.T) {
+	assert.True(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus: string(MergeStatusEscalated),
+	}))
+	assert.False(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+		metaKeyIntegrationConflictLabelSynced: "true",
+	}))
+	assert.False(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus: string(MergeStatusMerged),
+	}))
+}
+
+func TestMergeOutcomeFromEscalatedTask_FromMetadata(t *testing.T) {
+	task := Task{
+		Metadata: map[string]string{
+			"issue_num":                           "41",
+			"pr_num":                              "410",
+			"branch":                              "feat/41-core",
+			metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+			metaKeyIntegrationMergeExecutedAt:     "2026-02-17T10:00:00Z",
+			metaKeyIntegrationExecutorVersion:     "integration-merge-executor/v1",
+			metaKeyIntegrationConflictSummary:     `{"files":["pkg/service.go"],"total_hunk_count":2,"reason":"复杂冲突","suggested_action":"人工处理"}`,
+			metaKeyIntegrationConflictLabelSynced: "false",
+		},
+	}
+
+	outcome := mergeOutcomeFromEscalatedTask(task, "integration/main")
+	assert.Equal(t, MergeStatusEscalated, outcome.Status)
+	assert.Equal(t, "integration/main", outcome.IntegrationBranch)
+	assert.Equal(t, "feat/41-core", outcome.SourceBranch)
+	assert.Equal(t, 41, outcome.IssueNum)
+	assert.Equal(t, 410, outcome.PRNum)
+	require.NotNil(t, outcome.Conflict)
+	assert.Equal(t, []string{"pkg/service.go"}, outcome.Conflict.Files)
+	assert.Equal(t, 2, outcome.Conflict.TotalHunkCount)
+	assert.Equal(t, "复杂冲突", outcome.Conflict.Reason)
+}
+
+func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.replaceLabelFails[integrationConflictLabel] = 1
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                   "41",
+			metaKeyIntegrationMergeStatus: string(MergeStatusEscalated),
+		},
+	}
+	outcome := MergeOutcome{
+		Status:       MergeStatusEscalated,
+		SourceBranch: "feat/41-core-b",
+		Conflict: &ConflictSummary{
+			Files:           []string{"pkg/service.go"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+
+	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 3)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
+	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
 }
