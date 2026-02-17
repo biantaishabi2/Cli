@@ -1,6 +1,34 @@
-# BCC — Backend Compiler
+# BCC — Backend Compiler & Code Knowledge Graph
 
-YAML 驱动的后端编译器，含源码结构提取、文档覆盖审计、架构矩阵校验和 BDD 场景生成。
+**代码知识图谱 + 架构治理工具**
+
+从代码中提取结构（函数/类/模块/调用关系），持久化为可查询的 SQLite 图谱，
+支持架构验证、影响分析和测试生成。
+
+## 核心价值
+
+```
+源码 (Elixir/TS/PHP)
+    ↓ extract --batch
+AST 快照 (JSON)
+    ↓ graph-index build
+代码知识图谱 (SQLite)
+    ├── 函数调用图 (caller → callee)
+    ├── 类继承图 (parent → child)
+    └── 模块依赖图 (import → export)
+    ↓ arch validate
+架构合规性报告 (违规调用检测)
+    ↓ bugfix
+BDD 回归测试场景
+    ↓ bddc
+可执行测试
+```
+
+## 与 BDDC 的关系
+
+BCC 生成 BDD 场景，BDDC 执行测试，形成闭环：
+- BCC：`bugfix` 生成 `docs/bdd/**/*.dsl`
+- BDDC：编译 DSL 为 ExUnit 测试并执行
 
 ## 安装
 

@@ -1,6 +1,29 @@
-# bdd_compiler
+# BDDC — BDD Test Runtime
 
-独立 BDD DSL 编译器（`escript`），用于将 `docs/bdd/**/*.dsl` 与 Markdown fenced code block 内的 DSL 编译为 ExUnit 测试。
+**BDD 测试运行时**，与 BCC 配合形成"测试即文档"闭环。
+
+## 定位
+
+| 工具 | 职责 | 输出 |
+|------|------|------|
+| **BCC** | 分析代码/历史，生成 BDD 场景 | `docs/bdd/**/*.dsl` |
+| **BDDC** | 执行 BDD 场景，验证行为 | ExUnit 测试报告 |
+
+## 工作流程
+
+```
+代码变更 / Bugfix 历史
+    ↓ BCC bugfix
+BDD 场景文件 (.dsl)
+    ↓ BDDC 编译
+ExUnit 测试代码
+    ↓ mix test
+测试报告（通过/失败）
+```
+
+## 独立使用
+
+虽然设计为与 BCC 配合，BDDC 也可独立使用：
 
 ## 构建
 

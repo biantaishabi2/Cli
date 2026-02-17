@@ -13,14 +13,22 @@
 
 ### `compiler/`
 - [**`bddc/`**](compiler/bddc/README.md)（Elixir escript，已就绪）
-  BDD 编译器：DSL 解析 → 指令集生成 → 运行时覆盖校验 → 测试代码生成。从 shop 项目迁入。
+  **BDD 测试运行时**：执行 BCC 生成的 BDD 场景，实现"测试即文档"。
+  与 BCC 配合形成闭环：BCC 生成场景 → BDDC 执行测试 → 报告结果。
 
 - [**`bcc/`**](compiler/bcc/README.md)（Rust + Elixir emit，已就绪）
-  后端编译器：六命令（compile/extract/trace/arch/bugfix/bdd seed）已就绪，覆盖新/旧代码闭环。
+  **代码知识图谱 + 架构治理工具**：从代码提取结构（函数/类/模块/调用关系），
+  持久化为可查询图谱，支持架构验证和测试生成。
+  
+  核心价值：
+  - **代码图谱**：extract → 持久化到 SQLite → 图搜索（caller/callee/继承/模块依赖）
+  - **架构治理**：arch validate 检测分层违规（如 api→dao 跳过 service）
+  - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行
+  
   典型链路：
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
-  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`
-  - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/) - 完整架构分析示例（1685 文件项目，含 v0→v3 版本演进）
+  - Brownfield：`extract -> graph-index build -> arch validate -> bugfix`
+  - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/)
 
 ### `automation/`
 - [**`niuma/`**](automation/niuma/README.md)（Go，已就绪）
