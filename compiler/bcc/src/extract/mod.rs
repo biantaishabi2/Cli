@@ -396,7 +396,9 @@ fn extract_file(content: &str, path: &Path, lang: &str) -> Result<FileRecord, St
         .ok_or_else(|| format!("unsupported language: {}", actual_lang))?;
 
     // 使用 catch_unwind 防止 tree-sitter panic 导致整个 batch 中断
-    let result = std::panic::catch_unwind(|| lang_adapter.extract(content, &path_str));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lang_adapter.extract(content, &path_str)
+    }));
     result.map_err(|_| "parser panic".to_string())
 }
 

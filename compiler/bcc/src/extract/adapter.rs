@@ -102,6 +102,7 @@ pub fn detect_language(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     #[test]
     fn detect_language_by_extension() {
@@ -124,5 +125,36 @@ mod tests {
         assert_eq!(get_adapter("rust").map(|a| a.language()), Some("rust"));
         assert_eq!(get_adapter("php").map(|a| a.language()), Some("php"));
         assert!(get_adapter("go").is_none());
+    }
+
+    #[test]
+    fn adapter_registry_is_stable_under_concurrency() {
+        const EXPECTED: &[(&str, &str)] = &[
+            ("elixir", "elixir"),
+            ("typescript", "typescript"),
+            ("tsx", "tsx"),
+            ("rust", "rust"),
+            ("php", "php"),
+        ];
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                thread::spawn(|| {
+                    for _ in 0..200 {
+                        for (lang, expected_name) in EXPECTED {
+                            let adapter = get_adapter(lang).expect("adapter should exist");
+                            assert_eq!(adapter.language(), *expected_name);
+                        }
+                        assert!(get_adapter("unknown").is_none());
+                        assert_eq!(detect_language("apps/demo/lib/a.ex"), "elixir");
+                        assert_eq!(detect_language("apps/demo/src/a.ts"), "typescript");
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("thread should not panic");
+        }
     }
 }

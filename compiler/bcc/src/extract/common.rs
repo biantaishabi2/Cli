@@ -30,3 +30,42 @@ pub fn empty_side_effects() -> SideEffects {
         has_pubsub: false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedup_calls_handles_empty_input() {
+        let mut calls = Vec::new();
+        dedup_calls_by_callee(&mut calls);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn dedup_sort_calls_handles_deep_call_chain_boundary() {
+        let mut calls = Vec::new();
+        // 构造较深调用链长度，验证在边界规模下仍可稳定去重并排序。
+        for depth in (0..2048).rev() {
+            calls.push(CallRecord {
+                callee: format!("Mod{}.run", depth % 64),
+                line: depth + 1,
+            });
+        }
+
+        dedup_sort_calls(&mut calls);
+
+        assert_eq!(calls.len(), 64);
+        assert!(calls.windows(2).all(|w| w[0].line <= w[1].line));
+    }
+
+    #[test]
+    fn empty_side_effects_defaults_to_all_false() {
+        let se = empty_side_effects();
+        assert!(!se.has_async);
+        assert!(!se.has_http);
+        assert!(!se.has_genserver);
+        assert!(!se.has_file_io);
+        assert!(!se.has_pubsub);
+    }
+}
