@@ -1,0 +1,44 @@
+{
+  "calls": [
+    {
+      "callee": "SessionStore.get",
+      "line": 4
+    },
+    {
+      "callee": "get",
+      "line": 4
+    }
+  ],
+  "imports": [
+    {
+      "kind": "import",
+      "specifier": "../stores/session"
+    },
+    {
+      "kind": "import",
+      "specifier": "./handlers/agent"
+    }
+  ],
+  "exports": [
+    {
+      "name": "VERSION",
+      "kind": "const",
+      "signature": null,
+      "line": 14
+    },
+    {
+      "name": "dispatch",
+      "kind": "function",
+      "signature": null,
+      "line": 6
+    },
+    {
+      "name": "handleWebSocket",
+      "kind": "function",
+      "signature": null,
+      "line": 10
+    }
+  ],
+  "declarations": 3,
+  "loc_lines": 14
+}

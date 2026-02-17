@@ -1,0 +1,34 @@
+{
+  "calls": [
+    {
+      "callee": "run",
+      "line": 5
+    },
+    {
+      "callee": "walkDepth",
+      "line": 9
+    }
+  ],
+  "imports": [
+    {
+      "kind": "import",
+      "specifier": "./pipeline"
+    }
+  ],
+  "exports": [
+    {
+      "name": "startWalk",
+      "kind": "function",
+      "signature": null,
+      "line": 12
+    },
+    {
+      "name": "walkDepth",
+      "kind": "function",
+      "signature": null,
+      "line": 3
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 14
+}

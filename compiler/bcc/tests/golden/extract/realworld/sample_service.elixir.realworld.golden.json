@@ -1,0 +1,34 @@
+{
+  "calls": [
+    {
+      "callee": "CompactionService",
+      "line": 15
+    },
+    {
+      "callee": "String",
+      "line": 8
+    }
+  ],
+  "imports": [
+    {
+      "kind": "alias",
+      "specifier": "CompactionService"
+    }
+  ],
+  "exports": [
+    {
+      "name": "load_context",
+      "kind": "function",
+      "signature": "load_context(String.t()) :: {:ok, map()} | {:error, term()}",
+      "line": 9
+    },
+    {
+      "name": "persist_turn",
+      "kind": "function",
+      "signature": "persist_turn(String.t(), map()) :: {:ok, boolean()} | {:error, term()}",
+      "line": 14
+    }
+  ],
+  "declarations": 4,
+  "loc_lines": 22
+}

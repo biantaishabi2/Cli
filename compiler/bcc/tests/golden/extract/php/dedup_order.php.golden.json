@@ -1,0 +1,23 @@
+{
+  "calls": [
+    {
+      "callee": "Alpha",
+      "line": 9
+    },
+    {
+      "callee": "Helper",
+      "line": 7
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "method",
+      "signature": "public function run()",
+      "line": 5
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 12
+}

@@ -1,0 +1,28 @@
+{
+  "calls": [
+    {
+      "callee": "Helper.exec",
+      "line": 3
+    },
+    {
+      "callee": "exec",
+      "line": 3
+    }
+  ],
+  "imports": [
+    {
+      "kind": "import",
+      "specifier": "./helper"
+    }
+  ],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": null,
+      "line": 5
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 7
+}

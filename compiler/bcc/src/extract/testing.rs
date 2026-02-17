@@ -1,5 +1,7 @@
 use super::FileRecord;
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 /// 提取调用名列表，便于测试断言。
 pub fn call_names(record: &FileRecord) -> Vec<String> {
@@ -50,7 +52,11 @@ pub fn assert_contains(items: &[String], expected: &str, label: &str) {
 
 /// 归一化 calls：按 callee 去重并排序，忽略顺序差异。
 pub fn normalized_call_set(record: &FileRecord) -> BTreeSet<String> {
-    record.calls.iter().map(|call| call.callee.clone()).collect()
+    record
+        .calls
+        .iter()
+        .map(|call| call.callee.clone())
+        .collect()
 }
 
 /// 归一化 imports：按 "kind:specifier" 去重并排序，统一空白。
@@ -145,8 +151,152 @@ pub fn assert_semantic_sets_equal_json(
     );
 }
 
+/// 归一化测试路径：转为相对路径并统一为 POSIX 分隔符，避免平台差异。
+pub fn normalize_test_path(path: &str) -> String {
+    let raw = Path::new(path);
+    let normalized_path = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| raw.strip_prefix(&cwd).ok().map(PathBuf::from))
+        .unwrap_or_else(|| raw.to_path_buf());
+    normalize_path_separators(&normalized_path.to_string_lossy())
+}
+
+/// 仅保留 Golden 测试关注字段，并做稳定排序/去重，保证输出可复现。
+pub fn normalize_core_fields(record: &FileRecord) -> Value {
+    let mut calls: Vec<(String, usize)> = record
+        .calls
+        .iter()
+        .map(|item| (normalize_spaces(item.callee.trim()), item.line))
+        .collect();
+    calls.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    calls.dedup();
+
+    let mut imports: Vec<(String, String)> = record
+        .imports
+        .iter()
+        .map(|item| {
+            (
+                normalize_spaces(item.kind.trim()),
+                normalize_spaces(item.specifier.trim()),
+            )
+        })
+        .collect();
+    imports.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    imports.dedup();
+
+    let mut exports: Vec<(String, String, Option<String>, usize)> = record
+        .exports
+        .iter()
+        .map(|item| {
+            (
+                normalize_spaces(item.name.trim()),
+                normalize_spaces(item.kind.trim()),
+                item.signature
+                    .as_ref()
+                    .map(|sig| normalize_spaces(sig.trim())),
+                item.line,
+            )
+        })
+        .collect();
+    exports.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.3.cmp(&b.3))
+    });
+    exports.dedup();
+
+    json!({
+        "calls": calls
+            .into_iter()
+            .map(|(callee, line)| json!({ "callee": callee, "line": line }))
+            .collect::<Vec<_>>(),
+        "imports": imports
+            .into_iter()
+            .map(|(kind, specifier)| json!({ "kind": kind, "specifier": specifier }))
+            .collect::<Vec<_>>(),
+        "exports": exports
+            .into_iter()
+            .map(|(name, kind, signature, line)| json!({
+                "name": name,
+                "kind": kind,
+                "signature": signature,
+                "line": line
+            }))
+            .collect::<Vec<_>>(),
+        "declarations": record.declarations,
+        "loc_lines": record.loc_lines
+    })
+}
+
+/// 统一 JSON pretty 序列化格式（末尾换行），便于审查 diff。
+pub fn stable_pretty_json(value: &Value) -> String {
+    let mut text = serde_json::to_string_pretty(value).expect("serialize JSON");
+    text.push('\n');
+    text
+}
+
+/// 生成字段级 diff 片段，定位 Golden 不一致的关键字段。
+pub fn diff_core_fields(expected: &Value, actual: &Value, max_lines: usize) -> String {
+    const FIELDS: &[&str] = &["calls", "imports", "exports", "declarations", "loc_lines"];
+    let mut chunks = Vec::new();
+    for field in FIELDS {
+        let left = expected.get(field).unwrap_or(&Value::Null);
+        let right = actual.get(field).unwrap_or(&Value::Null);
+        if left == right {
+            continue;
+        }
+        let left_text = truncate_lines(
+            &serde_json::to_string_pretty(left).unwrap_or_else(|_| left.to_string()),
+            max_lines,
+        );
+        let right_text = truncate_lines(
+            &serde_json::to_string_pretty(right).unwrap_or_else(|_| right.to_string()),
+            max_lines,
+        );
+        chunks.push(format!(
+            "field `{}` mismatch\nexpected:\n{}\nactual:\n{}",
+            field, left_text, right_text
+        ));
+    }
+
+    if chunks.is_empty() {
+        "no field-level diff".to_string()
+    } else {
+        chunks.join("\n\n")
+    }
+}
+
 fn normalize_spaces(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_path_separators(input: &str) -> String {
+    input
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+fn truncate_lines(input: &str, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+
+    let mut lines = input.lines();
+    let mut picked = Vec::new();
+    for _ in 0..max_lines {
+        let Some(line) = lines.next() else { break };
+        picked.push(line.to_string());
+    }
+
+    if lines.next().is_some() {
+        picked.push(format!(
+            "... ({} lines omitted)",
+            input.lines().count() - max_lines
+        ));
+    }
+    picked.join("\n")
 }
 
 #[cfg(test)]
@@ -228,5 +378,68 @@ mod tests {
         let left = sample_record(&["B.run", "A.run", "A.run"], &[]);
         let right = sample_record(&["A.run", "B.run"], &[]);
         assert_eq!(normalized_call_set(&left), normalized_call_set(&right));
+    }
+
+    #[test]
+    fn normalize_core_fields_sorts_and_dedups() {
+        let mut record = sample_record(&["B.run", "A.run", "A.run"], &["Run"]);
+        record.imports.push(ImportRecord {
+            specifier: " Demo.Helper ".to_string(),
+            kind: " alias ".to_string(),
+        });
+        record.imports.push(ImportRecord {
+            specifier: "Demo.Helper".to_string(),
+            kind: "alias".to_string(),
+        });
+
+        let value = normalize_core_fields(&record);
+        let calls = value
+            .get("calls")
+            .and_then(|v| v.as_array())
+            .expect("calls array");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["callee"], "A.run");
+        assert_eq!(calls[1]["callee"], "B.run");
+
+        let imports = value
+            .get("imports")
+            .and_then(|v| v.as_array())
+            .expect("imports array");
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0]["kind"], "alias");
+        assert_eq!(imports[0]["specifier"], "Demo.Helper");
+    }
+
+    #[test]
+    fn diff_core_fields_reports_mismatched_field() {
+        let expected = json!({
+            "calls": [{"callee":"A.run","line":1}],
+            "imports": [],
+            "exports": [],
+            "declarations": 1,
+            "loc_lines": 3
+        });
+        let actual = json!({
+            "calls": [{"callee":"B.run","line":1}],
+            "imports": [],
+            "exports": [],
+            "declarations": 1,
+            "loc_lines": 3
+        });
+
+        let diff = diff_core_fields(&expected, &actual, 20);
+        assert!(diff.contains("field `calls` mismatch"));
+        assert!(diff.contains("A.run"));
+        assert!(diff.contains("B.run"));
+    }
+
+    #[test]
+    fn normalize_test_path_handles_absolute_and_relative() {
+        let abs = std::env::current_dir()
+            .unwrap()
+            .join("compiler/bcc/src/lib.rs");
+        let normalized = normalize_test_path(abs.to_string_lossy().as_ref());
+        assert!(normalized.ends_with("compiler/bcc/src/lib.rs"));
+        assert!(!normalized.contains('\\'));
     }
 }

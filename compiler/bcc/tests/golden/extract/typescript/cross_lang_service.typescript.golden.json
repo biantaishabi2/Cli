@@ -1,0 +1,23 @@
+{
+  "calls": [
+    {
+      "callee": "Helper.run",
+      "line": 1
+    },
+    {
+      "callee": "run",
+      "line": 1
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "process",
+      "kind": "function",
+      "signature": null,
+      "line": 3
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 5
+}

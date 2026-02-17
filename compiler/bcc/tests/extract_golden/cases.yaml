@@ -1,0 +1,142 @@
+cases:
+  - name: typescript_basic_consistency
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/basic_consistency.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/basic_consistency.typescript.golden.json
+    tags: [basic]
+
+  - name: typescript_dedup_order_stability
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/dedup_order.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/dedup_order.typescript.golden.json
+    tags: [dedup, stability]
+
+  - name: typescript_boundary_empty
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/boundary_empty.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/boundary_empty.typescript.golden.json
+    tags: [boundary]
+
+  - name: typescript_depth_recursive_limit
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/depth_recursive_limit.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/depth_recursive_limit.typescript.golden.json
+    tags: [boundary, depth, recursive]
+
+  - name: typescript_shared_golden_access_reader_a
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/shared_golden_access.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/shared_golden_access.typescript.golden.json
+    tags: [concurrency, shared_golden]
+
+  - name: typescript_shared_golden_access_reader_b
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/shared_golden_access.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/shared_golden_access.typescript.golden.json
+    tags: [concurrency, shared_golden]
+
+  - name: typescript_cross_lang_service_process
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/cross_lang_service.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/cross_lang_service.typescript.golden.json
+    tags: [cross_lang]
+    cross_lang_group: service_process
+
+  - name: rust_basic_consistency
+    lang: rust
+    fixture: tests/fixtures/extract_golden/rust/basic_consistency.rust.fixture.rs
+    golden: tests/golden/extract/rust/basic_consistency.rust.golden.json
+    tags: [basic]
+
+  - name: rust_dedup_order_stability
+    lang: rust
+    fixture: tests/fixtures/extract_golden/rust/dedup_order.rust.fixture.rs
+    golden: tests/golden/extract/rust/dedup_order.rust.golden.json
+    tags: [dedup, stability]
+
+  - name: rust_boundary_incomplete
+    lang: rust
+    fixture: tests/fixtures/extract_golden/rust/boundary_incomplete.rust.fixture.rs
+    golden: tests/golden/extract/rust/boundary_incomplete.rust.golden.json
+    tags: [boundary]
+
+  - name: rust_cross_lang_service_process
+    lang: rust
+    fixture: tests/fixtures/extract_golden/rust/cross_lang_service.rust.fixture.rs
+    golden: tests/golden/extract/rust/cross_lang_service.rust.golden.json
+    tags: [cross_lang]
+    cross_lang_group: service_process
+
+  - name: php_basic_consistency
+    lang: php
+    fixture: tests/fixtures/extract_golden/php/basic_consistency.php.fixture.php
+    golden: tests/golden/extract/php/basic_consistency.php.golden.json
+    tags: [basic]
+
+  - name: php_dedup_order_stability
+    lang: php
+    fixture: tests/fixtures/extract_golden/php/dedup_order.php.fixture.php
+    golden: tests/golden/extract/php/dedup_order.php.golden.json
+    tags: [dedup, stability]
+
+  - name: php_boundary_incomplete
+    lang: php
+    fixture: tests/fixtures/extract_golden/php/boundary_incomplete.php.fixture.php
+    golden: tests/golden/extract/php/boundary_incomplete.php.golden.json
+    tags: [boundary]
+
+  - name: php_cross_lang_service_process
+    lang: php
+    fixture: tests/fixtures/extract_golden/php/cross_lang_service.php.fixture.php
+    golden: tests/golden/extract/php/cross_lang_service.php.golden.json
+    tags: [cross_lang]
+    cross_lang_group: service_process
+
+  - name: elixir_basic_consistency
+    lang: elixir
+    fixture: tests/fixtures/extract_golden/elixir/basic_consistency.elixir.fixture.ex
+    golden: tests/golden/extract/elixir/basic_consistency.elixir.golden.json
+    tags: [basic]
+
+  - name: elixir_dedup_order_stability
+    lang: elixir
+    fixture: tests/fixtures/extract_golden/elixir/dedup_order.elixir.fixture.ex
+    golden: tests/golden/extract/elixir/dedup_order.elixir.golden.json
+    tags: [dedup, stability]
+
+  - name: elixir_boundary_comment_only
+    lang: elixir
+    fixture: tests/fixtures/extract_golden/elixir/boundary_comment_only.elixir.fixture.ex
+    golden: tests/golden/extract/elixir/boundary_comment_only.elixir.golden.json
+    tags: [boundary]
+
+  - name: elixir_cross_lang_service_process
+    lang: elixir
+    fixture: tests/fixtures/extract_golden/elixir/cross_lang_service.elixir.fixture.ex
+    golden: tests/golden/extract/elixir/cross_lang_service.elixir.golden.json
+    tags: [cross_lang]
+    cross_lang_group: service_process
+
+  - name: realworld_typescript_sample_router
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/realworld/sample_router.typescript.realworld.ts
+    golden: tests/golden/extract/realworld/sample_router.typescript.realworld.golden.json
+    tags: [realworld]
+
+  - name: realworld_rust_sample_service
+    lang: rust
+    fixture: tests/fixtures/extract_golden/realworld/sample_service.rust.realworld.rs
+    golden: tests/golden/extract/realworld/sample_service.rust.realworld.golden.json
+    tags: [realworld]
+
+  - name: realworld_php_sample_controller
+    lang: php
+    fixture: tests/fixtures/extract_golden/realworld/sample_controller.php.realworld.php
+    golden: tests/golden/extract/realworld/sample_controller.php.realworld.golden.json
+    tags: [realworld]
+
+  - name: realworld_elixir_sample_service
+    lang: elixir
+    fixture: tests/fixtures/extract_golden/realworld/sample_service.elixir.realworld.ex
+    golden: tests/golden/extract/realworld/sample_service.elixir.realworld.golden.json
+    tags: [realworld]

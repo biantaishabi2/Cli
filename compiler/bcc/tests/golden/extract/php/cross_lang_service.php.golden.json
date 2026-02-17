@@ -1,0 +1,19 @@
+{
+  "calls": [
+    {
+      "callee": "Helper",
+      "line": 7
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "process",
+      "kind": "method",
+      "signature": "public function process()",
+      "line": 5
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 9
+}

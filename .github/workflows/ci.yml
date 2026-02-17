@@ -64,6 +64,34 @@ jobs:
       - name: Run bcc smoke integration tests
         run: cargo test -p bcc --test cli_arch_bdd
 
+      # Golden 回归先并入 bcc 主测试任务；记录连续 10 次耗时并计算 P95，超过阈值时给出拆分提示。
+      - name: Run bcc extract golden tests (10-run window)
+        shell: bash
+        run: |
+          set -euo pipefail
+          durations=()
+          for i in $(seq 1 10); do
+            echo "extract_golden run ${i}/10"
+            start=$(date +%s)
+            cargo test -p bcc --test extract_golden
+            end=$(date +%s)
+            duration=$((end - start))
+            durations+=("${duration}")
+            echo "extract_golden duration[${i}]=${duration}s"
+          done
+
+          sorted=($(printf '%s\n' "${durations[@]}" | sort -n))
+          index=$(( (95 * ${#sorted[@]} + 99) / 100 - 1 ))
+          if [ "${index}" -lt 0 ]; then
+            index=0
+          fi
+          p95="${sorted[${index}]}"
+          echo "extract_golden durations: ${durations[*]}"
+          echo "extract_golden p95: ${p95}s (threshold: 90s)"
+          if [ "${p95}" -gt 90 ]; then
+            echo "::warning title=bcc extract golden tests::P95 ${p95}s > 90s, split to dedicated CI job."
+          fi
+
   bddc:
     name: bddc test (ubuntu)
     runs-on: ubuntu-latest

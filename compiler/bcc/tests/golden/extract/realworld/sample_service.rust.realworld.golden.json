@@ -1,0 +1,34 @@
+{
+  "calls": [
+    {
+      "callee": "HashMap::<String, String>::new",
+      "line": 8
+    },
+    {
+      "callee": "println!",
+      "line": 9
+    }
+  ],
+  "imports": [
+    {
+      "kind": "use",
+      "specifier": "std::collections::HashMap"
+    }
+  ],
+  "exports": [
+    {
+      "name": "Config",
+      "kind": "struct",
+      "signature": null,
+      "line": 3
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": "fn run(config: &Config)",
+      "line": 7
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 10
+}

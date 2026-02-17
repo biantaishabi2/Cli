@@ -1,0 +1,23 @@
+{
+  "calls": [
+    {
+      "callee": "Alpha::start",
+      "line": 4
+    },
+    {
+      "callee": "Helper::exec",
+      "line": 2
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": "fn run()",
+      "line": 1
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 6
+}

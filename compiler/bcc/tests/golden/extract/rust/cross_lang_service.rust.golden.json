@@ -1,0 +1,19 @@
+{
+  "calls": [
+    {
+      "callee": "Helper::run",
+      "line": 2
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "process",
+      "kind": "function",
+      "signature": "fn process()",
+      "line": 1
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 3
+}

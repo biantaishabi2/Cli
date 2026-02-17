@@ -1,0 +1,31 @@
+{
+  "calls": [
+    {
+      "callee": "Alpha.start",
+      "line": 3
+    },
+    {
+      "callee": "Helper.exec",
+      "line": 1
+    },
+    {
+      "callee": "exec",
+      "line": 1
+    },
+    {
+      "callee": "start",
+      "line": 3
+    }
+  ],
+  "imports": [],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": null,
+      "line": 6
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 6
+}

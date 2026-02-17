@@ -1,0 +1,28 @@
+{
+  "calls": [
+    {
+      "callee": "Helper",
+      "line": 6
+    },
+    {
+      "callee": "String",
+      "line": 4
+    }
+  ],
+  "imports": [
+    {
+      "kind": "alias",
+      "specifier": "App.Helper"
+    }
+  ],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": "run(String.t()) :: :ok",
+      "line": 5
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 9
+}
