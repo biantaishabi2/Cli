@@ -8,3 +8,5 @@ export class A {
     baz();
   }
 }
+
+export const nested = () => level1(level2(level3()));

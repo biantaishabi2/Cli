@@ -1123,6 +1123,9 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     assert!(ts_calls.contains("foo"), "ts calls should contain foo");
     assert!(ts_calls.contains("bar"), "ts calls should contain bar");
     assert!(ts_calls.contains("baz"), "ts calls should contain baz");
+    assert!(ts_calls.contains("level1"), "ts calls should contain level1");
+    assert!(ts_calls.contains("level2"), "ts calls should contain level2");
+    assert!(ts_calls.contains("level3"), "ts calls should contain level3");
 
     // 2) PHP AST：namespace use/use as 不漏提，同时 extends/trait/new 不回归
     let php_ast = run_extract_ast_json(&php_file, &work.join("php.ast.json"));
@@ -1131,6 +1134,14 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     assert!(
         php_imports.contains("use:C\\D as E"),
         "php imports should contain use:C\\D as E"
+    );
+    assert!(
+        php_imports.contains("use:Vendor\\Package\\Alpha"),
+        "php imports should contain use:Vendor\\Package\\Alpha"
+    );
+    assert!(
+        php_imports.contains("use:Vendor\\Package\\Beta as B"),
+        "php imports should contain use:Vendor\\Package\\Beta as B"
     );
     assert!(
         php_imports.contains("extends:Base"),
@@ -1142,37 +1153,48 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     );
     let php_calls = extract_testing::normalized_call_set_from_json(&php_ast);
     assert!(php_calls.contains("E"), "php calls should contain E");
+    assert!(php_calls.contains("B"), "php calls should contain B");
 
     // 3) AST vs Batch 一致性（文件集合 + 计数 + 关键字段集合）
     let ts_batch = run_extract_batch_json(&ts_root, "typescript", &work.join("ts.batch.json"));
     assert_eq!(ts_batch["source_count"].as_u64(), Some(1));
     let ts_records = ts_batch["records"].as_array().expect("ts records array");
     assert_eq!(ts_records.len(), 1);
-    assert_eq!(ts_records[0]["sourcePath"].as_str(), Some("export_calls.ts"));
+    let ts_batch_record = &ts_records[0];
+    assert_eq!(ts_batch_record["sourcePath"].as_str(), Some("export_calls.ts"));
     assert_eq!(
-        ts_records[0]["imports_count"].as_u64(),
+        ts_batch_record["imports_count"].as_u64(),
         Some(ts_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
     );
-    let ts_batch_ast = run_extract_ast_json(
-        &ts_root.join(ts_records[0]["sourcePath"].as_str().expect("ts sourcePath")),
-        &work.join("ts.batch.ast.json"),
+    assert_eq!(
+        ts_batch_record["calls"].as_array().map(|v| v.len()),
+        ts_ast["calls"].as_array().map(|v| v.len())
     );
-    extract_testing::assert_semantic_sets_equal_json(&ts_ast, &ts_batch_ast, "typescript");
+    assert_eq!(
+        ts_batch_record["imports"].as_array().map(|v| v.len()),
+        ts_ast["imports"].as_array().map(|v| v.len())
+    );
+    extract_testing::assert_semantic_sets_equal_json(&ts_ast, ts_batch_record, "typescript");
 
     let php_batch = run_extract_batch_json(&php_root, "php", &work.join("php.batch.json"));
     assert_eq!(php_batch["source_count"].as_u64(), Some(1));
     let php_records = php_batch["records"].as_array().expect("php records array");
     assert_eq!(php_records.len(), 1);
-    assert_eq!(php_records[0]["sourcePath"].as_str(), Some("namespace_use.php"));
+    let php_batch_record = &php_records[0];
+    assert_eq!(php_batch_record["sourcePath"].as_str(), Some("namespace_use.php"));
     assert_eq!(
-        php_records[0]["imports_count"].as_u64(),
+        php_batch_record["imports_count"].as_u64(),
         Some(php_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
     );
-    let php_batch_ast = run_extract_ast_json(
-        &php_root.join(php_records[0]["sourcePath"].as_str().expect("php sourcePath")),
-        &work.join("php.batch.ast.json"),
+    assert_eq!(
+        php_batch_record["calls"].as_array().map(|v| v.len()),
+        php_ast["calls"].as_array().map(|v| v.len())
     );
-    extract_testing::assert_semantic_sets_equal_json(&php_ast, &php_batch_ast, "php");
+    assert_eq!(
+        php_batch_record["imports"].as_array().map(|v| v.len()),
+        php_ast["imports"].as_array().map(|v| v.len())
+    );
+    extract_testing::assert_semantic_sets_equal_json(&php_ast, php_batch_record, "php");
 
     let _ = fs::remove_dir_all(&work);
 }
