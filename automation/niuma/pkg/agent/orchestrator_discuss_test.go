@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +131,46 @@ func TestDoDiscussionCheck_StaleConvergeWarningDoesNotAutoFinalize(t *testing.T)
 	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
 	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
 	assert.Equal(t, 1, mockGH.GetMarker(1, marker.TypeConvergeWarning).Marker.Revision)
+}
+
+func TestDoDiscuss_ConcurrentDuplicateTriggers_ConvergesSafely(t *testing.T) {
+	// 模拟同一 issue 被重复触发 discuss（并发两次），最终应稳定收敛到 plan-final。
+	mockAI := ai.NewMockProvider(
+		`{"consensus":"已达成一致","open_items":[],"should_finish":true}`,
+		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
+		`{"consensus":"已达成一致","open_items":[],"should_finish":true}`,
+		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- orch.DoDiscuss(context.Background(), 1)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	// 至少有一个触发应成功完成；另一个允许因为并发状态竞争返回错误。
+	successCount := 0
+	for err := range errs {
+		if err == nil {
+			successCount++
+		}
+	}
+	assert.GreaterOrEqual(t, successCount, 1)
+
+	finalMC := mockGH.GetMarker(1, marker.TypePlanFinal)
+	require.NotNil(t, finalMC)
+	assert.Contains(t, mockGH.Labels[1], string(state.StatePlanFinal))
 }
 
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {

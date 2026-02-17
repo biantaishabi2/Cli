@@ -190,8 +190,8 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if flagMaxDiscussionRounds < 0 || flagMaxDiscussionRounds > 20 {
-		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
+	if err := validateMaxDiscussionRounds(flagMaxDiscussionRounds); err != nil {
+		return err
 	}
 
 	configDir := "."
@@ -444,4 +444,12 @@ func resolveDiscussMaxRounds(cliRounds, configRounds int) int {
 		return configRounds
 	}
 	return 5
+}
+
+// validateMaxDiscussionRounds 校验 discuss 轮次 CLI 参数范围。
+func validateMaxDiscussionRounds(rounds int) error {
+	if rounds < 0 || rounds > 20 {
+		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
+	}
+	return nil
 }
