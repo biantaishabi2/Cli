@@ -1,0 +1,14 @@
+version: 0.2.0
+kind: transition_contract
+base: ../../analysis/gong-matrix-v2/v3.target-matrix.yaml
+intent: Transition contract between current codebase and target
+notes:
+- temporary_allow_edges are tolerated only during migration
+- blocked_edges are immediate cleanup targets
+temporary_allow_edges:
+- caller: TOOLS
+  callee: COMPACTION
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+blocked_edges: []
