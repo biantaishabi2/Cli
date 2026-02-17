@@ -472,6 +472,27 @@ func (c *Controller) FinalizeIntegratedIssues(ctx context.Context, issueNums []i
 		return nil
 	}
 
+	if c.taskctl != nil {
+		tasks, err := c.taskctl.List("")
+		if err != nil {
+			return fmt.Errorf("读取 task 集合失败: %w", err)
+		}
+		filtered, branchBuckets, skipped := c.selectClosableIssueNums(tasks, targets)
+		for _, branch := range sortedBranchNames(branchBuckets) {
+			fmt.Printf("[control] integration 分支 %s 收口候选: %v\n", branch, branchBuckets[branch])
+		}
+		for _, issueNum := range targets {
+			if reason, ok := skipped[issueNum]; ok {
+				fmt.Printf("[control] issue #%d 跳过收口：%s\n", issueNum, reason)
+			}
+		}
+		targets = filtered
+		if len(targets) == 0 {
+			fmt.Println("[control] 未发现满足 completed+integrated 条件的 sub issue，跳过")
+			return nil
+		}
+	}
+
 	parentNums := make(map[int]struct{})
 	var firstErr error
 
@@ -494,10 +515,14 @@ func (c *Controller) FinalizeIntegratedIssues(ctx context.Context, issueNums []i
 			continue
 		}
 
-		if err := c.syncIssueStateLabel(ctx, issueNum, botDoneLabel); err != nil {
-			fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", issueNum, botDoneLabel, err)
-			if firstErr == nil {
-				firstErr = err
+		if hasLabel(issue.Labels, botDoneLabel) {
+			fmt.Printf("[control] issue #%d 已存在 %s 标签，跳过重复打标\n", issueNum, botDoneLabel)
+		} else {
+			if err := c.syncIssueStateLabel(ctx, issueNum, botDoneLabel); err != nil {
+				fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", issueNum, botDoneLabel, err)
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 		}
 		if err := c.github.CloseIssue(ctx, issueNum); err != nil {
@@ -567,10 +592,14 @@ func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums ma
 			continue
 		}
 
-		if err := c.syncIssueStateLabel(ctx, parentNum, botDoneLabel); err != nil {
-			fmt.Printf("[control] parent issue #%d 打标 %s 失败: %v\n", parentNum, botDoneLabel, err)
-			if firstErr == nil {
-				firstErr = err
+		if hasLabel(parentIssue.Labels, botDoneLabel) {
+			fmt.Printf("[control] parent issue #%d 已存在 %s 标签，跳过重复打标\n", parentNum, botDoneLabel)
+		} else {
+			if err := c.syncIssueStateLabel(ctx, parentNum, botDoneLabel); err != nil {
+				fmt.Printf("[control] parent issue #%d 打标 %s 失败: %v\n", parentNum, botDoneLabel, err)
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 		}
 		if err := c.github.CloseIssue(ctx, parentNum); err != nil {
@@ -1182,4 +1211,94 @@ func uniquePositiveIssueNumbers(nums []int) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+func sortedBranchNames(branchBuckets map[string][]int) []string {
+	names := make([]string, 0, len(branchBuckets))
+	for branch := range branchBuckets {
+		names = append(names, branch)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// selectClosableIssueNums 从 task 集合中筛选可收口 issue。
+// 条件：task status=completed 且 metadata.integrated=true。
+func (c *Controller) selectClosableIssueNums(tasks []Task, issueNums []int) ([]int, map[string][]int, map[int]string) {
+	targets := uniquePositiveIssueNumbers(issueNums)
+	targetSet := make(map[int]struct{}, len(targets))
+	for _, issueNum := range targets {
+		targetSet[issueNum] = struct{}{}
+	}
+
+	type taskEval struct {
+		task       Task
+		hasTask    bool
+		status     TaskStatus
+		integrated bool
+	}
+	evals := make(map[int]taskEval, len(targets))
+	for _, task := range tasks {
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+		if _, ok := targetSet[issueNum]; !ok {
+			continue
+		}
+
+		status := normalizeTaskStatus(task.Status)
+		integrated := valueOrEmpty(task.Metadata, metaKeyIntegrated) == "true"
+		cur, exists := evals[issueNum]
+		if !exists {
+			evals[issueNum] = taskEval{
+				task:       task,
+				hasTask:    true,
+				status:     status,
+				integrated: integrated,
+			}
+			continue
+		}
+
+		// 多 task 关联同一 issue 时，优先选择满足 completed+integrated 的记录。
+		if status == TaskStatusCompleted && integrated &&
+			!(cur.status == TaskStatusCompleted && cur.integrated) {
+			evals[issueNum] = taskEval{
+				task:       task,
+				hasTask:    true,
+				status:     status,
+				integrated: integrated,
+			}
+		}
+	}
+
+	filtered := make([]int, 0, len(targets))
+	branchBuckets := make(map[string][]int)
+	skipped := make(map[int]string)
+	for _, issueNum := range targets {
+		eval, ok := evals[issueNum]
+		if !ok || !eval.hasTask {
+			skipped[issueNum] = "未找到关联 task"
+			continue
+		}
+
+		if eval.status != TaskStatusCompleted {
+			skipped[issueNum] = fmt.Sprintf("task 状态为 %s", eval.status)
+			continue
+		}
+		if !eval.integrated {
+			skipped[issueNum] = "task 尚未 integrated=true"
+			continue
+		}
+
+		filtered = append(filtered, issueNum)
+		branchName := c.getIntegrationBranchName(&eval.task)
+		branchBuckets[branchName] = append(branchBuckets[branchName], issueNum)
+	}
+
+	for branch, nums := range branchBuckets {
+		sort.Ints(nums)
+		branchBuckets[branch] = nums
+	}
+	return filtered, branchBuckets, skipped
 }

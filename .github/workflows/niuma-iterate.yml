@@ -5,6 +5,8 @@ on:
     types: [labeled]
   pull_request_review:
     types: [submitted]
+  pull_request:
+    types: [closed]
 
 concurrency:
   group: niuma-iterate-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -157,3 +159,41 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
           gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n根据人工 review 迭代后门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
           exit 1
+
+  close-after-integration-merge:
+    runs-on: self-hosted
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'integration/') &&
+      github.event.pull_request.base.ref == 'master'
+    permissions:
+      issues: write
+      pull-requests: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.NIUMA_PAT }}
+
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
+      - name: Close Merged Integration Issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
+          WORKSPACE: ${{ github.workspace }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          "$NIUMA_BIN" control close-merged \
+            --repo "$REPO" \
+            --repo-dir "$WORKSPACE" \
+            --pr "$PR_NUMBER"

@@ -855,6 +855,64 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 	assert.NotContains(t, mockGH.closeIssueCalls, 210)
 }
 
+func TestFinalizeIntegratedIssues_SkipDoneLabelWhenAlreadyPresent(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 214, Title: "sub-214", State: "open", Labels: []string{botDoneLabel}},
+	)
+
+	ctrl := &Controller{github: mockGH}
+	err := ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
+	require.NoError(t, err)
+
+	assert.Contains(t, mockGH.closeIssueCalls, 214)
+	assert.Equal(t, 0, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 214, botDoneLabel))
+}
+
+func TestSelectClosableIssueNums_FiltersCompletedAndIntegrated(t *testing.T) {
+	ctrl := &Controller{}
+	tasks := []Task{
+		{
+			Status: TaskStatusCompleted,
+			Metadata: map[string]string{
+				"issue_num":       "214",
+				"meta_issue_slug": "214",
+				metaKeyIntegrated: "true",
+			},
+		},
+		{
+			Status: TaskStatusCompleted,
+			Metadata: map[string]string{
+				"issue_num":       "215",
+				"meta_issue_slug": "214",
+				metaKeyIntegrated: "false",
+			},
+		},
+		{
+			Status: TaskStatusInProgress,
+			Metadata: map[string]string{
+				"issue_num":       "216",
+				"meta_issue_slug": "214",
+				metaKeyIntegrated: "true",
+			},
+		},
+		{
+			Status: TaskStatusCompleted,
+			Metadata: map[string]string{
+				"issue_num":       "217",
+				metaKeyIntegrated: "true",
+			},
+		},
+	}
+
+	filtered, branchBuckets, skipped := ctrl.selectClosableIssueNums(tasks, []int{214, 215, 216, 217, 218})
+	assert.Equal(t, []int{214, 217}, filtered)
+	assert.Equal(t, []int{214}, branchBuckets["integration/214"])
+	assert.Equal(t, []int{217}, branchBuckets["integration/main"])
+	assert.Equal(t, "task 尚未 integrated=true", skipped[215])
+	assert.Equal(t, "task 状态为 in-progress", skipped[216])
+	assert.Equal(t, "未找到关联 task", skipped[218])
+}
+
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
 	count := 0
 	for _, call := range calls {

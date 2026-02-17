@@ -5,6 +5,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-github/v68/github"
 )
@@ -98,9 +99,17 @@ func (c *Client) ListIssuesByState(ctx context.Context, state string) ([]*github
 
 // CloseIssue 关闭指定 issue
 func (c *Client) CloseIssue(ctx context.Context, number int) error {
+	issue, _, err := c.gh.Issues.Get(ctx, c.owner, c.repo, number)
+	if err != nil {
+		return fmt.Errorf("获取 issue #%d 失败: %w", number, err)
+	}
+	if strings.EqualFold(issue.GetState(), "closed") {
+		return nil
+	}
+
 	state := "closed"
 	req := &github.IssueRequest{State: &state}
-	_, _, err := c.gh.Issues.Edit(ctx, c.owner, c.repo, number, req)
+	_, _, err = c.gh.Issues.Edit(ctx, c.owner, c.repo, number, req)
 	if err != nil {
 		return fmt.Errorf("关闭 issue #%d 失败: %w", number, err)
 	}
