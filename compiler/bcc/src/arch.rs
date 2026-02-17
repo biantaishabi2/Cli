@@ -1,3 +1,5 @@
+//! 架构矩阵与门禁工具
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +11,8 @@ pub mod injection;
 use injection::{
     append_classification_reason, classify_edge, CallType, RelationClassification, RelationHint,
 };
+// 子模块
+pub mod score;
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]

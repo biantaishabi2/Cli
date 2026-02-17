@@ -1,0 +1,285 @@
+#!/bin/bash
+# bcc-score - BCC 架构评分工具
+# 用法: bcc-score --target <seed.yaml> --actual <actual.json> [选项]
+
+set -e
+
+# 默认配置
+COVERAGE=""
+FORMAT="text"
+CI_MODE=false
+CONFIG=""
+
+# 解析参数
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --target)
+      TARGET="$2"
+      shift 2
+      ;;
+    --actual)
+      ACTUAL="$2"
+      shift 2
+      ;;
+    --coverage)
+      COVERAGE="$2"
+      shift 2
+      ;;
+    --format)
+      FORMAT="$2"
+      shift 2
+      ;;
+    --config)
+      CONFIG="$2"
+      shift 2
+      ;;
+    --ci)
+      CI_MODE=true
+      shift
+      ;;
+    --help)
+      echo "用法: bcc-score --target <seed.yaml> --actual <actual.json> [选项]"
+      echo ""
+      echo "选项:"
+      echo "  --target <file>     架构种子文件 (seed.yaml)"
+      echo "  --actual <file>     实际依赖矩阵 (actual.json)"
+      echo "  --coverage <pct>    代码覆盖率百分比"
+      echo "  --format <format>   输出格式: text, json, markdown (默认: text)"
+      echo "  --config <file>     评分配置文件"
+      echo "  --ci                CI 模式 (失败时退出码非0)"
+      echo "  --help              显示帮助"
+      exit 0
+      ;;
+    *)
+      echo "未知选项: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# 检查必需参数
+if [ -z "$TARGET" ] || [ -z "$ACTUAL" ]; then
+  echo "错误: --target 和 --actual 是必需的"
+  echo "使用 --help 查看用法"
+  exit 1
+fi
+
+# 检查文件存在
+if [ ! -f "$TARGET" ]; then
+  echo "错误: 找不到 target 文件: $TARGET"
+  exit 1
+fi
+
+if [ ! -f "$ACTUAL" ]; then
+  echo "错误: 找不到 actual 文件: $ACTUAL"
+  exit 1
+fi
+
+# 运行评分 (调用 BCC 的 validate 获取详细数据)
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+# 创建临时 gates 文件
+cat > "$TMPDIR/gates.yaml" <<'EOF'
+version: 0.4.0
+kind: verification_gates
+intent: "Default gates"
+profiles:
+  target:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 0
+    max_forbidden_total_edges: 0
+    max_missing_edges_count: 0
+    max_directed_density_pct: 60
+    max_bidirectional_pair_count: 0
+  transition:
+    max_unexpected_edges_count: 0
+    max_forbidden_edges_count: 0
+    max_forbidden_total_edges: 0
+    max_missing_edges_count: 0
+    max_directed_density_pct: 80
+    max_bidirectional_pair_count: 5
+EOF
+
+# 创建临时 transition 文件
+cat > "$TMPDIR/transition.yaml" <<EOF
+version: 0.4.0
+kind: transition_contract
+base: $TARGET
+intent: "Auto-generated"
+temporary_allow_edges: []
+blocked_edges: []
+EOF
+
+# 运行 BCC 验证
+if ! bcc arch validate \
+    --target "$TARGET" \
+    --transition "$TMPDIR/transition.yaml" \
+    --gates "$TMPDIR/gates.yaml" \
+    --actual "$ACTUAL" \
+    --out-dir "$TMPDIR" 2>/dev/null; then
+  echo "❌ BCC 验证失败"
+  exit 1
+fi
+
+# 解析结果
+GATE_FILE="$TMPDIR/gate-evaluation.tsv"
+REPORT_FILE="$TMPDIR/v3-validation-report.md"
+
+# 提取指标
+TARGET_UNEXPECTED=$(grep "^target.*unexpected_edges_count" "$GATE_FILE" 2>/dev/null | awk -F'\t' '{print $3}' || echo "0")
+TARGET_FORBIDDEN=$(grep "^target.*forbidden_edges_count" "$GATE_FILE" 2>/dev/null | awk -F'\t' '{print $3}' || echo "0")
+BIDIRECTIONAL=$(grep "^target.*bidirectional_pair_count" "$GATE_FILE" 2>/dev/null | awk -F'\t' '{print $3}' || echo "0")
+DENSITY=$(grep "^target.*directed_density_pct" "$GATE_FILE" 2>/dev/null | awk -F'\t' '{print $3}' || echo "0")
+
+UNEXPECTED=${TARGET_UNEXPECTED:-0}
+FORBIDDEN=${TARGET_FORBIDDEN:-0}
+BIDIRECTIONAL=${BIDIRECTIONAL:-0}
+DENSITY=${DENSITY:-0}
+COVERAGE_PCT=${COVERAGE:-0}
+
+# 检查 CLI/API 是否直接依赖 Storage
+CLI_DIRECT=$(grep -c '"caller": "MEMORY_CLI".*"callee": "MEMORY_STORAGE"' "$ACTUAL" 2>/dev/null || echo "0")
+API_DIRECT=$(grep -c '"caller": "MEMORY_API".*"callee": "MEMORY_STORAGE"' "$ACTUAL" 2>/dev/null || echo "0")
+
+# 计算各项得分
+
+# 1. 合规性 (30%)
+if [ "$UNEXPECTED" -eq 0 ] && [ "$FORBIDDEN" -eq 0 ]; then
+  COMPLIANCE_SCORE=100
+  COMPLIANCE_PASSED=true
+else
+  COMPLIANCE_SCORE=0
+  COMPLIANCE_PASSED=false
+fi
+
+# 2. 依赖密度 (20%)
+if (( $(echo "$DENSITY <= 60" | bc -l) )); then
+  DENSITY_PASSED=true
+  if (( $(echo "$DENSITY < 30" | bc -l) )); then
+    DENSITY_SCORE=100
+  elif (( $(echo "$DENSITY < 50" | bc -l) )); then
+    DENSITY_SCORE=80
+  else
+    DENSITY_SCORE=60
+  fi
+else
+  DENSITY_PASSED=false
+  DENSITY_SCORE=0
+fi
+
+# 3. 分层清晰 (25%)
+if [ "$CLI_DIRECT" -eq 0 ] && [ "$API_DIRECT" -eq 0 ]; then
+  LAYER_SCORE=100
+  LAYER_PASSED=true
+else
+  LAYER_SCORE=0
+  LAYER_PASSED=false
+fi
+
+# 4. 无循环依赖 (15%)
+if [ "$BIDIRECTIONAL" -eq 0 ]; then
+  CYCLE_SCORE=100
+  CYCLE_PASSED=true
+else
+  CYCLE_SCORE=0
+  CYCLE_PASSED=false
+fi
+
+# 5. 测试覆盖 (10%)
+if (( $(echo "$COVERAGE_PCT >= 80" | bc -l) )); then
+  COVERAGE_SCORE=100
+elif (( $(echo "$COVERAGE_PCT >= 60" | bc -l) )); then
+  COVERAGE_SCORE=80
+elif (( $(echo "$COVERAGE_PCT >= 40" | bc -l) )); then
+  COVERAGE_SCORE=60
+elif (( $(echo "$COVERAGE_PCT >= 20" | bc -l) )); then
+  COVERAGE_SCORE=40
+else
+  COVERAGE_SCORE=20
+fi
+
+# 总分
+TOTAL_SCORE=$(echo "scale=0; ($COMPLIANCE_SCORE * 30 + $DENSITY_SCORE * 20 + $LAYER_SCORE * 25 + $CYCLE_SCORE * 15 + $COVERAGE_SCORE * 10) / 100" | bc)
+
+# 判断是否通过
+PASSED=true
+[ "$COMPLIANCE_PASSED" != true ] && PASSED=false
+[ "$CYCLE_PASSED" != true ] && PASSED=false
+[ "$LAYER_PASSED" != true ] && PASSED=false
+[ "$DENSITY_PASSED" != true ] && PASSED=false
+
+# 评级
+if [ "$PASSED" == true ]; then
+  if [ "$TOTAL_SCORE" -ge 95 ]; then GRADE="A+"
+  elif [ "$TOTAL_SCORE" -ge 90 ]; then GRADE="A"
+  elif [ "$TOTAL_SCORE" -ge 85 ]; then GRADE="B+"
+  elif [ "$TOTAL_SCORE" -ge 80 ]; then GRADE="B"
+  elif [ "$TOTAL_SCORE" -ge 70 ]; then GRADE="C"
+  else GRADE="D"; fi
+else
+  GRADE="F"
+fi
+
+# 输出结果
+case "$FORMAT" in
+  json)
+    cat <<EOF
+{
+  "timestamp": "$(date -Iseconds)",
+  "total_score": $TOTAL_SCORE,
+  "grade": "$GRADE",
+  "passed": $([ "$PASSED" == true ] && echo "true" || echo "false"),
+  "metrics": {
+    "compliance": { "score": $COMPLIANCE_SCORE, "passed": $([ "$COMPLIANCE_PASSED" == true ] && echo "true" || echo "false"), "weight": 30 },
+    "density": { "score": $DENSITY_SCORE, "passed": $([ "$DENSITY_PASSED" == true ] && echo "true" || echo "false"), "weight": 20, "actual": $DENSITY },
+    "layer_clarity": { "score": $LAYER_SCORE, "passed": $([ "$LAYER_PASSED" == true ] && echo "true" || echo "false"), "weight": 25 },
+    "cycle_free": { "score": $CYCLE_SCORE, "passed": $([ "$CYCLE_PASSED" == true ] && echo "true" || echo "false"), "weight": 15 },
+    "coverage": { "score": $COVERAGE_SCORE, "weight": 10, "actual": $COVERAGE_PCT }
+  }
+}
+EOF
+    ;;
+  markdown|md)
+    echo "## 架构健康度评分报告"
+    echo ""
+    echo "**总分: $TOTAL_SCORE/100 ($GRADE)**"
+    echo ""
+    if [ "$PASSED" == true ]; then
+      echo "✅ **通过**"
+    else
+      echo "❌ **失败**"
+    fi
+    echo ""
+    echo "| 指标 | 得分 | 权重 | 状态 |"
+    echo "|------|------|------|------|"
+    echo "| 合规性 | $COMPLIANCE_SCORE | 30% | $([ "$COMPLIANCE_PASSED" == true ] && echo "✅" || echo "❌") |"
+    echo "| 依赖密度 | $DENSITY_SCORE | 20% | $([ "$DENSITY_PASSED" == true ] && echo "✅" || echo "❌") |"
+    echo "| 分层清晰 | $LAYER_SCORE | 25% | $([ "$LAYER_PASSED" == true ] && echo "✅" || echo "❌") |"
+    echo "| 无循环依赖 | $CYCLE_SCORE | 15% | $([ "$CYCLE_PASSED" == true ] && echo "✅" || echo "❌") |"
+    echo "| 测试覆盖 | $COVERAGE_SCORE | 10% | ✅ |"
+    ;;
+  *)
+    echo "========================================"
+    echo "   架构健康度评分报告"
+    echo "========================================"
+    echo ""
+    echo "总分: $TOTAL_SCORE/100 ($GRADE)"
+    echo "状态: $([ "$PASSED" == true ] && echo "✅ 通过" || echo "❌ 失败")"
+    echo ""
+    echo "硬性指标:"
+    echo "  $([ "$COMPLIANCE_PASSED" == true ] && echo "✅" || echo "❌") 合规性: $UNEXPECTED 意外, $FORBIDDEN 禁止"
+    echo "  $([ "$DENSITY_PASSED" == true ] && echo "✅" || echo "❌") 依赖密度: ${DENSITY}%"
+    echo "  $([ "$LAYER_PASSED" == true ] && echo "✅" || echo "❌") 分层清晰: CLI($CLI_DIRECT), API($API_DIRECT)"
+    echo "  $([ "$CYCLE_PASSED" == true ] && echo "✅" || echo "❌") 无循环: $BIDIRECTIONAL 对"
+    echo "  ✅ 测试覆盖: ${COVERAGE_PCT}%"
+    echo "========================================"
+    ;;
+esac
+
+# CI 模式退出码
+if [ "$CI_MODE" == true ] && [ "$PASSED" != true ]; then
+  exit 1
+fi
+
+exit 0
