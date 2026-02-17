@@ -1,6 +1,7 @@
 //! 从 extract 输出构建索引
 
-use crate::graph::store::{CodeGraphStore, Result};
+use crate::graph::error::Result;
+use crate::graph::store::CodeGraphStore;
 
 /// 索引构建器
 pub struct Indexer<'a> {

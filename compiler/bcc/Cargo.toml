@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Backend Compiler - YAML to Elixir skeleton generator with extract and trace"
 
+[lib]
+name = "bcc"
+path = "src/lib.rs"
+
 [[bin]]
 name = "bcc"
 path = "src/main.rs"
@@ -22,7 +26,12 @@ regex = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+md5 = "0.7"
 thiserror = "1"
+
+[features]
+default = []
+bdd = []
 
 [dev-dependencies]
 tempfile = "3"

@@ -48,10 +48,31 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         local_call_symbols.insert(call.callee.clone());
     }
 
+    // 收集本地函数定义（用于本地函数调用）
+    let mut local_functions: HashSet<String> = HashSet::new();
+    for export in &exports {
+        local_functions.insert(export.name.clone());
+    }
+    
+    // 从 declarations 中提取更多本地函数名（简化处理）
+    // 实际应该从 AST 中提取所有函数定义
+    
     let mut local_call_targets_set = HashSet::new();
-    for symbol in local_call_symbols {
-        if let Some(specifier) = import_aliases.get(&symbol) {
+    for symbol in &local_call_symbols {
+        // 1. 检查是否是 import 的函数
+        if let Some(specifier) = import_aliases.get(symbol) {
             if let Some(target) = resolve_local_import(path, specifier) {
+                local_call_targets_set.insert(target);
+            }
+        }
+        // 2. 检查是否是本地函数（同一文件内的函数）
+        else if local_functions.contains(symbol) {
+            // 本地函数调用，目标就是当前文件
+            local_call_targets_set.insert(path.to_string());
+        }
+        // 3. 尝试解析为相对路径导入
+        else if symbol.contains('/') || symbol.starts_with('.') {
+            if let Some(target) = resolve_local_import(path, symbol) {
                 local_call_targets_set.insert(target);
             }
         }
@@ -225,7 +246,9 @@ fn extract_ts_recursive(
             // 模块调用检测: 以 call_expression 根调用符作为本地调用候选
             "call_expression" => {
                 if let Some(func_node) = node.child_by_field_name("function") {
-                    if let Some(callee) = extract_call_root(func_node, source) {
+                    // 提取各种调用类型
+                    let callees = extract_call_targets(func_node, source);
+                    for callee in callees {
                         local_call_symbols.insert(callee.clone());
                         calls.push(CallRecord {
                             callee,
@@ -408,6 +431,86 @@ fn extract_named_binding_alias(item: &str) -> Option<String> {
     }
 }
 
+
+/// 提取所有调用目标（包括方法调用、属性访问等）
+fn extract_call_targets(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut targets = Vec::new();
+    
+    match node.kind() {
+        // 简单标识符调用: foo()
+        "identifier" => {
+            if let Some(name) = node.utf8_text(source).ok() {
+                targets.push(name.to_string());
+            }
+        }
+        // 属性访问调用: obj.method() 或 this.method()
+        "member_expression" => {
+            // 提取完整的属性链: obj.method 或 this.method
+            if let Some(text) = extract_member_chain(node, source) {
+                targets.push(text);
+            }
+            // 同时提取方法名本身
+            if let Some(prop) = node.child_by_field_name("property") {
+                if let Some(name) = prop.utf8_text(source).ok() {
+                    targets.push(name.to_string());
+                }
+            }
+        }
+        // 带可选链的调用: obj?.method()
+        "call_expression" => {
+            // 递归处理嵌套调用
+            if let Some(func) = node.child_by_field_name("function") {
+                targets.extend(extract_call_targets(func, source));
+            }
+        }
+        // 其他情况使用原来的提取逻辑
+        _ => {
+            if let Some(callee) = extract_call_root(node, source) {
+                targets.push(callee);
+            }
+        }
+    }
+    
+    targets
+}
+
+/// 提取属性访问链: obj.prop1.prop2 -> "obj.prop1.prop2"
+fn extract_member_chain(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut current = node;
+    
+    loop {
+        match current.kind() {
+            "member_expression" => {
+                if let Some(prop) = current.child_by_field_name("property") {
+                    if let Ok(name) = prop.utf8_text(source) {
+                        parts.push(name.to_string());
+                    }
+                }
+                if let Some(obj) = current.child_by_field_name("object") {
+                    current = obj;
+                } else {
+                    break;
+                }
+            }
+            "identifier" | "this" | "super" => {
+                if let Ok(name) = current.utf8_text(source) {
+                    parts.push(name.to_string());
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+    
+    if parts.is_empty() {
+        None
+    } else {
+        parts.reverse();
+        Some(parts.join("."))
+    }
+}
+
 fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match node.kind() {
         "identifier" => Some(node_text(node, source)),
@@ -448,7 +551,8 @@ function run() {
         let record = extract(source, "src/sample.ts", "typescript");
         let calls: Vec<_> = record.calls.into_iter().map(|c| c.callee).collect();
 
-        assert_eq!(calls, vec!["formatName".to_string(), "Helper".to_string(), "Foo".to_string()]);
+        // 增强后的解析器现在能捕获更多调用类型
+        assert_eq!(calls, vec!["formatName".to_string(), "Helper.log".to_string(), "log".to_string(), "Foo.bar.baz".to_string(), "baz".to_string()]);
     }
 
     #[test]

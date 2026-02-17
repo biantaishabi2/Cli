@@ -1,13 +1,8 @@
+use bcc::*;
 use clap::{ArgAction, Parser, Subcommand};
 
-mod arch;
 mod bdd_seed;
 mod bugfix;
-mod compile;
-mod extract;
-mod spec;
-mod trace;
-mod graph;
 
 /// BCC — Backend Compiler for YAML-driven Elixir skeleton generation
 #[derive(Parser)]
@@ -346,6 +341,18 @@ enum BddAction {
 enum GraphAction {
     /// 从 extract 输出构建索引
     Build {
+        /// 仓库ID (如 github.com/HKUDS/nanobot)
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 仓库名称
+        #[arg(short, long)]
+        name: String,
+        
+        /// 仓库根路径
+        #[arg(short, long)]
+        path: String,
+        
         /// extract 输出的 JSON 文件路径
         #[arg(short, long)]
         input: String,
@@ -353,24 +360,21 @@ enum GraphAction {
         /// commit hash
         #[arg(short, long)]
         commit: String,
-        
-        /// 索引数据库路径
-        #[arg(short, long, default_value = ".bcc/index.db")]
-        db: String,
     },
     
     /// 查询函数信息
     Query {
-        /// 查询内容（函数ID/名称/模块）
-        query: String,
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 查询目标ID
+        #[arg(short, long)]
+        id: String,
         
         /// 查询类型
         #[arg(short, long, default_value = "id")]
         by: String,
-        
-        /// 索引数据库路径
-        #[arg(short, long, default_value = ".bcc/index.db")]
-        db: String,
         
         /// 查询深度（用于 callers/callees）
         #[arg(short, long, default_value = "3")]
@@ -379,13 +383,76 @@ enum GraphAction {
     
     /// 分析影响面
     Analyze {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
         /// 函数ID
         #[arg(short, long)]
-        function: String,
+        id: String,
+    },
+    
+    /// 列出所有索引的仓库
+    List,
+    
+    /// 删除仓库索引
+    Delete {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+    },
+    
+    /// 图搜索（多关系融合查询）
+    Search {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
         
-        /// 索引数据库路径
-        #[arg(short, long, default_value = ".bcc/index.db")]
-        db: String,
+        /// 函数ID
+        #[arg(short, long)]
+        id: String,
+        
+        /// 搜索深度
+        #[arg(short, long, default_value = "2")]
+        depth: usize,
+        
+        /// 包含的关系类型（逗号分隔: callers,callees,siblings,same-file,same-module）
+        #[arg(short, long, default_value = "callers,callees")]
+        include: String,
+    },
+    
+    /// 架构验证
+    ValidateArch {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 目标架构 YAML 文件路径
+        #[arg(short, long)]
+        target: String,
+        
+        /// 输出 JSON 文件路径
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    
+    /// 模块依赖查询
+    Module {
+        /// 仓库ID
+        #[arg(short, long)]
+        repo: String,
+        
+        /// 模块ID（文件路径）
+        #[arg(short, long)]
+        id: String,
+        
+        /// 查询类型
+        #[arg(short, long, default_value = "id")]
+        by: String,
+        
+        /// 查询深度
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
     },
 }
 
@@ -611,13 +678,13 @@ fn main() {
             }
         },
         Some(Commands::Graph { action }) => match action {
-            GraphAction::Build { input, commit, db } => {
-                if let Err(e) = graph::cli::build_index(&input, &commit, &db) {
+            GraphAction::Build { repo, name, path, input, commit } => {
+                if let Err(e) = graph::cli::build_index(&repo, &name, &path, &input, &commit) {
                     eprintln!("[graph-index] Error: {}", e);
-                    std::process::exit(1);
+                    std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::Query { query, by, db, depth } => {
+            GraphAction::Query { repo, id, by, depth } => {
                 let query_type = match by.as_str() {
                     "id" => graph::cli::QueryType::ById,
                     "name" => graph::cli::QueryType::ByName,
@@ -626,19 +693,59 @@ fn main() {
                     "callees" => graph::cli::QueryType::Callees { depth },
                     _ => {
                         eprintln!("Invalid query type: {}", by);
-                        std::process::exit(1);
+                        std::process::exit(10);
                     }
                 };
-                if let Err(e) = graph::cli::query_function(&db, &query, query_type) {
+                if let Err(e) = graph::cli::query_function(&repo, &id, query_type) {
                     eprintln!("[graph-index] Error: {}", e);
-                    std::process::exit(1);
+                    std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::Analyze { function, db } => {
+            GraphAction::Analyze { repo, id } => {
                 let query_type = graph::cli::QueryType::Impact;
-                if let Err(e) = graph::cli::query_function(&db, &function, query_type) {
+                if let Err(e) = graph::cli::query_function(&repo, &id, query_type) {
                     eprintln!("[graph-index] Error: {}", e);
-                    std::process::exit(1);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::List => {
+                if let Err(e) = graph::cli::list_repos() {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::Delete { repo } => {
+                if let Err(e) = graph::cli::delete_repo(&repo) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::Search { repo, id, depth, include } => {
+                if let Err(e) = graph::cli::search_graph(&repo, &id, depth, &include) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::ValidateArch { repo, target, output } => {
+                if let Err(e) = graph::cli::validate_arch(&repo, &target, output.as_deref()) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
+                }
+            }
+            GraphAction::Module { repo, id, by, depth } => {
+                let query_type = match by.as_str() {
+                    "id" => graph::cli::ModuleQueryType::ById,
+                    "deps" => graph::cli::ModuleQueryType::Deps { depth },
+                    "dependents" => graph::cli::ModuleQueryType::Dependents { depth },
+                    "circular" => graph::cli::ModuleQueryType::Circular,
+                    _ => {
+                        eprintln!("Invalid module query type: {}", by);
+                        std::process::exit(10);
+                    }
+                };
+                if let Err(e) = graph::cli::query_module(&repo, &id, query_type) {
+                    eprintln!("[graph-index] Error: {}", e);
+                    std::process::exit(e.exit_code());
                 }
             }
         },
