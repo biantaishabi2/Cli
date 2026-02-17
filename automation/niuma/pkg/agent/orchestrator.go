@@ -172,6 +172,7 @@ func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
 	}
 	if summaryMC != nil {
 		input.DiscussionSummary = summaryMC.Marker
+		input.AIShouldFinish = summaryMC.Marker.Finish
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker
