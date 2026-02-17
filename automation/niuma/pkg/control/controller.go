@@ -13,6 +13,7 @@ import (
 type GitHubOps interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]IssueInfo, error)
 	MergePR(ctx context.Context, prNum int, method string) error
+	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 }
 
 // Controller 多 Issue 协调控制器
@@ -163,6 +164,15 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 		issueToTask[issue.Number] = task.ID
 		fmt.Printf("[control] 创建任务 %s (issue #%d)\n", task.ID, issue.Number)
+
+		// 如果 issue 有 bot:orchestrate 标签，替换为 bot:queued
+		if hasLabel(issue.Labels, "bot:orchestrate") {
+			if err := c.github.ReplaceLabel(ctx, issue.Number, "bot:orchestrate", "bot:queued"); err != nil {
+				fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issue.Number, err)
+			} else {
+				fmt.Printf("[control] 已将 issue #%d 标签 bot:orchestrate → bot:queued\n", issue.Number)
+			}
+		}
 	}
 
 	// 设置 blocked_by
@@ -315,4 +325,14 @@ func FormatStatus(status *ControlStatus) string {
 	}
 
 	return sb.String()
+}
+
+// hasLabel 检查 label 列表中是否包含指定 label
+func hasLabel(labels []string, target string) bool {
+	for _, l := range labels {
+		if l == target {
+			return true
+		}
+	}
+	return false
 }

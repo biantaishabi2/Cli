@@ -147,6 +147,10 @@ func (g *gitHubControlOps) MergePR(ctx context.Context, prNum int, method string
 	return g.client.MergePR(ctx, prNum, method)
 }
 
+func (g *gitHubControlOps) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error {
+	return g.client.ReplaceLabel(ctx, issueNumber, oldLabel, newLabel)
+}
+
 func runControlRun(cmd *cobra.Command, args []string) error {
 	ctrl, err := buildController()
 	if err != nil {
