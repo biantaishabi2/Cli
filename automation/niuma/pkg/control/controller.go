@@ -187,8 +187,30 @@ func (c *Controller) Run(ctx context.Context) error {
 			minPRs = 2
 		}
 		if len(prBranches) >= minPRs {
-			fmt.Printf("[control] 有 %d 个 PR，开始构建 integration 分支\n", len(prBranches))
-			result, err := c.builder.Build(prBranches, analysis.Dependencies)
+			// 按 topo 序排列 prBranches（与 Merge 一致）
+			taskMap := make(map[int]*Task)
+			for i := range allTasks {
+				n := allTasks[i].IssueNum()
+				if n > 0 {
+					taskMap[n] = &allTasks[i]
+				}
+			}
+			var issueNums []int
+			branchByIssue := make(map[int]BranchInfo)
+			for _, bi := range prBranches {
+				issueNums = append(issueNums, bi.IssueNum)
+				branchByIssue[bi.IssueNum] = bi
+			}
+			sorted := topoSort(issueNums, taskMap)
+			sortedBranches := make([]BranchInfo, 0, len(sorted))
+			for _, n := range sorted {
+				if bi, ok := branchByIssue[n]; ok {
+					sortedBranches = append(sortedBranches, bi)
+				}
+			}
+
+			fmt.Printf("[control] 有 %d 个 PR，开始构建 integration 分支（topo 序）\n", len(sortedBranches))
+			result, err := c.builder.Build(sortedBranches, analysis.Dependencies)
 			if err != nil {
 				fmt.Printf("[control] 构建 integration 分支失败: %v\n", err)
 			} else {
