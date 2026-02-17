@@ -140,7 +140,7 @@ func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
 
 // RunInMem 模拟 Run 逻辑但使用内存 mock
 func (c *inMemController) RunInMem(ctx context.Context) error {
-	issues, err := c.github.ListIssuesWithLabel(ctx, "bot:fix")
+	issues, err := c.github.ListIssuesWithLabel(ctx, "bot:orchestrate")
 	if err != nil {
 		return err
 	}

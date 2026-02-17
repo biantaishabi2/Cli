@@ -76,39 +76,19 @@ func (c *Controller) getIntegrationBranchName(task *Task) string {
 
 // Run 执行一次完整协调循环
 func (c *Controller) Run(ctx context.Context) error {
-	// ① 扫描 GitHub：ListIssuesWithLabel("bot:orchestrate") 和 ListIssuesWithLabel("bot:fix")
+	// ① 扫描 GitHub：仅处理明确进入编排队列的 bot:orchestrate
 	orchestrateIssues, err := c.github.ListIssuesWithLabel(ctx, "bot:orchestrate")
 	if err != nil {
 		return fmt.Errorf("扫描 bot:orchestrate issues 失败: %w", err)
 	}
 
-	fixIssues, err := c.github.ListIssuesWithLabel(ctx, "bot:fix")
-	if err != nil {
-		return fmt.Errorf("扫描 bot:fix issues 失败: %w", err)
-	}
-
-	// 合并所有需要处理的 issues
-	allIssues := make(map[int]IssueInfo)
-	for _, issue := range orchestrateIssues {
-		allIssues[issue.Number] = issue
-	}
-	for _, issue := range fixIssues {
-		allIssues[issue.Number] = issue
-	}
-
-	if len(allIssues) == 0 {
-		fmt.Println("[control] 没有发现 bot:orchestrate 或 bot:fix issues")
+	if len(orchestrateIssues) == 0 {
+		fmt.Println("[control] 没有发现 bot:orchestrate issues")
 		return nil
 	}
 
-	// 转换为 slice
-	var issues []IssueInfo
-	for _, issue := range allIssues {
-		issues = append(issues, issue)
-	}
-
-	fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate: %d, bot:fix: %d)\n",
-		len(issues), len(orchestrateIssues), len(fixIssues))
+	issues := orchestrateIssues
+	fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", len(issues))
 
 	// ② 对比 taskctl store：找出新 issue
 	existingTasks, err := c.taskctl.List("")
