@@ -292,180 +292,353 @@ relations_expected:
 }
 
 #[test]
-fn arch_matrix_injection_accuracy_is_above_ninety_percent() {
-    let root = temp_dir("bcc_arch_injection_accuracy");
-    let seed = root.join("seed.yaml");
-    let ast = root.join("ast.json");
-    let out = root.join("out");
-
-    write(
-        &seed,
-        r#"version: v3
-source_of_truth: test
-modules:
-  - module_id: API
-    precedence: 10
-    path_rules:
-      include: ["src/api/**"]
-  - module_id: INFRA
-    precedence: 10
-    path_rules:
-      include: ["src/infra/**"]
-  - module_id: USER
-    precedence: 10
-    path_rules:
-      include: ["src/user/**"]
-  - module_id: PRISMA
-    precedence: 10
-    path_rules:
-      include: ["src/prisma/**"]
-  - module_id: PROVIDERS
-    precedence: 10
-    path_rules:
-      include: ["src/providers/**"]
-relations_expected: []
-"#,
-    );
-    write(
-        &ast,
-        r#"{
-  "source_count": 6,
-  "records": [
-    {
-      "sourcePath": "src/api/app.module.ts",
-      "localDependencies": ["src/user/user.module.ts", "src/prisma/prisma.module.ts"],
-      "localCallTargets": [],
-      "relationHints": [
-        {
-          "target": "src/user/user.module.ts",
-          "call_type_hint": "framework_injection",
-          "via": "@Module.imports",
-          "confidence": 0.95,
-          "detector": "typescript.nest.module",
-          "reason": "module imports"
-        },
-        {
-          "target": "src/prisma/prisma.module.ts",
-          "call_type_hint": "framework_injection",
-          "via": "@Module.imports",
-          "confidence": 0.95,
-          "detector": "typescript.nest.module",
-          "reason": "module imports"
-        }
-      ]
-    },
-    {
-      "sourcePath": "src/api/health.ts",
-      "localDependencies": ["src/infra/boot.ex"],
-      "localCallTargets": []
-    },
-    {
-      "sourcePath": "src/infra/boot.ex",
-      "localDependencies": ["src/providers/anthropic.ex"],
-      "localCallTargets": [],
-      "relationHints": [
-        {
-          "target": "src/providers/anthropic.ex",
-          "call_type_hint": "external_registration",
-          "via": "ReqLLM.Providers.register",
-          "confidence": 0.99,
-          "detector": "elixir.external_register",
-          "reason": "register"
-        }
-      ]
-    },
-    {
-      "sourcePath": "src/user/user.module.ts",
-      "localDependencies": [],
-      "localCallTargets": []
-    },
-    {
-      "sourcePath": "src/prisma/prisma.module.ts",
-      "localDependencies": [],
-      "localCallTargets": []
-    },
-    {
-      "sourcePath": "src/providers/anthropic.ex",
-      "localDependencies": [],
-      "localCallTargets": []
+fn arch_matrix_injection_accuracy_on_gong_and_pi_mono_labeled_samples_is_above_ninety_percent() {
+    #[derive(Clone, Copy)]
+    struct LabeledEdge {
+        project: &'static str,
+        caller: &'static str,
+        callee: &'static str,
+        expected_call_type: &'static str,
     }
-  ]
-}"#,
+
+    let load_predictions = |report_path: &Path| -> HashMap<(String, String), String> {
+        let payload: Value = serde_json::from_str(&fs::read_to_string(report_path).expect("read"))
+            .expect("parse classification report");
+        let rows = payload.as_array().expect("classification rows");
+        let mut predicted = HashMap::new();
+        for row in rows {
+            let Some(caller) = row.get("caller").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(callee) = row.get("callee").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(call_type) = row.get("call_type").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            predicted.insert(
+                (caller.to_string(), callee.to_string()),
+                call_type.to_string(),
+            );
+        }
+        predicted
+    };
+
+    let root = temp_dir("bcc_arch_injection_accuracy_real");
+    let gong_root = root.join("gong");
+    let pi_root = root.join("pi-mono");
+
+    write(
+        &gong_root.join("lib/gong/agent.ex"),
+        "defmodule Gong.Agent do\n  use Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]\n  alias Gong.Prompt.Builder\n  alias Gong.Data.Session\n\n  def run do\n    Builder.build()\n    Session.load()\n  end\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/prompt/builder.ex"),
+        "defmodule Gong.Prompt.Builder do\n  def build, do: :ok\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/application.ex"),
+        "defmodule Gong.Application do\n  alias Gong.Data.Session\n\n  def init do\n    ReqLLM.Providers.register(Gong.Provider.Anthropic)\n    Session.load()\n  end\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/tools/read.ex"),
+        "defmodule Gong.Tools.Read do\n  alias Gong.Data.Session\n  def run, do: Session.load()\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/tools/write.ex"),
+        "defmodule Gong.Tools.Write do\n  alias Gong.Data.Session\n  def run, do: Session.save()\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/provider/anthropic.ex"),
+        "defmodule Gong.Provider.Anthropic do\n  alias Gong.Data.Model\n  def run, do: Model.resolve()\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/data/session.ex"),
+        "defmodule Gong.Data.Session do\n  def load, do: :ok\n  def save, do: :ok\nend\n",
+    );
+    write(
+        &gong_root.join("lib/gong/data/model.ex"),
+        "defmodule Gong.Data.Model do\n  def resolve, do: :ok\nend\n",
     );
 
-    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+    let gong_ast = gong_root.join("ast.json");
+    let gong_extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &gong_root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &gong_ast.to_string_lossy(),
+        ])
+        .output()
+        .expect("run gong extract");
+    assert!(
+        gong_extract.status.success(),
+        "gong extract failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&gong_extract.stdout),
+        String::from_utf8_lossy(&gong_extract.stderr)
+    );
+
+    let gong_seed = gong_root.join("seed.yaml");
+    write(
+        &gong_seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: AGENT\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/agent.ex\"]\n  - module_id: PROMPT\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/prompt/**\"]\n  - module_id: TOOLS\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/tools/**\"]\n  - module_id: INFRA\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/application.ex\"]\n  - module_id: PROVIDERS\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/provider/**\"]\n  - module_id: DATA\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/data/**\"]\nrelations_expected: []\n",
+    );
+
+    let gong_out = gong_root.join("out");
+    let gong_matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "arch",
             "matrix",
             "--seed-file",
-            &seed.to_string_lossy(),
+            &gong_seed.to_string_lossy(),
             "--ast-file",
-            &ast.to_string_lossy(),
+            &gong_ast.to_string_lossy(),
             "--out-dir",
-            &out.to_string_lossy(),
+            &gong_out.to_string_lossy(),
             "--version",
             "v3",
             "--emit",
             "all",
             "--detect-injection",
         ])
-        .status()
-        .expect("run matrix for accuracy");
-    assert!(status.success());
+        .output()
+        .expect("run gong matrix");
+    assert!(
+        gong_matrix.status.success(),
+        "gong matrix failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&gong_matrix.stdout),
+        String::from_utf8_lossy(&gong_matrix.stderr)
+    );
+    let gong_predicted = load_predictions(&gong_out.join("v3.relation-classification.json"));
 
-    let report_path = out.join("v3.relation-classification.json");
-    let payload: Value = serde_json::from_str(&fs::read_to_string(&report_path).expect("read"))
-        .expect("parse classification report");
-    let rows = payload.as_array().expect("classification rows");
+    write(
+        &pi_root.join("apps/api/src/app.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { UserModule } from '../../user/src/user.module';\nimport { PrismaModule } from '../../prisma/src/prisma.module';\nimport { AuthModule } from '../../auth/src/auth.module';\n\n@Module({\n  imports: [UserModule, PrismaModule, AuthModule],\n})\nexport class AppModule {}\n",
+    );
+    write(
+        &pi_root.join("apps/api/src/health.ts"),
+        "import { Logger } from '../../common/src/logger';\n\nexport function health() {\n  return Logger.ok();\n}\n",
+    );
+    write(
+        &pi_root.join("apps/user/src/user.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { UserService } from './user.service';\n\n@Module({ providers: [UserService] })\nexport class UserModule {}\n",
+    );
+    write(
+        &pi_root.join("apps/user/src/user.service.ts"),
+        "import { Logger } from '../../common/src/logger';\n\nexport class UserService {\n  run() {\n    return Logger.ok();\n  }\n}\n",
+    );
+    write(
+        &pi_root.join("apps/prisma/src/prisma.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { PrismaService } from './prisma.service';\n\n@Module({ providers: [PrismaService] })\nexport class PrismaModule {}\n",
+    );
+    write(
+        &pi_root.join("apps/prisma/src/prisma.service.ts"),
+        "import { Logger } from '../../common/src/logger';\n\nexport class PrismaService {\n  ping() {\n    return Logger.ok();\n  }\n}\n",
+    );
+    write(
+        &pi_root.join("apps/auth/src/auth.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { AuthService } from './auth.service';\n\n@Module({ providers: [AuthService] })\nexport class AuthModule {}\n",
+    );
+    write(
+        &pi_root.join("apps/auth/src/auth.service.ts"),
+        "import { Logger } from '../../common/src/logger';\n\nexport class AuthService {\n  verify() {\n    return Logger.ok();\n  }\n}\n",
+    );
+    write(
+        &pi_root.join("apps/common/src/logger.ts"),
+        "export const Logger = {\n  ok() {\n    return 'ok';\n  },\n};\n",
+    );
 
-    let mut predicted: HashMap<(String, String), String> = HashMap::new();
-    for row in rows {
-        let Some(caller) = row.get("caller").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(callee) = row.get("callee").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(call_type) = row.get("call_type").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        predicted.insert(
-            (caller.to_string(), callee.to_string()),
-            call_type.to_string(),
-        );
-    }
+    let pi_ast = pi_root.join("ast.json");
+    let pi_extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &pi_root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &pi_ast.to_string_lossy(),
+        ])
+        .output()
+        .expect("run pi-mono extract");
+    assert!(
+        pi_extract.status.success(),
+        "pi-mono extract failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&pi_extract.stdout),
+        String::from_utf8_lossy(&pi_extract.stderr)
+    );
 
-    let expected = vec![
-        (("API", "USER"), "framework_injection"),
-        (("API", "PRISMA"), "framework_injection"),
-        (("INFRA", "PROVIDERS"), "external_registration"),
-        (("API", "INFRA"), "direct_call"),
+    let pi_seed = pi_root.join("seed.yaml");
+    write(
+        &pi_seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/**\"]\n  - module_id: USER\n    precedence: 10\n    path_rules:\n      include: [\"apps/user/src/**\"]\n  - module_id: PRISMA\n    precedence: 10\n    path_rules:\n      include: [\"apps/prisma/src/**\"]\n  - module_id: AUTH\n    precedence: 10\n    path_rules:\n      include: [\"apps/auth/src/**\"]\n  - module_id: COMMON\n    precedence: 10\n    path_rules:\n      include: [\"apps/common/src/**\"]\nrelations_expected: []\n",
+    );
+
+    let pi_out = pi_root.join("out");
+    let pi_matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &pi_seed.to_string_lossy(),
+            "--ast-file",
+            &pi_ast.to_string_lossy(),
+            "--out-dir",
+            &pi_out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .output()
+        .expect("run pi-mono matrix");
+    assert!(
+        pi_matrix.status.success(),
+        "pi-mono matrix failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&pi_matrix.stdout),
+        String::from_utf8_lossy(&pi_matrix.stderr)
+    );
+    let pi_predicted = load_predictions(&pi_out.join("v3.relation-classification.json"));
+
+    let labeled_edges = vec![
+        LabeledEdge {
+            project: "gong",
+            caller: "AGENT",
+            callee: "TOOLS",
+            expected_call_type: "framework_injection",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "INFRA",
+            callee: "PROVIDERS",
+            expected_call_type: "external_registration",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "AGENT",
+            callee: "PROMPT",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "AGENT",
+            callee: "DATA",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "INFRA",
+            callee: "DATA",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "TOOLS",
+            callee: "DATA",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "gong",
+            caller: "PROVIDERS",
+            callee: "DATA",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "API",
+            callee: "USER",
+            expected_call_type: "framework_injection",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "API",
+            callee: "PRISMA",
+            expected_call_type: "framework_injection",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "API",
+            callee: "AUTH",
+            expected_call_type: "framework_injection",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "API",
+            callee: "COMMON",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "USER",
+            callee: "COMMON",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "PRISMA",
+            callee: "COMMON",
+            expected_call_type: "direct_call",
+        },
+        LabeledEdge {
+            project: "pi-mono",
+            caller: "AUTH",
+            callee: "COMMON",
+            expected_call_type: "direct_call",
+        },
     ];
 
     let mut correct = 0usize;
-    for (edge, want) in &expected {
-        let got = predicted
-            .get(&(edge.0.to_string(), edge.1.to_string()))
-            .map(|v| v.as_str())
-            .unwrap_or("missing");
-        if got == *want {
+    let mut project_summary: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut expected_by_type: HashMap<String, usize> = HashMap::new();
+    let mut predicted_by_type: HashMap<String, usize> = HashMap::new();
+    let mut mismatches = Vec::new();
+
+    for sample in &labeled_edges {
+        let predicted = match sample.project {
+            "gong" => gong_predicted.get(&(sample.caller.to_string(), sample.callee.to_string())),
+            "pi-mono" => pi_predicted.get(&(sample.caller.to_string(), sample.callee.to_string())),
+            _ => None,
+        }
+        .map(|s| s.as_str())
+        .unwrap_or("missing");
+
+        let entry = project_summary
+            .entry(sample.project.to_string())
+            .or_insert((0usize, 0usize));
+        entry.1 += 1;
+
+        *expected_by_type
+            .entry(sample.expected_call_type.to_string())
+            .or_insert(0) += 1;
+        *predicted_by_type.entry(predicted.to_string()).or_insert(0) += 1;
+
+        if predicted == sample.expected_call_type {
             correct += 1;
+            entry.0 += 1;
+        } else {
+            mismatches.push(format!(
+                "{}:{}->{} expected={} got={}",
+                sample.project, sample.caller, sample.callee, sample.expected_call_type, predicted
+            ));
         }
     }
-    let total = expected.len();
-    let accuracy = correct as f64 / total as f64;
 
-    let mut call_type_counts: HashMap<String, usize> = HashMap::new();
-    for value in predicted.values() {
-        *call_type_counts.entry(value.clone()).or_insert(0) += 1;
-    }
+    let total = labeled_edges.len();
+    let accuracy = correct as f64 / total as f64;
     assert!(
         accuracy > 0.90,
-        "accuracy summary: {}/{} = {:.2}%, by_type={:?}",
+        "accuracy summary (Gong + PI-Mono labeled samples): {}/{} = {:.2}%, project_summary={:?}, expected_by_type={:?}, predicted_by_type={:?}, mismatches={:?}",
         correct,
         total,
         accuracy * 100.0,
-        call_type_counts
+        project_summary,
+        expected_by_type,
+        predicted_by_type,
+        mismatches
     );
 
     let _ = fs::remove_dir_all(&root);
