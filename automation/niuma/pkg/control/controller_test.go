@@ -145,10 +145,6 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		return err
 	}
 
-	if len(issues) == 0 {
-		return nil
-	}
-
 	// 找新 issue
 	existing := make(map[int]bool)
 	for _, t := range c.mockTaskCtl.tasks {
@@ -289,6 +285,19 @@ func TestController_ReadyTaskAdvance(t *testing.T) {
 			assert.Equal(t, TaskStatusPending, task.Status)
 		}
 	}
+}
+
+func TestController_AdvanceExistingTasksWithoutNewOrchestrateIssues(t *testing.T) {
+	ctrl := newInMemController(nil, "")
+
+	_, err := ctrl.mockTaskCtl.create("Existing queued task", "", map[string]string{"issue_num": "999"})
+	require.NoError(t, err)
+
+	err = ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[0].Status)
 }
 
 func TestFormatStatus(t *testing.T) {

@@ -82,13 +82,12 @@ func (c *Controller) Run(ctx context.Context) error {
 		return fmt.Errorf("扫描 bot:orchestrate issues 失败: %w", err)
 	}
 
-	if len(orchestrateIssues) == 0 {
-		fmt.Println("[control] 没有发现 bot:orchestrate issues")
-		return nil
-	}
-
 	issues := orchestrateIssues
-	fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", len(issues))
+	if len(issues) == 0 {
+		fmt.Println("[control] 没有发现新的 bot:orchestrate issues，将继续推进已有任务")
+	} else {
+		fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", len(issues))
+	}
 
 	// ② 对比 taskctl store：找出新 issue
 	existingTasks, err := c.taskctl.List("")
