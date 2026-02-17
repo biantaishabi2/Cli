@@ -1,9 +1,18 @@
+//! 架构矩阵与门禁工具
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+pub mod injection;
+use injection::{
+    append_classification_reason, classify_edge, CallType, RelationClassification, RelationHint,
+};
+// 子模块
+pub mod score;
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
@@ -22,6 +31,23 @@ struct AstRecord {
     localDependencies: Vec<String>,
     #[serde(default)]
     localCallTargets: Vec<String>,
+    #[serde(default)]
+    relationHints: Vec<AstRelationHint>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AstRelationHint {
+    target: String,
+    #[serde(default)]
+    call_type_hint: String,
+    #[serde(default)]
+    via: String,
+    #[serde(default)]
+    confidence: f64,
+    #[serde(default)]
+    detector: String,
+    #[serde(default)]
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,25 +349,26 @@ fn map_files_to_modules(
     }
 
     // 将路径匹配到模块的闭包
-    let match_path = |path: &str, compiled: &[(String, i64, Vec<Regex>, Vec<Regex>)]| -> Option<String> {
-        let mut candidates: Vec<(String, i64)> = Vec::new();
-        for (module_id, precedence, includes, excludes) in compiled {
-            let include_hit = includes.iter().any(|re| re.is_match(path));
-            if !include_hit {
-                continue;
+    let match_path =
+        |path: &str, compiled: &[(String, i64, Vec<Regex>, Vec<Regex>)]| -> Option<String> {
+            let mut candidates: Vec<(String, i64)> = Vec::new();
+            for (module_id, precedence, includes, excludes) in compiled {
+                let include_hit = includes.iter().any(|re| re.is_match(path));
+                if !include_hit {
+                    continue;
+                }
+                let exclude_hit = excludes.iter().any(|re| re.is_match(path));
+                if exclude_hit {
+                    continue;
+                }
+                candidates.push((module_id.clone(), *precedence));
             }
-            let exclude_hit = excludes.iter().any(|re| re.is_match(path));
-            if exclude_hit {
-                continue;
+            if candidates.is_empty() {
+                return None;
             }
-            candidates.push((module_id.clone(), *precedence));
-        }
-        if candidates.is_empty() {
-            return None;
-        }
-        candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        Some(candidates[0].0.clone())
-    };
+            candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            Some(candidates[0].0.clone())
+        };
 
     let mut out = HashMap::new();
 
@@ -356,7 +383,11 @@ fn map_files_to_modules(
     // 第二遍：遍历 localDependencies 和 localCallTargets，
     // 将依赖目标路径也通过 glob 规则匹配到模块（sourcePath 优先，不覆盖）
     for rec in &ast.records {
-        for dep in rec.localDependencies.iter().chain(rec.localCallTargets.iter()) {
+        for dep in rec
+            .localDependencies
+            .iter()
+            .chain(rec.localCallTargets.iter())
+        {
             let dep_path = to_posix(dep);
             if out.contains_key(&dep_path) {
                 continue;
@@ -428,15 +459,83 @@ fn derive_actual_relations(
     rows
 }
 
+fn parse_call_type_hint(raw: &str) -> CallType {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "framework_injection" | "framework" => CallType::FrameworkInjection,
+        "external_registration" | "external_lib" | "registration" => CallType::ExternalRegistration,
+        _ => CallType::DirectCall,
+    }
+}
+
+fn derive_relation_classification(
+    ast: &AstSnapshot,
+    file_to_module: &HashMap<String, String>,
+    actual: &[RelationActual],
+    detect_injection: bool,
+) -> Vec<RelationClassification> {
+    let mut hint_map: HashMap<String, Vec<RelationHint>> = HashMap::new();
+
+    for rec in &ast.records {
+        let src_path = to_posix(&rec.sourcePath);
+        let Some(src_module) = file_to_module.get(&src_path) else {
+            continue;
+        };
+
+        for hint in &rec.relationHints {
+            let target_path = to_posix(&hint.target);
+            let Some(dst_module) = file_to_module.get(&target_path) else {
+                continue;
+            };
+            if src_module == dst_module {
+                continue;
+            }
+            let key = edge_key(src_module, dst_module);
+            hint_map.entry(key).or_default().push(RelationHint {
+                target: target_path,
+                call_type_hint: parse_call_type_hint(&hint.call_type_hint),
+                via: hint.via.clone(),
+                confidence: hint.confidence,
+                detector: hint.detector.clone(),
+                reason: hint.reason.clone(),
+            });
+        }
+    }
+
+    let mut rows = Vec::new();
+    for edge in actual {
+        let key = edge_key(&edge.caller, &edge.callee);
+        let hints = hint_map.get(&key).cloned().unwrap_or_default();
+        rows.push(classify_edge(
+            &edge.caller,
+            &edge.callee,
+            &hints,
+            detect_injection,
+        ));
+    }
+    rows.sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
+    rows
+}
+
 pub fn matrix(
     seed_file: &str,
     ast_file: &str,
     out_dir: &str,
     version: &str,
     emit: &str,
+    detect_injection: bool,
+    injection_patterns: Option<&str>,
     force: bool,
 ) {
-    if let Err(e) = matrix_impl(seed_file, ast_file, out_dir, version, emit, force) {
+    if let Err(e) = matrix_impl(
+        seed_file,
+        ast_file,
+        out_dir,
+        version,
+        emit,
+        detect_injection,
+        injection_patterns,
+        force,
+    ) {
         eprintln!("{}", e);
         std::process::exit(1);
     }
@@ -448,6 +547,8 @@ fn matrix_impl(
     out_dir: &str,
     version: &str,
     emit: &str,
+    detect_injection: bool,
+    injection_patterns: Option<&str>,
     force: bool,
 ) -> Result<(), String> {
     let seed_raw =
@@ -459,9 +560,18 @@ fn matrix_impl(
         serde_yaml::from_str(&seed_raw).map_err(|e| format!("parse seed yaml failed: {}", e))?;
     let ast: AstSnapshot =
         serde_json::from_str(&ast_raw).map_err(|e| format!("parse ast json failed: {}", e))?;
+    if injection_patterns.is_some() {
+        eprintln!("warn: --injection-patterns is reserved for phase2 and currently ignored");
+    }
 
     let file_to_module = map_files_to_modules(&seed, &ast)?;
     let actual = derive_actual_relations(&ast, &file_to_module);
+    let classifications =
+        derive_relation_classification(&ast, &file_to_module, &actual, detect_injection);
+    let classification_map: HashMap<String, RelationClassification> = classifications
+        .iter()
+        .map(|row| (edge_key(&row.caller, &row.callee), row.clone()))
+        .collect();
 
     let actual_keys: BTreeSet<String> = actual
         .iter()
@@ -474,19 +584,31 @@ fn matrix_impl(
     if seed.relations_expected.is_empty() {
         for k in &actual_keys {
             let (caller, callee) = k.split_once("->").unwrap_or(("", ""));
+            let class_row = classification_map.get(k);
+            let rationale = if let Some(row) = class_row {
+                append_classification_reason("derived from actual relations", row, detect_injection)
+            } else {
+                "derived from actual relations".to_string()
+            };
             allow_edges.push(Edge {
                 caller: caller.to_string(),
                 callee: callee.to_string(),
-                rationale: "derived from actual relations".to_string(),
+                rationale,
             });
         }
     } else {
         for rel in &seed.relations_expected {
             if rel.allowed {
+                let key = edge_key(&rel.caller, &rel.callee);
+                let rationale = if let Some(row) = classification_map.get(&key) {
+                    append_classification_reason("from relations_expected", row, detect_injection)
+                } else {
+                    "from relations_expected".to_string()
+                };
                 allow_edges.push(Edge {
                     caller: rel.caller.clone(),
                     callee: rel.callee.clone(),
-                    rationale: "from relations_expected".to_string(),
+                    rationale,
                 });
             } else {
                 forbid_edges.push(Edge {
@@ -517,12 +639,22 @@ fn matrix_impl(
             continue;
         }
         let (caller, callee) = key.split_once("->").unwrap_or(("", ""));
+        let class_row = classification_map.get(key);
+        let reason = if let Some(row) = class_row {
+            append_classification_reason(
+                "derived from actual but not in target",
+                row,
+                detect_injection,
+            )
+        } else {
+            "derived from actual but not in target".to_string()
+        };
         temporary_allow_edges.push(TransitionEdge {
             caller: caller.to_string(),
             callee: callee.to_string(),
             owner: "tbd-owner".to_string(),
             due: "2099-12-31".to_string(),
-            reason: "derived from actual but not in target".to_string(),
+            reason,
         });
     }
     temporary_allow_edges
@@ -530,16 +662,23 @@ fn matrix_impl(
 
     let mut blocked_edges = Vec::new();
     for edge in &forbid_edges {
+        let key = edge_key(&edge.caller, &edge.callee);
+        let base_reason = if edge.rationale.is_empty() {
+            "forbidden by target".to_string()
+        } else {
+            edge.rationale.clone()
+        };
+        let reason = if let Some(row) = classification_map.get(&key) {
+            append_classification_reason(&base_reason, row, detect_injection)
+        } else {
+            base_reason
+        };
         blocked_edges.push(BlockedEdge {
             caller: edge.caller.clone(),
             callee: edge.callee.clone(),
             owner: "tbd-owner".to_string(),
             priority: "P1".to_string(),
-            reason: if edge.rationale.is_empty() {
-                "forbidden by target".to_string()
-            } else {
-                edge.rationale.clone()
-            },
+            reason,
         });
     }
 
@@ -607,6 +746,8 @@ fn matrix_impl(
     let target_path = out_dir_path.join(format!("{}.target-matrix.yaml", version));
     let transition_path = out_dir_path.join(format!("{}.transition-matrix.yaml", version));
     let gates_path = out_dir_path.join(format!("{}.gates.yaml", version));
+    let classification_path =
+        out_dir_path.join(format!("{}.relation-classification.json", version));
 
     match emit {
         "all" => {
@@ -648,11 +789,26 @@ fn matrix_impl(
             ))
         }
     }
+    if detect_injection {
+        let classification_json = serde_json::to_string_pretty(&classifications)
+            .map_err(|e| format!("serialize relation classifications failed: {}", e))?;
+        write_if_allowed(
+            &classification_path,
+            &format!("{}\n", classification_json),
+            force,
+        )?;
+    }
 
     println!("matrix_written_out_dir={}", out_dir);
     println!("matrix_version={}", version);
     println!("mapped_files={}", file_to_module.len());
     println!("actual_edges={}", actual.len());
+    if detect_injection {
+        println!(
+            "relation_classification_report={}",
+            classification_path.to_string_lossy()
+        );
+    }
 
     Ok(())
 }
@@ -1183,8 +1339,7 @@ fn validate_impl(
     // 导出 bdd source YAML（如果指定了 --export-bdd-source）
     if let Some(bdd_dir) = export_bdd_source {
         let bdd_path = Path::new(bdd_dir);
-        fs::create_dir_all(bdd_path)
-            .map_err(|e| format!("create bdd source dir failed: {}", e))?;
+        fs::create_dir_all(bdd_path).map_err(|e| format!("create bdd source dir failed: {}", e))?;
 
         let mut exported = 0usize;
         for (key, weight) in &transition_eval.forbidden_top {
@@ -1587,6 +1742,8 @@ relations_expected:
             &matrix_out.to_string_lossy(),
             "v3",
             "all",
+            false,
+            None,
             true,
         )
         .expect("matrix ok");
@@ -1781,13 +1938,17 @@ profiles:
                 sourcePath: "gong/tools/truncate.ex".to_string(),
                 localDependencies: vec!["gong/truncate.ex".to_string()],
                 localCallTargets: vec![],
+                relationHints: vec![],
             }],
         };
 
         let ftm = map_files_to_modules(&seed, &ast).expect("map ok");
 
         // sourcePath 应映射到 TOOLS
-        assert_eq!(ftm.get("gong/tools/truncate.ex"), Some(&"TOOLS".to_string()));
+        assert_eq!(
+            ftm.get("gong/tools/truncate.ex"),
+            Some(&"TOOLS".to_string())
+        );
         // dep 路径 gong/truncate.ex 应映射到 COMPACTION
         assert_eq!(ftm.get("gong/truncate.ex"), Some(&"COMPACTION".to_string()));
 
@@ -1839,11 +2000,13 @@ profiles:
                     sourcePath: "src/a/foo.ts".to_string(),
                     localDependencies: vec!["src/b/bar.ts".to_string()],
                     localCallTargets: vec![],
+                    relationHints: vec![],
                 },
                 AstRecord {
                     sourcePath: "src/b/bar.ts".to_string(),
                     localDependencies: vec![],
                     localCallTargets: vec![],
+                    relationHints: vec![],
                 },
             ],
         };

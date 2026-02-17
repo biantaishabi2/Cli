@@ -1,5 +1,7 @@
 use super::common;
 use super::*;
+use regex::Regex;
+use std::collections::HashMap;
 
 /// 使用 tree-sitter-elixir 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
@@ -31,6 +33,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     detect_side_effects(content, &mut side_effects);
 
     common::dedup_calls_by_callee(&mut calls);
+    let relation_hints = detect_relation_hints(&imports, content);
 
     FileRecord {
         language: "elixir".into(),
@@ -40,6 +43,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         imports,
         calls,
         local_call_targets: Vec::new(),
+        relation_hints,
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
@@ -376,6 +380,295 @@ fn extract_string_content(node: tree_sitter::Node, source: &[u8]) -> String {
     }
 }
 
+fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+
+    for imp in imports {
+        if imp.kind != "use" {
+            continue;
+        }
+        let via_module = extract_use_main_module(&imp.specifier);
+        let via = if via_module.is_empty() {
+            "use".to_string()
+        } else {
+            format!("use {}", via_module)
+        };
+        for target in extract_use_injected_modules(&imp.specifier) {
+            hints.push(RelationHintRecord {
+                target,
+                call_type_hint: "framework_injection".to_string(),
+                via: via.clone(),
+                confidence: 0.92,
+                detector: "elixir.use_macro".to_string(),
+                reason: "use 宏参数中的模块注入".to_string(),
+            });
+        }
+    }
+
+    // ExternalLib(.Providers).register(InternalModule) -> external_registration
+    // 使用 AST 节点提取，避免注释/字符串中的伪匹配误报。
+    let alias_bindings = collect_alias_bindings(imports);
+    for (lib_chain, target_module) in detect_external_register_calls(content) {
+        if has_register_namespace_conflict(&lib_chain, &target_module, &alias_bindings) {
+            continue;
+        }
+        hints.push(RelationHintRecord {
+            target: target_module,
+            call_type_hint: "external_registration".to_string(),
+            via: format!("{}.register", lib_chain),
+            confidence: 0.97,
+            detector: "elixir.external_register".to_string(),
+            reason: "外部库 register 调用内部模块".to_string(),
+        });
+    }
+
+    hints.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then_with(|| a.call_type_hint.cmp(&b.call_type_hint))
+            .then_with(|| a.via.cmp(&b.via))
+    });
+    hints.dedup_by(|a, b| {
+        a.target == b.target
+            && a.call_type_hint == b.call_type_hint
+            && a.via == b.via
+            && a.detector == b.detector
+    });
+    hints
+}
+
+fn detect_external_register_calls(content: &str) -> Vec<(String, String)> {
+    let tree = common::parse_tree(content, tree_sitter_elixir::LANGUAGE, "elixir");
+    let root = tree.root_node();
+    let source = content.as_bytes();
+    let mut calls = Vec::new();
+    collect_external_register_calls(root, source, &mut calls);
+    calls
+}
+
+fn collect_external_register_calls(
+    node: tree_sitter::Node,
+    source: &[u8],
+    calls: &mut Vec<(String, String)>,
+) {
+    if node.kind() == "call" {
+        if let Some(hit) = parse_external_register_call(node, source) {
+            calls.push(hit);
+        }
+    }
+
+    let skip_children = matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    );
+    if skip_children {
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_external_register_calls(child, source, calls);
+        }
+    }
+}
+
+fn parse_external_register_call(
+    call_node: tree_sitter::Node,
+    source: &[u8],
+) -> Option<(String, String)> {
+    let target = call_node.child_by_field_name("target")?;
+    let target_text = common::node_text(target, source);
+    let lib_chain = target_text.strip_suffix(".register")?.trim();
+    if !is_module_chain(lib_chain, false) {
+        return None;
+    }
+
+    let args = find_child_by_kind(&call_node, "arguments")?;
+    let args_text = common::node_text(args, source);
+    let target_module = extract_first_module_argument(&args_text)?;
+    if !is_module_chain(&target_module, true) {
+        return None;
+    }
+
+    Some((lib_chain.to_string(), target_module))
+}
+
+fn extract_first_module_argument(args_text: &str) -> Option<String> {
+    let module_arg_re =
+        Regex::new(r"^\s*\(?\s*([A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+)").ok()?;
+    module_arg_re
+        .captures(args_text)
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+}
+
+fn collect_alias_bindings(imports: &[ImportRecord]) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for imp in imports {
+        if imp.kind != "alias" {
+            continue;
+        }
+        let Some((alias, full_module)) = parse_alias_binding(&imp.specifier) else {
+            continue;
+        };
+        let entry = out.entry(alias).or_default();
+        if !entry.iter().any(|existing| existing == &full_module) {
+            entry.push(full_module);
+        }
+    }
+    out
+}
+
+fn parse_alias_binding(specifier: &str) -> Option<(String, String)> {
+    let trimmed = specifier.trim();
+    if trimmed.is_empty() || trimmed.starts_with('{') {
+        return None;
+    }
+
+    let mut parts = trimmed.splitn(2, ',');
+    let module_path = parts.next()?.trim();
+    if !is_module_chain(module_path, false) {
+        return None;
+    }
+
+    let alias_name = if let Some(rest) = parts.next() {
+        let rest = rest.trim();
+        if let Some(idx) = rest.find("as:") {
+            let alias_raw = rest[idx + 3..].trim();
+            let alias = alias_raw
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect::<String>();
+            if alias.is_empty() {
+                module_path
+                    .rsplit('.')
+                    .next()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+            } else {
+                alias
+            }
+        } else {
+            module_path
+                .rsplit('.')
+                .next()
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        }
+    } else {
+        module_path
+            .rsplit('.')
+            .next()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    };
+
+    if alias_name.is_empty() {
+        return None;
+    }
+    Some((alias_name, module_path.to_string()))
+}
+
+fn first_module_segment(module_path: &str) -> Option<&str> {
+    module_path.split('.').next().filter(|seg| !seg.is_empty())
+}
+
+fn is_module_chain(value: &str, require_nested: bool) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut segments = trimmed.split('.');
+    let mut count = 0usize;
+    for seg in segments.by_ref() {
+        if seg.is_empty() {
+            return false;
+        }
+        let mut chars = seg.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !first.is_ascii_uppercase() {
+            return false;
+        }
+        if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+            return false;
+        }
+        count += 1;
+    }
+    if require_nested {
+        count >= 2
+    } else {
+        count >= 1
+    }
+}
+
+fn has_register_namespace_conflict(
+    lib_chain: &str,
+    target_module: &str,
+    alias_bindings: &HashMap<String, Vec<String>>,
+) -> bool {
+    let Some(lib_root) = first_module_segment(lib_chain) else {
+        return true;
+    };
+    let Some(target_root) = first_module_segment(target_module) else {
+        return true;
+    };
+
+    // 同根命名空间无法确定是外部注册还是内部模块调用，保守降级 direct_call。
+    if lib_root == target_root {
+        return true;
+    }
+
+    let Some(resolved) = alias_bindings.get(lib_root) else {
+        return false;
+    };
+    if resolved.len() != 1 {
+        return true;
+    }
+
+    let Some(resolved_root) = first_module_segment(&resolved[0]) else {
+        return true;
+    };
+    resolved_root == target_root
+}
+
+fn extract_use_main_module(specifier: &str) -> String {
+    let trimmed = specifier.trim();
+    let end = trimmed
+        .find(',')
+        .unwrap_or(trimmed.len())
+        .min(trimmed.find('\n').unwrap_or(trimmed.len()));
+    trimmed[..end].trim().to_string()
+}
+
+fn extract_use_injected_modules(specifier: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let bytes = specifier.as_bytes();
+    let len = bytes.len();
+    let mut idx = specifier.find(',').unwrap_or(len);
+
+    while idx < len {
+        if bytes[idx].is_ascii_uppercase() {
+            let start = idx;
+            while idx < len
+                && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_' || bytes[idx] == b'.')
+            {
+                idx += 1;
+            }
+            let candidate = specifier[start..idx].trim_end_matches('.');
+            if candidate.split('.').count() >= 2 {
+                refs.push(candidate.to_string());
+            }
+            continue;
+        }
+        idx += 1;
+    }
+
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
 /// 从文件路径推断 Elixir 模块名
 /// 例如 lib/my_app/accounts/user.ex → MyApp.Accounts.User
 pub fn infer_module_from_path(rel_path: &str) -> Option<String> {
@@ -608,6 +901,78 @@ end
                 record.calls
             );
         }
+    }
+
+    #[test]
+    fn detect_use_macro_relation_hints() {
+        let source = r#"
+defmodule Gong.Agent do
+  use Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]
+end
+"#;
+        let record = extract(source, "lib/gong/agent.ex");
+        let targets: Vec<String> = record
+            .relation_hints
+            .iter()
+            .map(|h| h.target.clone())
+            .collect();
+        assert!(targets.iter().any(|t| t == "Gong.Tools.Read"));
+        assert!(targets.iter().any(|t| t == "Gong.Tools.Write"));
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint == "framework_injection"));
+    }
+
+    #[test]
+    fn detect_external_register_relation_hint() {
+        let source = r#"
+defmodule Gong.Infra.ReqLlm do
+  def init do
+    ReqLLM.Providers.register(Gong.Provider.Anthropic)
+  end
+end
+"#;
+        let record = extract(source, "lib/gong/infra/req_llm.ex");
+        let hit = record
+            .relation_hints
+            .iter()
+            .find(|h| h.target == "Gong.Provider.Anthropic")
+            .expect("external register hint should exist");
+        assert_eq!(hit.call_type_hint, "external_registration");
+        assert!(hit.via.contains("ReqLLM.Providers.register"));
+    }
+
+    #[test]
+    fn ignore_external_register_text_inside_comment_and_string() {
+        let source = r#"
+defmodule Gong.Infra.ReqLlm do
+  # ReqLLM.Providers.register(Gong.Provider.Anthropic)
+  @doc "ReqLLM.Providers.register(Gong.Provider.Anthropic)"
+  def init, do: :ok
+end
+"#;
+        let record = extract(source, "lib/gong/infra/req_llm.ex");
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint != "external_registration"));
+    }
+
+    #[test]
+    fn ambiguous_same_namespace_register_is_downgraded() {
+        let source = r#"
+defmodule Gong.Infra.Registry do
+  def init do
+    Gong.Providers.register(Gong.Provider.Anthropic)
+  end
+end
+"#;
+        let record = extract(source, "lib/gong/infra/registry.ex");
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint != "external_registration"));
     }
 }
 

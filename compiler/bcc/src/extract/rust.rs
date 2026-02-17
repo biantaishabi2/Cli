@@ -38,6 +38,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         imports,
         calls,
         local_call_targets: Vec::new(),
+        relation_hints: Vec::new(),
         side_effects,
         loc_lines: content.lines().count(),
         declarations,

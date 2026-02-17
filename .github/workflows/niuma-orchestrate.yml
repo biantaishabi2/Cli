@@ -1,0 +1,33 @@
+name: niuma - Orchestrate
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: '*/5 * * * *'  # 每5分钟检查一次
+
+concurrency:
+  group: niuma-orchestrate-${{ github.event.issue.number || 'schedule' }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: self-hosted
+    if: >
+      (github.event_name == 'issues' && github.event.label.name == 'bot:orchestrate') ||
+      github.event_name == 'schedule'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Orchestration
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          niuma control run \
+            --repo "$REPO" \
+            --repo-dir "$WORKSPACE"

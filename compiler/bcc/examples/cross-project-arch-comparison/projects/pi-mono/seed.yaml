@@ -1,5 +1,10 @@
 version: v3
 source_of_truth: pi-mono-architecture-analysis
+injection_regression_samples:
+  - language: typescript
+    snippet: "@Module({ imports: [UserModule, PrismaModule] })"
+    expected_call_type: framework_injection
+    notes: "用于校验 NestJS imports/providers 自动分类"
 modules:
   # ── AI 层 ──
   - module_id: PI_AI_PROVIDERS

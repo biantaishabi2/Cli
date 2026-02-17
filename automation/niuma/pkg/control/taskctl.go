@@ -65,15 +65,25 @@ func discoverBin(configBin, repoDir string) (string, error) {
 
 // Create 创建新任务
 func (c *TaskCtlClient) Create(subject, desc string, meta map[string]string) (*Task, error) {
-	args := []string{"task", "create", "--subject", subject}
-	if desc != "" {
-		args = append(args, "--desc", desc)
+	description := strings.TrimSpace(desc)
+	if description == "" {
+		description = subject
 	}
-	args = append(args, "--store", c.StorePath)
 
-	// 以 key=value 格式传递 metadata
-	for k, v := range meta {
-		args = append(args, "--meta", fmt.Sprintf("%s=%s", k, v))
+	args := []string{
+		"create",
+		"--store", c.StorePath,
+		"--subject", subject,
+		"--description", description,
+	}
+
+	// 新版 taskctl 使用 JSON 对象传递 metadata。
+	if len(meta) > 0 {
+		metadataJSON, err := json.Marshal(meta)
+		if err != nil {
+			return nil, fmt.Errorf("编码 metadata 失败: %w", err)
+		}
+		args = append(args, "--metadata", string(metadataJSON))
 	}
 
 	out, err := c.run(args...)
@@ -85,25 +95,30 @@ func (c *TaskCtlClient) Create(subject, desc string, meta map[string]string) (*T
 	if err := json.Unmarshal([]byte(out), &task); err != nil {
 		return nil, fmt.Errorf("解析任务 JSON 失败: %w\noutput: %s", err, out)
 	}
+	normalizeTask(&task)
 	return &task, nil
 }
 
 // Update 更新任务
 func (c *TaskCtlClient) Update(taskID string, opts UpdateOpts) error {
-	args := []string{"task", "update", taskID, "--store", c.StorePath}
+	args := []string{"update", "--store", c.StorePath, "--task-id", taskID}
 
 	if opts.Status != nil {
-		args = append(args, "--status", string(*opts.Status))
-	}
-	if opts.BlockedBy != nil {
-		for _, dep := range *opts.BlockedBy {
-			args = append(args, "--blocked-by", dep)
+		statusArg, err := toTaskctlStatus(*opts.Status)
+		if err != nil {
+			return fmt.Errorf("更新任务 %s 失败: %w", taskID, err)
 		}
+		args = append(args, "--status", statusArg)
+	}
+	if opts.BlockedBy != nil && len(*opts.BlockedBy) > 0 {
+		args = append(args, "--add-blocked-by", strings.Join(*opts.BlockedBy, ","))
 	}
 	if opts.Metadata != nil {
-		for k, v := range *opts.Metadata {
-			args = append(args, "--meta", fmt.Sprintf("%s=%s", k, v))
+		metadataJSON, err := json.Marshal(*opts.Metadata)
+		if err != nil {
+			return fmt.Errorf("更新任务 %s 失败: 编码 metadata 失败: %w", taskID, err)
 		}
+		args = append(args, "--metadata", string(metadataJSON))
 	}
 
 	_, err := c.run(args...)
@@ -115,7 +130,7 @@ func (c *TaskCtlClient) Update(taskID string, opts UpdateOpts) error {
 
 // Ready 获取所有就绪任务（无 blocked_by 且状态为 pending）
 func (c *TaskCtlClient) Ready() ([]Task, error) {
-	out, err := c.run("task", "ready", "--store", c.StorePath, "--format", "json")
+	out, err := c.run("ready", "--store", c.StorePath)
 	if err != nil {
 		return nil, fmt.Errorf("获取就绪任务失败: %w", err)
 	}
@@ -124,12 +139,13 @@ func (c *TaskCtlClient) Ready() ([]Task, error) {
 	if err := json.Unmarshal([]byte(out), &tasks); err != nil {
 		return nil, fmt.Errorf("解析就绪任务 JSON 失败: %w\noutput: %s", err, out)
 	}
+	normalizeTasks(tasks)
 	return tasks, nil
 }
 
 // Dag 获取 DAG 图
 func (c *TaskCtlClient) Dag() (*DagGraph, error) {
-	out, err := c.run("task", "dag", "--store", c.StorePath, "--format", "json")
+	out, err := c.run("dag", "--store", c.StorePath)
 	if err != nil {
 		return nil, fmt.Errorf("获取 DAG 失败: %w", err)
 	}
@@ -143,9 +159,13 @@ func (c *TaskCtlClient) Dag() (*DagGraph, error) {
 
 // List 列出指定状态的任务（空字符串列出所有）
 func (c *TaskCtlClient) List(status string) ([]Task, error) {
-	args := []string{"task", "list", "--store", c.StorePath, "--format", "json"}
+	args := []string{"list", "--store", c.StorePath}
 	if status != "" {
-		args = append(args, "--status", status)
+		statusArg, err := toTaskctlStatus(TaskStatus(status))
+		if err != nil {
+			return nil, fmt.Errorf("列出任务失败: %w", err)
+		}
+		args = append(args, "--status", statusArg)
 	}
 
 	out, err := c.run(args...)
@@ -157,12 +177,13 @@ func (c *TaskCtlClient) List(status string) ([]Task, error) {
 	if err := json.Unmarshal([]byte(out), &tasks); err != nil {
 		return nil, fmt.Errorf("解析任务列表 JSON 失败: %w\noutput: %s", err, out)
 	}
+	normalizeTasks(tasks)
 	return tasks, nil
 }
 
 // Get 获取单个任务
 func (c *TaskCtlClient) Get(taskID string) (*Task, error) {
-	out, err := c.run("task", "get", taskID, "--store", c.StorePath, "--format", "json")
+	out, err := c.run("get", "--task-id", taskID, "--store", c.StorePath)
 	if err != nil {
 		return nil, fmt.Errorf("获取任务 %s 失败: %w", taskID, err)
 	}
@@ -171,7 +192,24 @@ func (c *TaskCtlClient) Get(taskID string) (*Task, error) {
 	if err := json.Unmarshal([]byte(out), &task); err != nil {
 		return nil, fmt.Errorf("解析任务 JSON 失败: %w\noutput: %s", err, out)
 	}
+	normalizeTask(&task)
 	return &task, nil
+}
+
+// FindByIssueNum 根据 issue 编号查找任务
+// 返回 nil 表示未找到
+func (c *TaskCtlClient) FindByIssueNum(issueNum int) (*Task, error) {
+	tasks, err := c.List("")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, t := range tasks {
+		if t.IssueNum() == issueNum {
+			return &t, nil
+		}
+	}
+	return nil, nil
 }
 
 // run 执行 taskctl 命令
@@ -182,4 +220,51 @@ func (c *TaskCtlClient) run(args ...string) (string, error) {
 		return "", fmt.Errorf("taskctl %s: %w\noutput: %s", strings.Join(args, " "), err, string(out))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// normalizeTasks 归一化 taskctl 输出，兼容历史字段值。
+func normalizeTasks(tasks []Task) {
+	for i := range tasks {
+		normalizeTask(&tasks[i])
+	}
+}
+
+// normalizeTask 归一化单个任务结构。
+func normalizeTask(task *Task) {
+	if task.Description == "" && task.Desc != "" {
+		task.Description = task.Desc
+	}
+	task.Status = normalizeTaskStatus(task.Status)
+}
+
+// normalizeTaskStatus 将历史状态值统一到当前约定。
+func normalizeTaskStatus(status TaskStatus) TaskStatus {
+	switch strings.ToLower(string(status)) {
+	case "pending":
+		return TaskStatusPending
+	case "in-progress", "in_progress":
+		return TaskStatusInProgress
+	case "completed":
+		return TaskStatusCompleted
+	case "deleted":
+		return TaskStatusDeleted
+	default:
+		return status
+	}
+}
+
+// toTaskctlStatus 将控制层状态映射为 taskctl CLI 可接受的状态值。
+func toTaskctlStatus(status TaskStatus) (string, error) {
+	switch normalizeTaskStatus(status) {
+	case TaskStatusPending:
+		return "pending", nil
+	case TaskStatusInProgress:
+		return "in-progress", nil
+	case TaskStatusCompleted:
+		return "completed", nil
+	case TaskStatusDeleted:
+		return "deleted", nil
+	default:
+		return "", fmt.Errorf("不支持的 task 状态: %s", status)
+	}
 }

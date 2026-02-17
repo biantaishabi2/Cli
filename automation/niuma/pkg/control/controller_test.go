@@ -37,6 +37,10 @@ func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
 	return nil
 }
 
+func (m *mockGitHubOps) ReplaceLabel(_ context.Context, _ int, _, _ string) error {
+	return nil
+}
+
 // mockTaskCtlClient 用于 controller 测试的 taskctl mock
 type mockTaskCtlClient struct {
 	tasks     []Task
@@ -300,5 +304,5 @@ func TestFormatStatus(t *testing.T) {
 	assert.Contains(t, output, "#40")
 	assert.Contains(t, output, "#41")
 	assert.Contains(t, output, "completed")
-	assert.Contains(t, output, "in_progress")
+	assert.Contains(t, output, string(TaskStatusInProgress))
 }

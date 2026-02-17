@@ -1,5 +1,6 @@
 use super::common;
 use super::*;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
@@ -21,6 +22,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     let mut calls = Vec::new();
     let mut local_call_symbols: HashSet<String> = HashSet::new();
     let mut import_aliases: HashMap<String, String> = HashMap::new();
+    let mut import_alias_sources: HashMap<String, HashSet<String>> = HashMap::new();
     let mut declarations: usize = 0;
 
     let mut cursor = root.walk();
@@ -30,6 +32,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         &mut exports,
         &mut imports,
         &mut import_aliases,
+        &mut import_alias_sources,
         &mut calls,
         &mut local_call_symbols,
         &mut declarations,
@@ -72,6 +75,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     }
     let mut local_call_targets: Vec<String> = local_call_targets_set.into_iter().collect();
     local_call_targets.sort_unstable();
+    let relation_hints = detect_relation_hints(root, source, &import_alias_sources);
 
     let side_effects = SideEffects {
         has_async: content.contains("async ") || content.contains("await "),
@@ -93,6 +97,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         imports,
         calls,
         local_call_targets,
+        relation_hints,
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
@@ -105,6 +110,7 @@ fn extract_ts_recursive(
     exports: &mut Vec<ExportRecord>,
     imports: &mut Vec<ImportRecord>,
     import_aliases: &mut HashMap<String, String>,
+    import_alias_sources: &mut HashMap<String, HashSet<String>>,
     calls: &mut Vec<CallRecord>,
     local_call_symbols: &mut HashSet<String>,
     declarations: &mut usize,
@@ -209,6 +215,9 @@ fn extract_ts_recursive(
                         }
                     }
                 }
+
+                // 修复：export 子树内同样需要提取 call_expression（函数体、类方法、对象方法等）。
+                collect_ts_calls_in_subtree(node, source, calls, local_call_symbols);
             }
             // import_statement
             "import_statement" => {
@@ -220,7 +229,11 @@ fn extract_ts_recursive(
                         let import_text = common::node_text(node, source);
                         let aliases = extract_import_aliases(&import_text);
                         for alias in aliases {
-                            import_aliases.insert(alias, spec.clone());
+                            import_aliases.insert(alias.clone(), spec.clone());
+                            import_alias_sources
+                                .entry(alias)
+                                .or_default()
+                                .insert(spec.clone());
                         }
                         imports.push(ImportRecord {
                             specifier: spec,
@@ -281,6 +294,7 @@ fn extract_ts_recursive(
                     exports,
                     imports,
                     import_aliases,
+                    import_alias_sources,
                     calls,
                     local_call_symbols,
                     declarations,
@@ -291,6 +305,36 @@ fn extract_ts_recursive(
 
         if !cursor.goto_next_sibling() {
             break;
+        }
+    }
+}
+
+fn collect_ts_calls_in_subtree(
+    node: tree_sitter::Node,
+    source: &[u8],
+    calls: &mut Vec<CallRecord>,
+    local_call_symbols: &mut HashSet<String>,
+) {
+    if node.kind() == "call_expression" {
+        if let Some(func_node) = node.child_by_field_name("function") {
+            let callees = extract_call_targets(func_node, source);
+            for callee in callees {
+                local_call_symbols.insert(callee.clone());
+                calls.push(CallRecord {
+                    callee,
+                    line: node.start_position().row + 1,
+                });
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            collect_ts_calls_in_subtree(cursor.node(), source, calls, local_call_symbols);
+            if !cursor.goto_next_sibling() {
+                break;
+            }
         }
     }
 }
@@ -540,6 +584,177 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
+fn detect_relation_hints(
+    root: tree_sitter::Node,
+    source: &[u8],
+    import_alias_sources: &HashMap<String, HashSet<String>>,
+) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+    let sanitized_content = mask_non_code_regions_for_hint_detection(root, source);
+    let module_re = Regex::new(r"(?s)@Module\s*\(\s*\{(.*?)\}\s*\)").expect("valid module regex");
+    let module_field_re = Regex::new(r"(imports|providers|controllers)\s*:\s*\[([^\]]*)\]")
+        .expect("valid module field regex");
+    let symbol_re =
+        Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid ts symbol extraction regex");
+
+    for cap in module_re.captures_iter(&sanitized_content) {
+        let Some(body) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        for field_cap in module_field_re.captures_iter(body) {
+            let Some(field) = field_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(items) = field_cap.get(2).map(|m| m.as_str()) else {
+                continue;
+            };
+            let confidence = match field {
+                "imports" | "providers" => 0.95,
+                "controllers" => 0.90,
+                _ => 0.85,
+            };
+            for symbol_cap in symbol_re.captures_iter(items) {
+                let Some(symbol_match) = symbol_cap.get(0) else {
+                    continue;
+                };
+                let symbol = symbol_match.as_str();
+                let Some(specifier) = resolve_unique_hint_target(symbol, import_alias_sources)
+                else {
+                    continue;
+                };
+                hints.push(RelationHintRecord {
+                    target: specifier,
+                    call_type_hint: "framework_injection".to_string(),
+                    via: format!("@Module.{}", field),
+                    confidence,
+                    detector: "typescript.nest.module".to_string(),
+                    reason: "NestJS @Module 注入关系".to_string(),
+                });
+            }
+        }
+    }
+
+    let class_re = Regex::new(
+        r"(?s)@(Injectable|Controller)\s*(?:\([^)]*\))?\s*(?:export\s+)?class\s+[A-Za-z_][A-Za-z0-9_]*\s*\{(.*?)\}",
+    )
+    .expect("valid nest class regex");
+    let ctor_re = Regex::new(r"constructor\s*\(([^)]*)\)").expect("valid constructor regex");
+    let type_re = Regex::new(r":\s*([A-Za-z_][A-Za-z0-9_]*)").expect("valid type regex");
+
+    for class_cap in class_re.captures_iter(&sanitized_content) {
+        let Some(decorator) = class_cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(class_body) = class_cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(ctor_cap) = ctor_re.captures(class_body) else {
+            continue;
+        };
+        let Some(params) = ctor_cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+
+        for ty_cap in type_re.captures_iter(params) {
+            let Some(symbol) = ty_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(specifier) = resolve_unique_hint_target(symbol, import_alias_sources) else {
+                continue;
+            };
+            hints.push(RelationHintRecord {
+                target: specifier,
+                call_type_hint: "framework_injection".to_string(),
+                via: format!("@{} constructor", decorator),
+                confidence: 0.86,
+                detector: "typescript.nest.constructor".to_string(),
+                reason: "NestJS 装饰器构造注入".to_string(),
+            });
+        }
+    }
+
+    hints.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then_with(|| a.call_type_hint.cmp(&b.call_type_hint))
+            .then_with(|| a.via.cmp(&b.via))
+    });
+    hints.dedup_by(|a, b| {
+        a.target == b.target
+            && a.call_type_hint == b.call_type_hint
+            && a.via == b.via
+            && a.detector == b.detector
+    });
+    hints
+}
+
+fn mask_non_code_regions_for_hint_detection(root: tree_sitter::Node, source: &[u8]) -> String {
+    let mut masked = source.to_vec();
+    let mut stack = vec![root];
+
+    while let Some(node) = stack.pop() {
+        let should_mask = matches!(
+            node.kind(),
+            "comment" | "string" | "template_string" | "jsx_text"
+        );
+        if should_mask {
+            let start = node.start_byte();
+            let end = node.end_byte();
+            if start < end && end <= masked.len() {
+                for byte in &mut masked[start..end] {
+                    if *byte != b'\n' && *byte != b'\r' {
+                        *byte = b' ';
+                    }
+                }
+            }
+            continue;
+        }
+
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&masked).into_owned()
+}
+
+fn resolve_unique_hint_target(
+    symbol: &str,
+    import_alias_sources: &HashMap<String, HashSet<String>>,
+) -> Option<String> {
+    let candidates = import_alias_sources.get(symbol)?;
+    if candidates.len() == 1 {
+        return candidates.iter().next().cloned();
+    }
+
+    let mut internal = candidates
+        .iter()
+        .filter(|spec| is_internal_specifier(spec))
+        .cloned()
+        .collect::<Vec<_>>();
+    internal.sort_unstable();
+    internal.dedup();
+    if internal.len() == 1 {
+        return internal.into_iter().next();
+    }
+
+    None
+}
+
+fn is_internal_specifier(specifier: &str) -> bool {
+    let spec = specifier.trim();
+    spec.starts_with("./")
+        || spec.starts_with("../")
+        || spec.starts_with('/')
+        || spec.starts_with("@app/")
+        || spec.starts_with("@/")
+        || spec.starts_with("~/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +828,91 @@ function run() {
         let record = extract(source, "src/sample.ts", "typescript");
 
         assert!(record.calls.is_empty());
+    }
+
+    #[test]
+    fn extracts_calls_inside_export_function_and_class_methods() {
+        let source = r#"
+export function run() {
+  foo();
+}
+
+export class A {
+  m() {
+    this.bar();
+    baz();
+  }
+}
+"#;
+
+        let record = extract(source, "src/export_calls.ts", "typescript");
+        let calls = testing::call_names(&record);
+
+        testing::assert_contains(&calls, "foo", "calls");
+        testing::assert_contains(&calls, "bar", "calls");
+        testing::assert_contains(&calls, "baz", "calls");
+
+        assert_eq!(calls.iter().filter(|callee| *callee == "bar").count(), 1);
+    }
+
+    #[test]
+    fn detects_nest_module_relation_hints() {
+        let source = r#"
+import { Module } from '@nestjs/common';
+import { UserModule } from '@app/user';
+import { PrismaModule } from '@app/prisma';
+
+@Module({
+  imports: [UserModule, PrismaModule],
+})
+export class AppModule {}
+"#;
+        let record = extract(source, "apps/api/src/app.module.ts", "typescript");
+        let targets: Vec<String> = record
+            .relation_hints
+            .iter()
+            .map(|h| h.target.clone())
+            .collect();
+        assert!(targets.iter().any(|t| t == "@app/user"));
+        assert!(targets.iter().any(|t| t == "@app/prisma"));
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint == "framework_injection"));
+    }
+
+    #[test]
+    fn detects_injectable_constructor_relation_hints() {
+        let source = r#"
+import { Injectable } from '@nestjs/common';
+import { UserService } from '@app/user';
+
+@Injectable()
+export class AppService {
+  constructor(private readonly userService: UserService) {}
+}
+"#;
+        let record = extract(source, "apps/api/src/app.service.ts", "typescript");
+        assert!(record.relation_hints.iter().any(|h| {
+            h.target == "@app/user"
+                && h.call_type_hint == "framework_injection"
+                && h.via.contains("@Injectable")
+        }));
+    }
+
+    #[test]
+    fn ignores_nest_decorators_in_comments_and_strings() {
+        let source = r#"
+import { Module, Injectable } from '@nestjs/common';
+import { UserModule } from '@app/user';
+import { UserService } from '@app/user';
+
+// @Module({ imports: [UserModule] })
+const txt = "@Injectable() constructor(userService: UserService) {}";
+
+export class AppModule {}
+"#;
+        let record = extract(source, "apps/api/src/app.module.ts", "typescript");
+        assert!(record.relation_hints.is_empty());
     }
 }

@@ -8,3 +8,6 @@ pub mod extract;
 pub mod graph;
 pub mod spec;
 pub mod trace;
+
+// Re-export score module for CLI integration
+pub use arch::score;

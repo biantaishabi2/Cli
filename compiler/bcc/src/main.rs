@@ -174,7 +174,7 @@ enum Commands {
         issue: Option<u64>,
     },
 
-    /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report）
+    /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report/score）
     Arch {
         #[command(subcommand)]
         action: ArchAction,
@@ -243,6 +243,10 @@ enum ArchAction {
         version: String,
         #[arg(long, default_value = "all")]
         emit: String,
+        #[arg(long, default_value_t = false)]
+        detect_injection: bool,
+        #[arg(long)]
+        injection_patterns: Option<String>,
         #[arg(long)]
         force: bool,
     },
@@ -304,6 +308,12 @@ enum ArchAction {
         top: usize,
         #[arg(long, default_value = "md")]
         format: String,
+    },
+
+    /// 架构健康度评分
+    Score {
+        #[command(subcommand)]
+        action: arch::score::cli::ScoreAction,
     },
 }
 
@@ -586,9 +596,20 @@ fn main() {
                 out_dir,
                 version,
                 emit,
+                detect_injection,
+                injection_patterns,
                 force,
             } => {
-                arch::matrix(&seed_file, &ast_file, &out_dir, &version, &emit, force);
+                arch::matrix(
+                    &seed_file,
+                    &ast_file,
+                    &out_dir,
+                    &version,
+                    &emit,
+                    detect_injection,
+                    injection_patterns.as_deref(),
+                    force,
+                );
             }
             ArchAction::Validate {
                 target,
@@ -644,6 +665,9 @@ fn main() {
                     top,
                     &format,
                 );
+            }
+            ArchAction::Score { action } => {
+                action.execute();
             }
         },
         Some(Commands::Bdd { action }) => match action {

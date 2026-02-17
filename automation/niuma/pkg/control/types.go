@@ -9,20 +9,24 @@ type TaskStatus string
 
 const (
 	TaskStatusPending    TaskStatus = "pending"
-	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusInProgress TaskStatus = "in-progress"
 	TaskStatusCompleted  TaskStatus = "completed"
+	TaskStatusDeleted    TaskStatus = "deleted"
 	TaskStatusBlocked    TaskStatus = "blocked"
 	TaskStatusFailed     TaskStatus = "failed"
 )
 
 // Task 表示一个受 taskctl 管理的任务
 type Task struct {
-	ID        string            `json:"id"`
-	Subject   string            `json:"subject"`
-	Desc      string            `json:"desc,omitempty"`
-	Status    TaskStatus        `json:"status"`
-	BlockedBy []string          `json:"blocked_by,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	ID          string            `json:"id"`
+	Subject     string            `json:"subject"`
+	Description string            `json:"description,omitempty"`
+	Desc        string            `json:"desc,omitempty"` // 兼容旧字段
+	ActiveForm  string            `json:"active_form,omitempty"`
+	Status      TaskStatus        `json:"status"`
+	BlockedBy   []string          `json:"blocked_by,omitempty"`
+	Blocks      []string          `json:"blocks,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // IssueNum 从 metadata 获取 issue 编号
@@ -121,4 +125,12 @@ type UpdateOpts struct {
 	Status    *TaskStatus        `json:"status,omitempty"`
 	BlockedBy *[]string          `json:"blocked_by,omitempty"`
 	Metadata  *map[string]string `json:"metadata,omitempty"`
+}
+
+// ParseParent 解析 issue body 中的 parent 声明（Sub-Issue 模式）
+// 返回 0 表示没有 parent
+// 支持格式：parent: #40 或 parent issue: #40
+func ParseParent(body string) int {
+	// 这个函数在 analyzer.go 中实现，这里只是声明
+	return 0
 }

@@ -16,6 +16,11 @@ import (
 // dependsOnRe 匹配 issue body 中的 depends-on 声明
 // 支持格式：depends-on: #40, #41 或 depends-on: #40 #41
 var dependsOnRe = regexp.MustCompile(`(?i)depends[- ]on:\s*((?:#\d+[\s,]*)+)`)
+
+// parentRe 匹配 issue body 中的 parent 声明（Sub-Issue 模式）
+// 支持格式：parent: #40 或 parent issue: #40
+var parentRe = regexp.MustCompile(`(?i)parent(?:\s+issue)?:\s*#(\d+)`)
+
 var issueNumRe = regexp.MustCompile(`#(\d+)`)
 
 // DependencyAnalyzer AI 分析 issue 间依赖
@@ -198,4 +203,15 @@ func extractJSON(s string) string {
 		}
 	}
 	return strings.TrimSpace(s)
+}
+
+// parseParent 解析 issue body 中的 parent 声明
+// 返回 0 表示没有 parent
+func parseParent(body string) int {
+	matches := parentRe.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(matches[1])
+	return n
 }

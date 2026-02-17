@@ -250,6 +250,30 @@ func TestDoDiscussionCheck_NotConverged(t *testing.T) {
 	require.NotNil(t, mc)
 }
 
+func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
+	// 两轮讨论都未收敛，summary 应该更新同一条 marker 评论，而不是新增评论
+	mockAI := ai.NewMockProvider(
+		`{"consensus": "第一轮", "open_items": ["待定A"], "should_finish": false}`,
+		`{"consensus": "第二轮", "open_items": ["待定B"], "should_finish": false}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
+	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
+
+	comments := mockGH.Comments[1]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].GetBody(), "BOT:DISCUSSION_SUMMARY issue=1 rev=2")
+	assert.Contains(t, comments[0].GetBody(), "第二轮")
+
+	mc := mockGH.GetMarker(1, marker.TypeDiscussionSummary)
+	require.NotNil(t, mc)
+	assert.Equal(t, 2, mc.Marker.Revision)
+}
+
 func TestDoDiscussionCheck_WrongState(t *testing.T) {
 	mockAI := ai.NewMockProvider("unused")
 	mockGH := NewMockGitHub()

@@ -1,0 +1,187 @@
+# 架构健康度评分配置文件示例
+# 用于 bcc arch score 命令
+
+version: "1.0"
+kind: architecture_scoring_config
+
+# 评分模式
+# - strict: 严格模式，任何一票否决项失败则总分失败
+# - lenient: 宽松模式，允许部分一票否决项失败，但会扣减分数
+# - warning: 仅警告模式，只计算分数，不失败
+mode: strict
+
+# 总分失败阈值 (0-100)
+threshold: 60.0
+
+# 评分维度配置
+dimensions:
+  # 合规性维度：检查架构契约遵守情况
+  compliance:
+    enabled: true
+    weight: 0.30
+    blocking: true  # 一票否决
+    config:
+      # 意外边的惩罚系数
+      unexpected_penalty: 1.5
+      # 禁止边的惩罚系数
+      forbidden_penalty: 2.0
+      
+  # 依赖密度维度：检查模块间依赖密度
+  density:
+    enabled: true
+    weight: 0.25
+    blocking: true
+    config:
+      # 理想密度范围 (%)
+      ideal_min: 10.0
+      ideal_max: 40.0
+      # 最大可接受密度 (%)
+      max_acceptable: 75.0
+      
+  # 分层清晰维度：检查分层架构调用合规性
+  layering:
+    enabled: true
+    weight: 0.25
+    blocking: true
+    config:
+      # 分层定义，precedence 越小越上层
+      layers:
+        - name: api
+          precedence: 1
+        - name: controller
+          precedence: 1
+        - name: service
+          precedence: 2
+        - name: core
+          precedence: 2
+        - name: domain
+          precedence: 2
+        - name: dao
+          precedence: 3
+        - name: repository
+          precedence: 3
+        - name: infrastructure
+          precedence: 3
+        - name: support
+          precedence: 2
+      # 允许的跨层依赖 (上层 -> 下层)
+      allowed_transitions:
+        - [api, service]
+        - [api, core]
+        - [api, domain]
+        - [controller, service]
+        - [controller, core]
+        - [service, dao]
+        - [service, repository]
+        - [service, core]
+        - [service, domain]
+        - [core, dao]
+        - [core, repository]
+        - [core, infrastructure]
+        - [domain, dao]
+        - [domain, repository]
+        - [domain, infrastructure]
+        - [support, core]
+        - [support, domain]
+      # 禁止的跨层依赖
+      forbidden_transitions:
+        - [dao, service]
+        - [dao, api]
+        - [repository, service]
+        - [infrastructure, domain]
+        - [core, api]
+        
+  # 无循环依赖维度：检查双向依赖
+  acyclic:
+    enabled: true
+    weight: 0.10
+    blocking: true
+    config:
+      # 最大允许的双向依赖对数
+      max_pairs: 0
+      # 每对双向依赖的扣减分数
+      deduction_per_pair: 10.0
+      
+  # 测试覆盖维度：检查架构契约测试覆盖
+  coverage:
+    enabled: true
+    weight: 0.10
+    blocking: false  # 非一票否决
+    config:
+      # BDD 场景覆盖率阈值 (%)
+      min_bdd_coverage: 60.0
+      # 架构契约测试覆盖率阈值 (%)
+      min_contract_coverage: 60.0
+      # BDD 覆盖率权重
+      bdd_weight: 0.4
+      # 契约测试覆盖率权重
+      contract_weight: 0.6
+
+# 自定义规则（高级功能）
+custom_rules:
+  - name: "critical_module_isolation"
+    description: "关键模块不应依赖非关键模块"
+    severity: error
+    condition: |
+      module.tags.contains("critical") && 
+      dependency.module.tags.contains("non-critical")
+    message: "Critical module ${module.name} depends on non-critical module ${dependency.module.name}"
+    
+  - name: "api_stability"
+    description: "API 模块应依赖稳定的模块"
+    severity: warning
+    condition: |
+      module.layer == "api" && 
+      dependency.stability_score < 0.5
+    message: "API module ${module.name} depends on unstable module ${dependency.module.name}"
+    
+  - name: "repository_independence"
+    description: "Repository 不应直接依赖其他 Repository"
+    severity: error
+    condition: |
+      module.layer == "repository" &&
+      dependency.layer == "repository" &&
+      module.name != dependency.module.name
+    message: "Repository ${module.name} should not depend on Repository ${dependency.module.name}"
+
+# 输出配置
+output:
+  text:
+    # 显示详细信息
+    show_details: true
+    # 显示建议
+    show_suggestions: true
+    # 最大显示问题数
+    max_issues: 20
+    # 显示进度条
+    show_progress: true
+    
+  json:
+    # 格式化输出
+    pretty: true
+    # 包含原始指标
+    include_metrics: true
+    # 包含建议
+    include_suggestions: true
+    
+  markdown:
+    # 模板类型: default | detailed | minimal
+    template: detailed
+    # 包含图表
+    include_charts: true
+    # 包含对比表格
+    include_comparison: true
+
+# 模块标签定义（用于自定义规则）
+module_tags:
+  critical:
+    - order
+    - payment
+    - account
+  stable:
+    - utils
+    - common
+    - types
+  experimental:
+    - ai-features
+    - beta-module
