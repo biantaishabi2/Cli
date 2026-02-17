@@ -17,6 +17,8 @@ type mockGitHubOps struct {
 	mergedPRs         []int
 	mergeError        map[int]error
 	replaceLabelCalls []replaceLabelCall
+	replaceLabelError map[string]error
+	replaceLabelFails map[string]int
 }
 
 type replaceLabelCall struct {
@@ -27,8 +29,10 @@ type replaceLabelCall struct {
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	return &mockGitHubOps{
-		issues:     issues,
-		mergeError: make(map[int]error),
+		issues:            issues,
+		mergeError:        make(map[int]error),
+		replaceLabelError: make(map[string]error),
+		replaceLabelFails: make(map[string]int),
 	}
 }
 
@@ -50,6 +54,14 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 		oldLabel:    oldLabel,
 		newLabel:    newLabel,
 	})
+
+	if remaining := m.replaceLabelFails[newLabel]; remaining > 0 {
+		m.replaceLabelFails[newLabel] = remaining - 1
+		return fmt.Errorf("replace label %q temporary failed", newLabel)
+	}
+	if err, ok := m.replaceLabelError[newLabel]; ok {
+		return err
+	}
 	return nil
 }
 
@@ -419,4 +431,82 @@ func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.
 	}
 	ctrl.escalateIntegrationConflict(context.Background(), retryTask, outcome)
 	assert.Len(t, mockGH.replaceLabelCalls, 2)
+}
+
+func TestShouldRetryEscalationLabels(t *testing.T) {
+	assert.True(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus: string(MergeStatusEscalated),
+	}))
+	assert.False(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+		metaKeyIntegrationConflictLabelSynced: "true",
+	}))
+	assert.False(t, shouldRetryEscalationLabels(map[string]string{
+		metaKeyIntegrationMergeStatus: string(MergeStatusMerged),
+	}))
+}
+
+func TestMergeOutcomeFromEscalatedTask_FromMetadata(t *testing.T) {
+	task := Task{
+		Metadata: map[string]string{
+			"issue_num":                           "41",
+			"pr_num":                              "410",
+			"branch":                              "feat/41-core",
+			metaKeyIntegrationMergeStatus:         string(MergeStatusEscalated),
+			metaKeyIntegrationMergeExecutedAt:     "2026-02-17T10:00:00Z",
+			metaKeyIntegrationExecutorVersion:     "integration-merge-executor/v1",
+			metaKeyIntegrationConflictSummary:     `{"files":["pkg/service.go"],"total_hunk_count":2,"reason":"复杂冲突","suggested_action":"人工处理"}`,
+			metaKeyIntegrationConflictLabelSynced: "false",
+		},
+	}
+
+	outcome := mergeOutcomeFromEscalatedTask(task, "integration/main")
+	assert.Equal(t, MergeStatusEscalated, outcome.Status)
+	assert.Equal(t, "integration/main", outcome.IntegrationBranch)
+	assert.Equal(t, "feat/41-core", outcome.SourceBranch)
+	assert.Equal(t, 41, outcome.IssueNum)
+	assert.Equal(t, 410, outcome.PRNum)
+	require.NotNil(t, outcome.Conflict)
+	assert.Equal(t, []string{"pkg/service.go"}, outcome.Conflict.Files)
+	assert.Equal(t, 2, outcome.Conflict.TotalHunkCount)
+	assert.Equal(t, "复杂冲突", outcome.Conflict.Reason)
+}
+
+func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.replaceLabelFails[integrationConflictLabel] = 1
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+	}
+
+	task := Task{
+		ID: "task-1",
+		Metadata: map[string]string{
+			"issue_num":                   "41",
+			metaKeyIntegrationMergeStatus: string(MergeStatusEscalated),
+		},
+	}
+	outcome := MergeOutcome{
+		Status:       MergeStatusEscalated,
+		SourceBranch: "feat/41-core-b",
+		Conflict: &ConflictSummary{
+			Files:           []string{"pkg/service.go"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+
+	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
+	require.Len(t, mockGH.replaceLabelCalls, 3)
+	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
+	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
 }

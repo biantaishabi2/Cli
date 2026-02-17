@@ -244,7 +244,8 @@ func (c *Controller) Run(ctx context.Context) error {
 		allTasks, _ := c.taskctl.List("")
 
 		// 按 integration 分支分组 task
-		branchTasks := make(map[string][]Task) // integrationBranch → tasks
+		branchTasks := make(map[string][]Task)          // integrationBranch → 待合入 tasks
+		escalationRetryTasks := make(map[string][]Task) // integrationBranch → 待补打标签 tasks
 		for _, t := range allTasks {
 			if t.PRNum() > 0 && t.Branch() != "" {
 				// 检查是否已合入 integration（从 metadata 读）
@@ -252,14 +253,34 @@ func (c *Controller) Run(ctx context.Context) error {
 				if t.Metadata != nil && t.Metadata[metaKeyIntegrated] == "true" {
 					integrated = true
 				}
-				if t.Metadata != nil && t.Metadata[metaKeyIntegrationMergeStatus] == string(MergeStatusEscalated) {
-					fmt.Printf("[control] 跳过已升级人工 task %s (issue #%d)\n", t.ID, t.IssueNum())
+				if integrated {
 					continue
 				}
-				if !integrated {
-					branchName := c.getIntegrationBranchName(&t)
-					branchTasks[branchName] = append(branchTasks[branchName], t)
+
+				branchName := c.getIntegrationBranchName(&t)
+				if shouldRetryEscalationLabels(t.Metadata) {
+					escalationRetryTasks[branchName] = append(escalationRetryTasks[branchName], t)
+					continue
 				}
+
+				if isEscalatedIntegrationTask(t.Metadata) && isEscalationLabelSynced(t.Metadata) {
+					fmt.Printf("[control] 跳过已升级人工且已完成打标 task %s (issue #%d)\n", t.ID, t.IssueNum())
+					continue
+				}
+
+				branchTasks[branchName] = append(branchTasks[branchName], t)
+			}
+		}
+
+		for branchName, tasks := range escalationRetryTasks {
+			if len(tasks) == 0 {
+				continue
+			}
+
+			fmt.Printf("[control] Integration 分支 %s: 有 %d 个升级任务待补打标签\n", branchName, len(tasks))
+			for _, task := range tasks {
+				outcome := mergeOutcomeFromEscalatedTask(task, branchName)
+				c.escalateIntegrationConflict(ctx, task, outcome)
 			}
 		}
 
@@ -425,6 +446,79 @@ func hasLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func shouldRetryEscalationLabels(meta map[string]string) bool {
+	return isEscalatedIntegrationTask(meta) && !isEscalationLabelSynced(meta)
+}
+
+func isEscalatedIntegrationTask(meta map[string]string) bool {
+	return valueOrEmpty(meta, metaKeyIntegrationMergeStatus) == string(MergeStatusEscalated)
+}
+
+func isEscalationLabelSynced(meta map[string]string) bool {
+	return valueOrEmpty(meta, metaKeyIntegrationConflictLabelSynced) == "true"
+}
+
+func mergeOutcomeFromEscalatedTask(task Task, integrationBranch string) MergeOutcome {
+	return MergeOutcome{
+		Status:            MergeStatusEscalated,
+		IntegrationBranch: integrationBranch,
+		SourceBranch:      task.Branch(),
+		IssueNum:          task.IssueNum(),
+		PRNum:             task.PRNum(),
+		Conflict:          conflictSummaryFromMetadata(task.Metadata),
+		ExecutorVersion:   valueOrEmpty(task.Metadata, metaKeyIntegrationExecutorVersion),
+		ExecutedAt:        valueOrEmpty(task.Metadata, metaKeyIntegrationMergeExecutedAt),
+	}
+}
+
+func conflictSummaryFromMetadata(meta map[string]string) *ConflictSummary {
+	rawSummary := valueOrEmpty(meta, metaKeyIntegrationConflictSummary)
+	if rawSummary != "" {
+		var summary ConflictSummary
+		if err := json.Unmarshal([]byte(rawSummary), &summary); err == nil {
+			return &summary
+		}
+	}
+
+	files := splitMetadataList(valueOrEmpty(meta, metaKeyIntegrationConflictFiles))
+	totalHunks := 0
+	if rawHunks := valueOrEmpty(meta, metaKeyIntegrationConflictTotalHunks); rawHunks != "" {
+		if parsed, err := strconv.Atoi(rawHunks); err == nil {
+			totalHunks = parsed
+		}
+	}
+
+	reason := valueOrEmpty(meta, metaKeyIntegrationConflictReason)
+	suggestion := valueOrEmpty(meta, metaKeyIntegrationConflictSuggestion)
+	if len(files) == 0 && totalHunks == 0 && reason == "" && suggestion == "" {
+		return nil
+	}
+
+	return &ConflictSummary{
+		Files:           files,
+		TotalHunkCount:  totalHunks,
+		Reason:          reason,
+		SuggestedAction: suggestion,
+	}
+}
+
+func splitMetadataList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		items = append(items, part)
+	}
+	return items
 }
 
 func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {

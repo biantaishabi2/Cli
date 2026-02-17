@@ -333,7 +333,6 @@ func normalizeConflictSide(file, text string) string {
 			continue
 		}
 		if strings.HasPrefix(line, "//") ||
-			strings.HasPrefix(line, "*") ||
 			strings.HasPrefix(line, "*/") ||
 			strings.HasPrefix(line, "<!--") ||
 			strings.HasPrefix(line, "-->") {

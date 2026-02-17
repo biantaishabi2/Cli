@@ -284,6 +284,22 @@ func TestCanAutoResolveConflict_DoesNotStripCommentMarkersInsideStringLiteral(t 
 	assert.Contains(t, reason, "语义差异")
 }
 
+func TestCanAutoResolveConflict_DoesNotTreatLeadingAsteriskCodeAsComment(t *testing.T) {
+	fileSummary := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{
+				ours:   "\t*ptr = 1\nreturn value",
+				theirs: "\t*ptr = 2\nreturn value",
+			},
+		},
+	}
+
+	auto, reason := canAutoResolveConflict("pkg/service.go", fileSummary)
+	assert.False(t, auto)
+	assert.Contains(t, reason, "语义差异")
+}
+
 func splitNonEmpty(s string) []string {
 	var result []string
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
