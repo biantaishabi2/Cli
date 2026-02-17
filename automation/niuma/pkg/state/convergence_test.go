@@ -79,6 +79,40 @@ func TestConvergence_NotConverged_WarningTooRecent(t *testing.T) {
 	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
+func TestConvergence_NotFinalize_WhenHumanCommentAfterWarning(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	warnTime := now.Add(-40 * time.Minute)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人工补充了新的信息", now.Add(-5*time.Minute)),
+		},
+		ConvergeWarning: &marker.Marker{Type: marker.TypeConvergeWarning, Issue: 1, Revision: 1},
+		WarningTime:     warnTime,
+	}
+
+	decision := checker.CheckWithDecision(input)
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.Equal(t, "warning_invalidated_by_new_human_comment", decision.Reason)
+}
+
+func TestConvergence_StaleWarningFallsBackToSilenceWarn(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	warnTime := now.Add(-40 * time.Minute)
+	checker := fixedChecker(now)
+	input := &ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人工补充了新的信息", now.Add(-15*time.Minute)),
+		},
+		ConvergeWarning: &marker.Marker{Type: marker.TypeConvergeWarning, Issue: 1, Revision: 1},
+		WarningTime:     warnTime,
+	}
+
+	decision := checker.CheckWithDecision(input)
+	assert.Equal(t, ShouldWarn, decision.Result)
+	assert.Equal(t, "silence_warn", decision.Reason)
+}
+
 func TestConvergence_NotConverged_RoundBasedNoAutoFinalize(t *testing.T) {
 	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	checker := fixedChecker(now)

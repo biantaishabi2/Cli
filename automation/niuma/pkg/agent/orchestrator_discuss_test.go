@@ -99,6 +99,39 @@ func TestDoDiscuss_RoundLimitNoticeDoesNotAutoFinalize(t *testing.T) {
 	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
 }
 
+func TestDoDiscussionCheck_StaleConvergeWarningDoesNotAutoFinalize(t *testing.T) {
+	mockAI := ai.NewMockProvider(
+		`{"consensus":"继续讨论","open_items":["补充约束"],"should_finish":false}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypeConvergeWarning, Issue: 1, Revision: 1,
+	}, "warning")
+
+	now := time.Now()
+	warnMC := mockGH.GetMarker(1, marker.TypeConvergeWarning)
+	require.NotNil(t, warnMC)
+	warnMC.Comment.CreatedAt = &github.Timestamp{Time: now.Add(-31 * time.Minute)}
+
+	mockGH.Comments[1] = []*github.IssueComment{
+		{
+			ID:        github.Ptr(int64(1001)),
+			Body:      github.Ptr("人工补充了新的约束条件"),
+			CreatedAt: &github.Timestamp{Time: now},
+		},
+	}
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
+
+	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
+	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
+	assert.Equal(t, 1, mockGH.GetMarker(1, marker.TypeConvergeWarning).Marker.Revision)
+}
+
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {
 	mockAI := ai.NewMockProvider(
 		`{"consensus":"r1","open_items":["a"],"should_finish":false}`,

@@ -129,15 +129,19 @@ func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *Converg
 
 	// 已发过预警？
 	if input.ConvergeWarning != nil {
-		// 预警后静默 ≥ SilenceFinalize → 定稿
-		if now.Sub(input.WarningTime) >= c.SilenceFinalize {
-			decision.Result = ShouldFinalize
-			decision.Reason = "warning_timeout_finalize"
+		// 如果预警后出现了新的人工评论，则旧预警失效，按最新人工评论重新计算静默窗口。
+		if !lastCommentTime.After(input.WarningTime) {
+			// 预警后静默 ≥ SilenceFinalize → 定稿
+			if now.Sub(input.WarningTime) >= c.SilenceFinalize {
+				decision.Result = ShouldFinalize
+				decision.Reason = "warning_timeout_finalize"
+				return decision
+			}
+			decision.Result = NotConverged
+			decision.Reason = "warning_waiting"
 			return decision
 		}
-		decision.Result = NotConverged
-		decision.Reason = "warning_waiting"
-		return decision
+		decision.Reason = "warning_invalidated_by_new_human_comment"
 	}
 
 	// 未预警，静默 ≥ SilenceWarn → 发预警
