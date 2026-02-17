@@ -1,9 +1,14 @@
+//! 架构矩阵与门禁工具
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+// 子模块
+pub mod score;
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]

@@ -174,7 +174,7 @@ enum Commands {
         issue: Option<u64>,
     },
 
-    /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report）
+    /// 架构矩阵与门禁工具（matrix/validate/export-module-map/report/score）
     Arch {
         #[command(subcommand)]
         action: ArchAction,
@@ -304,6 +304,12 @@ enum ArchAction {
         top: usize,
         #[arg(long, default_value = "md")]
         format: String,
+    },
+
+    /// 架构健康度评分
+    Score {
+        #[command(subcommand)]
+        action: arch::score::cli::ScoreAction,
     },
 }
 
@@ -640,6 +646,9 @@ fn main() {
                     top,
                     &format,
                 );
+            }
+            ArchAction::Score { action } => {
+                action.execute();
             }
         },
         Some(Commands::Bdd { action }) => match action {
