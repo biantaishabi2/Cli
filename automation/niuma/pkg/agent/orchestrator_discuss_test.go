@@ -5,10 +5,12 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
+	"github.com/google/go-github/v68/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,14 +59,44 @@ func TestDoDiscuss_StopsAtRoundLimit(t *testing.T) {
 	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
 
 	// 轮次上限提醒使用 marker upsert
-	warnMC := mockGH.GetMarker(1, marker.TypeConvergeWarning)
+	warnMC := mockGH.GetMarker(1, marker.TypeDiscussionRoundLimitNotice)
 	require.NotNil(t, warnMC)
 	assert.Contains(t, warnMC.Comment.GetBody(), "讨论已达自动轮次上限")
+	assert.Nil(t, mockGH.GetMarker(1, marker.TypeConvergeWarning))
 
 	// 每轮都更新 summary，revision 应等于 max rounds
 	summaryMC := mockGH.GetMarker(1, marker.TypeDiscussionSummary)
 	require.NotNil(t, summaryMC)
 	assert.Equal(t, 3, summaryMC.Marker.Revision)
+}
+
+func TestDoDiscuss_RoundLimitNoticeDoesNotAutoFinalize(t *testing.T) {
+	mockAI := ai.NewMockProvider(
+		`{"consensus":"r1","open_items":["a"],"should_finish":false}`,
+		`{"consensus":"继续讨论","open_items":["b"],"should_finish":false}`,
+		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	require.NoError(t, orch.DoDiscuss(context.Background(), 1))
+
+	noticeMC := mockGH.GetMarker(1, marker.TypeDiscussionRoundLimitNotice)
+	require.NotNil(t, noticeMC)
+
+	now := time.Now()
+	noticeMC.Comment.CreatedAt = &github.Timestamp{Time: now.Add(-31 * time.Minute)}
+	mockGH.Comments[1] = append(mockGH.Comments[1], &github.IssueComment{
+		ID:        github.Ptr(int64(999)),
+		Body:      github.Ptr("人工补充了新的约束条件"),
+		CreatedAt: &github.Timestamp{Time: now},
+	})
+
+	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
+	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
+	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
 }
 
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {

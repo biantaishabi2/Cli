@@ -279,12 +279,26 @@ func (o *Orchestrator) upsertConvergeWarning(ctx context.Context, existing *gh.M
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
 }
 
+func (o *Orchestrator) upsertDiscussionRoundLimitNotice(ctx context.Context, existing *gh.MarkerComment, formatter func(*marker.Marker) string) error {
+	rev := 1
+	if existing != nil {
+		rev = existing.Marker.Revision + 1
+	}
+	m := &marker.Marker{
+		Type:     marker.TypeDiscussionRoundLimitNotice,
+		Issue:    o.issueNumber,
+		Revision: rev,
+	}
+	body := formatter(m)
+	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+}
+
 func (o *Orchestrator) notifyMaxDiscussionRoundsReached(ctx context.Context, maxRounds int) error {
-	warningMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeConvergeWarning)
+	noticeMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionRoundLimitNotice)
 	if err != nil {
 		return fmt.Errorf("读取预警 marker 失败: %w", err)
 	}
-	return o.upsertConvergeWarning(ctx, warningMC, func(m *marker.Marker) string {
+	return o.upsertDiscussionRoundLimitNotice(ctx, noticeMC, func(m *marker.Marker) string {
 		return FormatDiscussionRoundLimitWarning(m, maxRounds)
 	})
 }
