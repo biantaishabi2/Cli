@@ -7,10 +7,6 @@
     {
       "callee": "walkDepth",
       "line": 9
-    },
-    {
-      "callee": "walkDepth",
-      "line": 13
     }
   ],
   "imports": [

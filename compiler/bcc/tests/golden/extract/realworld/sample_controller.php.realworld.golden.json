@@ -25,6 +25,10 @@
     {
       "kind": "trait",
       "specifier": "MsbcArticleTrait"
+    },
+    {
+      "kind": "use",
+      "specifier": "Carbon\\Carbon"
     }
   ],
   "exports": [
