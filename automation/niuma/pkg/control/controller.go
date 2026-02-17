@@ -17,6 +17,9 @@ import (
 // GitHubOps 控制层需要的 GitHub 操作接口（独立于 agent 包的接口）
 type GitHubOps interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]IssueInfo, error)
+	ListIssuesByState(ctx context.Context, state string) ([]IssueInfo, error)
+	GetIssue(ctx context.Context, issueNumber int) (IssueInfo, error)
+	CloseIssue(ctx context.Context, issueNumber int) error
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 }
@@ -25,6 +28,7 @@ const (
 	integrationConflictLabel = "integration-conflict"
 	integrationGateFailLabel = "integration-gate-failed"
 	needsHumanLabel          = "needs-human"
+	botDoneLabel             = "bot:done"
 
 	metaKeyIntegrated                     = "integrated"
 	metaKeyIntegrationMergeStatus         = "integration_merge_status"
@@ -125,17 +129,16 @@ func (c *Controller) getIntegrationBranchName(task *Task) string {
 
 // Run 执行一次完整协调循环
 func (c *Controller) Run(ctx context.Context) error {
-	// ① 扫描 GitHub：仅处理明确进入编排队列的 bot:orchestrate
-	orchestrateIssues, err := c.github.ListIssuesWithLabel(ctx, "bot:orchestrate")
+	// ① 扫描 GitHub：优先处理 bot:orchestrate，同时持续纳入自动化标签队列
+	issues, orchestrateCount, err := c.collectAutomationIssues(ctx)
 	if err != nil {
-		return fmt.Errorf("扫描 bot:orchestrate issues 失败: %w", err)
+		return fmt.Errorf("扫描自动化 issues 失败: %w", err)
 	}
 
-	issues := orchestrateIssues
-	if len(issues) == 0 {
+	if orchestrateCount == 0 {
 		fmt.Println("[control] 没有发现新的 bot:orchestrate issues，将继续推进已有任务")
 	} else {
-		fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", len(issues))
+		fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", orchestrateCount)
 	}
 
 	// ② 对比 taskctl store：找出新 issue
@@ -383,6 +386,40 @@ func (c *Controller) Run(ctx context.Context) error {
 	return nil
 }
 
+// collectAutomationIssues 扫描所有自动化标签，合并为统一 issue 集合。
+// 返回值中的 orchestrateCount 仅用于日志，表示本轮新触发数量。
+func (c *Controller) collectAutomationIssues(ctx context.Context) ([]IssueInfo, int, error) {
+	issueMap := make(map[int]IssueInfo)
+	orchestrateCount := 0
+
+	for _, label := range integrationAutomationLabels {
+		issues, err := c.github.ListIssuesWithLabel(ctx, label)
+		if err != nil {
+			return nil, 0, fmt.Errorf("扫描 label=%s 失败: %w", label, err)
+		}
+		if label == "bot:orchestrate" {
+			orchestrateCount = len(issues)
+		}
+		for _, issue := range issues {
+			if issue.Number <= 0 {
+				continue
+			}
+			// 同一个 issue 可能匹配多个 label，保留最新结构即可。
+			issueMap[issue.Number] = issue
+		}
+	}
+
+	result := make([]IssueInfo, 0, len(issueMap))
+	for _, issue := range issueMap {
+		result = append(result, issue)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Number < result[j].Number
+	})
+
+	return result, orchestrateCount, nil
+}
+
 // checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
 func (c *Controller) checkParentProgress(ctx context.Context, issues []IssueInfo) {
 	// 构建 parent → sub-issues 映射
@@ -425,6 +462,128 @@ func (c *Controller) checkParentProgress(ctx context.Context, issues []IssueInfo
 			// TODO: 可以在这里关闭父 issue 或添加评论
 		}
 	}
+}
+
+// FinalizeIntegratedIssues 在 integration PR 合并后关闭对应 sub-issue，并尝试收口 parent。
+func (c *Controller) FinalizeIntegratedIssues(ctx context.Context, issueNums []int) error {
+	targets := uniquePositiveIssueNumbers(issueNums)
+	if len(targets) == 0 {
+		fmt.Println("[control] integration merge 未提取到可收口 issue，跳过")
+		return nil
+	}
+
+	parentNums := make(map[int]struct{})
+	var firstErr error
+
+	for _, issueNum := range targets {
+		issue, err := c.github.GetIssue(ctx, issueNum)
+		if err != nil {
+			fmt.Printf("[control] 获取 issue #%d 失败: %v\n", issueNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			parentNums[parentNum] = struct{}{}
+		}
+
+		if strings.EqualFold(issue.State, "closed") {
+			fmt.Printf("[control] issue #%d 已关闭，跳过重复收口\n", issueNum)
+			continue
+		}
+
+		if err := c.syncIssueStateLabel(ctx, issueNum, botDoneLabel); err != nil {
+			fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", issueNum, botDoneLabel, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if err := c.github.CloseIssue(ctx, issueNum); err != nil {
+			fmt.Printf("[control] 关闭 issue #%d 失败: %v\n", issueNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		fmt.Printf("[control] 已关闭 sub issue #%d\n", issueNum)
+	}
+
+	if err := c.closeParentIssuesIfReady(ctx, parentNums); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// closeParentIssuesIfReady 当 parent 的 sub-issue 全部关闭时，自动关闭 parent。
+func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums map[int]struct{}) error {
+	if len(parentNums) == 0 {
+		return nil
+	}
+
+	issues, err := c.github.ListIssuesByState(ctx, "all")
+	if err != nil {
+		return fmt.Errorf("列出全量 issues 失败: %w", err)
+	}
+
+	parentToSubs := make(map[int][]IssueInfo)
+	for _, issue := range issues {
+		if parentNum := parseParent(issue.Body); parentNum > 0 {
+			parentToSubs[parentNum] = append(parentToSubs[parentNum], issue)
+		}
+	}
+
+	var firstErr error
+	for parentNum := range parentNums {
+		subs := parentToSubs[parentNum]
+		if len(subs) == 0 {
+			fmt.Printf("[control] parent #%d 未找到 sub-issue，跳过自动关闭\n", parentNum)
+			continue
+		}
+
+		var openSubs []int
+		for _, sub := range subs {
+			if !strings.EqualFold(sub.State, "closed") {
+				openSubs = append(openSubs, sub.Number)
+			}
+		}
+		if len(openSubs) > 0 {
+			sort.Ints(openSubs)
+			fmt.Printf("[control] parent #%d 未满足关闭条件，仍有未关闭 sub-issue: %v\n", parentNum, openSubs)
+			continue
+		}
+
+		parentIssue, err := c.github.GetIssue(ctx, parentNum)
+		if err != nil {
+			fmt.Printf("[control] 获取 parent issue #%d 失败: %v\n", parentNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if strings.EqualFold(parentIssue.State, "closed") {
+			fmt.Printf("[control] parent issue #%d 已关闭，跳过重复收口\n", parentNum)
+			continue
+		}
+
+		if err := c.syncIssueStateLabel(ctx, parentNum, botDoneLabel); err != nil {
+			fmt.Printf("[control] parent issue #%d 打标 %s 失败: %v\n", parentNum, botDoneLabel, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if err := c.github.CloseIssue(ctx, parentNum); err != nil {
+			fmt.Printf("[control] 关闭 parent issue #%d 失败: %v\n", parentNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		fmt.Printf("[control] 已关闭 parent issue #%d（sub-issue 全部完成）\n", parentNum)
+	}
+
+	return firstErr
 }
 
 // Status 返回全局控制状态
@@ -513,6 +672,9 @@ var integrationAutomationLabels = []string{
 	"bot:pr-reviewable",
 	"bot:pr-needs-fix",
 	"bot:iterating",
+	integrationConflictLabel,
+	integrationGateFailLabel,
+	needsHumanLabel,
 }
 
 func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task, outcome MergeOutcome) (bool, error) {
@@ -1003,4 +1165,21 @@ func valueOrEmpty(meta map[string]string, key string) string {
 		return ""
 	}
 	return meta[key]
+}
+
+func uniquePositiveIssueNumbers(nums []int) []int {
+	unique := make(map[int]struct{}, len(nums))
+	for _, num := range nums {
+		if num <= 0 {
+			continue
+		}
+		unique[num] = struct{}{}
+	}
+
+	result := make([]int, 0, len(unique))
+	for num := range unique {
+		result = append(result, num)
+	}
+	sort.Ints(result)
+	return result
 }

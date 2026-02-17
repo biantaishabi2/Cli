@@ -94,6 +94,7 @@ type IssueInfo struct {
 	Number int      `json:"number"`
 	Title  string   `json:"title"`
 	Body   string   `json:"body"`
+	State  string   `json:"state,omitempty"`
 	Labels []string `json:"labels"`
 }
 

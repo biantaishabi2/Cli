@@ -3,11 +3,13 @@ name: niuma - Orchestrate
 on:
   issues:
     types: [labeled]
+  pull_request:
+    types: [closed]
   schedule:
     - cron: '*/5 * * * *'  # 每5分钟检查一次
 
 concurrency:
-  group: niuma-orchestrate-${{ github.event.issue.number || 'schedule' }}
+  group: niuma-orchestrate-${{ github.event.issue.number || github.event.pull_request.number || 'schedule' }}
   cancel-in-progress: false
 
 jobs:
@@ -87,3 +89,39 @@ jobs:
         if: steps.gate_status.outputs.integration_gate_status == 'pending'
         run: |
           echo "integration gate 仍在等待结果，本轮不推进后续自动流程。"
+
+  close-after-integration-merge:
+    runs-on: self-hosted
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'integration/')
+    permissions:
+      issues: write
+      pull-requests: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.NIUMA_PAT }}
+
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
+      - name: Close Sub/Parent Issues After Integration Merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
+          WORKSPACE: ${{ github.workspace }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          "$NIUMA_BIN" control close-merged \
+            --repo "$REPO" \
+            --repo-dir "$WORKSPACE" \
+            --pr "$PR_NUMBER"

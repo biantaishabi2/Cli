@@ -86,3 +86,28 @@ func (c *Client) ListPRReviews(ctx context.Context, number int) ([]*github.PullR
 
 	return allReviews, nil
 }
+
+// ListPRCommitMessages 列出 PR 中所有 commit message（含标题+正文）
+func (c *Client) ListPRCommitMessages(ctx context.Context, number int) ([]string, error) {
+	var messages []string
+	opts := &github.ListOptions{PerPage: 100}
+
+	for {
+		commits, resp, err := c.gh.PullRequests.ListCommits(ctx, c.owner, c.repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("列出 PR #%d commits 失败: %w", number, err)
+		}
+		for _, commit := range commits {
+			if commit == nil || commit.Commit == nil {
+				continue
+			}
+			messages = append(messages, commit.Commit.GetMessage())
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return messages, nil
+}

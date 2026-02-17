@@ -64,6 +64,38 @@ func (c *Client) ListIssuesWithLabel(ctx context.Context, label string) ([]*gith
 	return allIssues, nil
 }
 
+// ListIssuesByState 列出指定状态的 issue（过滤掉 PR）
+// state 支持 open/closed/all，空值默认 open。
+func (c *Client) ListIssuesByState(ctx context.Context, state string) ([]*github.Issue, error) {
+	if state == "" {
+		state = "open"
+	}
+
+	var allIssues []*github.Issue
+	opts := &github.IssueListByRepoOptions{
+		State:       state,
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	for {
+		issues, resp, err := c.gh.Issues.ListByRepo(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return nil, fmt.Errorf("列出 state=%s 的 issues 失败: %w", state, err)
+		}
+		for _, issue := range issues {
+			if issue.PullRequestLinks == nil {
+				allIssues = append(allIssues, issue)
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allIssues, nil
+}
+
 // CloseIssue 关闭指定 issue
 func (c *Client) CloseIssue(ctx context.Context, number int) error {
 	state := "closed"

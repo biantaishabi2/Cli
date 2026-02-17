@@ -18,11 +18,15 @@ import (
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
 	issues            []IssueInfo
+	issuesByLabel     map[string][]IssueInfo
+	issuesByNumber    map[int]IssueInfo
 	mergedPRs         []int
 	mergeError        map[int]error
 	replaceLabelCalls []replaceLabelCall
 	replaceLabelError map[string]error
 	replaceLabelFails map[string]int
+	closeIssueCalls   []int
+	closeIssueError   map[int]error
 }
 
 type replaceLabelCall struct {
@@ -32,16 +36,66 @@ type replaceLabelCall struct {
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
+	issuesByNumber := make(map[int]IssueInfo, len(issues))
+	for _, issue := range issues {
+		issuesByNumber[issue.Number] = issue
+	}
+
 	return &mockGitHubOps{
 		issues:            issues,
+		issuesByLabel:     make(map[string][]IssueInfo),
+		issuesByNumber:    issuesByNumber,
 		mergeError:        make(map[int]error),
 		replaceLabelError: make(map[string]error),
 		replaceLabelFails: make(map[string]int),
+		closeIssueError:   make(map[int]error),
 	}
 }
 
-func (m *mockGitHubOps) ListIssuesWithLabel(_ context.Context, _ string) ([]IssueInfo, error) {
+func (m *mockGitHubOps) ListIssuesWithLabel(_ context.Context, label string) ([]IssueInfo, error) {
+	if issues, ok := m.issuesByLabel[label]; ok {
+		return issues, nil
+	}
 	return m.issues, nil
+}
+
+func (m *mockGitHubOps) ListIssuesByState(_ context.Context, state string) ([]IssueInfo, error) {
+	if state == "all" {
+		result := make([]IssueInfo, 0, len(m.issuesByNumber))
+		for _, issue := range m.issuesByNumber {
+			result = append(result, issue)
+		}
+		return result, nil
+	}
+
+	result := make([]IssueInfo, 0, len(m.issuesByNumber))
+	for _, issue := range m.issuesByNumber {
+		if strings.EqualFold(issue.State, state) {
+			result = append(result, issue)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockGitHubOps) GetIssue(_ context.Context, issueNumber int) (IssueInfo, error) {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		return IssueInfo{}, fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	return issue, nil
+}
+
+func (m *mockGitHubOps) CloseIssue(_ context.Context, issueNumber int) error {
+	if err, ok := m.closeIssueError[issueNumber]; ok {
+		return err
+	}
+	issue, ok := m.issuesByNumber[issueNumber]
+	if ok {
+		issue.State = "closed"
+		m.issuesByNumber[issueNumber] = issue
+	}
+	m.closeIssueCalls = append(m.closeIssueCalls, issueNumber)
+	return nil
 }
 
 func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
@@ -738,10 +792,83 @@ func TestIntegrationGate(t *testing.T) {}
 	assert.Contains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
 }
 
+func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.issuesByLabel["bot:queued"] = []IssueInfo{
+		{Number: 214, Title: "queued task", State: "open", Labels: []string{"bot:queued"}},
+	}
+	mockGH.issuesByLabel["bot:fix"] = []IssueInfo{
+		{Number: 215, Title: "in progress task", State: "open", Labels: []string{"bot:fix"}},
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issues, orchestrateCount, err := ctrl.collectAutomationIssues(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, orchestrateCount)
+	assert.Len(t, issues, 2)
+}
+
+func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 210, Title: "parent", State: "open"},
+		IssueInfo{Number: 214, Title: "sub-214", Body: "parent: #210", State: "open", Labels: []string{"bot:pr-reviewable"}},
+		IssueInfo{Number: 215, Title: "sub-215", Body: "parent: #210", State: "closed"},
+	)
+
+	ctrl := &Controller{github: mockGH}
+	err := ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
+	require.NoError(t, err)
+
+	assert.Contains(t, mockGH.closeIssueCalls, 214)
+	assert.Contains(t, mockGH.closeIssueCalls, 210)
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 214, botDoneLabel), 0)
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 210, botDoneLabel), 0)
+}
+
+func TestFinalizeIntegratedIssues_ParentRemainsOpenWhenSubNotAllClosed(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 210, Title: "parent", State: "open"},
+		IssueInfo{Number: 214, Title: "sub-214", Body: "parent: #210", State: "open"},
+		IssueInfo{Number: 215, Title: "sub-215", Body: "parent: #210", State: "open"},
+	)
+
+	ctrl := &Controller{github: mockGH}
+	err := ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
+	require.NoError(t, err)
+
+	assert.Contains(t, mockGH.closeIssueCalls, 214)
+	assert.NotContains(t, mockGH.closeIssueCalls, 210)
+}
+
+func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 210, Title: "parent", State: "open"},
+		IssueInfo{Number: 214, Title: "sub-214", Body: "parent: #210", State: "closed"},
+		IssueInfo{Number: 215, Title: "sub-215", Body: "parent: #210", State: "open"},
+	)
+
+	ctrl := &Controller{github: mockGH}
+	err := ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
+	require.NoError(t, err)
+
+	assert.NotContains(t, mockGH.closeIssueCalls, 214)
+	assert.NotContains(t, mockGH.closeIssueCalls, 210)
+}
+
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
 	count := 0
 	for _, call := range calls {
 		if call.newLabel == label {
+			count++
+		}
+	}
+	return count
+}
+
+func countReplaceLabelByIssueAndTarget(calls []replaceLabelCall, issueNum int, label string) int {
+	count := 0
+	for _, call := range calls {
+		if call.issueNumber == issueNum && call.newLabel == label {
 			count++
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -44,6 +46,12 @@ var controlCheckCmd = &cobra.Command{
 	RunE:  runControlCheck,
 }
 
+var controlCloseMergedCmd = &cobra.Command{
+	Use:   "close-merged",
+	Short: "integration PR 合并后自动收口（关闭 sub/parent issue）",
+	RunE:  runControlCloseMerged,
+}
+
 var flagControlIssues string // --issues "40,41,42"
 var flagIntegrationGateMaxRetries int
 
@@ -52,10 +60,12 @@ func init() {
 	controlCmd.AddCommand(controlStatusCmd)
 	controlCmd.AddCommand(controlMergeCmd)
 	controlCmd.AddCommand(controlCheckCmd)
+	controlCmd.AddCommand(controlCloseMergedCmd)
 
 	controlMergeCmd.Flags().StringVar(&flagControlIssues, "issues", "", "要合并的 issue 编号列表（逗号分隔）")
 	controlMergeCmd.MarkFlagRequired("issues")
 	controlRunCmd.Flags().IntVar(&flagIntegrationGateMaxRetries, "integration-gate-max-retries", -1, "integration gate 最大重试次数（flag > env > default=2）")
+	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
 
 func buildController() (*control.Controller, error) {
@@ -153,10 +163,56 @@ func (g *gitHubControlOps) ListIssuesWithLabel(ctx context.Context, label string
 			Number: issue.GetNumber(),
 			Title:  issue.GetTitle(),
 			Body:   issue.GetBody(),
+			State:  issue.GetState(),
 			Labels: labels,
 		})
 	}
 	return result, nil
+}
+
+func (g *gitHubControlOps) ListIssuesByState(ctx context.Context, state string) ([]control.IssueInfo, error) {
+	issues, err := g.client.ListIssuesByState(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []control.IssueInfo
+	for _, issue := range issues {
+		var labels []string
+		for _, l := range issue.Labels {
+			labels = append(labels, l.GetName())
+		}
+		result = append(result, control.IssueInfo{
+			Number: issue.GetNumber(),
+			Title:  issue.GetTitle(),
+			Body:   issue.GetBody(),
+			State:  issue.GetState(),
+			Labels: labels,
+		})
+	}
+	return result, nil
+}
+
+func (g *gitHubControlOps) GetIssue(ctx context.Context, issueNumber int) (control.IssueInfo, error) {
+	issue, err := g.client.GetIssue(ctx, issueNumber)
+	if err != nil {
+		return control.IssueInfo{}, err
+	}
+	var labels []string
+	for _, l := range issue.Labels {
+		labels = append(labels, l.GetName())
+	}
+	return control.IssueInfo{
+		Number: issue.GetNumber(),
+		Title:  issue.GetTitle(),
+		Body:   issue.GetBody(),
+		State:  issue.GetState(),
+		Labels: labels,
+	}, nil
+}
+
+func (g *gitHubControlOps) CloseIssue(ctx context.Context, issueNumber int) error {
+	return g.client.CloseIssue(ctx, issueNumber)
 }
 
 func (g *gitHubControlOps) MergePR(ctx context.Context, prNum int, method string) error {
@@ -282,4 +338,78 @@ func runControlCheck(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Issue #%d 不在编排队列中\n", flagIssue)
 	// 返回 exit code 1 表示不在队列中（用于 workflow 判断）
 	return fmt.Errorf("not in queue")
+}
+
+func runControlCloseMerged(cmd *cobra.Command, args []string) error {
+	if flagRepo == "" || flagPR <= 0 {
+		return fmt.Errorf("必须指定 --repo 和 --pr")
+	}
+
+	ctx := context.Background()
+	client, err := gh.NewClientFromEnv(flagRepo)
+	if err != nil {
+		return err
+	}
+
+	pr, err := client.GetPR(ctx, flagPR)
+	if err != nil {
+		return err
+	}
+	if !pr.GetMerged() {
+		fmt.Printf("PR #%d 未合并，跳过收口。\n", flagPR)
+		return nil
+	}
+	headRef := pr.GetHead().GetRef()
+	baseRef := pr.GetBase().GetRef()
+	if !strings.HasPrefix(headRef, "integration/") || baseRef != "master" {
+		fmt.Printf("PR #%d (%s -> %s) 非 integration 合并到 master，跳过收口。\n", flagPR, headRef, baseRef)
+		return nil
+	}
+
+	commitMessages, err := client.ListPRCommitMessages(ctx, flagPR)
+	if err != nil {
+		return err
+	}
+	issueNums := extractIntegratedIssueNumbers(commitMessages)
+	if len(issueNums) == 0 {
+		fmt.Printf("PR #%d 未识别到 integration 子任务 issue，跳过收口。\n", flagPR)
+		return nil
+	}
+
+	ctrl, err := buildController()
+	if err != nil {
+		return err
+	}
+	if err := ctrl.FinalizeIntegratedIssues(ctx, issueNums); err != nil {
+		return err
+	}
+
+	fmt.Printf("PR #%d 收口完成，目标 issues: %v\n", flagPR, issueNums)
+	return nil
+}
+
+var integrationIssuePattern = regexp.MustCompile(`(?i)issue\s*#([0-9]+)`)
+
+func extractIntegratedIssueNumbers(messages []string) []int {
+	unique := make(map[int]struct{})
+	for _, message := range messages {
+		matches := integrationIssuePattern.FindAllStringSubmatch(message, -1)
+		for _, groups := range matches {
+			if len(groups) < 2 {
+				continue
+			}
+			num, err := strconv.Atoi(groups[1])
+			if err != nil || num <= 0 {
+				continue
+			}
+			unique[num] = struct{}{}
+		}
+	}
+
+	var result []int
+	for num := range unique {
+		result = append(result, num)
+	}
+	sort.Ints(result)
+	return result
 }
