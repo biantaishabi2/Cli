@@ -45,10 +45,7 @@ fn setup_multi_grade_repo(root: &Path) -> (PathBuf, usize, usize) {
     let svc = src.join("app/services");
     fs::create_dir_all(&ctrl).unwrap();
     fs::create_dir_all(&svc).unwrap();
-    write(
-        &ctrl.join("MainController.php"),
-        "<?php\nclass MainController {}\n",
-    );
+    write(&ctrl.join("MainController.php"), "<?php\nclass MainController {}\n");
     git(&["init"]);
     git(&["config", "user.email", "test@bdd.com"]);
     git(&["config", "user.name", "bdd-test"]);
@@ -164,7 +161,11 @@ fn count_prompt_files(dir: &Path) -> usize {
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().to_string_lossy().ends_with(".prompt.txt"))
+                .filter(|e| {
+                    e.path()
+                        .to_string_lossy()
+                        .ends_with(".prompt.txt")
+                })
                 .count()
         })
         .unwrap_or(0)
@@ -180,26 +181,14 @@ fn generate_ignores_stale_context_files() {
 
     // Step 1: collect + context
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c.status.success(), "collect failed");
 
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x.status.success(), "context failed");
 
@@ -209,21 +198,12 @@ fn generate_ignores_stale_context_files() {
         &stale_path,
         r#"{"hash":"deadbeef_stale","message":"stale","grade":"C","module":"ghost","tags":[],"diffs":[]}"#,
     );
-    assert!(
-        stale_path.exists(),
-        "stale file should exist before generate"
-    );
+    assert!(stale_path.exists(), "stale file should exist before generate");
 
     // Step 3: generate（降级模式，无 codex → 写 prompts/）
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--force",
     ]);
     assert!(g.status.success(), "generate failed");
 
@@ -235,8 +215,10 @@ fn generate_ignores_stale_context_files() {
     );
 
     // 验证 prompts/ 中的文件数 == inventory 中的 commit 数
-    let inv: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    )
+    .unwrap();
     let inv_count = inv["commits"].as_array().unwrap().len();
     let prompt_count = count_prompt_files(&prompts);
     assert_eq!(
@@ -258,29 +240,15 @@ fn generate_respects_grade_filter() {
 
     // collect 只保留 A 级（repo 中的 commit 都是 A 级）
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A", "--force",
     ]);
     assert!(c.status.success());
 
     // context
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x.status.success());
 
@@ -292,14 +260,8 @@ fn generate_respects_grade_filter() {
 
     // generate
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--force",
     ]);
     assert!(g.status.success());
 
@@ -322,25 +284,13 @@ fn step_organize_does_not_trigger_generate() {
 
     // 先跑 collect + context 准备数据
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c.status.success());
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x.status.success());
 
@@ -360,29 +310,17 @@ fn step_organize_does_not_trigger_generate() {
 
     // 只执行 organize
     let o = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "o",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "o",
     ]);
     assert!(o.status.success(), "organize should succeed");
 
     // prompts/ 不应有新文件（generate 未执行）
     let prompt_count = count_prompt_files(&prompts);
-    assert_eq!(
-        prompt_count, 0,
-        "organize should NOT trigger generate (found {} prompt files)",
-        prompt_count
-    );
+    assert_eq!(prompt_count, 0, "organize should NOT trigger generate (found {} prompt files)", prompt_count);
 
     // by_module/ 应该被创建
-    assert!(
-        out.join("by_module").exists(),
-        "organize should create by_module/"
-    );
+    assert!(out.join("by_module").exists(), "organize should create by_module/");
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -397,52 +335,40 @@ fn step_generate_does_not_rerun_collect() {
 
     // 先 collect
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c.status.success());
 
     // context
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x.status.success());
 
     // 记录 inventory.json 的 mtime
     let inv_path = out.join("inventory.json");
-    let mtime_before = fs::metadata(&inv_path).unwrap().modified().unwrap();
+    let mtime_before = fs::metadata(&inv_path)
+        .unwrap()
+        .modified()
+        .unwrap();
 
     // 等 1 秒确保 mtime 差异可检测
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     // 只执行 generate
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--force",
     ]);
     assert!(g.status.success(), "generate should succeed");
 
     // inventory.json 的 mtime 不应变化
-    let mtime_after = fs::metadata(&inv_path).unwrap().modified().unwrap();
+    let mtime_after = fs::metadata(&inv_path)
+        .unwrap()
+        .modified()
+        .unwrap();
     assert_eq!(
         mtime_before, mtime_after,
         "inventory.json mtime should not change when running -s g alone"
@@ -480,10 +406,7 @@ fn generate_circuit_breaker_after_consecutive_failures() {
         let hash = format!("breaker{:03}", i);
         write(
             &contexts.join(format!("{}.json", hash)),
-            &format!(
-                r#"{{"hash":"{}","message":"fix {}","grade":"A","module":"test","tags":[],"diffs":[]}}"#,
-                hash, i
-            ),
+            &format!(r#"{{"hash":"{}","message":"fix {}","grade":"A","module":"test","tags":[],"diffs":[]}}"#, hash, i),
         );
         commits.push(serde_json::json!({
             "hash": hash,
@@ -521,12 +444,9 @@ fn generate_circuit_breaker_after_consecutive_failures() {
         .arg("bugfix")
         .args([
             root.join("dummy_repo").to_str().unwrap(), // repo 参数（generate 不使用）
-            "-o",
-            out.to_str().unwrap(),
-            "--lang",
-            "php",
-            "-s",
-            "g",
+            "-o", out.to_str().unwrap(),
+            "--lang", "php",
+            "-s", "g",
             "--force",
         ])
         .env("PATH", &new_path)
@@ -557,31 +477,16 @@ fn context_works_after_dead_param_removal() {
     let out = root.join("out");
 
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c.status.success());
 
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
-    assert!(
-        x.status.success(),
-        "context should work without dead params"
-    );
+    assert!(x.status.success(), "context should work without dead params");
 
     assert!(out.join("contexts").exists(), "contexts/ should be created");
     assert!(
@@ -602,14 +507,8 @@ fn collect_force_cleans_stale_contexts() {
 
     // 第一次 collect
     let c1 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c1.status.success());
 
@@ -628,14 +527,8 @@ fn collect_force_cleans_stale_contexts() {
 
     // 再次 collect --force → 应清理 stale 文件
     let c2 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--force",
     ]);
     assert!(c2.status.success());
 
@@ -672,12 +565,8 @@ fn full_run_cleans_stale_artifacts() {
 
     // 全量运行（不传 -s）
     let full = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "--force",
     ]);
     assert!(full.status.success(), "full run should succeed");
 
@@ -714,78 +603,41 @@ fn limit_end_to_end_two_collect_rounds() {
 
     // 第一轮：全量 collect + context（7 个 bugfix commit）
     let c1 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A,B",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A,B", "--force",
     ]);
     assert!(c1.status.success());
 
-    let inv1: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv1: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let inv1_count = inv1["commits"].as_array().unwrap().len();
-    assert_eq!(
-        inv1_count, total,
-        "first collect should have {} commits",
-        total
-    );
+    assert_eq!(inv1_count, total, "first collect should have {} commits", total);
 
     let x1 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x1.status.success());
     let ctx_full = count_json_files(&out.join("contexts"));
-    assert_eq!(
-        ctx_full, total,
-        "first context should produce {} files",
-        total
-    );
+    assert_eq!(ctx_full, total, "first context should produce {} files", total);
 
     // 第二轮：collect --limit 3 重写 inventory
     let c2 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A,B",
-        "--limit",
-        "3",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A,B", "--limit", "3", "--force",
     ]);
     assert!(c2.status.success());
 
-    let inv2: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv2: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let inv2_count = inv2["commits"].as_array().unwrap().len();
-    assert_eq!(
-        inv2_count, 3,
-        "second collect with --limit 3 should have 3 commits"
-    );
+    assert_eq!(inv2_count, 3, "second collect with --limit 3 should have 3 commits");
 
     // collect --force 后清理了旧 context，contexts/ 应只剩 3 个
     let ctx_after = count_json_files(&out.join("contexts"));
-    assert_eq!(
-        ctx_after, 3,
-        "cleanup after collect should leave 3 context files, got {}",
-        ctx_after
-    );
+    assert_eq!(ctx_after, 3, "cleanup after collect should leave 3 context files, got {}", ctx_after);
 
     // 注入一个 stale context（模拟清理失败或手动残留）
     write(
@@ -795,14 +647,8 @@ fn limit_end_to_end_two_collect_rounds() {
 
     // generate — 应只处理 inventory 中的 3 个，忽略 stale
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--force",
     ]);
     assert!(g.status.success());
 
@@ -827,74 +673,39 @@ fn grade_filter_two_collect_rounds() {
 
     // 第一轮：collect --grade A,B（全部）
     let c1 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A,B",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A,B", "--force",
     ]);
     assert!(c1.status.success());
 
     let x1 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x1.status.success());
     assert_eq!(count_json_files(&out.join("contexts")), total);
 
     // 第二轮：collect --grade A（只保留 A 级）
     let c2 = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A", "--force",
     ]);
     assert!(c2.status.success());
 
-    let inv2: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv2: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let inv2_count = inv2["commits"].as_array().unwrap().len();
-    assert_eq!(
-        inv2_count, a_count,
-        "second collect --grade A should have {} A-grade commits",
-        a_count
-    );
+    assert_eq!(inv2_count, a_count, "second collect --grade A should have {} A-grade commits", a_count);
 
     // B 级的 context 应被清理
     let ctx_after = count_json_files(&out.join("contexts"));
-    assert_eq!(
-        ctx_after, a_count,
-        "cleanup should remove B-grade contexts, leaving {}",
-        a_count
-    );
+    assert_eq!(ctx_after, a_count, "cleanup should remove B-grade contexts, leaving {}", a_count);
 
     // generate
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--force",
     ]);
     assert!(g.status.success());
 
@@ -917,13 +728,8 @@ fn step_context_fails_without_inventory() {
     fs::create_dir_all(&out).unwrap();
 
     let result = bcc_bugfix(&[
-        "/nonexistent/repo",
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
+        "/nonexistent/repo", "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x",
     ]);
 
     assert!(
@@ -950,13 +756,8 @@ fn step_generate_fails_without_inventory() {
     fs::create_dir_all(&out).unwrap();
 
     let result = bcc_bugfix(&[
-        "/nonexistent/repo",
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
+        "/nonexistent/repo", "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g",
     ]);
 
     assert!(
@@ -984,52 +785,27 @@ fn generate_limit_via_cli() {
 
     // collect + context（全量）
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "c",
-        "--grade",
-        "A,B",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "c", "--grade", "A,B", "--force",
     ]);
     assert!(c.status.success());
 
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "x", "--force",
     ]);
     assert!(x.status.success());
 
-    let inv: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let total = inv["commits"].as_array().unwrap().len();
-    assert!(
-        total >= 5,
-        "need at least 5 commits for limit test, got {}",
-        total
-    );
+    assert!(total >= 5, "need at least 5 commits for limit test, got {}", total);
 
     // generate --limit 2（只处理前 2 个）
     let g = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "php",
-        "-s",
-        "g",
-        "--limit",
-        "2",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "php", "-s", "g", "--limit", "2", "--force",
     ]);
     assert!(g.status.success());
 
@@ -1053,9 +829,7 @@ fn generate_limit_via_cli() {
 fn rust_extract_smoke() {
     let root = temp_dir("bdd_rust_extract");
     let rs_file = root.join("sample.rs");
-    write(
-        &rs_file,
-        r#"//! 示例模块
+    write(&rs_file, r#"//! 示例模块
 
 use std::collections::HashMap;
 use serde::Serialize;
@@ -1088,8 +862,7 @@ pub fn run(config: &Config) -> Result<(), String> {
 fn private_helper() {
     std::fs::read_to_string("file.txt").ok();
 }
-"#,
-    );
+"#);
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args(["extract", rs_file.to_str().unwrap(), "--mode", "ast"])
@@ -1097,27 +870,20 @@ fn private_helper() {
         .expect("run bcc extract");
     assert!(output.status.success(), "extract should succeed");
 
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("output should be valid JSON");
 
     // 验证语言
     assert_eq!(json["language"], "rust");
 
     // 验证 exports 包含 pub 声明
     let exports = json["exports"].as_array().unwrap();
-    let export_names: Vec<&str> = exports.iter().filter_map(|e| e["name"].as_str()).collect();
-    assert!(
-        export_names.contains(&"Config"),
-        "should export Config struct"
-    );
-    assert!(
-        export_names.contains(&"Status"),
-        "should export Status enum"
-    );
-    assert!(
-        export_names.contains(&"Handler"),
-        "should export Handler trait"
-    );
+    let export_names: Vec<&str> = exports.iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(export_names.contains(&"Config"), "should export Config struct");
+    assert!(export_names.contains(&"Status"), "should export Status enum");
+    assert!(export_names.contains(&"Handler"), "should export Handler trait");
     assert!(export_names.contains(&"run"), "should export run function");
 
     // 验证 imports
@@ -1126,11 +892,10 @@ fn private_helper() {
 
     // 验证 calls 包含 println! 宏
     let calls = json["calls"].as_array().unwrap();
-    let call_names: Vec<&str> = calls.iter().filter_map(|c| c["callee"].as_str()).collect();
-    assert!(
-        call_names.contains(&"println!"),
-        "should detect println! macro"
-    );
+    let call_names: Vec<&str> = calls.iter()
+        .filter_map(|c| c["callee"].as_str())
+        .collect();
+    assert!(call_names.contains(&"println!"), "should detect println! macro");
 
     // 验证副作用
     let se = &json["side_effects"];
@@ -1156,13 +921,10 @@ fn setup_rust_bugfix_repo(root: &Path) -> PathBuf {
     };
 
     // 初始化 repo
-    write(
-        &src.join("main.rs"),
-        r#"pub fn run() {
+    write(&src.join("main.rs"), r#"pub fn run() {
     println!("hello");
 }
-"#,
-    );
+"#);
     git(&["init"]);
     git(&["config", "user.email", "test@bdd.com"]);
     git(&["config", "user.name", "bdd-test"]);
@@ -1170,42 +932,33 @@ fn setup_rust_bugfix_repo(root: &Path) -> PathBuf {
     git(&["commit", "-m", "init: rust project"]);
 
     // bugfix commit 1
-    write(
-        &src.join("main.rs"),
-        r#"pub fn run() {
+    write(&src.join("main.rs"), r#"pub fn run() {
     if std::env::args().len() < 2 {
         eprintln!("missing argument");
         return;
     }
     println!("hello");
 }
-"#,
-    );
+"#);
     git(&["add", "."]);
     git(&["commit", "-m", "fix: handle empty input"]);
 
     // bugfix commit 2
-    write(
-        &src.join("lib.rs"),
-        r#"pub fn parse(input: &str) -> Result<i32, String> {
+    write(&src.join("lib.rs"), r#"pub fn parse(input: &str) -> Result<i32, String> {
     input.parse::<i32>().map_err(|e| e.to_string())
 }
-"#,
-    );
+"#);
     git(&["add", "."]);
     git(&["commit", "-m", "init: add parser"]);
 
-    write(
-        &src.join("lib.rs"),
-        r#"pub fn parse(input: &str) -> Result<i32, String> {
+    write(&src.join("lib.rs"), r#"pub fn parse(input: &str) -> Result<i32, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err("empty input".into());
     }
     trimmed.parse::<i32>().map_err(|e| e.to_string())
 }
-"#,
-    );
+"#);
     git(&["add", "."]);
     git(&["commit", "-m", "bug: parse 空字符串 panic"]);
 
@@ -1220,55 +973,28 @@ fn rust_bugfix_collect_and_context() {
 
     // collect
     let c = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "rust",
-        "-s",
-        "c",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "rust", "-s", "c", "--force",
     ]);
-    assert!(
-        c.status.success(),
-        "collect failed: {}",
-        String::from_utf8_lossy(&c.stderr)
-    );
+    assert!(c.status.success(), "collect failed: {}", String::from_utf8_lossy(&c.stderr));
 
     // 验证 inventory.json
-    let inv: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let commits = inv["commits"].as_array().unwrap();
-    assert!(
-        commits.len() >= 1,
-        "should have at least 1 bugfix commit, got {}",
-        commits.len()
-    );
+    assert!(commits.len() >= 1, "should have at least 1 bugfix commit, got {}", commits.len());
 
     // context
     let x = bcc_bugfix(&[
-        repo.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--lang",
-        "rust",
-        "-s",
-        "x",
-        "--force",
+        repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+        "--lang", "rust", "-s", "x", "--force",
     ]);
-    assert!(
-        x.status.success(),
-        "context failed: {}",
-        String::from_utf8_lossy(&x.stderr)
-    );
+    assert!(x.status.success(), "context failed: {}", String::from_utf8_lossy(&x.stderr));
 
     // 验证 contexts/ 有文件
     let ctx_count = count_json_files(&out.join("contexts"));
-    assert!(
-        ctx_count >= 1,
-        "should have at least 1 context file, got {}",
-        ctx_count
-    );
+    assert!(ctx_count >= 1, "should have at least 1 context file, got {}", ctx_count);
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1295,10 +1021,7 @@ fn collect_skips_issue_when_gh_unavailable() {
     };
 
     // 创建含 #N 引用的 commit
-    write(
-        &ctrl.join("OrderController.php"),
-        "<?php\nclass OrderController {}\n",
-    );
+    write(&ctrl.join("OrderController.php"), "<?php\nclass OrderController {}\n");
     git(&["init"]);
     git(&["config", "user.email", "test@bdd.com"]);
     git(&["config", "user.name", "bdd-test"]);
@@ -1318,14 +1041,8 @@ fn collect_skips_issue_when_gh_unavailable() {
     let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .arg("bugfix")
         .args([
-            repo.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-            "--lang",
-            "php",
-            "-s",
-            "c",
-            "--force",
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force",
         ])
         .env("BCC_FORCE_PROMPT_MODE", "1")
         .env("PATH", "/usr/bin:/bin")
@@ -1335,17 +1052,15 @@ fn collect_skips_issue_when_gh_unavailable() {
     assert!(result.status.success(), "collect should succeed without gh");
 
     // inventory.json 应存在且 commit 中无 issue 字段
-    let inv: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(out.join("inventory.json")).unwrap()).unwrap();
+    let inv: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("inventory.json")).unwrap(),
+    ).unwrap();
     let commits = inv["commits"].as_array().unwrap();
     assert!(!commits.is_empty(), "should have commits");
     // 无 gh 时 issue 应为 null/不存在
     for c in commits {
-        assert!(
-            c.get("issue").is_none() || c["issue"].is_null(),
-            "issue should not be present without gh, got: {}",
-            c
-        );
+        assert!(c.get("issue").is_none() || c["issue"].is_null(),
+            "issue should not be present without gh, got: {}", c);
     }
 
     let _ = fs::remove_dir_all(&root);
@@ -1363,31 +1078,17 @@ fn cli_accepts_issue_flag() {
     let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .arg("bugfix")
         .args([
-            repo.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-            "--lang",
-            "php",
-            "-s",
-            "c",
-            "--force",
-            "--issue",
-            "99",
+            repo.to_str().unwrap(), "-o", out.to_str().unwrap(),
+            "--lang", "php", "-s", "c", "--force", "--issue", "99",
         ])
         .env("BCC_FORCE_PROMPT_MODE", "1")
         .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("run bcc bugfix with --issue");
 
-    assert!(
-        result.status.success(),
-        "collect with --issue should succeed, stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        out.join("inventory.json").exists(),
-        "inventory.json should be created"
-    );
+    assert!(result.status.success(), "collect with --issue should succeed, stderr: {}",
+        String::from_utf8_lossy(&result.stderr));
+    assert!(out.join("inventory.json").exists(), "inventory.json should be created");
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1416,25 +1117,16 @@ fn issue_enrichment_merges_pr_and_issue() {
     let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .arg("bugfix")
         .args([
-            repo,
-            "-o",
-            &out.to_string_lossy(),
-            "-s",
-            "c",
-            "--force",
-            "--issue",
-            "4", // 手动指定 PR #4
+            repo, "-o", &out.to_string_lossy(), "-s", "c", "--force",
+            "--issue", "4", // 手动指定 PR #4
         ])
         .env("BCC_FORCE_PROMPT_MODE", "1")
         .output();
 
     // 即使 API 调用失败也不应该 panic，应该静默跳过
     if let Ok(output) = result {
-        assert!(
-            output.status.success(),
-            "collect should not fail: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success(), "collect should not fail: {}",
+            String::from_utf8_lossy(&output.stderr));
 
         // 检查 inventory.json
         if let Ok(inv_content) = fs::read_to_string(out.join("inventory.json")) {
@@ -1448,8 +1140,7 @@ fn issue_enrichment_merges_pr_and_issue() {
                             // 合并后的内容应该包含两个章节
                             assert!(
                                 body.contains("## 原始需求") || body.contains("## 实现方案"),
-                                "merged content should have structured sections, got: {}",
-                                body
+                                "merged content should have structured sections, got: {}", body
                             );
                         }
                     }
@@ -1478,10 +1169,9 @@ Closes #2
 
     // 使用与实现相同的正则
     let re = regex::Regex::new(r"(?i)(closes|fixes|resolves)\s*#(\d+)").unwrap();
-    let refs: Vec<u64> = re
-        .captures_iter(pr_body)
+    let refs: Vec<u64> = re.captures_iter(pr_body)
         .filter_map(|cap| cap.get(2)?.as_str().parse::<u64>().ok())
         .collect();
-
+    
     assert_eq!(refs, vec![2], "should extract issue #2 from PR body");
 }

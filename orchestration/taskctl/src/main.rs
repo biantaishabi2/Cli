@@ -3,9 +3,9 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use taskctl::{
-    DagGraph, TaskCreate, TaskStatus, TaskUpdate, UpdateStatus, create_task, dag_graph,
-    default_store_path, delete_task, get_task, list_tasks, load_store, ready_tasks, save_store,
-    update_task, validate_store,
+    create_task, dag_graph, default_store_path, delete_task, get_task, list_tasks, load_store,
+    ready_tasks, save_store, update_task, validate_store, DagGraph, TaskCreate, TaskStatus,
+    TaskUpdate, UpdateStatus,
 };
 
 const EXAMPLES: &str = r#"Examples:
@@ -29,9 +29,7 @@ const EXAMPLES: &str = r#"Examples:
 #[derive(Parser, Debug)]
 #[command(name = "taskctl")]
 #[command(about = "Task DAG CLI for human/agent collaboration")]
-#[command(
-    long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints."
-)]
+#[command(long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints.")]
 #[command(after_help = EXAMPLES)]
 struct Cli {
     #[arg(long, global = true, help = "Path to task store JSON file")]
@@ -57,10 +55,7 @@ enum Commands {
     Update {
         #[arg(long, help = "Task ID")]
         task_id: String,
-        #[arg(
-            long,
-            help = "Status transition: pending -> in-progress -> completed, or deleted"
-        )]
+        #[arg(long, help = "Status transition: pending -> in-progress -> completed, or deleted")]
         status: Option<StatusArg>,
         #[arg(long, help = "Updated task title")]
         subject: Option<String>,
@@ -74,11 +69,7 @@ enum Commands {
         metadata: Option<String>,
         #[arg(long, value_delimiter = ',', help = "Task IDs blocked by this task")]
         add_blocks: Vec<String>,
-        #[arg(
-            long,
-            value_delimiter = ',',
-            help = "Dependency task IDs that block this task"
-        )]
+        #[arg(long, value_delimiter = ',', help = "Dependency task IDs that block this task")]
         add_blocked_by: Vec<String>,
     },
     #[command(about = "Delete task and clean reverse dependency links")]
@@ -102,10 +93,7 @@ enum Commands {
     Ready,
     #[command(about = "Validate graph integrity and acyclic DAG constraints")]
     Validate,
-    #[command(
-        about = "Generate DAG JSON (topo_order, layers, nodes, edges)",
-        alias = "generate"
-    )]
+    #[command(about = "Generate DAG JSON (topo_order, layers, nodes, edges)", alias = "generate")]
     Dag,
     #[command(about = "Render DAG in ASCII text for quick review", alias = "ascii")]
     DagAscii,

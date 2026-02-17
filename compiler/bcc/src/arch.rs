@@ -323,26 +323,25 @@ fn map_files_to_modules(
     }
 
     // 将路径匹配到模块的闭包
-    let match_path =
-        |path: &str, compiled: &[(String, i64, Vec<Regex>, Vec<Regex>)]| -> Option<String> {
-            let mut candidates: Vec<(String, i64)> = Vec::new();
-            for (module_id, precedence, includes, excludes) in compiled {
-                let include_hit = includes.iter().any(|re| re.is_match(path));
-                if !include_hit {
-                    continue;
-                }
-                let exclude_hit = excludes.iter().any(|re| re.is_match(path));
-                if exclude_hit {
-                    continue;
-                }
-                candidates.push((module_id.clone(), *precedence));
+    let match_path = |path: &str, compiled: &[(String, i64, Vec<Regex>, Vec<Regex>)]| -> Option<String> {
+        let mut candidates: Vec<(String, i64)> = Vec::new();
+        for (module_id, precedence, includes, excludes) in compiled {
+            let include_hit = includes.iter().any(|re| re.is_match(path));
+            if !include_hit {
+                continue;
             }
-            if candidates.is_empty() {
-                return None;
+            let exclude_hit = excludes.iter().any(|re| re.is_match(path));
+            if exclude_hit {
+                continue;
             }
-            candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-            Some(candidates[0].0.clone())
-        };
+            candidates.push((module_id.clone(), *precedence));
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        Some(candidates[0].0.clone())
+    };
 
     let mut out = HashMap::new();
 
@@ -357,11 +356,7 @@ fn map_files_to_modules(
     // 第二遍：遍历 localDependencies 和 localCallTargets，
     // 将依赖目标路径也通过 glob 规则匹配到模块（sourcePath 优先，不覆盖）
     for rec in &ast.records {
-        for dep in rec
-            .localDependencies
-            .iter()
-            .chain(rec.localCallTargets.iter())
-        {
+        for dep in rec.localDependencies.iter().chain(rec.localCallTargets.iter()) {
             let dep_path = to_posix(dep);
             if out.contains_key(&dep_path) {
                 continue;
@@ -1188,7 +1183,8 @@ fn validate_impl(
     // 导出 bdd source YAML（如果指定了 --export-bdd-source）
     if let Some(bdd_dir) = export_bdd_source {
         let bdd_path = Path::new(bdd_dir);
-        fs::create_dir_all(bdd_path).map_err(|e| format!("create bdd source dir failed: {}", e))?;
+        fs::create_dir_all(bdd_path)
+            .map_err(|e| format!("create bdd source dir failed: {}", e))?;
 
         let mut exported = 0usize;
         for (key, weight) in &transition_eval.forbidden_top {
@@ -1791,10 +1787,7 @@ profiles:
         let ftm = map_files_to_modules(&seed, &ast).expect("map ok");
 
         // sourcePath 应映射到 TOOLS
-        assert_eq!(
-            ftm.get("gong/tools/truncate.ex"),
-            Some(&"TOOLS".to_string())
-        );
+        assert_eq!(ftm.get("gong/tools/truncate.ex"), Some(&"TOOLS".to_string()));
         // dep 路径 gong/truncate.ex 应映射到 COMPACTION
         assert_eq!(ftm.get("gong/truncate.ex"), Some(&"COMPACTION".to_string()));
 

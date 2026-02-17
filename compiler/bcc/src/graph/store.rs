@@ -91,7 +91,7 @@ pub trait CodeGraphStore {
     // ==================== Phase 3: Search Graph ====================
 
     /// 多图融合搜索
-    ///
+    /// 
     /// 支持同时搜索多种关系：callers, callees, siblings, same-file, same-module
     fn search_graph(
         &self,
@@ -116,7 +116,7 @@ pub trait GraphStoreInsert: CodeGraphStore {
     fn insert_language_stat(&self, stat: &LanguageStat) -> Result<()>;
     fn insert_class(&self, class: &ClassRecord) -> Result<()>;
     fn insert_inherit_edge(&self, edge: &InheritEdge) -> Result<()>;
-
+    
     // ==================== 模块依赖图 ====================
     fn insert_module(&self, module: &ModuleRecord) -> Result<()>;
     fn insert_module_dep_edge(&self, edge: &ModuleDepEdge) -> Result<()>;

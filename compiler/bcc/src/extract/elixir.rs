@@ -586,6 +586,29 @@ end
             call_lines
         );
     }
+
+    #[test]
+    fn import_use_require_declaration_dot_not_extracted_as_call() {
+        let cases = vec![
+            ("import", "import Foo.Bar"),
+            ("use", "use Foo.Bar"),
+            ("require", "require Foo.Bar"),
+        ];
+
+        for (name, declaration) in cases {
+            let source = format!(
+                "defmodule Demo do\n  {}\n  def run, do: :ok\nend\n",
+                declaration
+            );
+            let record = extract(&source, "lib/demo.ex");
+            assert!(
+                record.calls.is_empty(),
+                "{} declaration should not create calls, got: {:?}",
+                name,
+                record.calls
+            );
+        }
+    }
 }
 
 /// 基于全文关键词扫描的副作用分类标签（行为检测的分类维度）

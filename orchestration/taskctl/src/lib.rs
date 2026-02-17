@@ -159,10 +159,7 @@ fn parse_update_status(s: UpdateStatus) -> Option<TaskStatus> {
 
 pub fn default_store_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join("cli")
-        .join("taskctl")
-        .join("tasks.json")
+    PathBuf::from(home).join("cli").join("taskctl").join("tasks.json")
 }
 
 pub fn load_store(path: &Path) -> Result<TaskStore, TaskError> {
@@ -247,7 +244,11 @@ pub fn update_task(
         return Err(TaskError::SelfDependency);
     }
 
-    for dep in patch.add_blocks.iter().chain(patch.add_blocked_by.iter()) {
+    for dep in patch
+        .add_blocks
+        .iter()
+        .chain(patch.add_blocked_by.iter())
+    {
         if !store.tasks.contains_key(dep) {
             return Err(TaskError::MissingDependency(dep.clone()));
         }
@@ -334,9 +335,7 @@ pub fn update_task(
             });
         }
 
-        if matches!(target, TaskStatus::InProgress | TaskStatus::Completed)
-            && !unresolved.is_empty()
-        {
+        if matches!(target, TaskStatus::InProgress | TaskStatus::Completed) && !unresolved.is_empty() {
             return Err(TaskError::BlockedTransition(target, unresolved.join(",")));
         }
 
@@ -377,9 +376,10 @@ pub fn ready_tasks(store: &TaskStore) -> Result<Vec<Task>, TaskError> {
 pub fn validate_store(store: &TaskStore) -> Result<(), TaskError> {
     for (task_id, task) in &store.tasks {
         for dep in &task.blocked_by {
-            let dep_task = store.tasks.get(dep).ok_or_else(|| {
-                TaskError::StoreValidation(format!("{task_id} blocked_by missing {dep}"))
-            })?;
+            let dep_task = store
+                .tasks
+                .get(dep)
+                .ok_or_else(|| TaskError::StoreValidation(format!("{task_id} blocked_by missing {dep}")))?;
             if !dep_task.blocks.contains(task_id) {
                 return Err(TaskError::StoreValidation(format!(
                     "{task_id}<->{dep} relation is not symmetric"
@@ -387,9 +387,10 @@ pub fn validate_store(store: &TaskStore) -> Result<(), TaskError> {
             }
         }
         for blocked in &task.blocks {
-            let blocked_task = store.tasks.get(blocked).ok_or_else(|| {
-                TaskError::StoreValidation(format!("{task_id} blocks missing {blocked}"))
-            })?;
+            let blocked_task = store
+                .tasks
+                .get(blocked)
+                .ok_or_else(|| TaskError::StoreValidation(format!("{task_id} blocks missing {blocked}")))?;
             if !blocked_task.blocked_by.contains(task_id) {
                 return Err(TaskError::StoreValidation(format!(
                     "{task_id}<->{blocked} relation is not symmetric"
@@ -842,8 +843,11 @@ mod tests {
         let mut store = TaskStore::default();
         let mut ids = HashSet::new();
         for idx in 0..3 {
-            let task = create_task(&mut store, mk_create(&format!("parallel-task-{idx}")))
-                .expect("create task");
+            let task = create_task(
+                &mut store,
+                mk_create(&format!("parallel-task-{idx}")),
+            )
+            .expect("create task");
             ids.insert(task.id);
         }
 
@@ -861,10 +865,7 @@ mod tests {
         // Given: create dependency chain and write to disk
         let mut store = TaskStore::default();
         let mut meta = serde_json::Map::new();
-        meta.insert(
-            "priority".to_string(),
-            serde_json::Value::String("P0".to_string()),
-        );
+        meta.insert("priority".to_string(), serde_json::Value::String("P0".to_string()));
 
         let design = create_task(
             &mut store,
@@ -876,8 +877,11 @@ mod tests {
             },
         )
         .expect("create design");
-        let implement =
-            create_task(&mut store, mk_create("Implement API")).expect("create implement");
+        let implement = create_task(
+            &mut store,
+            mk_create("Implement API"),
+        )
+        .expect("create implement");
         update_task(
             &mut store,
             &implement.id,
@@ -907,10 +911,7 @@ mod tests {
             parsed["tasks"][&design.id]["status"],
             serde_json::Value::String("pending".to_string())
         );
-        assert_eq!(
-            parsed["tasks"][&implement.id]["blocked_by"][0],
-            design.id.clone()
-        );
+        assert_eq!(parsed["tasks"][&implement.id]["blocked_by"][0], design.id.clone());
 
         let loaded = load_store(&path).expect("load");
         let ready = ready_tasks(&loaded).expect("ready");
@@ -923,10 +924,7 @@ mod tests {
                 "status".to_string(),
                 serde_json::Value::String("in_progress".to_string()),
             ),
-            (
-                "module".to_string(),
-                serde_json::Value::String("api".to_string()),
-            ),
+            ("module".to_string(), serde_json::Value::String("api".to_string())),
         ]);
         let maybe_err = update_task(
             &mut store,
