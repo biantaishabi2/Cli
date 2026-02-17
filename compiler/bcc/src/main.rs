@@ -243,6 +243,10 @@ enum ArchAction {
         version: String,
         #[arg(long, default_value = "all")]
         emit: String,
+        #[arg(long, default_value_t = false)]
+        detect_injection: bool,
+        #[arg(long)]
+        injection_patterns: Option<String>,
         #[arg(long)]
         force: bool,
     },
@@ -582,9 +586,20 @@ fn main() {
                 out_dir,
                 version,
                 emit,
+                detect_injection,
+                injection_patterns,
                 force,
             } => {
-                arch::matrix(&seed_file, &ast_file, &out_dir, &version, &emit, force);
+                arch::matrix(
+                    &seed_file,
+                    &ast_file,
+                    &out_dir,
+                    &version,
+                    &emit,
+                    detect_injection,
+                    injection_patterns.as_deref(),
+                    force,
+                );
             }
             ArchAction::Validate {
                 target,

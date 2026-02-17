@@ -1,5 +1,6 @@
 use super::common;
 use super::*;
+use regex::Regex;
 
 /// 使用 tree-sitter-elixir 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
@@ -31,6 +32,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     detect_side_effects(content, &mut side_effects);
 
     common::dedup_calls_by_callee(&mut calls);
+    let relation_hints = detect_relation_hints(&imports, content);
 
     FileRecord {
         language: "elixir".into(),
@@ -40,6 +42,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         imports,
         calls,
         local_call_targets: Vec::new(),
+        relation_hints,
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
@@ -356,6 +359,105 @@ fn extract_string_content(node: tree_sitter::Node, source: &[u8]) -> String {
     }
 }
 
+fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+
+    for imp in imports {
+        if imp.kind != "use" {
+            continue;
+        }
+        let via_module = extract_use_main_module(&imp.specifier);
+        let via = if via_module.is_empty() {
+            "use".to_string()
+        } else {
+            format!("use {}", via_module)
+        };
+        for target in extract_use_injected_modules(&imp.specifier) {
+            hints.push(RelationHintRecord {
+                target,
+                call_type_hint: "framework_injection".to_string(),
+                via: via.clone(),
+                confidence: 0.92,
+                detector: "elixir.use_macro".to_string(),
+                reason: "use 宏参数中的模块注入".to_string(),
+            });
+        }
+    }
+
+    // ExternalLib(.Providers).register(InternalModule) -> external_registration
+    let register_re = Regex::new(
+        r"([A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*)\.register\s*\(\s*([A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+)",
+    )
+    .expect("valid elixir register regex");
+    for cap in register_re.captures_iter(content) {
+        let Some(lib_chain) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(target_module) = cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        hints.push(RelationHintRecord {
+            target: target_module.to_string(),
+            call_type_hint: "external_registration".to_string(),
+            via: format!("{}.register", lib_chain),
+            confidence: 0.97,
+            detector: "elixir.external_register".to_string(),
+            reason: "外部库 register 调用内部模块".to_string(),
+        });
+    }
+
+    hints.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then_with(|| a.call_type_hint.cmp(&b.call_type_hint))
+            .then_with(|| a.via.cmp(&b.via))
+    });
+    hints.dedup_by(|a, b| {
+        a.target == b.target
+            && a.call_type_hint == b.call_type_hint
+            && a.via == b.via
+            && a.detector == b.detector
+    });
+    hints
+}
+
+fn extract_use_main_module(specifier: &str) -> String {
+    let trimmed = specifier.trim();
+    let end = trimmed
+        .find(',')
+        .unwrap_or(trimmed.len())
+        .min(trimmed.find('\n').unwrap_or(trimmed.len()));
+    trimmed[..end].trim().to_string()
+}
+
+fn extract_use_injected_modules(specifier: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let bytes = specifier.as_bytes();
+    let len = bytes.len();
+    let mut idx = specifier.find(',').unwrap_or(len);
+
+    while idx < len {
+        if bytes[idx].is_ascii_uppercase() {
+            let start = idx;
+            while idx < len
+                && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_' || bytes[idx] == b'.')
+            {
+                idx += 1;
+            }
+            let candidate = specifier[start..idx].trim_end_matches('.');
+            if candidate.split('.').count() >= 2 {
+                refs.push(candidate.to_string());
+            }
+            continue;
+        }
+        idx += 1;
+    }
+
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
 /// 从文件路径推断 Elixir 模块名
 /// 例如 lib/my_app/accounts/user.ex → MyApp.Accounts.User
 pub fn infer_module_from_path(rel_path: &str) -> Option<String> {
@@ -530,6 +632,46 @@ end
         // specifier 应该包含完整的 use 参数文本
         let spec = &use_imports[0].specifier;
         assert!(spec.contains("Jido.AI.ReActAgent"));
+    }
+
+    #[test]
+    fn detect_use_macro_relation_hints() {
+        let source = r#"
+defmodule Gong.Agent do
+  use Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]
+end
+"#;
+        let record = extract(source, "lib/gong/agent.ex");
+        let targets: Vec<String> = record
+            .relation_hints
+            .iter()
+            .map(|h| h.target.clone())
+            .collect();
+        assert!(targets.iter().any(|t| t == "Gong.Tools.Read"));
+        assert!(targets.iter().any(|t| t == "Gong.Tools.Write"));
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint == "framework_injection"));
+    }
+
+    #[test]
+    fn detect_external_register_relation_hint() {
+        let source = r#"
+defmodule Gong.Infra.ReqLlm do
+  def init do
+    ReqLLM.Providers.register(Gong.Provider.Anthropic)
+  end
+end
+"#;
+        let record = extract(source, "lib/gong/infra/req_llm.ex");
+        let hit = record
+            .relation_hints
+            .iter()
+            .find(|h| h.target == "Gong.Provider.Anthropic")
+            .expect("external register hint should exist");
+        assert_eq!(hit.call_type_hint, "external_registration");
+        assert!(hit.via.contains("ReqLLM.Providers.register"));
     }
 }
 

@@ -1,5 +1,6 @@
 use super::common;
 use super::*;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
@@ -72,6 +73,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     }
     let mut local_call_targets: Vec<String> = local_call_targets_set.into_iter().collect();
     local_call_targets.sort_unstable();
+    let relation_hints = detect_relation_hints(content, &import_aliases);
 
     let side_effects = SideEffects {
         has_async: content.contains("async ") || content.contains("await "),
@@ -93,6 +95,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         imports,
         calls,
         local_call_targets,
+        relation_hints,
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
@@ -540,6 +543,104 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
+fn detect_relation_hints(
+    content: &str,
+    import_aliases: &HashMap<String, String>,
+) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+    let module_re = Regex::new(r"(?s)@Module\s*\(\s*\{(.*?)\}\s*\)").expect("valid module regex");
+    let module_field_re = Regex::new(r"(imports|providers|controllers)\s*:\s*\[([^\]]*)\]")
+        .expect("valid module field regex");
+    let symbol_re =
+        Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid ts symbol extraction regex");
+
+    for cap in module_re.captures_iter(content) {
+        let Some(body) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        for field_cap in module_field_re.captures_iter(body) {
+            let Some(field) = field_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(items) = field_cap.get(2).map(|m| m.as_str()) else {
+                continue;
+            };
+            let confidence = match field {
+                "imports" | "providers" => 0.95,
+                "controllers" => 0.90,
+                _ => 0.85,
+            };
+            for symbol_cap in symbol_re.captures_iter(items) {
+                let symbol = symbol_cap.as_str();
+                let Some(specifier) = import_aliases.get(symbol) else {
+                    continue;
+                };
+                hints.push(RelationHintRecord {
+                    target: specifier.clone(),
+                    call_type_hint: "framework_injection".to_string(),
+                    via: format!("@Module.{}", field),
+                    confidence,
+                    detector: "typescript.nest.module".to_string(),
+                    reason: "NestJS @Module 注入关系".to_string(),
+                });
+            }
+        }
+    }
+
+    let class_re = Regex::new(
+        r"(?s)@(Injectable|Controller)\s*(?:\([^)]*\))?\s*(?:export\s+)?class\s+[A-Za-z_][A-Za-z0-9_]*\s*\{(.*?)\}",
+    )
+    .expect("valid nest class regex");
+    let ctor_re = Regex::new(r"constructor\s*\(([^)]*)\)").expect("valid constructor regex");
+    let type_re = Regex::new(r":\s*([A-Za-z_][A-Za-z0-9_]*)").expect("valid type regex");
+
+    for class_cap in class_re.captures_iter(content) {
+        let Some(decorator) = class_cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(class_body) = class_cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(ctor_cap) = ctor_re.captures(class_body) else {
+            continue;
+        };
+        let Some(params) = ctor_cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+
+        for ty_cap in type_re.captures_iter(params) {
+            let Some(symbol) = ty_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(specifier) = import_aliases.get(symbol) else {
+                continue;
+            };
+            hints.push(RelationHintRecord {
+                target: specifier.clone(),
+                call_type_hint: "framework_injection".to_string(),
+                via: format!("@{} constructor", decorator),
+                confidence: 0.86,
+                detector: "typescript.nest.constructor".to_string(),
+                reason: "NestJS 装饰器构造注入".to_string(),
+            });
+        }
+    }
+
+    hints.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then_with(|| a.call_type_hint.cmp(&b.call_type_hint))
+            .then_with(|| a.via.cmp(&b.via))
+    });
+    hints.dedup_by(|a, b| {
+        a.target == b.target
+            && a.call_type_hint == b.call_type_hint
+            && a.via == b.via
+            && a.detector == b.detector
+    });
+    hints
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +714,50 @@ function run() {
         let record = extract(source, "src/sample.ts", "typescript");
 
         assert!(record.calls.is_empty());
+    }
+
+    #[test]
+    fn detects_nest_module_relation_hints() {
+        let source = r#"
+import { Module } from '@nestjs/common';
+import { UserModule } from '@app/user';
+import { PrismaModule } from '@app/prisma';
+
+@Module({
+  imports: [UserModule, PrismaModule],
+})
+export class AppModule {}
+"#;
+        let record = extract(source, "apps/api/src/app.module.ts", "typescript");
+        let targets: Vec<String> = record
+            .relation_hints
+            .iter()
+            .map(|h| h.target.clone())
+            .collect();
+        assert!(targets.iter().any(|t| t == "@app/user"));
+        assert!(targets.iter().any(|t| t == "@app/prisma"));
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint == "framework_injection"));
+    }
+
+    #[test]
+    fn detects_injectable_constructor_relation_hints() {
+        let source = r#"
+import { Injectable } from '@nestjs/common';
+import { UserService } from '@app/user';
+
+@Injectable()
+export class AppService {
+  constructor(private readonly userService: UserService) {}
+}
+"#;
+        let record = extract(source, "apps/api/src/app.service.ts", "typescript");
+        assert!(record.relation_hints.iter().any(|h| {
+            h.target == "@app/user"
+                && h.call_type_hint == "framework_injection"
+                && h.via.contains("@Injectable")
+        }));
     }
 }

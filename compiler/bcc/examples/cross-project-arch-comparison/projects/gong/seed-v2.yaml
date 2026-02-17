@@ -126,12 +126,10 @@ relations_expected:
     callee: TOOLS
     allowed: true
     rationale: "Agent 需要调用工具完成用户任务"
-    injection_type: "framework"
-    notes: "通过 Jido.AI.ReActAgent 的 tools 参数注入"
+    notes: "建议开启 --detect-injection 自动识别 Jido use 宏注入"
     
   - caller: INFRA
     callee: PROVIDERS
     allowed: true
     rationale: "Application 启动时需要注册 LLM Provider"
-    injection_type: "registration"
-    notes: "通过 ReqLLM.Providers.register 注册内部 Provider 模块"
+    notes: "建议开启 --detect-injection 自动识别 ReqLLM.Providers.register 模式"

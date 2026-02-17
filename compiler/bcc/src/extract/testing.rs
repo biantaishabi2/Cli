@@ -85,6 +85,7 @@ mod tests {
                 })
                 .collect(),
             local_call_targets: Vec::new(),
+            relation_hints: Vec::new(),
             side_effects: SideEffects {
                 has_async: false,
                 has_http: false,
