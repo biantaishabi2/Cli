@@ -1,0 +1,57 @@
+ai:
+  default: claude
+  
+  # 预定义模板，使用时只需填 api_key
+  templates:
+    claude:
+      type: claude
+      cmd: "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}"
+    
+    codex:
+      type: openai
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      # api_key 从环境变量 OPENAI_API_KEY 读取
+    
+    openrouter:
+      type: openai  # OpenAI 兼容格式
+      base_url: "https://openrouter.ai/api/v1"
+      model: "anthropic/claude-3.5-sonnet"
+      # api_key 从环境变量 OPENROUTER_API_KEY 读取
+    
+    ollama:
+      type: ollama
+      base_url: "http://localhost:11434"
+      model: "qwen2.5-coder:14b"
+  
+  # 实际使用的 provider，引用模板
+  providers:
+    claude:
+      template: claude
+    
+    codex:
+      template: codex
+      # 可选覆盖
+      model: "gpt-4o-mini"
+    
+    openrouter:
+      template: openrouter
+    
+    local:
+      template: ollama
+      model: "deepseek-coder:6.7b"
+
+  # 讨论阶段：多 provider 左右互搏
+  discussion:
+    providers:
+      - claude
+      - codex
+    consolidator: claude
+
+  # 实现阶段：切换 provider 只需改这里
+  implementation:
+    provider: codex  # ← 切换这里即可
+
+workflow:
+  allowed_prefixes:
+    - "automation/"

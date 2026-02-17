@@ -1,5 +1,6 @@
 // pkg/config/config.go
 // 配置加载：读取 .niuma.yml，支持环境变量覆盖
+// 支持模板化 provider 配置
 package config
 
 import (
@@ -18,8 +19,9 @@ type Config struct {
 
 // WorkflowConfig 工作流配置
 type WorkflowConfig struct {
-	RequirePlanApproval bool `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
-	MaxIterateRounds    int  `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+	RequirePlanApproval bool     `yaml:"require_plan_approval"` // 方案定稿后是否需要人工审批
+	MaxIterateRounds    int      `yaml:"max_iterate_rounds"`    // 最大自动迭代轮数（0=默认3）
+	AllowedPrefixes     []string `yaml:"allowed_prefixes"`      // 允许修改的路径前缀
 }
 
 // GetMaxIterateRounds 获取最大迭代轮数，默认3
@@ -33,15 +35,29 @@ func (w *WorkflowConfig) GetMaxIterateRounds() int {
 // AIConfig AI 相关配置
 type AIConfig struct {
 	Default        string                    `yaml:"default"`
-	Providers      map[string]ProviderConfig `yaml:"providers"`
-	Discussion     DiscussionConfig          `yaml:"discussion"`
-	Implementation ImplementationConfig      `yaml:"implementation"`
+	Templates      map[string]TemplateConfig `yaml:"templates"`      // 预定义模板
+	Providers      map[string]ProviderConfig `yaml:"providers"`      // 实际 provider 实例
+	Discussion     DiscussionConfig          `yaml:"discussion"`     // 讨论配置
+	Implementation ImplementationConfig      `yaml:"implementation"` // 实现配置
+}
+
+// TemplateConfig 模板配置
+type TemplateConfig struct {
+	Type     string `yaml:"type"`      // 模板类型: claude | openai | ollama
+	Cmd      string `yaml:"cmd"`       // 文本模式命令（可选，用于 claude 等）
+	BaseURL  string `yaml:"base_url"`  // API 基础 URL（用于 openai/ollama）
+	Model    string `yaml:"model"`     // 模型名称
+	APIKey   string `yaml:"api_key"`   // API Key（可选，优先从环境变量读取）
 }
 
 // ProviderConfig 单个 AI Provider 配置
 type ProviderConfig struct {
-	Cmd      string `yaml:"cmd"`       // 文本模式命令（只读，AI 返回文本）
-	CmdAgent string `yaml:"cmd_agent"` // agentic 模式命令（AI 可读写文件）
+	Template string `yaml:"template"` // 引用的模板名称
+	Cmd      string `yaml:"cmd"`      // 覆盖模板的 cmd（可选）
+	CmdAgent string `yaml:"cmd_agent"` // 向后兼容：agentic 模式命令
+	BaseURL  string `yaml:"base_url"` // 覆盖模板的 base_url（可选）
+	Model    string `yaml:"model"`    // 覆盖模板的 model（可选）
+	APIKey   string `yaml:"api_key"`  // 覆盖模板的 api_key（可选）
 }
 
 // DiscussionConfig 讨论（左右互搏）配置
@@ -53,6 +69,110 @@ type DiscussionConfig struct {
 // ImplementationConfig 实现配置
 type ImplementationConfig struct {
 	Provider string `yaml:"provider"` // 实现用哪个 provider
+}
+
+// ResolvedProvider 解析后的 provider 配置（包含模板解析）
+type ResolvedProvider struct {
+	Type     string // claude | openai | ollama
+	Cmd      string // 最终命令
+	BaseURL  string
+	Model    string
+	APIKey   string
+}
+
+// GetProvider 获取解析后的 provider 配置
+// 支持模板继承和覆盖
+func (c *Config) GetProvider(name string) (*ResolvedProvider, error) {
+	providerCfg, ok := c.AI.Providers[name]
+	if !ok {
+		return nil, fmt.Errorf("provider %q 未找到", name)
+	}
+
+	// 如果有 template，先加载模板
+	var templateCfg TemplateConfig
+	if providerCfg.Template != "" {
+		tmpl, ok := c.AI.Templates[providerCfg.Template]
+		if !ok {
+			return nil, fmt.Errorf("provider %q 引用的模板 %q 未找到", name, providerCfg.Template)
+		}
+		templateCfg = tmpl
+	}
+
+	// 合并配置：provider 覆盖 template
+	rp := &ResolvedProvider{
+		Type:    templateCfg.Type,
+		Cmd:     firstNonEmpty(providerCfg.Cmd, templateCfg.Cmd),
+		BaseURL: firstNonEmpty(providerCfg.BaseURL, templateCfg.BaseURL),
+		Model:   firstNonEmpty(providerCfg.Model, templateCfg.Model),
+		APIKey:  firstNonEmpty(providerCfg.APIKey, templateCfg.APIKey),
+	}
+
+	// 如果 APIKey 为空，尝试从环境变量读取
+	if rp.APIKey == "" {
+		rp.APIKey = c.getAPIKeyFromEnv(name, templateCfg.Type)
+	}
+
+	// 根据类型生成 Cmd（如果没有直接指定）
+	if rp.Cmd == "" {
+		cmd, err := c.generateCmd(rp)
+		if err != nil {
+			return nil, fmt.Errorf("为 provider %q 生成命令失败: %w", name, err)
+		}
+		rp.Cmd = cmd
+	}
+
+	return rp, nil
+}
+
+// GetImplementationProvider 获取实现阶段的 provider
+func (c *Config) GetImplementationProvider() (*ResolvedProvider, error) {
+	name := c.AI.Implementation.Provider
+	if name == "" {
+		name = c.AI.Default
+	}
+	return c.GetProvider(name)
+}
+
+// firstNonEmpty 返回第一个非空字符串
+func firstNonEmpty(strs ...string) string {
+	for _, s := range strs {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// getAPIKeyFromEnv 从环境变量获取 API Key
+func (c *Config) getAPIKeyFromEnv(providerName, providerType string) string {
+	// 优先尝试 provider 特定的环境变量
+	if key := os.Getenv(fmt.Sprintf("%s_API_KEY", providerName)); key != "" {
+		return key
+	}
+	// 然后尝试类型特定的环境变量
+	switch providerType {
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_API_KEY")
+	}
+	return ""
+}
+
+// generateCmd 根据 provider 类型生成命令
+func (c *Config) generateCmd(rp *ResolvedProvider) (string, error) {
+	switch rp.Type {
+	case "claude":
+		return "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}", nil
+	case "openai":
+		// 使用自定义的 openai 客户端命令
+		return fmt.Sprintf("niuma-openai --base-url %s --model %s --api-key %s --workdir {workdir} --prompt {prompt_file}",
+			rp.BaseURL, rp.Model, rp.APIKey), nil
+	case "ollama":
+		return fmt.Sprintf("cat {prompt_file} | ollama run %s", rp.Model), nil
+	default:
+		return "", fmt.Errorf("未知的 provider 类型: %s", rp.Type)
+	}
 }
 
 // Load 从指定目录加载 .niuma.yml
@@ -87,6 +207,10 @@ func defaultConfig() *Config {
 		AI: AIConfig{
 			Default:   "codex",
 			Providers: map[string]ProviderConfig{},
+			Templates: map[string]TemplateConfig{},
+		},
+		Workflow: WorkflowConfig{
+			MaxIterateRounds: 3,
 		},
 	}
 }
@@ -95,5 +219,9 @@ func defaultConfig() *Config {
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("NIUMA_AI_DEFAULT"); v != "" {
 		cfg.AI.Default = v
+	}
+	// 支持用环境变量切换实现 provider
+	if v := os.Getenv("NIUMA_IMPLEMENTATION_PROVIDER"); v != "" {
+		cfg.AI.Implementation.Provider = v
 	}
 }
