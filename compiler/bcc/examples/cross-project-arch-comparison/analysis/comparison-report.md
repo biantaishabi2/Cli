@@ -9,10 +9,14 @@
 |-----|---------------|---------------------|
 | 文件数 | 78 | 385 |
 | 模块数 | 8 | 18 |
-| 期望边 | 7 | 19 |
-| 实际命中 | 7 (100%) | 19 (100%) |
-| 额外边 | 3 | 15 |
-| 架构健康度 | ✅ 良好 | ⚠️ 需要关注 |
+| 期望边 | 7 (v1) → **9 (v2)** | 19 |
+| 实际命中 | 7 (100%) → **9 (100%)** | 19 (100%) |
+| 额外边 | 3 (v1) → **1 (v2)** | 15 |
+| 架构健康度 | ✅ **优秀** (v2) | ⚠️ 需要关注 |
+
+> **重要更新**：通过完善 Seed 定义（v1 → v2），Gong 的额外边从 3 条减少到 1 条。
+> 
+> 详细对比参见：[Gong Seed v1 vs v2 对比报告](./gong-seed-v1-v2-comparison.md)
 
 ## 模块映射对比
 
@@ -54,7 +58,7 @@
 | INFRA → COMPACTION | (无显式对应) | ✅ 启动依赖 |
 | TOOLS → DATA | (无显式对应) | ✅ 数据依赖 |
 
-#### 额外边分析
+#### 额外边分析（基于 v1 Seed）
 
 | 边 | 分析 | 判定 | 建议 |
 |---|------|------|------|
@@ -67,6 +71,17 @@
 - **AGENT → TOOLS**: Agent 需要调用工具，正当依赖
 - **INFRA → PROVIDERS**: Application 启动时注册 Provider，正当依赖（ReqLLM 是外部库）
 - **TOOLS → COMPACTION**: 唯一真正的轻微违反（模块职责不清）
+
+#### v2 Seed 改进结果
+
+通过补充 2 条漏定义的依赖，Gong 的架构健康度显著提升：
+
+| 版本 | 期望边 | 额外边 | 架构健康度 |
+|-----|--------|--------|----------|
+| v1 | 7 条 | 3 条 | ⚠️ 有 2 条假阳性 |
+| **v2** | **9 条** | **1 条** | ✅ **优秀** |
+
+**详细对比**：[Gong Seed v1 vs v2 对比报告](./gong-seed-v1-v2-comparison.md)
 
 ### PI-Mono 的依赖边
 
@@ -86,18 +101,25 @@
 
 ## 架构健康度评估
 
-### Gong：✅ 良好
+### Gong：✅ 优秀（v2）
 
 **优点**：
 1. 分层清晰，没有循环依赖
 2. Elixir/OTP 监督树天然限制不良依赖
 3. Jido 框架提供良好的依赖注入机制
 4. 显式定义 DATA 层，职责清晰
+5. **完善 Seed 后，只有 1 条轻微违反**（v2）
 
-**问题**：
-1. Seed 漏定义 AGENT → TOOLS（已识别，非违反）
-2. Seed 漏定义 INFRA → PROVIDERS（已识别，非违反，ReqLLM 是外部库）
-3. truncate 模块位置不当（轻微违反）
+**问题**（v1 → v2 改进）：
+1. ~~Seed 漏定义 AGENT → TOOLS~~ ✅ v2 已补充
+2. ~~Seed 漏定义 INFRA → PROVIDERS~~ ✅ v2 已补充
+3. truncate 模块位置不当（唯一轻微违反）
+
+**关键洞察**：
+Gong 的架构实际上**非常健康**。v1 的 3 条"额外边"中，2 条是 Seed 漏定义，1 条是轻微违反。
+通过完善 Seed，架构健康度从"良好"提升到"优秀"。
+
+参见：[Gong Seed v1 vs v2 详细对比](./gong-seed-v1-v2-comparison.md)
 
 ### PI-Mono：⚠️ 需要关注
 
@@ -154,19 +176,21 @@ Gong 的"额外边" AGENT → TOOLS 实际上是：
 
 ### 对 Gong
 
-1. **修复 seed 定义**
-   ```yaml
-   - caller: AGENT
-     callee: TOOLS
-     allowed: true
-     rationale: "Agent 需要调用工具"
-   ```
+**已完成的改进（v1 → v2）**：
 
-2. **优化 Provider 注册**
+参见：[Gong Seed v1 vs v2 对比报告](./gong-seed-v1-v2-comparison.md)
+
+1. **✅ 已修复：补充 Seed 定义**
+   - AGENT → TOOLS（Jido 框架注入）
+   - INFRA → PROVIDERS（启动时注册）
+
+2. **可选优化：Provider 配置化**
    - 从配置读取，不要硬编码
+   - 当前硬编码也是可接受的
 
-3. **整理 truncate 模块**
+3. **建议修复：整理 truncate 模块**
    - 移到 utils 或单独的工具模块
+   - 这是唯一的轻微架构违反
 
 ### 对 PI-Mono
 
@@ -221,7 +245,18 @@ bcc arch matrix \
 
 ### 参考文件
 
-- `gong-matrix/v3.target-matrix.yaml`
-- `gong-matrix/v3.transition-matrix.yaml`
+#### Gong
+- `gong-matrix/v3.target-matrix.yaml` (v1)
+- `gong-matrix/v3.transition-matrix.yaml` (v1: 3 条额外边)
+- `gong-matrix-v2/v3.target-matrix.yaml` (v2)
+- `gong-matrix-v2/v3.transition-matrix.yaml` (v2: 1 条额外边)
+- [Gong Seed v1 vs v2 对比报告](./gong-seed-v1-v2-comparison.md)
+
+#### PI-Mono
 - `pi-mono-matrix/v3.target-matrix.yaml`
 - `pi-mono-matrix/v3.transition-matrix.yaml`
+
+#### Seed 文件
+- `projects/gong/seed.yaml` (v1)
+- `projects/gong/seed-v2.yaml` (v2)
+- `projects/pi-mono/seed.yaml`
