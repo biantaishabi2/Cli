@@ -11,7 +11,7 @@ concurrency:
 jobs:
   discussion-check:
     runs-on: self-hosted
-    if: github.event.issue.pull_request == null
+    if: github.event.issue.pull_request == null && !contains(github.event.comment.body, '<!-- BOT:')
     permissions:
       issues: write
       contents: read
