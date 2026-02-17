@@ -1,13 +1,9 @@
-use tree_sitter::Parser;
+use super::common;
 use super::*;
 
 /// 使用 tree-sitter-rust 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust::LANGUAGE;
-    parser.set_language(&language.into()).expect("failed to set rust grammar");
-
-    let tree = parser.parse(content, None).expect("failed to parse rust source");
+    let tree = common::parse_tree(content, tree_sitter_rust::LANGUAGE, "rust");
     let root = tree.root_node();
     let source = content.as_bytes();
 
@@ -26,10 +22,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         &mut declarations,
     );
 
-    // 去重 calls
-    let mut seen = std::collections::HashSet::new();
-    calls.retain(|c| seen.insert(c.callee.clone()));
-    calls.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.callee.cmp(&b.callee)));
+    common::dedup_sort_calls(&mut calls);
 
     // 副作用检测（关键词扫描）
     let side_effects = detect_side_effects(content);
@@ -69,7 +62,7 @@ fn extract_recursive(
                 *declarations += 1;
                 let is_pub = has_visibility(&node);
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = node_text(name_node, source);
+                    let name = common::node_text(name_node, source);
                     let signature = build_fn_signature(&node, source);
                     if is_pub {
                         exports.push(ExportRecord {
@@ -88,7 +81,7 @@ fn extract_recursive(
                 if is_pub {
                     if let Some(name_node) = node.child_by_field_name("name") {
                         exports.push(ExportRecord {
-                            name: node_text(name_node, source),
+                            name: common::node_text(name_node, source),
                             kind: "struct".into(),
                             signature: None,
                             line: node.start_position().row + 1,
@@ -103,7 +96,7 @@ fn extract_recursive(
                 if is_pub {
                     if let Some(name_node) = node.child_by_field_name("name") {
                         exports.push(ExportRecord {
-                            name: node_text(name_node, source),
+                            name: common::node_text(name_node, source),
                             kind: "enum".into(),
                             signature: None,
                             line: node.start_position().row + 1,
@@ -118,7 +111,7 @@ fn extract_recursive(
                 if is_pub {
                     if let Some(name_node) = node.child_by_field_name("name") {
                         exports.push(ExportRecord {
-                            name: node_text(name_node, source),
+                            name: common::node_text(name_node, source),
                             kind: "trait".into(),
                             signature: None,
                             line: node.start_position().row + 1,
@@ -129,10 +122,15 @@ fn extract_recursive(
             // impl Foo / impl Trait for Foo
             "impl_item" => {
                 *declarations += 1;
-                let impl_text = node_text(node, source);
+                let impl_text = common::node_text(node, source);
                 // 取 impl 行的摘要（到 { 为止）
-                let summary = impl_text.lines().next().unwrap_or("")
-                    .trim_end_matches('{').trim().to_string();
+                let summary = impl_text
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('{')
+                    .trim()
+                    .to_string();
                 exports.push(ExportRecord {
                     name: summary.clone(),
                     kind: "impl".into(),
@@ -151,7 +149,7 @@ fn extract_recursive(
             }
             // use 声明
             "use_declaration" => {
-                let use_text = node_text(node, source);
+                let use_text = common::node_text(node, source);
                 // 去掉 "use " 前缀和尾部 ";"
                 let specifier = use_text
                     .strip_prefix("use ")
@@ -186,7 +184,7 @@ fn extract_recursive(
             // 宏调用: println!(), vec![], format!()
             "macro_invocation" => {
                 if let Some(macro_node) = node.child(0) {
-                    let macro_name = node_text(macro_node, source);
+                    let macro_name = common::node_text(macro_node, source);
                     if !macro_name.is_empty() {
                         calls.push(CallRecord {
                             callee: format!("{}!", macro_name),
@@ -230,17 +228,20 @@ fn has_visibility(node: &tree_sitter::Node) -> bool {
 
 /// 从 function_item 构建函数签名：fn foo(a: i32, b: &str) -> Result<T, E>
 fn build_fn_signature(node: &tree_sitter::Node, source: &[u8]) -> String {
-    let name = node.child_by_field_name("name")
-        .map(|n| node_text(n, source))
+    let name = node
+        .child_by_field_name("name")
+        .map(|n| common::node_text(n, source))
         .unwrap_or_default();
 
-    let params = node.child_by_field_name("parameters")
-        .map(|n| node_text(n, source))
+    let params = node
+        .child_by_field_name("parameters")
+        .map(|n| common::node_text(n, source))
         .unwrap_or_else(|| "()".into());
 
-    let ret = node.child_by_field_name("return_type")
+    let ret = node
+        .child_by_field_name("return_type")
         .map(|n| {
-            let text = node_text(n, source);
+            let text = common::node_text(n, source);
             // return_type 节点包含 "-> Type"
             if text.starts_with("->") {
                 format!(" {}", text.trim())
@@ -257,16 +258,16 @@ fn build_fn_signature(node: &tree_sitter::Node, source: &[u8]) -> String {
 /// field_expression → "obj.method"
 fn extract_call_name(node: tree_sitter::Node, source: &[u8]) -> String {
     match node.kind() {
-        "identifier" => node_text(node, source),
-        "scoped_identifier" => node_text(node, source),
+        "identifier" => common::node_text(node, source),
+        "scoped_identifier" => common::node_text(node, source),
         "field_expression" => {
             // obj.method → 提取根对象名
             if let Some(value) = node.child_by_field_name("value") {
-                return node_text(value, source);
+                return common::node_text(value, source);
             }
-            node_text(node, source)
+            common::node_text(node, source)
         }
-        _ => node_text(node, source),
+        _ => common::node_text(node, source),
     }
 }
 
@@ -295,26 +296,28 @@ fn extract_module_doc(content: &str) -> Option<String> {
 /// 基于全文关键词扫描的副作用分类标签
 fn detect_side_effects(content: &str) -> SideEffects {
     SideEffects {
-        has_async: content.contains("async ") || content.contains(".await")
+        has_async: content.contains("async ")
+            || content.contains(".await")
             || content.contains("tokio::"),
-        has_http: content.contains("reqwest") || content.contains("hyper::")
+        has_http: content.contains("reqwest")
+            || content.contains("hyper::")
             || content.contains("http::"),
         has_genserver: false,
-        has_file_io: content.contains("std::fs") || content.contains("File::open")
-            || content.contains("File::create") || content.contains("fs::read")
+        has_file_io: content.contains("std::fs")
+            || content.contains("File::open")
+            || content.contains("File::create")
+            || content.contains("fs::read")
             || content.contains("fs::write"),
-        has_pubsub: content.contains("channel") || content.contains("mpsc::")
+        has_pubsub: content.contains("channel")
+            || content.contains("mpsc::")
             || content.contains("broadcast::"),
     }
-}
-
-fn node_text(node: tree_sitter::Node, source: &[u8]) -> String {
-    node.utf8_text(source).unwrap_or("").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::testing;
 
     #[test]
     fn extracts_pub_functions_and_structs() {
@@ -330,26 +333,30 @@ pub fn run(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
-fn private_helper() {}
+        fn private_helper() {}
 "#;
         let record = extract(source, "src/lib.rs");
-        let export_names: Vec<_> = record.exports.iter().map(|e| e.name.as_str()).collect();
-        assert!(export_names.contains(&"Config"), "should export Config struct");
-        assert!(export_names.contains(&"run"), "should export run function");
+        let export_names = testing::export_names(&record);
+        testing::assert_contains(&export_names, "Config", "exports");
+        testing::assert_contains(&export_names, "run", "exports");
         // private_helper 不应出现在 exports
-        assert!(!export_names.contains(&"private_helper"), "should not export private fn");
+        assert!(!export_names.iter().any(|name| name == "private_helper"));
 
         // 验证 imports
         assert_eq!(record.imports.len(), 1);
         assert_eq!(record.imports[0].specifier, "std::collections::HashMap");
 
         // 验证 calls 包含 println! 宏
-        let call_names: Vec<_> = record.calls.iter().map(|c| c.callee.as_str()).collect();
-        assert!(call_names.contains(&"println!"), "should detect println! macro call");
+        let call_names = testing::call_names(&record);
+        testing::assert_contains(&call_names, "println!", "calls");
 
         // 验证签名
         let run_export = record.exports.iter().find(|e| e.name == "run").unwrap();
-        assert!(run_export.signature.as_ref().unwrap().contains("-> Result<(), String>"));
+        assert!(run_export
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("-> Result<(), String>"));
     }
 
     #[test]
@@ -399,9 +406,7 @@ impl fmt::Display for Status {
         let record = extract(source, "src/model.rs");
         assert_eq!(record.imports.len(), 2);
 
-        let enum_exports: Vec<_> = record.exports.iter()
-            .filter(|e| e.kind == "enum")
-            .collect();
+        let enum_exports: Vec<_> = record.exports.iter().filter(|e| e.kind == "enum").collect();
         assert_eq!(enum_exports.len(), 1);
         assert_eq!(enum_exports[0].name, "Status");
     }
