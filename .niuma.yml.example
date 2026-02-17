@@ -53,5 +53,7 @@ ai:
     provider: codex  # ← 切换这里即可
 
 workflow:
+  # discuss 单次 run 内最大轮次（1-20，默认 5）
+  max_discussion_rounds: 5
   allowed_prefixes:
     - "automation/"

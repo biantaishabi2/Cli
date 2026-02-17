@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	flagRepo    string
-	flagIssue   int
-	flagPR      int
-	flagWorkDir string
-	flagRepoDir string // 主仓库本地路径（用于 worktree）
+	flagRepo                string
+	flagIssue               int
+	flagPR                  int
+	flagWorkDir             string
+	flagRepoDir             string // 主仓库本地路径（用于 worktree）
+	flagMaxDiscussionRounds int    // discuss 最大轮次（0=使用配置）
 )
 
 func main() {
@@ -54,6 +55,9 @@ func init() {
 	rootCmd.AddCommand(iterateCmd)
 	rootCmd.AddCommand(reviewCmd)
 	rootCmd.AddCommand(controlCmd)
+
+	// discuss 特有 flags
+	discussCmd.Flags().IntVar(&flagMaxDiscussionRounds, "max-discussion-rounds", 0, "讨论最大轮次（1-20，0 表示使用配置）")
 }
 
 // ===== status 命令：完整实现 =====
@@ -186,9 +190,13 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("正在为 issue #%d 进行讨论检查...\n", flagIssue)
+	if flagMaxDiscussionRounds < 0 || flagMaxDiscussionRounds > 20 {
+		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
+	}
 
-	if err := orch.DoDiscussionCheck(ctx); err != nil {
+	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d）...\n", flagIssue, flagMaxDiscussionRounds)
+
+	if err := orch.DoDiscuss(ctx, flagMaxDiscussionRounds); err != nil {
 		return fmt.Errorf("讨论检查失败: %w", err)
 	}
 
@@ -357,16 +365,12 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		return nil, fmt.Errorf("默认 AI provider %q 未配置", defaultName)
 	}
 
-	// 如果没有配置多 provider 讨论，使用简单模式
-	if len(cfg.AI.Discussion.Providers) == 0 && flagRepoDir == "" {
-		return agent.NewOrchestrator(client, defaultProvider, issueNumber), nil
-	}
-
 	// 构建完整配置
 	orchCfg := &agent.OrchestratorConfig{
 		RepoDir:             flagRepoDir,
 		RequirePlanApproval: cfg.Workflow.RequirePlanApproval,
 		MaxIterateRounds:    cfg.Workflow.GetMaxIterateRounds(),
+		MaxDiscussionRounds: cfg.Workflow.GetMaxDiscussionRounds(),
 	}
 
 	// 讨论 provider

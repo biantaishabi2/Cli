@@ -26,7 +26,6 @@ func fixedChecker(now time.Time) *ConvergenceChecker {
 		Now:             func() time.Time { return now },
 		SilenceWarn:     10 * time.Minute,
 		SilenceFinalize: 30 * time.Minute,
-		MaxRounds:       5,
 	}
 }
 
@@ -80,7 +79,7 @@ func TestConvergence_NotConverged_WarningTooRecent(t *testing.T) {
 	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
-func TestConvergence_ShouldFinalize_RoundBased(t *testing.T) {
+func TestConvergence_NotConverged_RoundBasedNoAutoFinalize(t *testing.T) {
 	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	checker := fixedChecker(now)
 	input := &ConvergenceInput{
@@ -93,7 +92,7 @@ func TestConvergence_ShouldFinalize_RoundBased(t *testing.T) {
 			Revision: 5, // ≥ 5 轮次
 		},
 	}
-	assert.Equal(t, ShouldFinalize, checker.Check(input))
+	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
 func TestConvergence_NotConverged_RoundInsufficient(t *testing.T) {
@@ -251,6 +250,14 @@ func TestConvergence_AIFalse_WithRounds(t *testing.T) {
 		},
 		AIShouldFinish: false,
 	}
-	// AI 不建议结束，但轮次达到阈值，应该定稿
-	assert.Equal(t, ShouldFinalize, checker.Check(input))
+	// AI 不建议结束，轮次本身不触发定稿
+	assert.Equal(t, NotConverged, checker.Check(input))
+}
+
+func TestReachedDiscussionRoundLimit(t *testing.T) {
+	assert.True(t, ReachedDiscussionRoundLimit(5, 5))
+	assert.True(t, ReachedDiscussionRoundLimit(6, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(4, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(0, 5))
+	assert.False(t, ReachedDiscussionRoundLimit(1, 0))
 }

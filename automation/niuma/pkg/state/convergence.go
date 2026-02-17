@@ -1,5 +1,5 @@
 // pkg/state/convergence.go
-// 讨论收敛检查：轮次收敛、静默收敛、命令收敛
+// 讨论收敛检查：命令收敛、AI 收敛、静默收敛
 package state
 
 import (
@@ -33,12 +33,25 @@ func (r ConvergeResult) String() string {
 	}
 }
 
+// ConvergenceDecision 结构化收敛判定结果（供 orchestrator 多轮循环使用）
+type ConvergenceDecision struct {
+	Result       ConvergeResult
+	Reason       string
+	Round        int
+	MaxRound     int
+	RoundLimited bool
+}
+
+// Converged 是否已收敛可定稿
+func (d *ConvergenceDecision) Converged() bool {
+	return d != nil && d.Result == ShouldFinalize
+}
+
 // ConvergenceChecker 纯函数收敛检查器（可注入时间，测试不依赖真实时间）
 type ConvergenceChecker struct {
 	Now             func() time.Time // 可注入的时间源
 	SilenceWarn     time.Duration    // 静默多久发预警，默认 10 分钟
 	SilenceFinalize time.Duration    // 预警后静默多久定稿，默认 30 分钟
-	MaxRounds       int              // 轮次收敛阈值，默认 5
 }
 
 // DefaultChecker 返回默认配置的收敛检查器
@@ -47,7 +60,6 @@ func DefaultChecker() *ConvergenceChecker {
 		Now:             time.Now,
 		SilenceWarn:     10 * time.Minute,
 		SilenceFinalize: 30 * time.Minute,
-		MaxRounds:       5,
 	}
 }
 
@@ -58,53 +70,84 @@ type ConvergenceInput struct {
 	ConvergeWarning   *marker.Marker // 可为 nil
 	WarningTime       time.Time      // 预警评论的创建时间
 	AIShouldFinish    bool           // AI 建议结束讨论（discussion summary 中的 should_finish）
+	Round             int            // 当前 discuss 轮次（可选）
+	MaxRound          int            // discuss 最大轮次（可选）
 }
 
 // Check 纯函数：根据输入数据检查收敛条件
 func (c *ConvergenceChecker) Check(input *ConvergenceInput) ConvergeResult {
+	return c.CheckWithDecision(input).Result
+}
+
+// CheckWithDecision 返回结构化收敛判定结果
+func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *ConvergenceDecision {
+	if input == nil {
+		return &ConvergenceDecision{
+			Result: NotConverged,
+			Reason: "empty_input",
+		}
+	}
+
+	decision := &ConvergenceDecision{
+		Result:       NotConverged,
+		Reason:       "continue_discussion",
+		Round:        input.Round,
+		MaxRound:     input.MaxRound,
+		RoundLimited: ReachedDiscussionRoundLimit(input.Round, input.MaxRound),
+	}
+
 	now := c.Now()
 
 	// 0. 检查最后一条命令（只看最后发出的 /finalize 或 /hold）
 	if lastCmd := findLastCommand(input.Comments); lastCmd != "" {
 		switch lastCmd {
 		case "/finalize":
-			return ShouldFinalize
+			decision.Result = ShouldFinalize
+			decision.Reason = "command_finalize"
+			return decision
 		case "/hold":
-			return NotConverged
+			decision.Result = NotConverged
+			decision.Reason = "command_hold"
+			return decision
 		}
 	}
 
 	// 1. AI 建议收敛：discussion summary 中 should_finish=true
 	if input.AIShouldFinish {
-		return ShouldFinalize
+		decision.Result = ShouldFinalize
+		decision.Reason = "ai_should_finish"
+		return decision
 	}
 
-	// 2. 轮次收敛：讨论汇总更新 ≥ MaxRounds 次
-	if input.DiscussionSummary != nil && input.DiscussionSummary.Revision >= c.MaxRounds {
-		return ShouldFinalize
-	}
-
-	// 3. 静默收敛
+	// 2. 静默收敛
 	lastCommentTime := getLastHumanCommentTime(input.Comments)
 	if lastCommentTime.IsZero() {
-		return NotConverged
+		decision.Result = NotConverged
+		decision.Reason = "no_human_comments"
+		return decision
 	}
 
 	// 已发过预警？
 	if input.ConvergeWarning != nil {
 		// 预警后静默 ≥ SilenceFinalize → 定稿
 		if now.Sub(input.WarningTime) >= c.SilenceFinalize {
-			return ShouldFinalize
+			decision.Result = ShouldFinalize
+			decision.Reason = "warning_timeout_finalize"
+			return decision
 		}
-		return NotConverged
+		decision.Result = NotConverged
+		decision.Reason = "warning_waiting"
+		return decision
 	}
 
 	// 未预警，静默 ≥ SilenceWarn → 发预警
 	if now.Sub(lastCommentTime) >= c.SilenceWarn {
-		return ShouldWarn
+		decision.Result = ShouldWarn
+		decision.Reason = "silence_warn"
+		return decision
 	}
 
-	return NotConverged
+	return decision
 }
 
 // CheckConvergence Machine 上的便捷方法，从 GitHub 读取数据后检查收敛
@@ -139,6 +182,14 @@ func (m *Machine) CheckConvergence(ctx context.Context, checker *ConvergenceChec
 	}
 
 	return checker.Check(input), nil
+}
+
+// ReachedDiscussionRoundLimit 判断是否达到 discuss 最大轮次
+func ReachedDiscussionRoundLimit(round, maxRound int) bool {
+	if maxRound <= 0 || round <= 0 {
+		return false
+	}
+	return round >= maxRound
 }
 
 // findLastCommand 从评论中倒序查找最后一条 /finalize 或 /hold 命令

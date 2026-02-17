@@ -54,6 +54,7 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	cfg := LoadWithDefaults(t.TempDir())
 	assert.Equal(t, "codex", cfg.AI.Default)
 	assert.NotNil(t, cfg.AI.Providers)
+	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
 }
 
 func TestLoad_WorkflowConfig(t *testing.T) {
@@ -66,6 +67,7 @@ func TestLoad_WorkflowConfig(t *testing.T) {
 workflow:
   require_plan_approval: true
   max_iterate_rounds: 5
+  max_discussion_rounds: 7
 `
 	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
 	require.NoError(t, err)
@@ -75,14 +77,23 @@ workflow:
 	assert.True(t, cfg.Workflow.RequirePlanApproval)
 	assert.Equal(t, 5, cfg.Workflow.MaxIterateRounds)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxIterateRounds())
+	assert.Equal(t, 7, cfg.Workflow.MaxDiscussionRounds)
+	assert.Equal(t, 7, cfg.Workflow.GetMaxDiscussionRounds())
 }
 
 func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
 	w := &WorkflowConfig{}
 	assert.Equal(t, 3, w.GetMaxIterateRounds())
+	assert.Equal(t, 5, w.GetMaxDiscussionRounds())
 
 	w.MaxIterateRounds = -1
 	assert.Equal(t, 3, w.GetMaxIterateRounds())
+
+	w.MaxDiscussionRounds = 21
+	assert.Equal(t, 5, w.GetMaxDiscussionRounds())
+
+	w.MaxDiscussionRounds = -1
+	assert.Equal(t, 5, w.GetMaxDiscussionRounds())
 }
 
 func TestLoad_EnvOverride(t *testing.T) {
