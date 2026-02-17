@@ -4,9 +4,12 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GitHubOps 控制层需要的 GitHub 操作接口（独立于 agent 包的接口）
@@ -15,6 +18,24 @@ type GitHubOps interface {
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 }
+
+const (
+	integrationConflictLabel = "integration-conflict"
+	needsHumanLabel          = "needs-human"
+
+	metaKeyIntegrated                     = "integrated"
+	metaKeyIntegrationMergeStatus         = "integration_merge_status"
+	metaKeyIntegrationMergeExecutedAt     = "integration_merge_executed_at"
+	metaKeyIntegrationExecutorVersion     = "integration_executor_version"
+	metaKeyIntegrationAutoResolvedFiles   = "integration_auto_resolved_files"
+	metaKeyIntegrationConflictSummary     = "integration_conflict_summary"
+	metaKeyIntegrationConflictFiles       = "integration_conflict_files"
+	metaKeyIntegrationConflictTotalHunks  = "integration_conflict_total_hunks"
+	metaKeyIntegrationConflictReason      = "integration_conflict_reason"
+	metaKeyIntegrationConflictSuggestion  = "integration_conflict_suggestion"
+	metaKeyIntegrationConflictRecordedAt  = "integration_conflict_recorded_at"
+	metaKeyIntegrationConflictLabelSynced = "integration_conflict_labeled"
+)
 
 // Controller 多 Issue 协调控制器
 type Controller struct {
@@ -228,8 +249,12 @@ func (c *Controller) Run(ctx context.Context) error {
 			if t.PRNum() > 0 && t.Branch() != "" {
 				// 检查是否已合入 integration（从 metadata 读）
 				integrated := false
-				if t.Metadata != nil && t.Metadata["integrated"] == "true" {
+				if t.Metadata != nil && t.Metadata[metaKeyIntegrated] == "true" {
 					integrated = true
+				}
+				if t.Metadata != nil && t.Metadata[metaKeyIntegrationMergeStatus] == string(MergeStatusEscalated) {
+					fmt.Printf("[control] 跳过已升级人工 task %s (issue #%d)\n", t.ID, t.IssueNum())
+					continue
 				}
 				if !integrated {
 					branchName := c.getIntegrationBranchName(&t)
@@ -254,19 +279,27 @@ func (c *Controller) Run(ctx context.Context) error {
 					TaskID:   task.ID,
 				}
 
-				if err := c.builder.MergeOne(branchName, bi); err != nil {
+				outcome, err := c.builder.ExecuteIntegrationMerge(branchName, bi)
+				if err != nil {
 					fmt.Printf("[control] 合入 %s 失败: %v\n", bi.Branch, err)
-					// 冲突时跳过，继续下一个
 					continue
 				}
 
-				// 标记为已集成
-				metaUpdate := map[string]string{"integrated": "true"}
-				if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
-					fmt.Printf("[control] 标记 integrated 失败 (task %s): %v\n", task.ID, err)
-				}
+				switch outcome.Status {
+				case MergeStatusMerged, MergeStatusAutoResolved:
+					if err := c.markTaskIntegrated(task, outcome); err != nil {
+						fmt.Printf("[control] 标记 integrated 失败 (task %s): %v\n", task.ID, err)
+						continue
+					}
+					fmt.Printf("[control] 已合入 %s (issue #%d) 到 %s, status=%s\n", bi.Branch, bi.IssueNum, branchName, outcome.Status)
 
-				fmt.Printf("[control] 已合入 %s (issue #%d) 到 %s\n", bi.Branch, bi.IssueNum, branchName)
+				case MergeStatusEscalated:
+					c.escalateIntegrationConflict(ctx, task, outcome)
+
+				default:
+					fmt.Printf("[control] 合入 %s 返回未知状态 %q，跳过\n", bi.Branch, outcome.Status)
+					continue
+				}
 			}
 		}
 	}
@@ -392,4 +425,118 @@ func hasLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {
+	metaUpdate := map[string]string{
+		metaKeyIntegrated:                 "true",
+		metaKeyIntegrationMergeStatus:     string(outcome.Status),
+		metaKeyIntegrationMergeExecutedAt: outcome.ExecutedAt,
+		metaKeyIntegrationExecutorVersion: outcome.ExecutorVersion,
+	}
+	if len(outcome.AutoResolvedFiles) > 0 {
+		files := append([]string(nil), outcome.AutoResolvedFiles...)
+		sort.Strings(files)
+		metaUpdate[metaKeyIntegrationAutoResolvedFiles] = strings.Join(files, ",")
+	}
+	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
+}
+
+func (c *Controller) escalateIntegrationConflict(ctx context.Context, task Task, outcome MergeOutcome) {
+	metadataUpdate := buildEscalationMetadata(task.Metadata, outcome)
+	if len(metadataUpdate) > 0 {
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metadataUpdate}); err != nil {
+			fmt.Printf("[control] 写入冲突 metadata 失败 (task %s): %v\n", task.ID, err)
+		}
+	}
+
+	if task.IssueNum() <= 0 {
+		fmt.Printf("[control] issue 编号缺失，无法打冲突标签 (task %s)\n", task.ID)
+		return
+	}
+
+	if task.Metadata != nil && task.Metadata[metaKeyIntegrationConflictLabelSynced] == "true" {
+		fmt.Printf("[control] issue #%d 已存在升级标签，跳过重复打标\n", task.IssueNum())
+		return
+	}
+
+	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", integrationConflictLabel); err != nil {
+		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationConflictLabel, err)
+		return
+	}
+	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", needsHumanLabel); err != nil {
+		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
+		return
+	}
+
+	labelMeta := map[string]string{metaKeyIntegrationConflictLabelSynced: "true"}
+	if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &labelMeta}); err != nil {
+		fmt.Printf("[control] 写入打标状态失败 (task %s): %v\n", task.ID, err)
+	}
+
+	if outcome.Conflict != nil {
+		fmt.Printf(
+			"[control] 合入 %s 升级人工: issue #%d files=%d hunks=%d reason=%s\n",
+			outcome.SourceBranch,
+			task.IssueNum(),
+			len(outcome.Conflict.Files),
+			outcome.Conflict.TotalHunkCount,
+			outcome.Conflict.Reason,
+		)
+	} else {
+		fmt.Printf("[control] 合入 %s 升级人工: issue #%d\n", outcome.SourceBranch, task.IssueNum())
+	}
+}
+
+func buildEscalationMetadata(existing map[string]string, outcome MergeOutcome) map[string]string {
+	update := make(map[string]string)
+
+	setMetadataIfChanged(update, existing, metaKeyIntegrationMergeStatus, string(MergeStatusEscalated))
+	setMetadataIfChanged(update, existing, metaKeyIntegrationExecutorVersion, outcome.ExecutorVersion)
+	setMetadataIfChanged(update, existing, metaKeyIntegrationMergeExecutedAt, outcome.ExecutedAt)
+
+	if valueOrEmpty(existing, metaKeyIntegrationConflictRecordedAt) != "" {
+		return update
+	}
+
+	setMetadataIfChanged(update, existing, metaKeyIntegrationConflictRecordedAt, time.Now().UTC().Format(time.RFC3339))
+	if outcome.Conflict == nil {
+		return update
+	}
+
+	payload, err := json.Marshal(outcome.Conflict)
+	if err == nil {
+		setMetadataIfChanged(update, existing, metaKeyIntegrationConflictSummary, string(payload))
+	}
+
+	if len(outcome.Conflict.Files) > 0 {
+		files := append([]string(nil), outcome.Conflict.Files...)
+		sort.Strings(files)
+		setMetadataIfChanged(update, existing, metaKeyIntegrationConflictFiles, strings.Join(files, ","))
+	}
+
+	if outcome.Conflict.TotalHunkCount > 0 {
+		setMetadataIfChanged(update, existing, metaKeyIntegrationConflictTotalHunks, strconv.Itoa(outcome.Conflict.TotalHunkCount))
+	}
+	setMetadataIfChanged(update, existing, metaKeyIntegrationConflictReason, outcome.Conflict.Reason)
+	setMetadataIfChanged(update, existing, metaKeyIntegrationConflictSuggestion, outcome.Conflict.SuggestedAction)
+
+	return update
+}
+
+func setMetadataIfChanged(update, existing map[string]string, key, value string) {
+	if value == "" {
+		return
+	}
+	if valueOrEmpty(existing, key) == value {
+		return
+	}
+	update[key] = value
+}
+
+func valueOrEmpty(meta map[string]string, key string) string {
+	if meta == nil {
+		return ""
+	}
+	return meta[key]
 }

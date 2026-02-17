@@ -5,14 +5,38 @@ package control
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
+	"time"
+	"unicode"
 )
 
 // IntegrationBuilder 构建 integration 分支
 type IntegrationBuilder struct {
 	repoDir    string
 	baseBranch string
+}
+
+const (
+	// integrationMergeExecutorVersion 用于记录执行器版本，便于审计与回溯。
+	integrationMergeExecutorVersion = "integration-merge-executor/v1"
+	maxWhitelistConflictHunks       = 3
+)
+
+var blockCommentPattern = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+type conflictBlock struct {
+	ours   string
+	theirs string
+}
+
+type conflictFileSummary struct {
+	hunks  int
+	blocks []conflictBlock
 }
 
 // NewIntegrationBuilder 创建构建器
@@ -52,25 +76,333 @@ func (b *IntegrationBuilder) EnsureBranch(branchName string) (string, error) {
 // MergeOne 将单个完成的 PR 分支 merge 进 integration
 // integrationBranch: 目标 integration 分支名
 func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo) error {
+	outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi)
+	if err != nil {
+		return err
+	}
+
+	if outcome.Status == MergeStatusEscalated {
+		reason := "冲突需要人工处理"
+		if outcome.Conflict != nil && outcome.Conflict.Reason != "" {
+			reason = outcome.Conflict.Reason
+		}
+		return fmt.Errorf("merge %s 升级人工: %s", bi.Branch, reason)
+	}
+
+	return nil
+}
+
+// ExecuteIntegrationMerge 执行统一 integration 合并流程。
+// 结果分为 merged / auto_resolved / escalated。
+func (b *IntegrationBuilder) ExecuteIntegrationMerge(integrationBranch string, bi BranchInfo) (MergeOutcome, error) {
+	outcome := MergeOutcome{
+		Status:            MergeStatusMerged,
+		IntegrationBranch: integrationBranch,
+		SourceBranch:      bi.Branch,
+		IssueNum:          bi.IssueNum,
+		PRNum:             bi.PRNum,
+		ExecutorVersion:   integrationMergeExecutorVersion,
+		ExecutedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+
 	// 确保 integration 分支存在
 	if _, err := b.EnsureBranch(integrationBranch); err != nil {
-		return err
+		return MergeOutcome{}, err
 	}
 
 	// checkout integration 分支
 	if err := b.git("checkout", integrationBranch); err != nil {
-		return fmt.Errorf("checkout %s 失败: %w", integrationBranch, err)
+		return MergeOutcome{}, fmt.Errorf("checkout %s 失败: %w", integrationBranch, err)
 	}
 	defer b.git("checkout", b.baseBranch)
 
 	// merge PR 分支
 	msg := fmt.Sprintf("Merge %s (issue #%d)", bi.Branch, bi.IssueNum)
-	if err := b.git("merge", "--no-ff", bi.Branch, "-m", msg); err != nil {
-		_ = b.git("merge", "--abort")
-		return fmt.Errorf("merge %s 冲突: %w", bi.Branch, err)
+	if err := b.git("merge", "--no-ff", bi.Branch, "-m", msg); err == nil {
+		return outcome, nil
 	}
 
+	// merge 失败时走统一冲突处理器
+	return b.handleConflict(outcome)
+}
+
+// handleConflict 处理 merge 冲突：可自动处理则继续提交，否则升级人工。
+func (b *IntegrationBuilder) handleConflict(outcome MergeOutcome) (MergeOutcome, error) {
+	files, perFile, err := b.collectConflictDetails()
+	if err != nil {
+		return b.abortAndEscalate(outcome, &ConflictSummary{}, fmt.Sprintf("采集冲突信息失败: %v", err)), nil
+	}
+	if len(files) == 0 {
+		return b.abortAndEscalate(outcome, &ConflictSummary{}, "merge 失败但未发现可解析冲突文件"), nil
+	}
+
+	summary := buildConflictSummary(files, perFile)
+	var autoResolvedFiles []string
+
+	for _, file := range files {
+		fileSummary := perFile[file]
+		auto, reason := canAutoResolveConflict(file, fileSummary)
+		if !auto {
+			return b.abortAndEscalate(outcome, summary, fmt.Sprintf("文件 %s 不满足自动处理规则: %s", file, reason)), nil
+		}
+
+		if err := b.resolveConflictWithTheirs(file); err != nil {
+			return b.abortAndEscalate(outcome, summary, fmt.Sprintf("自动处理文件 %s 失败: %v", file, err)), nil
+		}
+		autoResolvedFiles = append(autoResolvedFiles, file)
+	}
+
+	unmergedFiles, err := b.listUnmergedFiles()
+	if err != nil {
+		return b.abortAndEscalate(outcome, summary, fmt.Sprintf("校验未解决冲突失败: %v", err)), nil
+	}
+	if len(unmergedFiles) > 0 {
+		return b.abortAndEscalate(outcome, summary, fmt.Sprintf("仍有未解决冲突文件: %s", strings.Join(unmergedFiles, ","))), nil
+	}
+
+	if err := b.git("commit", "--no-edit"); err != nil {
+		return b.abortAndEscalate(outcome, summary, fmt.Sprintf("自动处理后提交 merge 失败: %v", err)), nil
+	}
+
+	outcome.Status = MergeStatusAutoResolved
+	outcome.AutoResolvedFiles = autoResolvedFiles
+	return outcome, nil
+}
+
+func (b *IntegrationBuilder) abortAndEscalate(outcome MergeOutcome, summary *ConflictSummary, reason string) MergeOutcome {
+	abortErr := b.git("merge", "--abort")
+	if abortErr != nil {
+		if reason == "" {
+			reason = fmt.Sprintf("merge --abort 失败: %v", abortErr)
+		} else {
+			reason = fmt.Sprintf("%s; merge --abort 失败: %v", reason, abortErr)
+		}
+	}
+
+	if summary == nil {
+		summary = &ConflictSummary{}
+	}
+	if reason != "" {
+		summary.Reason = reason
+	}
+	if summary.SuggestedAction == "" {
+		summary.SuggestedAction = "请人工解决冲突后重新触发 integration"
+	}
+
+	outcome.Status = MergeStatusEscalated
+	outcome.Conflict = summary
+	return outcome
+}
+
+func (b *IntegrationBuilder) collectConflictDetails() ([]string, map[string]conflictFileSummary, error) {
+	out, err := b.gitOutput("diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, nil, err
+	}
+	files := splitNonEmptyLines(out)
+	sort.Strings(files)
+
+	perFile := make(map[string]conflictFileSummary, len(files))
+	for _, file := range files {
+		fileSummary, err := b.parseConflictBlocks(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		perFile[file] = fileSummary
+	}
+
+	return files, perFile, nil
+}
+
+func buildConflictSummary(files []string, perFile map[string]conflictFileSummary) *ConflictSummary {
+	fileHunkCount := make(map[string]int, len(files))
+	totalHunks := 0
+	for _, file := range files {
+		hunks := perFile[file].hunks
+		fileHunkCount[file] = hunks
+		totalHunks += hunks
+	}
+
+	return &ConflictSummary{
+		Files:           files,
+		FileHunkCount:   fileHunkCount,
+		TotalHunkCount:  totalHunks,
+		SuggestedAction: "请人工解决冲突后重新触发 integration",
+	}
+}
+
+func (b *IntegrationBuilder) parseConflictBlocks(relPath string) (conflictFileSummary, error) {
+	raw, err := os.ReadFile(filepath.Join(b.repoDir, relPath))
+	if err != nil {
+		return conflictFileSummary{}, fmt.Errorf("读取冲突文件 %s 失败: %w", relPath, err)
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	summary := conflictFileSummary{}
+
+	for i := 0; i < len(lines); i++ {
+		if !strings.HasPrefix(lines[i], "<<<<<<<") {
+			continue
+		}
+
+		i++
+		var ours []string
+		for i < len(lines) && !strings.HasPrefix(lines[i], "=======") {
+			ours = append(ours, lines[i])
+			i++
+		}
+		if i >= len(lines) {
+			return conflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 =======", relPath)
+		}
+
+		i++
+		var theirs []string
+		for i < len(lines) && !strings.HasPrefix(lines[i], ">>>>>>>") {
+			theirs = append(theirs, lines[i])
+			i++
+		}
+		if i >= len(lines) {
+			return conflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 >>>>>>>", relPath)
+		}
+
+		summary.hunks++
+		summary.blocks = append(summary.blocks, conflictBlock{
+			ours:   strings.Join(ours, "\n"),
+			theirs: strings.Join(theirs, "\n"),
+		})
+	}
+
+	return summary, nil
+}
+
+func canAutoResolveConflict(file string, fileSummary conflictFileSummary) (bool, string) {
+	if fileSummary.hunks == 0 || len(fileSummary.blocks) == 0 {
+		return false, "未识别到可处理的文本冲突块"
+	}
+
+	// 非核心白名单文件允许小规模冲突直接选择 theirs。
+	if isNonCoreWhitelistedFile(file) {
+		if fileSummary.hunks <= maxWhitelistConflictHunks {
+			return true, "非核心白名单文件小规模冲突"
+		}
+		return false, fmt.Sprintf("白名单文件冲突块过多: %d", fileSummary.hunks)
+	}
+
+	// 其他文件仅允许注释/空白差异。
+	for _, block := range fileSummary.blocks {
+		if !isCommentWhitespaceEquivalent(file, block.ours, block.theirs) {
+			return false, "冲突内容包含语义差异"
+		}
+	}
+	return true, "注释或空白差异"
+}
+
+func isNonCoreWhitelistedFile(file string) bool {
+	if strings.HasPrefix(file, "docs/") || strings.HasPrefix(file, ".github/") {
+		return true
+	}
+
+	ext := strings.ToLower(filepath.Ext(file))
+	return ext == ".md" || ext == ".mdx"
+}
+
+func isCommentWhitespaceEquivalent(file, ours, theirs string) bool {
+	left := normalizeConflictSide(file, ours)
+	right := normalizeConflictSide(file, theirs)
+	return left == right
+}
+
+func normalizeConflictSide(file, text string) string {
+	noBlockComments := blockCommentPattern.ReplaceAllString(text, "")
+	lines := strings.Split(noBlockComments, "\n")
+	hashComments := supportsHashComments(file)
+
+	var sb strings.Builder
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "//") ||
+			strings.HasPrefix(line, "/*") ||
+			strings.HasPrefix(line, "*") ||
+			strings.HasPrefix(line, "*/") ||
+			strings.HasPrefix(line, "<!--") ||
+			strings.HasPrefix(line, "-->") {
+			continue
+		}
+		if hashComments && strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		if hashComments {
+			if idx := strings.Index(line, "#"); idx >= 0 {
+				line = strings.TrimSpace(line[:idx])
+			}
+		}
+		if line == "" {
+			continue
+		}
+
+		sb.WriteString(removeWhitespace(line))
+	}
+
+	return sb.String()
+}
+
+func supportsHashComments(file string) bool {
+	base := strings.ToLower(filepath.Base(file))
+	if base == ".gitignore" {
+		return true
+	}
+
+	switch strings.ToLower(filepath.Ext(file)) {
+	case ".md", ".markdown", ".yml", ".yaml", ".toml", ".sh", ".py", ".ini", ".conf", ".txt":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeWhitespace(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func (b *IntegrationBuilder) resolveConflictWithTheirs(file string) error {
+	if err := b.git("checkout", "--theirs", "--", file); err != nil {
+		return err
+	}
+	if err := b.git("add", "--", file); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (b *IntegrationBuilder) listUnmergedFiles() ([]string, error) {
+	out, err := b.gitOutput("diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	return splitNonEmptyLines(out), nil
+}
+
+func splitNonEmptyLines(s string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // Reset 从 master 重建 integration 分支（冲突无法解决时）

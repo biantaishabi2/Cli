@@ -18,7 +18,7 @@ func setupGitRepo(t *testing.T) string {
 	dir := t.TempDir()
 
 	// 初始化仓库
-	runGit(t, dir, "init")
+	runGit(t, dir, "init", "-b", "master")
 	runGit(t, dir, "config", "user.email", "test@test.com")
 	runGit(t, dir, "config", "user.name", "Test")
 
@@ -26,9 +26,6 @@ func setupGitRepo(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644))
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "initial commit")
-
-	// 确保在 master 分支上（某些 git 版本默认是 main）
-	runGit(t, dir, "branch", "-m", "master")
 
 	return dir
 }
@@ -61,6 +58,15 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, string(out))
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, string(out))
+	return strings.TrimSpace(string(out))
 }
 
 func TestIntegrationBuilder_NoConflict(t *testing.T) {
@@ -155,6 +161,86 @@ func TestIntegrationBuilder_CleanOld(t *testing.T) {
 
 	lines := splitNonEmpty(string(out))
 	assert.LessOrEqual(t, len(lines), 3)
+}
+
+func TestIntegrationBuilder_ExecuteIntegrationMerge_AutoResolvedForWhitelistedFile(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "guide.md"), []byte("# guide\nline\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add docs guide")
+
+	createBranchModifyFile(t, dir, "feat/40-doc-a", "docs/guide.md", "# guide\nline from A\n")
+	createBranchModifyFile(t, dir, "feat/41-doc-b", "docs/guide.md", "# guide\nline from B\n")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	first, err := builder.ExecuteIntegrationMerge("integration/test-auto", BranchInfo{
+		Branch:   "feat/40-doc-a",
+		IssueNum: 40,
+		PRNum:    400,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusMerged, first.Status)
+
+	second, err := builder.ExecuteIntegrationMerge("integration/test-auto", BranchInfo{
+		Branch:   "feat/41-doc-b",
+		IssueNum: 41,
+		PRNum:    401,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusAutoResolved, second.Status)
+	assert.Contains(t, second.AutoResolvedFiles, "docs/guide.md")
+
+	unmerged := runGitOutput(t, dir, "diff", "--name-only", "--diff-filter=U")
+	assert.Empty(t, unmerged)
+
+	content := runGitOutput(t, dir, "show", "integration/test-auto:docs/guide.md")
+	assert.Contains(t, content, "line from B")
+}
+
+func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConflict(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "service.go"), []byte("package pkg\n\nfunc version() int {\n\treturn 0\n}\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add core service")
+
+	createBranchModifyFile(t, dir, "feat/40-core-a", "pkg/service.go", "package pkg\n\nfunc version() int {\n\treturn 1\n}\n")
+	createBranchModifyFile(t, dir, "feat/41-core-b", "pkg/service.go", "package pkg\n\nfunc version() int {\n\treturn 2\n}\n")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	first, err := builder.ExecuteIntegrationMerge("integration/test-escalated", BranchInfo{
+		Branch:   "feat/40-core-a",
+		IssueNum: 40,
+		PRNum:    500,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusMerged, first.Status)
+
+	second, err := builder.ExecuteIntegrationMerge("integration/test-escalated", BranchInfo{
+		Branch:   "feat/41-core-b",
+		IssueNum: 41,
+		PRNum:    501,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusEscalated, second.Status)
+	require.NotNil(t, second.Conflict)
+	assert.Contains(t, second.Conflict.Files, "pkg/service.go")
+	assert.GreaterOrEqual(t, second.Conflict.TotalHunkCount, 1)
+	assert.NotEmpty(t, second.Conflict.Reason)
+
+	// 升级后应已执行 merge --abort，不应残留进行中的 merge 状态。
+	checkMergeHead := exec.Command("git", "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	checkMergeHead.Dir = dir
+	_, mergeHeadErr := checkMergeHead.CombinedOutput()
+	assert.Error(t, mergeHeadErr)
+
+	// integration 分支应保持在已成功合入的状态（仅包含 feat/40-core-a）。
+	content := runGitOutput(t, dir, "show", "integration/test-escalated:pkg/service.go")
+	assert.Contains(t, content, "return 1")
+	assert.NotContains(t, content, "return 2")
 }
 
 func splitNonEmpty(s string) []string {

@@ -315,3 +315,49 @@ func TestFormatStatus(t *testing.T) {
 	assert.Contains(t, output, "completed")
 	assert.Contains(t, output, string(TaskStatusInProgress))
 }
+
+func TestBuildEscalationMetadata_FirstWrite(t *testing.T) {
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"docs/b.md", "docs/a.md"},
+			TotalHunkCount:  3,
+			Reason:          "核心文件语义冲突",
+			SuggestedAction: "请人工处理",
+		},
+	}
+
+	update := buildEscalationMetadata(nil, outcome)
+	assert.Equal(t, string(MergeStatusEscalated), update[metaKeyIntegrationMergeStatus])
+	assert.Equal(t, "integration-merge-executor/v1", update[metaKeyIntegrationExecutorVersion])
+	assert.Equal(t, "2026-02-17T10:00:00Z", update[metaKeyIntegrationMergeExecutedAt])
+	assert.Equal(t, "docs/a.md,docs/b.md", update[metaKeyIntegrationConflictFiles])
+	assert.Equal(t, "3", update[metaKeyIntegrationConflictTotalHunks])
+	assert.NotEmpty(t, update[metaKeyIntegrationConflictSummary])
+	assert.NotEmpty(t, update[metaKeyIntegrationConflictRecordedAt])
+}
+
+func TestBuildEscalationMetadata_IdempotentRetry(t *testing.T) {
+	outcome := MergeOutcome{
+		Status:          MergeStatusEscalated,
+		ExecutedAt:      "2026-02-17T10:00:00Z",
+		ExecutorVersion: "integration-merge-executor/v1",
+		Conflict: &ConflictSummary{
+			Files:           []string{"docs/a.md"},
+			TotalHunkCount:  1,
+			Reason:          "复杂冲突",
+			SuggestedAction: "人工处理",
+		},
+	}
+
+	first := buildEscalationMetadata(nil, outcome)
+	existing := make(map[string]string, len(first))
+	for k, v := range first {
+		existing[k] = v
+	}
+
+	second := buildEscalationMetadata(existing, outcome)
+	assert.Empty(t, second)
+}
