@@ -581,7 +581,10 @@ fn detect_relation_hints(
                 _ => 0.85,
             };
             for symbol_cap in symbol_re.captures_iter(items) {
-                let symbol = symbol_cap.as_str();
+                let Some(symbol_match) = symbol_cap.get(0) else {
+                    continue;
+                };
+                let symbol = symbol_match.as_str();
                 let Some(specifier) = resolve_unique_hint_target(symbol, import_alias_sources)
                 else {
                     continue;

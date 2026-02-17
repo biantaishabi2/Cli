@@ -843,12 +843,17 @@ fn scan_elixir_module_refs(content: &str) -> Vec<String> {
 /// 解析 TypeScript 相对导入为相对于 root 的路径
 fn resolve_ts_import(file_dir: &Path, specifier: &str, root: &Path) -> Option<String> {
     let base = file_dir.join(specifier);
+    let base_text = base.to_string_lossy();
     let candidates = [
         base.clone(),
-        base.with_extension("ts"),
-        base.with_extension("tsx"),
+        PathBuf::from(format!("{}.ts", base_text)),
+        PathBuf::from(format!("{}.tsx", base_text)),
+        PathBuf::from(format!("{}.mts", base_text)),
+        PathBuf::from(format!("{}.cts", base_text)),
         base.join("index.ts"),
         base.join("index.tsx"),
+        base.join("index.mts"),
+        base.join("index.cts"),
     ];
 
     // canonicalize root 以便 strip_prefix 正确工作
