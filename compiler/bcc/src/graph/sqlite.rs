@@ -6,9 +6,7 @@ use crate::graph::store::{CodeGraphStore, CommitInfo, GraphStoreInsert};
 use crate::graph::types::*;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 /// SQLite 图存储实现
 pub struct SqliteGraphStore {
@@ -287,6 +285,22 @@ impl CodeGraphStore for SqliteGraphStore {
         };
 
         let rows = match stmt.query_map(params![name], Self::parse_function_row) {
+            Ok(rows) => rows,
+            Err(_) => return vec![],
+        };
+
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    fn list_functions(&self) -> Vec<FunctionRecord> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT * FROM functions ORDER BY file_path, start_line"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        let rows = match stmt.query_map([], Self::parse_function_row) {
             Ok(rows) => rows,
             Err(_) => return vec![],
         };
@@ -633,7 +647,7 @@ impl CodeGraphStore for SqliteGraphStore {
         self.check_depth(depth)?;
         
         let mut functions = Vec::new();
-        let mut classes = Vec::new();
+        let classes = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
         
         // 获取查询函数的基本信息

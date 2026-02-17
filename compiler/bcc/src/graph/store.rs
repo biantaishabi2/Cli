@@ -39,6 +39,9 @@ pub trait CodeGraphStore {
     /// 按名称查询函数
     fn find_by_name(&self, name: &str) -> Vec<FunctionRecord>;
 
+    /// 获取仓库内所有函数
+    fn list_functions(&self) -> Vec<FunctionRecord>;
+
     /// 查找调用者（支持深度）
     fn find_callers(&self, function_id: &str, depth: usize) -> Result<Vec<FunctionRecord>>;
 

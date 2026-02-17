@@ -2,8 +2,10 @@
 //!
 //! 运行条件: 手动触发（通过 workflow_dispatch）
 //! 环境变量: E2E_TEST_REPO=/path/to/openclaw
+//! 可选环境变量: BCC_BIN=/path/to/bcc
+//! 手动执行: E2E_TEST_REPO=/path/to/repo cargo test -p bcc --test graph_e2e <case> -- --ignored --nocapture
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// 获取测试仓库路径
@@ -11,23 +13,34 @@ fn get_test_repo() -> Option<PathBuf> {
     std::env::var("E2E_TEST_REPO").ok().map(PathBuf::from)
 }
 
+/// 定位 workspace 根目录（默认从 compiler/bcc 回溯到仓库根）
+fn workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .join("../..")
+        .canonicalize()
+        .unwrap_or(manifest_dir)
+}
+
 /// 运行 bcc 命令
 fn run_bcc(args: &[&str]) -> Result<String, String> {
-    // 尝试使用 release 二进制，如果不存在则使用 cargo run
-    let bcc_path = "/Users/biantaishabi/Cli-graph-68/target/release/bcc";
-    
-    let output = if std::path::Path::new(bcc_path).exists() {
-        Command::new(bcc_path)
+    // 优先使用显式指定的二进制路径（便于 CI/本地复用）
+    let output = if let Ok(bcc_bin) = std::env::var("BCC_BIN") {
+        if !Path::new(&bcc_bin).exists() {
+            return Err(format!("BCC_BIN does not exist: {}", bcc_bin));
+        }
+        Command::new(&bcc_bin)
             .args(args)
             .output()
-            .map_err(|e| format!("Failed to run bcc binary: {}", e))?
+            .map_err(|e| format!("Failed to run bcc binary (BCC_BIN={}): {}", bcc_bin, e))?
     } else {
+        // 回退到当前仓库执行 cargo run
         Command::new("cargo")
             .args(&["run", "--release", "--bin", "bcc", "--"])
             .args(args)
-            .current_dir("/Users/biantaishabi/Cli-graph-68")
+            .current_dir(workspace_root())
             .output()
-            .map_err(|e| format!("Failed to run cargo: {}", e))?
+            .map_err(|e| format!("Failed to run cargo in workspace root: {}", e))?
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
