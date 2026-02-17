@@ -146,6 +146,7 @@ cross-project-arch-comparison/
 - `cross-project-arch-comparison`：教你如何用 bcc 对比项目架构，识别设计差异
 
 ## 延伸阅读
+- [架构整改方案](./insights/architecture-remediation.md) - Gong 和 PI-Mono 的具体修复建议
 
 - [依赖注入的架构界定](./insights/dependency-injection.md)
 - [Seed 定义完整性检查](./insights/seed-completeness.md)
