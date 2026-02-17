@@ -3,7 +3,7 @@
 [![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
 [![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
 
-> **LLM 时代的架构操作系统**：[BCC](#compiler) 将代码编译为知识图谱并自动验证架构约束；[niuma](#automation) 实现 Issue 到 Merge 的全自动流程；人只需定义规则和最终批准，机器持续守护架构健康。
+> **LLM 时代的软件工程操作系统**：taskctl 编排复杂工作流，BCC 编译代码结构为可验证的知识图谱，niuma 实现从需求到合并的全自动开发，BDDC 执行行为驱动测试。人定义规则和目标，机器处理执行和验证。
 >
 > 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
 
