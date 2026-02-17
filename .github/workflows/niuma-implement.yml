@@ -11,9 +11,7 @@ concurrency:
 jobs:
   implement:
     runs-on: self-hosted
-    if: >
-      github.event.label.name == 'bot:plan-final' ||
-      github.event.label.name == 'bot:plan-approved'
+    if: github.event.label.name == 'bot:plan-final'
     permissions:
       issues: write
       pull-requests: write
@@ -24,6 +22,7 @@ jobs:
       - name: Implement Code
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          NIUMA_IMPLEMENTATION_PROVIDER: codex
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           WORKSPACE: ${{ github.workspace }}
