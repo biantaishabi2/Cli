@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.NIUMA_PAT }}
           fetch-depth: 0
 
       - name: Implement Code
