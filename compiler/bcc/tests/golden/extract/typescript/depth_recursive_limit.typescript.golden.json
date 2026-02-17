@@ -21,16 +21,16 @@
   ],
   "exports": [
     {
-      "name": "walkDepth",
-      "kind": "function",
-      "signature": null,
-      "line": 3
-    },
-    {
       "name": "startWalk",
       "kind": "function",
       "signature": null,
       "line": 12
+    },
+    {
+      "name": "walkDepth",
+      "kind": "function",
+      "signature": null,
+      "line": 3
     }
   ],
   "declarations": 2,
