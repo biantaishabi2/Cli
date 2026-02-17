@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -383,6 +384,197 @@ relations_expected: []
         total,
         accuracy * 100.0,
         call_type_counts
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn arch_matrix_detect_injection_is_stable_in_parallel_runs() {
+    let mut handles = Vec::new();
+
+    for i in 0..4 {
+        handles.push(thread::spawn(move || {
+            let root = temp_dir(&format!("bcc_arch_injection_parallel_{}", i));
+            let seed = root.join("seed.yaml");
+            let ast = root.join("ast.json");
+            let out = root.join("out");
+
+            write(
+                &seed,
+                r#"version: v3
+source_of_truth: test
+modules:
+  - module_id: INFRA
+    precedence: 10
+    path_rules:
+      include: ["src/infra/**"]
+  - module_id: PROVIDERS
+    precedence: 10
+    path_rules:
+      include: ["src/providers/**"]
+relations_expected: []
+"#,
+            );
+            write(
+                &ast,
+                r#"{
+  "source_count": 2,
+  "records": [
+    {
+      "sourcePath": "src/infra/req_llm.ex",
+      "localDependencies": ["src/providers/anthropic.ex"],
+      "localCallTargets": [],
+      "relationHints": [
+        {
+          "target": "src/providers/anthropic.ex",
+          "call_type_hint": "external_registration",
+          "via": "ReqLLM.Providers.register",
+          "confidence": 0.99,
+          "detector": "elixir.external_register",
+          "reason": "register"
+        }
+      ]
+    },
+    {
+      "sourcePath": "src/providers/anthropic.ex",
+      "localDependencies": [],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+            );
+
+            let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                .args([
+                    "arch",
+                    "matrix",
+                    "--seed-file",
+                    &seed.to_string_lossy(),
+                    "--ast-file",
+                    &ast.to_string_lossy(),
+                    "--out-dir",
+                    &out.to_string_lossy(),
+                    "--version",
+                    "v3",
+                    "--emit",
+                    "all",
+                    "--detect-injection",
+                ])
+                .status()
+                .expect("run matrix in parallel");
+            assert!(status.success());
+
+            let report_path = out.join("v3.relation-classification.json");
+            assert!(report_path.exists());
+            let payload: Value =
+                serde_json::from_str(&fs::read_to_string(&report_path).expect("read report"))
+                    .expect("parse report");
+            let rows = payload.as_array().expect("classification rows");
+            assert!(rows.iter().any(|row| {
+                row.get("caller") == Some(&Value::String("INFRA".to_string()))
+                    && row.get("callee") == Some(&Value::String("PROVIDERS".to_string()))
+                    && row.get("call_type")
+                        == Some(&Value::String("external_registration".to_string()))
+            }));
+
+            let _ = fs::remove_dir_all(&root);
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread should not panic");
+    }
+}
+
+#[test]
+fn arch_matrix_handles_deep_relation_chain_with_injection_hints() {
+    let depth = 128usize;
+    let root = temp_dir("bcc_arch_injection_deep_chain");
+    let seed = root.join("seed.yaml");
+    let ast = root.join("ast.json");
+    let out = root.join("out");
+
+    let mut seed_yaml = String::from("version: v3\nsource_of_truth: test\nmodules:\n");
+    for i in 0..=depth {
+        seed_yaml.push_str(&format!(
+            "  - module_id: M{}\n    precedence: 10\n    path_rules:\n      include: [\"src/m{}/**\"]\n",
+            i, i
+        ));
+    }
+    seed_yaml.push_str("relations_expected: []\n");
+    write(&seed, &seed_yaml);
+
+    let mut records = Vec::new();
+    for i in 0..=depth {
+        if i < depth {
+            records.push(format!(
+                r#"{{
+      "sourcePath": "src/m{0}/file.ts",
+      "localDependencies": ["src/m{1}/file.ts"],
+      "localCallTargets": [],
+      "relationHints": [
+        {{
+          "target": "src/m{1}/file.ts",
+          "call_type_hint": "framework_injection",
+          "via": "@Module.imports",
+          "confidence": 0.95,
+          "detector": "typescript.nest.module",
+          "reason": "deep chain"
+        }}
+      ]
+    }}"#,
+                i,
+                i + 1
+            ));
+        } else {
+            records.push(format!(
+                r#"{{
+      "sourcePath": "src/m{0}/file.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    }}"#,
+                i
+            ));
+        }
+    }
+    let ast_json = format!(
+        "{{\n  \"source_count\": {},\n  \"records\": [\n{}\n  ]\n}}",
+        depth + 1,
+        records.join(",\n")
+    );
+    write(&ast, &ast_json);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix deep chain");
+    assert!(status.success());
+
+    let payload: Value = serde_json::from_str(
+        &fs::read_to_string(out.join("v3.relation-classification.json")).expect("read report"),
+    )
+    .expect("parse report");
+    let rows = payload.as_array().expect("classification rows");
+    assert_eq!(rows.len(), depth);
+    assert!(
+        rows.iter()
+            .all(|row| row.get("call_type")
+                == Some(&Value::String("framework_injection".to_string())))
     );
 
     let _ = fs::remove_dir_all(&root);

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -1979,6 +1980,193 @@ fn pi_mono_module_imports_are_classified_as_framework_injection() {
     assert!(rows.as_array().unwrap().iter().any(|row| {
         row["caller"] == "API"
             && row["callee"] == "PRISMA"
+            && row["call_type"] == "framework_injection"
+    }));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn bdd_injection_pipeline_is_stable_in_parallel_runs() {
+    let mut handles = Vec::new();
+
+    for i in 0..2 {
+        handles.push(thread::spawn(move || {
+            let root = temp_dir(&format!("bcc_bdd_injection_parallel_{}", i));
+            let api = root.join("apps/api/src");
+            let user = root.join("apps/user/src");
+            fs::create_dir_all(&api).expect("create api");
+            fs::create_dir_all(&user).expect("create user");
+
+            write(
+                &api.join("app.module.ts"),
+                "import { Module } from '@nestjs/common';\nimport { UserModule } from '../../user/src/user.module';\n\n@Module({\n  imports: [UserModule],\n})\nexport class AppModule {}\n",
+            );
+            write(&user.join("user.module.ts"), "export class UserModule {}\n");
+
+            let ast_file = root.join("ast.json");
+            let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                .args([
+                    "extract",
+                    &root.to_string_lossy(),
+                    "--batch",
+                    "--lang",
+                    "typescript",
+                    "--output",
+                    &ast_file.to_string_lossy(),
+                ])
+                .status()
+                .expect("run ts extract in parallel");
+            assert!(extract.success());
+
+            let seed = root.join("seed.yaml");
+            write(
+                &seed,
+                "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/**\"]\n  - module_id: USER\n    precedence: 10\n    path_rules:\n      include: [\"apps/user/src/**\"]\nrelations_expected: []\n",
+            );
+
+            let out = root.join("out");
+            let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                .args([
+                    "arch",
+                    "matrix",
+                    "--seed-file",
+                    &seed.to_string_lossy(),
+                    "--ast-file",
+                    &ast_file.to_string_lossy(),
+                    "--out-dir",
+                    &out.to_string_lossy(),
+                    "--version",
+                    "v3",
+                    "--emit",
+                    "all",
+                    "--detect-injection",
+                ])
+                .status()
+                .expect("run matrix in parallel");
+            assert!(matrix.success());
+
+            let report =
+                fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+            let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+            let rows = rows.as_array().expect("classification rows");
+            assert!(rows.iter().any(|row| {
+                row["caller"] == "API"
+                    && row["callee"] == "USER"
+                    && row["call_type"] == "framework_injection"
+            }));
+
+            let _ = fs::remove_dir_all(&root);
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread should not panic");
+    }
+}
+
+#[test]
+fn bdd_injection_pipeline_handles_deep_module_imports() {
+    let depth = 64usize;
+    let root = temp_dir("bcc_bdd_injection_deep");
+    let api = root.join("apps/api/src");
+    fs::create_dir_all(&api).expect("create api");
+
+    let mut app_module = String::from("import { Module } from '@nestjs/common';\n");
+    for i in 0..depth {
+        app_module.push_str(&format!(
+            "import {{ F{}Module }} from './f{}.module';\n",
+            i, i
+        ));
+    }
+    app_module.push_str("\n@Module({\n  imports: [");
+    for i in 0..depth {
+        if i > 0 {
+            app_module.push_str(", ");
+        }
+        app_module.push_str(&format!("F{}Module", i));
+    }
+    app_module.push_str("],\n})\nexport class AppModule {}\n");
+    write(&api.join("app.module.ts"), &app_module);
+
+    for i in 0..depth {
+        write(
+            &api.join(format!("f{}.module.ts", i)),
+            &format!("export class F{}Module {{}}\n", i),
+        );
+    }
+
+    let ast_file = root.join("ast.json");
+    let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run ts extract");
+    assert!(extract.success());
+
+    let ast_content = fs::read_to_string(&ast_file).expect("read ast json");
+    let ast_json: serde_json::Value = serde_json::from_str(&ast_content).expect("parse ast json");
+    let app_record = ast_json["records"]
+        .as_array()
+        .and_then(|records| {
+            records.iter().find(|record| {
+                record["sourcePath"]
+                    .as_str()
+                    .map(|p| p.ends_with("apps/api/src/app.module.ts"))
+                    .unwrap_or(false)
+            })
+        })
+        .expect("app.module.ts record");
+    let hint_count = app_record["relationHints"]
+        .as_array()
+        .map(|h| {
+            h.iter()
+                .filter(|item| item["via"] == "@Module.imports")
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(hint_count, depth);
+
+    let seed = root.join("seed.yaml");
+    write(
+        &seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/app.module.ts\"]\n  - module_id: FEATURE\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/f*.module.ts\"]\nrelations_expected: []\n",
+    );
+
+    let out = root.join("out");
+    let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix");
+    assert!(matrix.success());
+
+    let report = fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+    let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+    let rows = rows.as_array().expect("classification rows");
+    assert!(rows.iter().any(|row| {
+        row["caller"] == "API"
+            && row["callee"] == "FEATURE"
             && row["call_type"] == "framework_injection"
     }));
 

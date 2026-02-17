@@ -75,7 +75,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     }
     let mut local_call_targets: Vec<String> = local_call_targets_set.into_iter().collect();
     local_call_targets.sort_unstable();
-    let relation_hints = detect_relation_hints(content, &import_alias_sources);
+    let relation_hints = detect_relation_hints(root, source, &import_alias_sources);
 
     let side_effects = SideEffects {
         has_async: content.contains("async ") || content.contains("await "),
@@ -552,17 +552,19 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 fn detect_relation_hints(
-    content: &str,
+    root: tree_sitter::Node,
+    source: &[u8],
     import_alias_sources: &HashMap<String, HashSet<String>>,
 ) -> Vec<RelationHintRecord> {
     let mut hints = Vec::new();
+    let sanitized_content = mask_non_code_regions_for_hint_detection(root, source);
     let module_re = Regex::new(r"(?s)@Module\s*\(\s*\{(.*?)\}\s*\)").expect("valid module regex");
     let module_field_re = Regex::new(r"(imports|providers|controllers)\s*:\s*\[([^\]]*)\]")
         .expect("valid module field regex");
     let symbol_re =
         Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid ts symbol extraction regex");
 
-    for cap in module_re.captures_iter(content) {
+    for cap in module_re.captures_iter(&sanitized_content) {
         let Some(body) = cap.get(1).map(|m| m.as_str()) else {
             continue;
         };
@@ -603,7 +605,7 @@ fn detect_relation_hints(
     let ctor_re = Regex::new(r"constructor\s*\(([^)]*)\)").expect("valid constructor regex");
     let type_re = Regex::new(r":\s*([A-Za-z_][A-Za-z0-9_]*)").expect("valid type regex");
 
-    for class_cap in class_re.captures_iter(content) {
+    for class_cap in class_re.captures_iter(&sanitized_content) {
         let Some(decorator) = class_cap.get(1).map(|m| m.as_str()) else {
             continue;
         };
@@ -648,6 +650,40 @@ fn detect_relation_hints(
             && a.detector == b.detector
     });
     hints
+}
+
+fn mask_non_code_regions_for_hint_detection(root: tree_sitter::Node, source: &[u8]) -> String {
+    let mut masked = source.to_vec();
+    let mut stack = vec![root];
+
+    while let Some(node) = stack.pop() {
+        let should_mask = matches!(
+            node.kind(),
+            "comment" | "string" | "template_string" | "jsx_text"
+        );
+        if should_mask {
+            let start = node.start_byte();
+            let end = node.end_byte();
+            if start < end && end <= masked.len() {
+                for byte in &mut masked[start..end] {
+                    if *byte != b'\n' && *byte != b'\r' {
+                        *byte = b' ';
+                    }
+                }
+            }
+            continue;
+        }
+
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&masked).into_owned()
 }
 
 fn resolve_unique_hint_target(
@@ -801,5 +837,21 @@ export class AppService {
                 && h.call_type_hint == "framework_injection"
                 && h.via.contains("@Injectable")
         }));
+    }
+
+    #[test]
+    fn ignores_nest_decorators_in_comments_and_strings() {
+        let source = r#"
+import { Module, Injectable } from '@nestjs/common';
+import { UserModule } from '@app/user';
+import { UserService } from '@app/user';
+
+// @Module({ imports: [UserModule] })
+const txt = "@Injectable() constructor(userService: UserService) {}";
+
+export class AppModule {}
+"#;
+        let record = extract(source, "apps/api/src/app.module.ts", "typescript");
+        assert!(record.relation_hints.is_empty());
     }
 }

@@ -1,5 +1,6 @@
 use bcc::arch::injection::{append_classification_reason, classify_edge, CallType, RelationHint};
 use bcc::extract::{elixir, typescript};
+use std::thread;
 
 #[test]
 fn classifier_prefers_external_registration_when_conflict() {
@@ -241,4 +242,85 @@ export class AppModule {}
         .relation_hints
         .iter()
         .any(|h| h.via.contains("@Module.imports") && h.target == "@vendor/user"));
+}
+
+#[test]
+fn typescript_detector_ignores_commented_or_stringified_decorators() {
+    let source = r#"
+import { Module, Injectable } from '@nestjs/common';
+import { UserModule } from '@app/user';
+import { UserService } from '@app/user';
+
+// @Module({ imports: [UserModule] })
+const fakeModule = "@Module({ imports: [UserModule] })";
+const fakeInjectable = "@Injectable() constructor(userService: UserService) {}";
+
+export class AppModule {}
+"#;
+
+    let record = typescript::extract(source, "apps/api/src/app.module.ts", "typescript");
+    assert!(record.relation_hints.is_empty());
+}
+
+#[test]
+fn classifier_is_thread_safe_under_parallel_load() {
+    let hints = vec![
+        RelationHint {
+            target: "src/provider.ex".to_string(),
+            call_type_hint: CallType::FrameworkInjection,
+            via: "@Module.imports".to_string(),
+            confidence: 0.95,
+            detector: "typescript.nest.module".to_string(),
+            reason: "framework".to_string(),
+        },
+        RelationHint {
+            target: "src/provider.ex".to_string(),
+            call_type_hint: CallType::ExternalRegistration,
+            via: "ReqLLM.Providers.register".to_string(),
+            confidence: 0.97,
+            detector: "elixir.external_register".to_string(),
+            reason: "register".to_string(),
+        },
+    ];
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let thread_hints = hints.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..200 {
+                let row = classify_edge("INFRA", "PROVIDERS", &thread_hints, true);
+                assert_eq!(row.call_type, CallType::ExternalRegistration);
+                assert_eq!(row.source, "ast_hint");
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread should not panic");
+    }
+}
+
+#[test]
+fn typescript_detector_handles_deep_module_imports_without_recursion_break() {
+    let depth = 256usize;
+    let mut source = String::from("import { Module } from '@nestjs/common';\n");
+    for i in 0..depth {
+        source.push_str(&format!("import {{ M{} }} from '@app/m{}';\n", i, i));
+    }
+    source.push_str("\n@Module({\n  imports: [");
+    for i in 0..depth {
+        if i > 0 {
+            source.push_str(", ");
+        }
+        source.push_str(&format!("M{}", i));
+    }
+    source.push_str("],\n})\nexport class AppModule {}\n");
+
+    let record = typescript::extract(&source, "apps/api/src/app.module.ts", "typescript");
+    let module_import_hints = record
+        .relation_hints
+        .iter()
+        .filter(|h| h.via.contains("@Module.imports"))
+        .count();
+    assert_eq!(module_import_hints, depth);
 }
