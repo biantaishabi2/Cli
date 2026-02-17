@@ -3,9 +3,22 @@
 use bcc::graph::error::GraphError;
 use bcc::graph::sqlite::GraphStoreManager;
 use bcc::graph::store::{CodeGraphStore, GraphStoreInsert};
-use bcc::graph::types::{FunctionRecord, Repository};
+use bcc::graph::types::{FunctionRecord, Repository, ModuleRecord, ModuleDepEdge, DepType};
 use chrono::Utc;
 use std::thread;
+
+fn create_test_module(id: &str, name: &str, directory: &str) -> ModuleRecord {
+    ModuleRecord {
+        id: id.to_string(),
+        name: name.to_string(),
+        file_path: id.to_string(),
+        directory: directory.to_string(),
+        exports_count: 5,
+        imports_count: 3,
+        loc_lines: 100,
+        language: "typescript".to_string(),
+    }
+}
 
 fn create_test_function(id: &str, name: &str, module: &str) -> FunctionRecord {
     FunctionRecord {
@@ -168,5 +181,281 @@ fn test_depth_limit_error() {
     
     // 测试超限深度
     let result = store.find_callers("test.php#foo#1", 101);
+    assert!(matches!(result, Err(GraphError::DepthLimitExceeded(100))));
+}
+
+// ==================== 模块依赖图集成测试 ====================
+
+#[test]
+fn test_module_crud() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-test").unwrap();
+    
+    // 插入模块
+    let module = create_test_module("src/utils.ts", "utils.ts", "src");
+    GraphStoreInsert::insert_module(&store, &module).unwrap();
+    
+    // 查询模块
+    let retrieved = store.get_module("src/utils.ts");
+    assert!(retrieved.is_some());
+    let retrieved = retrieved.unwrap();
+    assert_eq!(retrieved.name, "utils.ts");
+    assert_eq!(retrieved.directory, "src");
+    assert_eq!(retrieved.exports_count, 5);
+    assert_eq!(retrieved.imports_count, 3);
+    assert_eq!(retrieved.loc_lines, 100);
+    
+    // 查询不存在的模块
+    assert!(store.get_module("non-existent.ts").is_none());
+}
+
+#[test]
+fn test_module_dep_edge_storage() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-dep-test").unwrap();
+    
+    // 插入模块
+    let mod_a = create_test_module("src/a.ts", "a.ts", "src");
+    let mod_b = create_test_module("src/b.ts", "b.ts", "src");
+    let mod_c = create_test_module("src/c.ts", "c.ts", "src");
+    
+    GraphStoreInsert::insert_module(&store, &mod_a).unwrap();
+    GraphStoreInsert::insert_module(&store, &mod_b).unwrap();
+    GraphStoreInsert::insert_module(&store, &mod_c).unwrap();
+    
+    // 插入依赖边: a -> b, a -> c, b -> c
+    let edge_ab = ModuleDepEdge {
+        source_id: "src/a.ts".to_string(),
+        target_id: "src/b.ts".to_string(),
+        dep_type: DepType::Import,
+        symbols: vec!["helper".to_string(), "util".to_string()],
+    };
+    let edge_ac = ModuleDepEdge {
+        source_id: "src/a.ts".to_string(),
+        target_id: "src/c.ts".to_string(),
+        dep_type: DepType::Import,
+        symbols: vec!["config".to_string()],
+    };
+    let edge_bc = ModuleDepEdge {
+        source_id: "src/b.ts".to_string(),
+        target_id: "src/c.ts".to_string(),
+        dep_type: DepType::DynamicImport,
+        symbols: vec![],
+    };
+    
+    GraphStoreInsert::insert_module_dep_edge(&store, &edge_ab).unwrap();
+    GraphStoreInsert::insert_module_dep_edge(&store, &edge_ac).unwrap();
+    GraphStoreInsert::insert_module_dep_edge(&store, &edge_bc).unwrap();
+    
+    // 验证依赖查询
+    let deps_of_a = store.find_module_deps("src/a.ts", 1).unwrap();
+    assert_eq!(deps_of_a.len(), 2);
+    
+    let deps_of_b = store.find_module_deps("src/b.ts", 1).unwrap();
+    assert_eq!(deps_of_b.len(), 1);
+    assert_eq!(deps_of_b[0].id, "src/c.ts");
+    
+    // 验证被依赖查询
+    let dependents_of_c = store.find_module_dependents("src/c.ts", 1).unwrap();
+    assert_eq!(dependents_of_c.len(), 2);
+    
+    let dependents_of_b = store.find_module_dependents("src/b.ts", 1).unwrap();
+    assert_eq!(dependents_of_b.len(), 1);
+    assert_eq!(dependents_of_b[0].id, "src/a.ts");
+}
+
+#[test]
+fn test_module_deps_recursive() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-recursive-test").unwrap();
+    
+    // 创建链式依赖: a -> b -> c -> d
+    let modules = vec![
+        ("src/a.ts", "a.ts", "src"),
+        ("src/b.ts", "b.ts", "src"),
+        ("src/c.ts", "c.ts", "src"),
+        ("src/d.ts", "d.ts", "src"),
+    ];
+    
+    for (id, name, dir) in &modules {
+        let module = create_test_module(id, name, dir);
+        GraphStoreInsert::insert_module(&store, &module).unwrap();
+    }
+    
+    // 创建链式依赖
+    let edges = vec![
+        ("src/a.ts", "src/b.ts"),
+        ("src/b.ts", "src/c.ts"),
+        ("src/c.ts", "src/d.ts"),
+    ];
+    
+    for (source, target) in edges {
+        let edge = ModuleDepEdge {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            dep_type: DepType::Import,
+            symbols: vec![],
+        };
+        GraphStoreInsert::insert_module_dep_edge(&store, &edge).unwrap();
+    }
+    
+    // depth=1: a 直接依赖 b
+    let deps_depth1 = store.find_module_deps("src/a.ts", 1).unwrap();
+    assert_eq!(deps_depth1.len(), 1);
+    assert_eq!(deps_depth1[0].id, "src/b.ts");
+    
+    // depth=2: a 依赖 b, c
+    let deps_depth2 = store.find_module_deps("src/a.ts", 2).unwrap();
+    assert_eq!(deps_depth2.len(), 2);
+    let ids: Vec<_> = deps_depth2.iter().map(|m| m.id.clone()).collect();
+    assert!(ids.contains(&"src/b.ts".to_string()));
+    assert!(ids.contains(&"src/c.ts".to_string()));
+    
+    // depth=3: a 依赖 b, c, d
+    let deps_depth3 = store.find_module_deps("src/a.ts", 3).unwrap();
+    assert_eq!(deps_depth3.len(), 3);
+    let ids: Vec<_> = deps_depth3.iter().map(|m| m.id.clone()).collect();
+    assert!(ids.contains(&"src/d.ts".to_string()));
+}
+
+#[test]
+fn test_circular_module_deps_detection() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-circular-test").unwrap();
+    
+    // 创建循环依赖: a -> b -> c -> a
+    let modules = vec![
+        ("src/a.ts", "a.ts", "src"),
+        ("src/b.ts", "b.ts", "src"),
+        ("src/c.ts", "c.ts", "src"),
+    ];
+    
+    for (id, name, dir) in &modules {
+        let module = create_test_module(id, name, dir);
+        GraphStoreInsert::insert_module(&store, &module).unwrap();
+    }
+    
+    // 创建循环依赖
+    let edges = vec![
+        ("src/a.ts", "src/b.ts"),
+        ("src/b.ts", "src/c.ts"),
+        ("src/c.ts", "src/a.ts"),
+    ];
+    
+    for (source, target) in edges {
+        let edge = ModuleDepEdge {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            dep_type: DepType::Import,
+            symbols: vec![],
+        };
+        GraphStoreInsert::insert_module_dep_edge(&store, &edge).unwrap();
+    }
+    
+    // 检测循环依赖
+    let cycle = store.detect_circular_deps("src/a.ts").unwrap();
+    assert!(cycle.is_some());
+    let cycle_path = cycle.unwrap();
+    assert!(cycle_path.contains(&"src/a.ts".to_string()));
+    assert!(cycle_path.contains(&"src/b.ts".to_string()));
+    assert!(cycle_path.contains(&"src/c.ts".to_string()));
+    
+    // 无循环的模块
+    let no_cycle = store.detect_circular_deps("src/b.ts").unwrap();
+    // 注意：由于算法从给定节点出发，b 在循环中也会被检测到
+    assert!(no_cycle.is_some());
+}
+
+#[test]
+fn test_module_deps_no_cycle() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-no-cycle-test").unwrap();
+    
+    // 创建无循环依赖: a -> b -> c
+    let modules = vec![
+        ("src/a.ts", "a.ts", "src"),
+        ("src/b.ts", "b.ts", "src"),
+        ("src/c.ts", "c.ts", "src"),
+    ];
+    
+    for (id, name, dir) in &modules {
+        let module = create_test_module(id, name, dir);
+        GraphStoreInsert::insert_module(&store, &module).unwrap();
+    }
+    
+    // 创建无循环依赖
+    let edges = vec![
+        ("src/a.ts", "src/b.ts"),
+        ("src/b.ts", "src/c.ts"),
+    ];
+    
+    for (source, target) in edges {
+        let edge = ModuleDepEdge {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            dep_type: DepType::Import,
+            symbols: vec![],
+        };
+        GraphStoreInsert::insert_module_dep_edge(&store, &edge).unwrap();
+    }
+    
+    // c 没有出边，应该无循环
+    let cycle = store.detect_circular_deps("src/c.ts").unwrap();
+    assert!(cycle.is_none());
+}
+
+#[test]
+fn test_module_function_isolation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-func-isolation").unwrap();
+    
+    // 插入模块
+    let module = create_test_module("src/app.ts", "app.ts", "src");
+    GraphStoreInsert::insert_module(&store, &module).unwrap();
+    
+    // 插入同名函数（不同 ID 格式）
+    let func = create_test_function("src/app.ts#foo#10", "foo", "app");
+    GraphStoreInsert::insert_function(&store, &func).unwrap();
+    
+    // 验证模块和函数独立存储
+    let retrieved_module = store.get_module("src/app.ts");
+    assert!(retrieved_module.is_some());
+    assert_eq!(retrieved_module.unwrap().name, "app.ts");
+    
+    let retrieved_func = store.get_function("src/app.ts#foo#10");
+    assert!(retrieved_func.is_some());
+    assert_eq!(retrieved_func.unwrap().name, "foo");
+    
+    // 模块 ID 和函数 ID 不同
+    assert!(store.get_function("src/app.ts").is_none());
+    assert!(store.get_module("src/app.ts#foo#10").is_none());
+}
+
+#[test]
+fn test_module_depth_limit() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
+    let store = manager.get_store("module-depth-test").unwrap();
+    
+    // 插入测试模块
+    let module = create_test_module("src/test.ts", "test.ts", "src");
+    GraphStoreInsert::insert_module(&store, &module).unwrap();
+    
+    // 测试正常深度
+    let result = store.find_module_deps("src/test.ts", 10);
+    assert!(result.is_ok());
+    
+    // 测试超限深度
+    let result = store.find_module_deps("src/test.ts", 101);
+    assert!(matches!(result, Err(GraphError::DepthLimitExceeded(100))));
+    
+    // 测试 dependents 深度限制
+    let result = store.find_module_dependents("src/test.ts", 101);
     assert!(matches!(result, Err(GraphError::DepthLimitExceeded(100))));
 }
