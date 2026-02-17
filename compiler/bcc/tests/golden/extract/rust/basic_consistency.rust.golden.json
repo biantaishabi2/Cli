@@ -1,0 +1,24 @@
+{
+  "calls": [
+    {
+      "callee": "Helper::exec",
+      "line": 4
+    }
+  ],
+  "imports": [
+    {
+      "kind": "use",
+      "specifier": "crate::helper::Helper"
+    }
+  ],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": "fn run(input: &str)",
+      "line": 3
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 5
+}

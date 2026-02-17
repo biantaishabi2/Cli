@@ -1,0 +1,24 @@
+{
+  "calls": [
+    {
+      "callee": "Helper",
+      "line": 9
+    }
+  ],
+  "imports": [
+    {
+      "kind": "extends",
+      "specifier": "BaseController"
+    }
+  ],
+  "exports": [
+    {
+      "name": "run",
+      "kind": "method",
+      "signature": "public function run($input)",
+      "line": 7
+    }
+  ],
+  "declarations": 2,
+  "loc_lines": 11
+}

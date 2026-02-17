@@ -1,0 +1,52 @@
+{
+  "calls": [
+    {
+      "callee": "OaComment",
+      "line": 29
+    },
+    {
+      "callee": "SysFile",
+      "line": 37
+    },
+    {
+      "callee": "SysMsg",
+      "line": 20
+    },
+    {
+      "callee": "SysUser",
+      "line": 36
+    }
+  ],
+  "imports": [
+    {
+      "kind": "extends",
+      "specifier": "ObaseController"
+    },
+    {
+      "kind": "trait",
+      "specifier": "MsbcArticleTrait"
+    }
+  ],
+  "exports": [
+    {
+      "name": "initialize",
+      "kind": "method",
+      "signature": "public function initialize()",
+      "line": 11
+    },
+    {
+      "name": "attentionnewsAction",
+      "kind": "method",
+      "signature": "public function attentionnewsAction()",
+      "line": 17
+    },
+    {
+      "name": "commentAction",
+      "kind": "method",
+      "signature": "public function commentAction()",
+      "line": 24
+    }
+  ],
+  "declarations": 5,
+  "loc_lines": 40
+}

@@ -207,7 +207,7 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 存量项目线（Brownfield）：
 - `extract -> arch validate -> arch export-module-map -> bugfix -> bddc check`
 
-`arch validate` 与 `bdd seed check` 是当前主线的门禁点；`cargo test -p bcc --test cli_arch_bdd` 负责 CI Smoke 覆盖。
+`arch validate` 与 `bdd seed check` 是当前主线的门禁点；CI Smoke 由 `cargo test -p bcc --test cli_arch_bdd` 与 `cargo test -p bcc --test extract_golden` 共同覆盖。
 ## 支持语言
 
 | 语言 | extract | bugfix | tree-sitter |
@@ -215,6 +215,7 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 | Elixir | .ex .exs | .ex .exs | tree-sitter-elixir 0.3 |
 | TypeScript | .ts .tsx | .ts .tsx | tree-sitter-typescript 0.23 |
 | PHP | .php | .php | tree-sitter-php 0.24 |
+| Rust | .rs | .rs | tree-sitter-rust 0.23 |
 
 ## Extract 架构
 
@@ -235,10 +236,34 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 ```bash
 cd compiler/bcc
 cargo test          # 单测
+cargo test -p bcc --test extract_golden
+UPDATE_GOLDEN=1 cargo test -p bcc --test extract_golden
 cargo run -- extract fixtures/sample_controller.php --mode ast  # PHP 端到端
 cargo run -- arch --help
 cargo run -- bdd --help
 ```
+
+### Golden 基线更新规范
+
+仅在以下条件同时满足时允许更新 `tests/golden/extract/**`：
+
+1. 提取逻辑存在预期行为变更（非偶发波动）。
+2. 评审者已确认变更原因与影响范围。
+3. PR 中包含对应 fixture/golden diff 说明。
+
+更新命令：
+
+```bash
+cd compiler/bcc
+UPDATE_GOLDEN=1 cargo test -p bcc --test extract_golden
+```
+
+Golden diff 评审清单：
+
+1. 是否仅影响 `calls/imports/exports/declarations/loc_lines` 的预期字段。
+2. 每个变化是否能对应到明确的提取规则改动。
+3. 是否引入跨语言同构规则之外的新差异。
+4. 是否包含必要的新增/修正测试场景说明。
 
 ## 里程碑
 

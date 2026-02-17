@@ -1,0 +1,33 @@
+compare_fields:
+  - calls
+  - exports
+  - declarations
+
+call_root_separators:
+  - "::"
+  - "."
+
+import_kind_map:
+  alias: import
+  import: import
+  use: import
+  extends: import
+  trait: import
+  behaviour: import
+
+export_kind_map:
+  function: callable
+  method: callable
+  class: type
+  struct: type
+  enum: type
+  trait: type
+  interface: type
+  type: type
+  const: value
+  impl: impl
+
+whitelist:
+  declarations:
+    - php
+    - elixir

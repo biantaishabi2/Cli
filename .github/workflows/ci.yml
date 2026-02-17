@@ -64,6 +64,10 @@ jobs:
       - name: Run bcc smoke integration tests
         run: cargo test -p bcc --test cli_arch_bdd
 
+      # Golden 回归先并入 bcc 主测试任务；若连续 10 次观测窗口内 P95 > 90s，再拆分独立 job。
+      - name: Run bcc extract golden tests
+        run: cargo test -p bcc --test extract_golden
+
   bddc:
     name: bddc test (ubuntu)
     runs-on: ubuntu-latest

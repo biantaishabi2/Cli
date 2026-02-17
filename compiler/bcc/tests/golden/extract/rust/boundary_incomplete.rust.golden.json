@@ -1,0 +1,12 @@
+{
+  "calls": [
+    {
+      "callee": "println!",
+      "line": 2
+    }
+  ],
+  "imports": [],
+  "exports": [],
+  "declarations": 0,
+  "loc_lines": 2
+}
