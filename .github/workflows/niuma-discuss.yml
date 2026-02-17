@@ -4,7 +4,7 @@ on:
   issue_comment:
     types: [created]
   schedule:
-    - cron: '*/15 * * * *'  # 每 15 分钟检查收敛
+    - cron: '*/1 * * * *'  # 每分钟检查收敛
 
 concurrency:
   group: niuma-discuss-${{ github.event.issue.number || 'schedule' }}
