@@ -3,6 +3,10 @@
 [![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
 [![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
 
+> **LLM 时代的架构操作系统**：[BCC](#compiler) 将代码编译为知识图谱并自动验证架构约束；[niuma](#automation) 实现 Issue 到 Merge 的全自动流程；人只需定义规则和最终批准，机器持续守护架构健康。
+>
+> 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
+
 承载多个命令行工具的 monorepo，按职责分类管理。
 
 ## 目录：工具总览
