@@ -84,6 +84,7 @@ jobs:
           RETRY_COUNT=0
           GATE_STATUS=""
           ATTEMPT_KEY=""
+          ESCALATION_LABELED="false"
           if [ -f "$STORE_PATH" ]; then
             RETRY_COUNT=$(jq -r --arg issue "$ISSUE_NUMBER" '
               map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_retry_count // "0"
@@ -94,10 +95,16 @@ jobs:
             ATTEMPT_KEY=$(jq -r --arg issue "$ISSUE_NUMBER" '
               map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_attempt_key // ""
             ' "$STORE_PATH")
+            ESCALATION_LABELED=$(jq -r --arg issue "$ISSUE_NUMBER" '
+              map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_escalation_labeled // "false"
+            ' "$STORE_PATH")
           fi
 
           if ! [[ "$RETRY_COUNT" =~ ^[0-9]+$ ]]; then
             RETRY_COUNT=0
+          fi
+          if [ "$ESCALATION_LABELED" != "true" ]; then
+            ESCALATION_LABELED="false"
           fi
 
           SHOULD_AUTO_FIX=true
@@ -109,6 +116,7 @@ jobs:
           echo "retry_count=$RETRY_COUNT" >> "$GITHUB_OUTPUT"
           echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
           echo "attempt_key=$ATTEMPT_KEY" >> "$GITHUB_OUTPUT"
+          echo "escalation_labeled=$ESCALATION_LABELED" >> "$GITHUB_OUTPUT"
           echo "should_auto_fix=$SHOULD_AUTO_FIX" >> "$GITHUB_OUTPUT"
 
       - name: Mark Needs Fix On Gate Failure
@@ -128,6 +136,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
+          ATTEMPT_KEY="${{ steps.gate_policy.outputs.attempt_key }}"
+          ESCALATION_LABELED="${{ steps.gate_policy.outputs.escalation_labeled }}"
+          if [ -n "$ATTEMPT_KEY" ]; then
+            MARKER="<!-- NIUMA_GATE_ESCALATED:${ATTEMPT_KEY} -->"
+          else
+            MARKER="<!-- NIUMA_GATE_ESCALATED:no-attempt-key -->"
+          fi
+
+          if [ "$ESCALATION_LABELED" = "true" ]; then
+            echo "controller 已完成 gate 升级标记，同轮次跳过重复升级动作。"
+            exit 1
+          fi
+
+          EXISTING_COUNT=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | \
+            jq -r --arg marker "$MARKER" '[.[] | select(.body | contains($marker))] | length')
+          if [ "$EXISTING_COUNT" -gt 0 ]; then
+            echo "发现同 attempt_key 升级记录，跳过重复升级动作。"
+            exit 1
+          fi
+
           gh issue edit "$ISSUE_NUMBER" --add-label needs-human --add-label integration-gate-failed
-          gh issue comment "$ISSUE_NUMBER" --body "## 🚨 Gate 已超限，升级人工处理\n\nintegration gate 失败次数已超过上限，本轮不再触发自动修复。\n\n- retry_count=${{ steps.gate_policy.outputs.retry_count }}\n- max_retries=${{ steps.gate_policy.outputs.max_retries }}\n- attempt_key=\`${{ steps.gate_policy.outputs.attempt_key }}\`"
+          gh issue comment "$ISSUE_NUMBER" --body "## 🚨 Gate 已超限，升级人工处理\n\nintegration gate 失败次数已超过上限，本轮不再触发自动修复。\n\n- retry_count=${{ steps.gate_policy.outputs.retry_count }}\n- max_retries=${{ steps.gate_policy.outputs.max_retries }}\n- attempt_key=\`${{ steps.gate_policy.outputs.attempt_key }}\`\n\n$MARKER"
           exit 1

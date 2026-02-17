@@ -548,8 +548,12 @@ func (c *Controller) buildIntegrationGateAttemptKey(outcome MergeOutcome) (strin
 	if outcome.IntegrationBranch == "" {
 		return "", fmt.Errorf("integration branch 为空，无法生成 attempt_key")
 	}
+	if outcome.SourceBranch == "" {
+		return "", fmt.Errorf("source branch 为空，无法生成 attempt_key")
+	}
 
-	headSHA, err := c.currentIntegrationHeadSHA(outcome.IntegrationBranch)
+	// attempt_key 仅跟随当前任务源分支的新提交变化，避免 integration 头部被他人推进时误增计数。
+	headSHA, err := c.currentBranchHeadSHA(outcome.SourceBranch)
 	if err != nil {
 		return "", err
 	}
@@ -557,7 +561,7 @@ func (c *Controller) buildIntegrationGateAttemptKey(outcome MergeOutcome) (strin
 	return fmt.Sprintf("%s:%s:%s", outcome.IntegrationBranch, outcome.SourceBranch, headSHA), nil
 }
 
-func (c *Controller) currentIntegrationHeadSHA(branch string) (string, error) {
+func (c *Controller) currentBranchHeadSHA(branch string) (string, error) {
 	out, err := c.runCommand(context.Background(), c.cfg.RepoDir, "git", "rev-parse", "--verify", branch)
 	if err != nil {
 		return "", fmt.Errorf("获取 %s HEAD 失败: %w", branch, err)
