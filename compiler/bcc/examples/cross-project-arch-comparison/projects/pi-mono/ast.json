@@ -1,0 +1,6235 @@
+{
+  "source_count": 385,
+  "skipped_count": 0,
+  "records": [
+    {
+      "sourcePath": "agent/src/agent-loop.ts",
+      "localDependencies": [
+        "agent/src/types.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 417,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/src/agent.ts",
+      "localDependencies": [
+        "agent/src/agent-loop.ts",
+        "agent/src/types.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 3,
+      "loc_lines": 536,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "agent/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 8,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/src/proxy.ts",
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 340,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/src/types.ts",
+      "exports_count": 11,
+      "imports_count": 2,
+      "loc_lines": 194,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/test/bedrock-utils.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 18,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/test/utils/calculate.ts",
+      "localDependencies": [
+        "agent/src/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 32,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/test/utils/get-current-time.ts",
+      "localDependencies": [
+        "agent/src/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 46,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "agent/vitest.config.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 9,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/scripts/generate-models.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 1316,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/scripts/generate-test-image.ts",
+      "exports_count": 0,
+      "imports_count": 5,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/api-registry.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 1,
+      "loc_lines": 98,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/cli.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/index.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 133,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/env-api-keys.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 115,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 22,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/models.generated.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 12207,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/models.ts",
+      "localDependencies": [
+        "ai/src/models.generated.ts",
+        "ai/src/types.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 2,
+      "loc_lines": 77,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/amazon-bedrock.ts",
+      "localDependencies": [
+        "ai/src/models.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/providers/transform-messages.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/json-parse.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 8,
+      "loc_lines": 731,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/anthropic.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/providers/transform-messages.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/json-parse.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 10,
+      "loc_lines": 808,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/azure-openai-responses.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/openai-responses-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 8,
+      "loc_lines": 256,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/google-gemini-cli.ts",
+      "localDependencies": [
+        "ai/src/models.ts",
+        "ai/src/providers/google-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 7,
+      "loc_lines": 940,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/google-shared.ts",
+      "localDependencies": [
+        "ai/src/providers/transform-messages.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 4,
+      "loc_lines": 317,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/google-vertex.ts",
+      "localDependencies": [
+        "ai/src/models.ts",
+        "ai/src/providers/google-gemini-cli.ts",
+        "ai/src/providers/google-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 8,
+      "loc_lines": 482,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/google.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/google-gemini-cli.ts",
+        "ai/src/providers/google-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 9,
+      "loc_lines": 452,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/openai-codex-responses.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/openai-responses-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 7,
+      "loc_lines": 457,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/openai-completions.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/providers/transform-messages.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/json-parse.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "localCallTargets": [
+        "packages/ai/src/providers/openai-completions.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 10,
+      "loc_lines": 847,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/openai-responses-shared.ts",
+      "localDependencies": [
+        "ai/src/models.ts",
+        "ai/src/providers/transform-messages.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts",
+        "ai/src/utils/json-parse.ts",
+        "ai/src/utils/sanitize-unicode.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 8,
+      "loc_lines": 480,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/openai-responses.ts",
+      "localDependencies": [
+        "ai/src/env-api-keys.ts",
+        "ai/src/models.ts",
+        "ai/src/providers/openai-responses-shared.ts",
+        "ai/src/providers/simple-options.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/event-stream.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 8,
+      "loc_lines": 274,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/register-builtins.ts",
+      "localDependencies": [
+        "ai/src/api-registry.ts",
+        "ai/src/providers/amazon-bedrock.ts",
+        "ai/src/providers/anthropic.ts",
+        "ai/src/providers/azure-openai-responses.ts",
+        "ai/src/providers/google-gemini-cli.ts",
+        "ai/src/providers/google-vertex.ts",
+        "ai/src/providers/google.ts",
+        "ai/src/providers/openai-codex-responses.ts",
+        "ai/src/providers/openai-completions.ts",
+        "ai/src/providers/openai-responses.ts"
+      ],
+      "localCallTargets": [
+        "packages/ai/src/providers/register-builtins.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 10,
+      "loc_lines": 73,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/simple-options.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 45,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/providers/transform-messages.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 167,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/stream.ts",
+      "localDependencies": [
+        "ai/src/api-registry.ts",
+        "ai/src/providers/register-builtins.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/http-proxy.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 60,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/types.ts",
+      "localDependencies": [
+        "ai/src/utils/event-stream.ts"
+      ],
+      "exports_count": 29,
+      "imports_count": 2,
+      "loc_lines": 295,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/event-stream.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 87,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/http-proxy.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 13,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/json-parse.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/anthropic.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/pkce.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 138,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/github-copilot.ts",
+      "localDependencies": [
+        "ai/src/models.ts",
+        "ai/src/types.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "localCallTargets": [
+        "packages/ai/src/utils/oauth/github-copilot.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 3,
+      "loc_lines": 381,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/google-antigravity.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/pkce.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 3,
+      "loc_lines": 457,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/google-gemini-cli.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/pkce.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 3,
+      "loc_lines": 599,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/index.ts",
+      "localDependencies": [
+        "ai/src/utils/http-proxy.ts",
+        "ai/src/utils/oauth/anthropic.ts",
+        "ai/src/utils/oauth/github-copilot.ts",
+        "ai/src/utils/oauth/google-antigravity.ts",
+        "ai/src/utils/oauth/google-gemini-cli.ts",
+        "ai/src/utils/oauth/openai-codex.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 7,
+      "loc_lines": 136,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/openai-codex.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/pkce.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 455,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/pkce.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/oauth/types.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 1,
+      "loc_lines": 59,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/overflow.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 121,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/sanitize-unicode.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 25,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/typebox-helpers.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 24,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/src/utils/validation.ts",
+      "localDependencies": [
+        "ai/src/types.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 3,
+      "loc_lines": 84,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/test/azure-utils.ts",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/test/bedrock-utils.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 18,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/test/oauth.ts",
+      "localDependencies": [
+        "ai/src/utils/oauth/index.ts",
+        "ai/src/utils/oauth/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 89,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "ai/vitest.config.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 9,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/antigravity-image-gen.ts",
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 413,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/auto-commit-on-exit.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 49,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/bash-spawn-hook.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 30,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/bookmark.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 50,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/claude-rules.ts",
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 86,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/commands.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 72,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/confirm-destructive.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 59,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-compaction.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 114,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-footer.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 64,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-header.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 73,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-provider-anthropic/index.ts",
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 604,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-provider-gitlab-duo/index.ts",
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 349,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-provider-gitlab-duo/test.ts",
+      "localDependencies": [
+        "coding-agent/examples/extensions/custom-provider-gitlab-duo/index.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 5,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/custom-provider-qwen-cli/index.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 345,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/dirty-repo-guard.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/doom-overlay/doom-component.ts",
+      "localDependencies": [
+        "coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+        "coding-agent/examples/extensions/doom-overlay/doom-keys.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 132,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+      "exports_count": 2,
+      "imports_count": 4,
+      "loc_lines": 173,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/doom-overlay/doom-keys.ts",
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/doom-overlay/index.ts",
+      "localDependencies": [
+        "coding-agent/examples/extensions/doom-overlay/doom-component.ts",
+        "coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+        "coding-agent/examples/extensions/doom-overlay/wad-finder.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 74,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
+      "exports_count": 2,
+      "imports_count": 3,
+      "loc_lines": 51,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/dynamic-resources/index.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 15,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/event-bus.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 43,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/file-trigger.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/git-checkpoint.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 53,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/handoff.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 150,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/hello.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 25,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/inline-bash.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 94,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/input-transform.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 43,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/interactive-shell.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 196,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/mac-system-theme.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 47,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/message-renderer.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 59,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/minimal-mode.ts",
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 426,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/modal-editor.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 85,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/model-status.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 31,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/notify.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 55,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/overlay-qa-tests.ts",
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 881,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/overlay-test.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 150,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/permission-gate.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/pirate.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 47,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/plan-mode/index.ts",
+      "localDependencies": [
+        "coding-agent/examples/extensions/plan-mode/utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 340,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/plan-mode/utils.ts",
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 168,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/preset.ts",
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 398,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/protected-paths.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 30,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/qna.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 119,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/question.ts",
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 264,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/questionnaire.ts",
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 427,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/rainbow-editor.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 88,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/reload-runtime.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 37,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/rpc-demo.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 124,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/sandbox/index.ts",
+      "exports_count": 0,
+      "imports_count": 7,
+      "loc_lines": 318,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/send-user-message.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/session-name.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 27,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/shutdown-command.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 63,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/snake.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 343,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/space-invaders.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 560,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/ssh.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 220,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/status-line.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 40,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/subagent/agents.ts",
+      "exports_count": 5,
+      "imports_count": 4,
+      "loc_lines": 127,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/subagent/index.ts",
+      "localDependencies": [
+        "coding-agent/examples/extensions/subagent/agents.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 11,
+      "loc_lines": 964,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/summarize.ts",
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 195,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/system-prompt-header.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 17,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/timed-confirm.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 70,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/titlebar-spinner.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 58,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/todo.ts",
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 299,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/tool-override.ts",
+      "exports_count": 0,
+      "imports_count": 7,
+      "loc_lines": 143,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/tools.ts",
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 146,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/trigger-compact.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 40,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/truncated-tool.ts",
+      "exports_count": 0,
+      "imports_count": 8,
+      "loc_lines": 192,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/widget-placement.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 17,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/extensions/with-deps/index.ts",
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 36,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/rpc-extension-ui.ts",
+      "exports_count": 0,
+      "imports_count": 5,
+      "loc_lines": 632,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/01-minimal.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 22,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/02-custom-model.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 49,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/03-custom-prompt.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 55,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/04-skills.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 46,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/05-tools.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/06-extensions.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 88,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/07-context-files.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 40,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/08-prompt-templates.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 47,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/09-api-keys-and-oauth.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 48,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/10-settings.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 38,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/11-sessions.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 48,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/examples/sdk/12-full-control.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli/args.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/tools/index.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 4,
+      "loc_lines": 304,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli/config-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/core/package-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/modes/interactive/components/config-selector.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 5,
+      "loc_lines": 52,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli/file-processor.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts",
+        "coding-agent/src/utils/image-resize.ts",
+        "coding-agent/src/utils/mime.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 7,
+      "loc_lines": 96,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli/list-models.ts",
+      "localDependencies": [
+        "coding-agent/src/core/model-registry.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli/session-picker.ts",
+      "localDependencies": [
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/modes/interactive/components/session-selector.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 51,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/cli.ts",
+      "localDependencies": [
+        "coding-agent/src/main.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 12,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/config.ts",
+      "exports_count": 28,
+      "imports_count": 4,
+      "loc_lines": 241,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/agent-session.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/bash-executor.ts",
+        "coding-agent/src/core/compaction/index.ts",
+        "coding-agent/src/core/defaults.ts",
+        "coding-agent/src/core/export-html/index.ts",
+        "coding-agent/src/core/export-html/tool-renderer.ts",
+        "coding-agent/src/core/extensions/index.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/prompt-templates.ts",
+        "coding-agent/src/core/resource-loader.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/core/slash-commands.ts",
+        "coding-agent/src/core/system-prompt.ts",
+        "coding-agent/src/core/tools/bash.ts",
+        "coding-agent/src/core/tools/index.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts",
+        "coding-agent/src/utils/frontmatter.ts",
+        "coding-agent/src/utils/sleep.ts"
+      ],
+      "exports_count": 10,
+      "imports_count": 25,
+      "loc_lines": 2787,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/auth-storage.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/resolve-config-value.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 6,
+      "loc_lines": 348,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/bash-executor.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/bash.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/utils/shell.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 9,
+      "loc_lines": 278,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/compaction/branch-summarization.ts",
+      "localDependencies": [
+        "coding-agent/src/core/compaction/compaction.ts",
+        "coding-agent/src/core/compaction/utils.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/session-manager.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 7,
+      "loc_lines": 352,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/compaction/compaction.ts",
+      "localDependencies": [
+        "coding-agent/src/core/compaction/utils.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/session-manager.ts"
+      ],
+      "exports_count": 17,
+      "imports_count": 6,
+      "loc_lines": 809,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/compaction/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 7,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/compaction/utils.ts",
+      "exports_count": 7,
+      "imports_count": 2,
+      "loc_lines": 154,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/defaults.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 3,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/diagnostics.ts",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 15,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/event-bus.ts",
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/exec.ts",
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/export-html/ansi-to-html.ts",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 258,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/export-html/index.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 8,
+      "loc_lines": 304,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/export-html/tool-renderer.ts",
+      "localDependencies": [
+        "coding-agent/src/core/export-html/ansi-to-html.ts",
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 4,
+      "loc_lines": 90,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/extensions/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 157,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/extensions/loader.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/event-bus.ts",
+        "coding-agent/src/core/exec.ts",
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/index.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 17,
+      "loc_lines": 516,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/extensions/runner.ts",
+      "localDependencies": [
+        "coding-agent/src/core/diagnostics.ts",
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 9,
+      "imports_count": 9,
+      "loc_lines": 825,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/extensions/types.ts",
+      "localDependencies": [
+        "coding-agent/src/core/bash-executor.ts",
+        "coding-agent/src/core/compaction/index.ts",
+        "coding-agent/src/core/event-bus.ts",
+        "coding-agent/src/core/exec.ts",
+        "coding-agent/src/core/footer-data-provider.ts",
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/slash-commands.ts",
+        "coding-agent/src/core/tools/bash.ts",
+        "coding-agent/src/core/tools/edit.ts",
+        "coding-agent/src/core/tools/index.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 105,
+      "imports_count": 18,
+      "loc_lines": 1278,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/extensions/wrapper.ts",
+      "localDependencies": [
+        "coding-agent/src/core/extensions/runner.ts",
+        "coding-agent/src/core/extensions/types.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 3,
+      "loc_lines": 118,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/footer-data-provider.ts",
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 144,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 61,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/keybindings.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 4,
+      "loc_lines": 211,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/messages.ts",
+      "exports_count": 13,
+      "imports_count": 2,
+      "loc_lines": 195,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/model-registry.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/auth-storage.ts",
+        "coding-agent/src/core/resolve-config-value.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 8,
+      "loc_lines": 665,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/model-resolver.ts",
+      "localDependencies": [
+        "coding-agent/src/cli/args.ts",
+        "coding-agent/src/core/defaults.ts",
+        "coding-agent/src/core/model-registry.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 7,
+      "loc_lines": 405,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/package-manager.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/utils/git.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 10,
+      "loc_lines": 1729,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/prompt-templates.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/utils/frontmatter.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 5,
+      "loc_lines": 299,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/resolve-config-value.ts",
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 64,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/resource-loader.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/diagnostics.ts",
+        "coding-agent/src/core/event-bus.ts",
+        "coding-agent/src/core/extensions/loader.ts",
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/core/package-manager.ts",
+        "coding-agent/src/core/prompt-templates.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/core/skills.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 16,
+      "loc_lines": 871,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/sdk.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/auth-storage.ts",
+        "coding-agent/src/core/defaults.ts",
+        "coding-agent/src/core/extensions/index.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/model-resolver.ts",
+        "coding-agent/src/core/resource-loader.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/core/timings.ts",
+        "coding-agent/src/core/tools/index.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 17,
+      "loc_lines": 365,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/session-manager.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/messages.ts"
+      ],
+      "exports_count": 27,
+      "imports_count": 8,
+      "loc_lines": 1401,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/settings-manager.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts"
+      ],
+      "exports_count": 10,
+      "imports_count": 3,
+      "loc_lines": 751,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/skills.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/diagnostics.ts",
+        "coding-agent/src/utils/frontmatter.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 7,
+      "loc_lines": 459,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/slash-commands.ts",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 38,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/system-prompt.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/skills.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 188,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/timings.ts",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 25,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/bash.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/utils/shell.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 9,
+      "loc_lines": 321,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/edit-diff.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts"
+      ],
+      "exports_count": 11,
+      "imports_count": 4,
+      "loc_lines": 308,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/edit.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/edit-diff.ts",
+        "coding-agent/src/core/tools/path-utils.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 6,
+      "loc_lines": 227,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/find.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/utils/tools-manager.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 9,
+      "loc_lines": 273,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/grep.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/utils/tools-manager.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 9,
+      "loc_lines": 346,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/index.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/bash.ts",
+        "coding-agent/src/core/tools/edit.ts",
+        "coding-agent/src/core/tools/find.ts",
+        "coding-agent/src/core/tools/grep.ts",
+        "coding-agent/src/core/tools/ls.ts",
+        "coding-agent/src/core/tools/read.ts",
+        "coding-agent/src/core/tools/write.ts"
+      ],
+      "exports_count": 9,
+      "imports_count": 8,
+      "loc_lines": 139,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/ls.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts",
+        "coding-agent/src/core/tools/truncate.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 6,
+      "loc_lines": 170,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/path-utils.ts",
+      "exports_count": 3,
+      "imports_count": 3,
+      "loc_lines": 94,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/read.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/utils/image-resize.ts",
+        "coding-agent/src/utils/mime.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 9,
+      "loc_lines": 222,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/truncate.ts",
+      "exports_count": 9,
+      "imports_count": 0,
+      "loc_lines": 265,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/core/tools/write.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/path-utils.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 5,
+      "loc_lines": 118,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 322,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/main.ts",
+      "localDependencies": [
+        "coding-agent/src/cli/args.ts",
+        "coding-agent/src/cli/config-selector.ts",
+        "coding-agent/src/cli/file-processor.ts",
+        "coding-agent/src/cli/list-models.ts",
+        "coding-agent/src/cli/session-picker.ts",
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/auth-storage.ts",
+        "coding-agent/src/core/defaults.ts",
+        "coding-agent/src/core/export-html/index.ts",
+        "coding-agent/src/core/extensions/index.ts",
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/model-resolver.ts",
+        "coding-agent/src/core/package-manager.ts",
+        "coding-agent/src/core/resource-loader.ts",
+        "coding-agent/src/core/sdk.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/core/timings.ts",
+        "coding-agent/src/core/tools/index.ts",
+        "coding-agent/src/migrations.ts",
+        "coding-agent/src/modes/index.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 26,
+      "loc_lines": 726,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/migrations.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 295,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 9,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/armin.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 382,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/assistant-message.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 115,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/bash-execution.ts",
+      "localDependencies": [
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/components/visual-truncate.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 7,
+      "loc_lines": 210,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/bordered-loader.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 66,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/branch-summary-message.ts",
+      "localDependencies": [
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 58,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+      "localDependencies": [
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 59,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/config-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/package-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 592,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/countdown-timer.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 38,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/custom-editor.ts",
+      "localDependencies": [
+        "coding-agent/src/core/keybindings.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 80,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/custom-message.ts",
+      "localDependencies": [
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 99,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/daxnuts.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 164,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/diff.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 147,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 25,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/extension-editor.ts",
+      "localDependencies": [
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 9,
+      "loc_lines": 136,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/extension-input.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/countdown-timer.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 5,
+      "loc_lines": 85,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/extension-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/countdown-timer.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 5,
+      "loc_lines": 107,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/footer.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/footer-data-provider.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 239,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 32,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+      "localDependencies": [
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 3,
+      "loc_lines": 66,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/login-dialog.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 174,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/model-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 7,
+      "loc_lines": 329,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/oauth-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/core/auth-storage.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 120,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/scoped-models-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 4,
+      "loc_lines": 346,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/session-selector-search.ts",
+      "localDependencies": [
+        "coding-agent/src/core/session-manager.ts"
+      ],
+      "localCallTargets": [
+        "packages/coding-agent/src/modes/interactive/components/session-selector-search.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 2,
+      "loc_lines": 194,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/session-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/components/session-selector-search.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 11,
+      "loc_lines": 1019,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/settings-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 4,
+      "loc_lines": 394,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/show-images-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 45,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/skill-invocation-message.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 55,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/theme-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 62,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/thinking-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 64,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/tool-execution.ts",
+      "localDependencies": [
+        "coding-agent/src/core/extensions/types.ts",
+        "coding-agent/src/core/tools/edit-diff.ts",
+        "coding-agent/src/core/tools/index.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/modes/interactive/components/diff.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/components/visual-truncate.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts",
+        "coding-agent/src/utils/image-convert.ts",
+        "coding-agent/src/utils/shell.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 13,
+      "loc_lines": 739,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/tree-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 1079,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/user-message-selector.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 143,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/user-message.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 18,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/components/visual-truncate.ts",
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 50,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/interactive-mode.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/compaction/index.ts",
+        "coding-agent/src/core/extensions/index.ts",
+        "coding-agent/src/core/footer-data-provider.ts",
+        "coding-agent/src/core/keybindings.ts",
+        "coding-agent/src/core/messages.ts",
+        "coding-agent/src/core/model-resolver.ts",
+        "coding-agent/src/core/resource-loader.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/slash-commands.ts",
+        "coding-agent/src/core/tools/truncate.ts",
+        "coding-agent/src/modes/interactive/components/armin.ts",
+        "coding-agent/src/modes/interactive/components/assistant-message.ts",
+        "coding-agent/src/modes/interactive/components/bash-execution.ts",
+        "coding-agent/src/modes/interactive/components/bordered-loader.ts",
+        "coding-agent/src/modes/interactive/components/branch-summary-message.ts",
+        "coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+        "coding-agent/src/modes/interactive/components/custom-editor.ts",
+        "coding-agent/src/modes/interactive/components/custom-message.ts",
+        "coding-agent/src/modes/interactive/components/daxnuts.ts",
+        "coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "coding-agent/src/modes/interactive/components/extension-editor.ts",
+        "coding-agent/src/modes/interactive/components/extension-input.ts",
+        "coding-agent/src/modes/interactive/components/extension-selector.ts",
+        "coding-agent/src/modes/interactive/components/footer.ts",
+        "coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "coding-agent/src/modes/interactive/components/login-dialog.ts",
+        "coding-agent/src/modes/interactive/components/model-selector.ts",
+        "coding-agent/src/modes/interactive/components/oauth-selector.ts",
+        "coding-agent/src/modes/interactive/components/scoped-models-selector.ts",
+        "coding-agent/src/modes/interactive/components/session-selector.ts",
+        "coding-agent/src/modes/interactive/components/settings-selector.ts",
+        "coding-agent/src/modes/interactive/components/skill-invocation-message.ts",
+        "coding-agent/src/modes/interactive/components/tool-execution.ts",
+        "coding-agent/src/modes/interactive/components/tree-selector.ts",
+        "coding-agent/src/modes/interactive/components/user-message-selector.ts",
+        "coding-agent/src/modes/interactive/components/user-message.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts",
+        "coding-agent/src/utils/changelog.ts",
+        "coding-agent/src/utils/clipboard-image.ts",
+        "coding-agent/src/utils/clipboard.ts",
+        "coding-agent/src/utils/tools-manager.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 52,
+      "loc_lines": 4364,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/interactive/theme/theme.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts"
+      ],
+      "exports_count": 24,
+      "imports_count": 8,
+      "loc_lines": 1100,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/print-mode.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 124,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/rpc/rpc-client.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/bash-executor.ts",
+        "coding-agent/src/core/compaction/index.ts",
+        "coding-agent/src/modes/rpc/rpc-types.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 8,
+      "loc_lines": 510,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/rpc/rpc-mode.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/extensions/index.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts",
+        "coding-agent/src/modes/rpc/rpc-types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 634,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/modes/rpc/rpc-types.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/bash-executor.ts",
+        "coding-agent/src/core/compaction/index.ts"
+      ],
+      "exports_count": 7,
+      "imports_count": 5,
+      "loc_lines": 263,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/changelog.ts",
+      "exports_count": 4,
+      "imports_count": 1,
+      "loc_lines": 99,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/clipboard-image.ts",
+      "localDependencies": [
+        "coding-agent/src/utils/clipboard-native.ts",
+        "coding-agent/src/utils/photon.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 3,
+      "loc_lines": 207,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/clipboard-native.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 21,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/clipboard.ts",
+      "localDependencies": [
+        "coding-agent/src/utils/clipboard-image.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 62,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/frontmatter.ts",
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 39,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/git.ts",
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 179,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/image-convert.ts",
+      "localDependencies": [
+        "coding-agent/src/utils/photon.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 38,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/image-resize.ts",
+      "localDependencies": [
+        "coding-agent/src/utils/photon.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 2,
+      "loc_lines": 231,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/mime.ts",
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 30,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/photon.ts",
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 139,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/shell.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts",
+        "coding-agent/src/core/settings-manager.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 5,
+      "loc_lines": 202,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/sleep.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 18,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/src/utils/tools-manager.ts",
+      "localDependencies": [
+        "coding-agent/src/config.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 8,
+      "loc_lines": 237,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/test/rpc-example.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/rpc/rpc-client.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 4,
+      "loc_lines": 86,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/test/streaming-render-debug.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/components/assistant-message.ts",
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 7,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/test/test-theme-colors.ts",
+      "localDependencies": [
+        "coding-agent/src/modes/interactive/theme/theme.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 246,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/test/utilities.ts",
+      "localDependencies": [
+        "coding-agent/src/core/agent-session.ts",
+        "coding-agent/src/core/auth-storage.ts",
+        "coding-agent/src/core/extensions/loader.ts",
+        "coding-agent/src/core/model-registry.ts",
+        "coding-agent/src/core/resource-loader.ts",
+        "coding-agent/src/core/session-manager.ts",
+        "coding-agent/src/core/settings-manager.ts",
+        "coding-agent/src/core/tools/index.ts"
+      ],
+      "exports_count": 12,
+      "imports_count": 13,
+      "loc_lines": 277,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "coding-agent/vitest.config.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 14,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/scripts/migrate-timestamps.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 121,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/agent.ts",
+      "localDependencies": [
+        "mom/src/context.ts",
+        "mom/src/log.ts",
+        "mom/src/sandbox.ts",
+        "mom/src/slack.ts",
+        "mom/src/store.ts",
+        "mom/src/tools/index.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 13,
+      "loc_lines": 884,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/context.ts",
+      "exports_count": 5,
+      "imports_count": 4,
+      "loc_lines": 297,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/download.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 117,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/events.ts",
+      "localDependencies": [
+        "mom/src/log.ts",
+        "mom/src/slack.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 6,
+      "loc_lines": 383,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/log.ts",
+      "exports_count": 22,
+      "imports_count": 1,
+      "loc_lines": 271,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/main.ts",
+      "localDependencies": [
+        "mom/src/agent.ts",
+        "mom/src/download.ts",
+        "mom/src/events.ts",
+        "mom/src/log.ts",
+        "mom/src/sandbox.ts",
+        "mom/src/slack.ts",
+        "mom/src/store.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 8,
+      "loc_lines": 322,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/sandbox.ts",
+      "exports_count": 7,
+      "imports_count": 1,
+      "loc_lines": 221,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/slack.ts",
+      "localDependencies": [
+        "mom/src/log.ts",
+        "mom/src/store.ts"
+      ],
+      "exports_count": 8,
+      "imports_count": 6,
+      "loc_lines": 623,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/store.ts",
+      "localDependencies": [
+        "mom/src/log.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 234,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/attach.ts",
+      "exports_count": 2,
+      "imports_count": 3,
+      "loc_lines": 47,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/bash.ts",
+      "localDependencies": [
+        "mom/src/sandbox.ts",
+        "mom/src/tools/truncate.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/edit.ts",
+      "localDependencies": [
+        "mom/src/sandbox.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 165,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/index.ts",
+      "localDependencies": [
+        "mom/src/sandbox.ts",
+        "mom/src/tools/attach.ts",
+        "mom/src/tools/bash.ts",
+        "mom/src/tools/edit.ts",
+        "mom/src/tools/read.ts",
+        "mom/src/tools/write.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 7,
+      "loc_lines": 19,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/read.ts",
+      "localDependencies": [
+        "mom/src/sandbox.ts",
+        "mom/src/tools/truncate.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 159,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/truncate.ts",
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 236,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "mom/src/tools/write.ts",
+      "localDependencies": [
+        "mom/src/sandbox.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 45,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/cli.ts",
+      "localDependencies": [
+        "pods/src/commands/models.ts",
+        "pods/src/commands/pods.ts",
+        "pods/src/commands/prompt.ts",
+        "pods/src/config.ts",
+        "pods/src/ssh.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 10,
+      "loc_lines": 360,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/commands/models.ts",
+      "localDependencies": [
+        "pods/src/config.ts",
+        "pods/src/model-configs.ts",
+        "pods/src/ssh.ts",
+        "pods/src/types.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 9,
+      "loc_lines": 753,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/commands/pods.ts",
+      "localDependencies": [
+        "pods/src/config.ts",
+        "pods/src/ssh.ts",
+        "pods/src/types.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 6,
+      "loc_lines": 205,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/commands/prompt.ts",
+      "localDependencies": [
+        "pods/src/config.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 84,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/config.ts",
+      "localDependencies": [
+        "pods/src/types.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 4,
+      "loc_lines": 80,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 2,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/model-configs.ts",
+      "localDependencies": [
+        "pods/src/types.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 111,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/ssh.ts",
+      "exports_count": 4,
+      "imports_count": 1,
+      "loc_lines": 151,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "pods/src/types.ts",
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 27,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/autocomplete.ts",
+      "localDependencies": [
+        "tui/src/fuzzy.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 5,
+      "loc_lines": 693,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/box.ts",
+      "localDependencies": [
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 137,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/cancellable-loader.ts",
+      "localDependencies": [
+        "tui/src/components/loader.ts",
+        "tui/src/keybindings.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 40,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/editor.ts",
+      "localDependencies": [
+        "tui/src/autocomplete.ts",
+        "tui/src/components/select-list.ts",
+        "tui/src/keybindings.ts",
+        "tui/src/keys.ts",
+        "tui/src/kill-ring.ts",
+        "tui/src/tui.ts",
+        "tui/src/undo-stack.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 8,
+      "loc_lines": 1999,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/image.ts",
+      "localDependencies": [
+        "tui/src/terminal-image.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/input.ts",
+      "localDependencies": [
+        "tui/src/keybindings.ts",
+        "tui/src/kill-ring.ts",
+        "tui/src/tui.ts",
+        "tui/src/undo-stack.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 510,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/loader.ts",
+      "localDependencies": [
+        "tui/src/components/text.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 55,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/markdown.ts",
+      "localDependencies": [
+        "tui/src/terminal-image.ts",
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 4,
+      "loc_lines": 770,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/select-list.ts",
+      "localDependencies": [
+        "tui/src/keybindings.ts",
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 3,
+      "loc_lines": 188,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/settings-list.ts",
+      "localDependencies": [
+        "tui/src/components/input.ts",
+        "tui/src/fuzzy.ts",
+        "tui/src/keybindings.ts",
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 5,
+      "loc_lines": 250,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/spacer.ts",
+      "localDependencies": [
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/text.ts",
+      "localDependencies": [
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 106,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/components/truncated-text.ts",
+      "localDependencies": [
+        "tui/src/tui.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 65,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/editor-component.ts",
+      "localDependencies": [
+        "tui/src/autocomplete.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 74,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/fuzzy.ts",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 133,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 92,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/keybindings.ts",
+      "localDependencies": [
+        "tui/src/keys.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 1,
+      "loc_lines": 183,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/keys.ts",
+      "exports_count": 9,
+      "imports_count": 0,
+      "loc_lines": 1152,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/kill-ring.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 46,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/stdin-buffer.ts",
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 386,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": true
+      }
+    },
+    {
+      "sourcePath": "tui/src/terminal-image.ts",
+      "exports_count": 24,
+      "imports_count": 0,
+      "loc_lines": 381,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/terminal.ts",
+      "localDependencies": [
+        "tui/src/keys.ts",
+        "tui/src/stdin-buffer.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 3,
+      "loc_lines": 288,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/tui.ts",
+      "localDependencies": [
+        "tui/src/keys.ts",
+        "tui/src/terminal-image.ts",
+        "tui/src/terminal.ts",
+        "tui/src/utils.ts"
+      ],
+      "exports_count": 11,
+      "imports_count": 7,
+      "loc_lines": 1154,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/undo-stack.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/src/utils.ts",
+      "localCallTargets": [
+        "packages/tui/src/utils.ts"
+      ],
+      "exports_count": 11,
+      "imports_count": 1,
+      "loc_lines": 889,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/chat-simple.ts",
+      "localDependencies": [
+        "tui/src/autocomplete.ts",
+        "tui/src/components/editor.ts",
+        "tui/src/components/loader.ts",
+        "tui/src/components/markdown.ts",
+        "tui/src/components/text.ts",
+        "tui/src/terminal.ts",
+        "tui/src/tui.ts",
+        "tui/test/test-themes.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 9,
+      "loc_lines": 129,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/image-test.ts",
+      "localDependencies": [
+        "tui/src/components/image.ts",
+        "tui/src/components/spacer.ts",
+        "tui/src/components/text.ts",
+        "tui/src/terminal-image.ts",
+        "tui/src/terminal.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 7,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/key-tester.ts",
+      "localDependencies": [
+        "tui/src/keys.ts",
+        "tui/src/terminal.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 3,
+      "loc_lines": 105,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/test-themes.ts",
+      "localDependencies": [
+        "tui/src/index.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 2,
+      "loc_lines": 38,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/viewport-overwrite-repro.ts",
+      "localDependencies": [
+        "tui/src/terminal.ts",
+        "tui/src/tui.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 106,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/test/virtual-terminal.ts",
+      "localDependencies": [
+        "tui/src/terminal.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 209,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "tui/vitest.config.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 7,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/example/src/custom-messages.ts",
+      "exports_count": 4,
+      "imports_count": 5,
+      "loc_lines": 99,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/example/src/main.ts",
+      "localDependencies": [
+        "web-ui/example/src/app.css",
+        "web-ui/example/src/custom-messages.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 11,
+      "loc_lines": 421,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/example/vite.config.ts",
+      "exports_count": 0,
+      "imports_count": 2,
+      "loc_lines": 6,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/scripts/count-prompt-tokens.ts",
+      "localDependencies": [
+        "web-ui/src/prompts/prompts.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 88,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/ChatPanel.ts",
+      "localDependencies": [
+        "web-ui/src/components/AgentInterface.ts",
+        "web-ui/src/components/sandbox/ArtifactsRuntimeProvider.ts",
+        "web-ui/src/components/sandbox/AttachmentsRuntimeProvider.ts",
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/tools/artifacts/index.ts",
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 13,
+      "loc_lines": 207,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/AgentInterface.ts",
+      "localDependencies": [
+        "web-ui/src/components/MessageEditor.ts",
+        "web-ui/src/components/MessageList.ts",
+        "web-ui/src/components/Messages.ts",
+        "web-ui/src/components/StreamingMessageContainer.ts",
+        "web-ui/src/dialogs/ModelSelector.ts",
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/format.ts",
+        "web-ui/src/utils/i18n.ts",
+        "web-ui/src/utils/proxy-utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 17,
+      "loc_lines": 388,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/AttachmentTile.ts",
+      "localDependencies": [
+        "web-ui/src/dialogs/AttachmentOverlay.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 107,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/ConsoleBlock.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 72,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/CustomProviderCard.ts",
+      "localDependencies": [
+        "web-ui/src/storage/stores/custom-providers-store.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 100,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/ExpandableSection.ts",
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 46,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/Input.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 113,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/MessageEditor.ts",
+      "localDependencies": [
+        "web-ui/src/components/AttachmentTile.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 12,
+      "loc_lines": 400,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/MessageList.ts",
+      "localDependencies": [
+        "web-ui/src/components/message-renderer-registry.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 98,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/Messages.ts",
+      "localDependencies": [
+        "web-ui/src/components/ThinkingBlock.ts",
+        "web-ui/src/tools/index.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/format.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 11,
+      "imports_count": 11,
+      "loc_lines": 383,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/ProviderKeyInput.ts",
+      "localDependencies": [
+        "web-ui/src/components/Input.ts",
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/utils/proxy-utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 9,
+      "loc_lines": 153,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/SandboxedIframe.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/ConsoleRuntimeProvider.ts",
+        "web-ui/src/components/sandbox/RuntimeMessageBridge.ts",
+        "web-ui/src/components/sandbox/RuntimeMessageRouter.ts",
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 6,
+      "loc_lines": 626,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/StreamingMessageContainer.ts",
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 103,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/ThinkingBlock.ts",
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 43,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/message-renderer-registry.ts",
+      "exports_count": 5,
+      "imports_count": 2,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/ArtifactsRuntimeProvider.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/prompts/prompts.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 219,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/AttachmentsRuntimeProvider.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/prompts/prompts.ts",
+        "web-ui/src/utils/attachment-utils.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 66,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/ConsoleRuntimeProvider.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 186,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/FileDownloadRuntimeProvider.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 110,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/RuntimeMessageBridge.ts",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/RuntimeMessageRouter.ts",
+      "localDependencies": [
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 1,
+      "loc_lines": 216,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 52,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/ApiKeyPromptDialog.ts",
+      "localDependencies": [
+        "web-ui/src/components/ProviderKeyInput.ts",
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 7,
+      "loc_lines": 75,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/AttachmentOverlay.ts",
+      "localDependencies": [
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 11,
+      "loc_lines": 636,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/CustomProviderDialog.ts",
+      "localDependencies": [
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/storage/stores/custom-providers-store.ts",
+        "web-ui/src/utils/model-discovery.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 12,
+      "loc_lines": 274,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/ModelSelector.ts",
+      "localDependencies": [
+        "web-ui/src/components/Input.ts",
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/storage/stores/custom-providers-store.ts",
+        "web-ui/src/utils/format.ts",
+        "web-ui/src/utils/i18n.ts",
+        "web-ui/src/utils/model-discovery.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 16,
+      "loc_lines": 310,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/PersistentStorageDialog.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 144,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/ProvidersModelsTab.ts",
+      "localDependencies": [
+        "web-ui/src/components/CustomProviderCard.ts",
+        "web-ui/src/components/ProviderKeyInput.ts",
+        "web-ui/src/dialogs/CustomProviderDialog.ts",
+        "web-ui/src/dialogs/SettingsDialog.ts",
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/storage/stores/custom-providers-store.ts",
+        "web-ui/src/utils/model-discovery.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 12,
+      "loc_lines": 212,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/SessionListDialog.ts",
+      "localDependencies": [
+        "web-ui/src/storage/app-storage.ts",
+        "web-ui/src/storage/types.ts",
+        "web-ui/src/utils/format.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 150,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/dialogs/SettingsDialog.ts",
+      "localDependencies": [
+        "web-ui/src/components/ProviderKeyInput.ts",
+        "web-ui/src/storage/app-storage.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 10,
+      "loc_lines": 214,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 119,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/prompts/prompts.ts",
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 282,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/app-storage.ts",
+      "localDependencies": [
+        "web-ui/src/storage/stores/custom-providers-store.ts",
+        "web-ui/src/storage/stores/provider-keys-store.ts",
+        "web-ui/src/storage/stores/sessions-store.ts",
+        "web-ui/src/storage/stores/settings-store.ts",
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 5,
+      "loc_lines": 60,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/backends/indexeddb-storage-backend.ts",
+      "localDependencies": [
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 193,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/store.ts",
+      "localDependencies": [
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/stores/custom-providers-store.ts",
+      "localDependencies": [
+        "web-ui/src/storage/store.ts",
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 4,
+      "imports_count": 3,
+      "loc_lines": 62,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/stores/provider-keys-store.ts",
+      "localDependencies": [
+        "web-ui/src/storage/store.ts",
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/stores/sessions-store.ts",
+      "localDependencies": [
+        "web-ui/src/storage/store.ts",
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 3,
+      "loc_lines": 136,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/stores/settings-store.ts",
+      "localDependencies": [
+        "web-ui/src/storage/store.ts",
+        "web-ui/src/storage/types.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 2,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/storage/types.ts",
+      "exports_count": 7,
+      "imports_count": 2,
+      "loc_lines": 206,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/ArtifactElement.ts",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 14,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/ArtifactPill.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/artifacts.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 4,
+      "loc_lines": 26,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/Console.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 93,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/DocxArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 213,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/ExcelArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 231,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/GenericArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 117,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/HtmlArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/components/SandboxedIframe.ts",
+        "web-ui/src/components/sandbox/RuntimeMessageRouter.ts",
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/tools/artifacts/Console.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 19,
+      "loc_lines": 195,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/ImageArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 5,
+      "loc_lines": 116,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/MarkdownArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 10,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/PdfArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 201,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/SvgArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 9,
+      "loc_lines": 78,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/TextArtifact.ts",
+      "localDependencies": [
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 8,
+      "loc_lines": 148,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/artifacts-tool-renderer.ts",
+      "localDependencies": [
+        "web-ui/src/components/ConsoleBlock.ts",
+        "web-ui/src/tools/artifacts/ArtifactPill.ts",
+        "web-ui/src/tools/artifacts/artifacts.ts",
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 12,
+      "loc_lines": 310,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/artifacts.ts",
+      "localDependencies": [
+        "web-ui/src/components/Messages.ts",
+        "web-ui/src/components/sandbox/ArtifactsRuntimeProvider.ts",
+        "web-ui/src/components/sandbox/AttachmentsRuntimeProvider.ts",
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/prompts/prompts.ts",
+        "web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "web-ui/src/tools/artifacts/DocxArtifact.ts",
+        "web-ui/src/tools/artifacts/ExcelArtifact.ts",
+        "web-ui/src/tools/artifacts/GenericArtifact.ts",
+        "web-ui/src/tools/artifacts/HtmlArtifact.ts",
+        "web-ui/src/tools/artifacts/ImageArtifact.ts",
+        "web-ui/src/tools/artifacts/MarkdownArtifact.ts",
+        "web-ui/src/tools/artifacts/PdfArtifact.ts",
+        "web-ui/src/tools/artifacts/SvgArtifact.ts",
+        "web-ui/src/tools/artifacts/TextArtifact.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 3,
+      "imports_count": 27,
+      "loc_lines": 713,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/artifacts/index.ts",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 7,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/extract-document.ts",
+      "localDependencies": [
+        "web-ui/src/prompts/prompts.ts",
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/attachment-utils.ts",
+        "web-ui/src/utils/proxy-utils.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 11,
+      "loc_lines": 275,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/index.ts",
+      "localDependencies": [
+        "web-ui/src/tools/extract-document.ts",
+        "web-ui/src/tools/javascript-repl.ts",
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/renderers/BashRenderer.ts",
+        "web-ui/src/tools/renderers/DefaultRenderer.ts",
+        "web-ui/src/tools/types.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 7,
+      "loc_lines": 46,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/javascript-repl.ts",
+      "localDependencies": [
+        "web-ui/src/components/SandboxedIframe.ts",
+        "web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "web-ui/src/prompts/prompts.ts",
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/attachment-utils.ts"
+      ],
+      "exports_count": 6,
+      "imports_count": 13,
+      "loc_lines": 293,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/renderer-registry.ts",
+      "localDependencies": [
+        "web-ui/src/tools/types.ts"
+      ],
+      "exports_count": 5,
+      "imports_count": 6,
+      "loc_lines": 130,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/renderers/BashRenderer.ts",
+      "localDependencies": [
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 52,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/renderers/CalculateRenderer.ts",
+      "localDependencies": [
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 58,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/renderers/DefaultRenderer.ts",
+      "localDependencies": [
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 103,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/renderers/GetCurrentTimeRenderer.ts",
+      "localDependencies": [
+        "web-ui/src/tools/renderer-registry.ts",
+        "web-ui/src/tools/types.ts",
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 1,
+      "imports_count": 6,
+      "loc_lines": 92,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/tools/types.ts",
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 15,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/attachment-utils.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 6,
+      "loc_lines": 472,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/auth-token.ts",
+      "localDependencies": [
+        "web-ui/src/utils/i18n.ts"
+      ],
+      "exports_count": 2,
+      "imports_count": 2,
+      "loc_lines": 22,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/format.ts",
+      "exports_count": 4,
+      "imports_count": 2,
+      "loc_lines": 42,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/i18n.ts",
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 653,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/model-discovery.ts",
+      "exports_count": 5,
+      "imports_count": 3,
+      "loc_lines": 277,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": true,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/proxy-utils.ts",
+      "exports_count": 4,
+      "imports_count": 2,
+      "loc_lines": 134,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "web-ui/src/utils/test-sessions.ts",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 2357,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    }
+  ]
+}

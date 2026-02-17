@@ -1,0 +1,186 @@
+version: v3
+source_of_truth: pi-mono-architecture-analysis
+modules:
+  # ── AI 层 ──
+  - module_id: PI_AI_PROVIDERS
+    display_name: "LLM Provider 实现"
+    precedence: 10
+    path_rules:
+      include: ["ai/src/providers/**"]
+
+  - module_id: PI_AI_CORE
+    display_name: "AI 核心抽象"
+    precedence: 20
+    path_rules:
+      include: ["ai/src/**"]
+      exclude: ["ai/src/providers/**"]
+
+  # ── Agent 运行时 ──
+  - module_id: PI_AGENT
+    display_name: "Agent 运行时"
+    precedence: 10
+    path_rules:
+      include: ["agent/src/**"]
+
+  # ── TUI 框架 ──
+  - module_id: PI_TUI_COMPONENTS
+    display_name: "TUI 组件"
+    precedence: 10
+    path_rules:
+      include: ["tui/src/components/**"]
+
+  - module_id: PI_TUI_CORE
+    display_name: "TUI 核心"
+    precedence: 20
+    path_rules:
+      include: ["tui/src/**"]
+      exclude: ["tui/src/components/**"]
+
+  # ── Coding Agent ──
+  - module_id: PI_CODING_TOOLS
+    display_name: "编码工具"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/src/core/tools/**"]
+
+  - module_id: PI_CODING_COMPACTION
+    display_name: "上下文压缩"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/src/core/compaction/**"]
+
+  - module_id: PI_CODING_EXTENSIONS
+    display_name: "扩展系统"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/src/core/extensions/**"]
+
+  - module_id: PI_CODING_CORE
+    display_name: "编码 Agent 核心"
+    precedence: 20
+    path_rules:
+      include: ["coding-agent/src/core/**"]
+      exclude: ["coding-agent/src/core/tools/**", "coding-agent/src/core/compaction/**", "coding-agent/src/core/extensions/**"]
+
+  - module_id: PI_CODING_MODES
+    display_name: "交互模式"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/src/modes/**"]
+
+  - module_id: PI_CODING_CLI
+    display_name: "CLI 入口"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/src/cli/**", "coding-agent/src/cli.ts"]
+
+  - module_id: PI_CODING_SDK
+    display_name: "SDK"
+    precedence: 10
+    path_rules:
+      include: ["coding-agent/examples/sdk/**"]
+
+  # ── Web UI ──
+  - module_id: PI_WEBUI_CHAT
+    display_name: "Web 聊天组件"
+    precedence: 10
+    path_rules:
+      include: ["web-ui/src/**", "web-ui/components/**"]
+
+  - module_id: PI_WEBUI_STORAGE
+    display_name: "Web 存储层"
+    precedence: 10
+    path_rules:
+      include: ["web-ui/storage/**"]
+
+  - module_id: PI_WEBUI_TOOLS
+    display_name: "Web 工具渲染"
+    precedence: 10
+    path_rules:
+      include: ["web-ui/tools/**"]
+
+  # ── Mom Slack Bot ──
+  - module_id: PI_MOM
+    display_name: "Slack Bot"
+    precedence: 10
+    path_rules:
+      include: ["mom/**"]
+
+  # ── Pods GPU 管理 ──
+  - module_id: PI_PODS
+    display_name: "GPU Pod 管理"
+    precedence: 10
+    path_rules:
+      include: ["pods/**"]
+
+relations_expected:
+  # AI 层是最底层，不依赖上层
+  - caller: PI_AI_PROVIDERS
+    callee: PI_AI_CORE
+    allowed: true
+
+  # Agent 依赖 AI
+  - caller: PI_AGENT
+    callee: PI_AI_CORE
+    allowed: true
+
+  # TUI 组件依赖 TUI 核心
+  - caller: PI_TUI_COMPONENTS
+    callee: PI_TUI_CORE
+    allowed: true
+
+  # Coding Agent 内部依赖
+  - caller: PI_CODING_CORE
+    callee: PI_AGENT
+    allowed: true
+  - caller: PI_CODING_CORE
+    callee: PI_AI_CORE
+    allowed: true
+  - caller: PI_CODING_TOOLS
+    callee: PI_CODING_CORE
+    allowed: true
+  - caller: PI_CODING_COMPACTION
+    callee: PI_AI_CORE
+    allowed: true
+  - caller: PI_CODING_EXTENSIONS
+    callee: PI_CODING_CORE
+    allowed: true
+  - caller: PI_CODING_MODES
+    callee: PI_CODING_CORE
+    allowed: true
+  - caller: PI_CODING_MODES
+    callee: PI_TUI_CORE
+    allowed: true
+  - caller: PI_CODING_MODES
+    callee: PI_AGENT
+    allowed: true
+  - caller: PI_CODING_CLI
+    callee: PI_CODING_CORE
+    allowed: true
+  - caller: PI_CODING_CLI
+    callee: PI_CODING_MODES
+    allowed: true
+
+  # Web UI 依赖
+  - caller: PI_WEBUI_CHAT
+    callee: PI_AGENT
+    allowed: true
+  - caller: PI_WEBUI_CHAT
+    callee: PI_AI_CORE
+    allowed: true
+  - caller: PI_WEBUI_TOOLS
+    callee: PI_AI_CORE
+    allowed: true
+
+  # Mom 依赖
+  - caller: PI_MOM
+    callee: PI_AGENT
+    allowed: true
+  - caller: PI_MOM
+    callee: PI_AI_CORE
+    allowed: true
+
+  # Pods 依赖
+  - caller: PI_PODS
+    callee: PI_AGENT
+    allowed: true
