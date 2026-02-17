@@ -24,12 +24,21 @@ jobs:
         with:
           token: ${{ secrets.NIUMA_PAT }}
 
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
       - name: Run Orchestration
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          niuma control run \
+          "$NIUMA_BIN" control run \
             --repo "$REPO" \
             --repo-dir "$WORKSPACE"

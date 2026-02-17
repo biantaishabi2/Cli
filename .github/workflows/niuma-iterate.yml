@@ -27,6 +27,15 @@ jobs:
           token: ${{ secrets.NIUMA_PAT }}
           fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
 
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
       - name: Find PR Number
         id: find_pr
         env:
@@ -50,7 +59,7 @@ jobs:
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          niuma iterate \
+          "$NIUMA_BIN" iterate \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
@@ -93,6 +102,15 @@ jobs:
           token: ${{ secrets.NIUMA_PAT }}
           fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
 
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
       - name: Extract Issue Number from PR
         id: extract
         env:
@@ -113,7 +131,7 @@ jobs:
           PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          niuma iterate \
+          "$NIUMA_BIN" iterate \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \

@@ -27,6 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build niuma from current commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          (
+            cd automation/niuma
+            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
+          )
+          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
+
       # 事件驱动启动一次 discuss，后续轮次在进程内循环推进
       - name: Check Discussion
         env:
@@ -36,7 +45,7 @@ jobs:
         run: |
           LABELS=$(gh issue view "$ISSUE_NUMBER" --json labels -q '.labels[].name')
           if echo "$LABELS" | grep -q "bot:needs-discussion"; then
-            niuma discuss \
+            "$NIUMA_BIN" discuss \
               --repo "$REPO" \
               --issue "$ISSUE_NUMBER" || true
           fi
