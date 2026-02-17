@@ -1,0 +1,63 @@
+version: "1.0"
+kind: architecture_scoring_config
+mode: strict
+threshold: 60.0
+dimensions:
+  compliance:
+    enabled: true
+    weight: 0.30
+    blocking: true
+    config:
+      unexpected_penalty: 1.5
+      forbidden_penalty: 2.0
+  density:
+    enabled: true
+    weight: 0.25
+    blocking: true
+    config:
+      ideal_min: 10.0
+      ideal_max: 40.0
+      max_acceptable: 75.0
+  layering:
+    enabled: true
+    weight: 0.25
+    blocking: true
+    config:
+      layers:
+        - name: api
+          precedence: 1
+        - name: service
+          precedence: 2
+        - name: dao
+          precedence: 3
+        - name: core
+          precedence: 2
+        - name: support
+          precedence: 2
+      allowed_transitions:
+        - [api, service]
+        - [api, core]
+        - [service, dao]
+        - [service, core]
+        - [core, dao]
+        - [support, core]
+      forbidden_transitions:
+        - [dao, service]
+        - [dao, api]
+        - [core, api]
+  acyclic:
+    enabled: true
+    weight: 0.10
+    blocking: true
+    config:
+      max_pairs: 0
+      deduction_per_pair: 10.0
+  coverage:
+    enabled: false
+    weight: 0.0
+    blocking: false
+    config:
+      min_bdd_coverage: 60.0
+      min_contract_coverage: 60.0
+      bdd_weight: 0.4
+      contract_weight: 0.6

@@ -1,0 +1,19 @@
+version: 0.2.0
+kind: transition_contract
+base: /home/wangbo/document/Cli/compiler/bcc/examples/cross-project-arch-comparison/analysis/gong-live-20260217-192706/v2-matrix/v3.target-matrix.yaml
+intent: Transition contract between current codebase and target
+notes:
+- temporary_allow_edges are tolerated only during migration
+- blocked_edges are immediate cleanup targets
+temporary_allow_edges:
+- caller: AGENT
+  callee: EXTENSIONS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: INFRA
+  callee: PROMPT
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+blocked_edges: []

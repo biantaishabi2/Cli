@@ -1,0 +1,51 @@
+[
+  {
+    "caller": "AGENT",
+    "callee": "DATA",
+    "import_edges": 1,
+    "call_edges": 0,
+    "total_edges": 1
+  },
+  {
+    "caller": "AGENT",
+    "callee": "EXTENSIONS",
+    "import_edges": 1,
+    "call_edges": 0,
+    "total_edges": 1
+  },
+  {
+    "caller": "AGENT",
+    "callee": "PROMPT",
+    "import_edges": 1,
+    "call_edges": 0,
+    "total_edges": 1
+  },
+  {
+    "caller": "AGENT",
+    "callee": "TOOLS",
+    "import_edges": 7,
+    "call_edges": 0,
+    "total_edges": 7
+  },
+  {
+    "caller": "INFRA",
+    "callee": "PROMPT",
+    "import_edges": 1,
+    "call_edges": 0,
+    "total_edges": 1
+  },
+  {
+    "caller": "INFRA",
+    "callee": "PROVIDERS",
+    "import_edges": 2,
+    "call_edges": 0,
+    "total_edges": 2
+  },
+  {
+    "caller": "TOOLS",
+    "callee": "DATA",
+    "import_edges": 7,
+    "call_edges": 0,
+    "total_edges": 7
+  }
+]

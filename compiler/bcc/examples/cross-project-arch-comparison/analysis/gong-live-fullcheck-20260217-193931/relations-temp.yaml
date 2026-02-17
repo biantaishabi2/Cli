@@ -1,0 +1,29 @@
+relations_expected:
+  - caller: AGENT
+    callee: DATA
+    allowed: true
+    rationale: "actual"
+  - caller: AGENT
+    callee: EXTENSIONS
+    allowed: true
+    rationale: "actual"
+  - caller: AGENT
+    callee: PROMPT
+    allowed: true
+    rationale: "actual"
+  - caller: AGENT
+    callee: TOOLS
+    allowed: true
+    rationale: "actual"
+  - caller: INFRA
+    callee: PROMPT
+    allowed: true
+    rationale: "actual"
+  - caller: INFRA
+    callee: PROVIDERS
+    allowed: true
+    rationale: "actual"
+  - caller: TOOLS
+    callee: DATA
+    allowed: true
+    rationale: "actual"

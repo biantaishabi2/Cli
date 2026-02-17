@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-02-17T11:40:07Z",
+  "outputs": [
+    "compiler/bcc/examples/cross-project-arch-comparison/analysis/gong-live-fullcheck-20260217-193931/validate/scenario-validation.tsv",
+    "compiler/bcc/examples/cross-project-arch-comparison/analysis/gong-live-fullcheck-20260217-193931/validate/gate-evaluation.tsv",
+    "compiler/bcc/examples/cross-project-arch-comparison/analysis/gong-live-fullcheck-20260217-193931/validate/v3-validation-report.md"
+  ],
+  "scenarios": {
+    "v3_target": {
+      "unexpected_edges_count": 0,
+      "forbidden_edges_count": 0,
+      "gate_pass": true
+    },
+    "v3_transition": {
+      "unexpected_edges_count": 0,
+      "forbidden_edges_count": 0,
+      "gate_pass": true
+    }
+  }
+}

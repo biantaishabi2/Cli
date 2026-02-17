@@ -1,0 +1,9 @@
+version: 0.2.0
+kind: transition_contract
+base: compiler/bcc/examples/cross-project-arch-comparison/analysis/gong-live-fullcheck-20260217-193931/matrix/v3.target-matrix.yaml
+intent: Transition contract between current codebase and target
+notes:
+- temporary_allow_edges are tolerated only during migration
+- blocked_edges are immediate cleanup targets
+temporary_allow_edges: []
+blocked_edges: []

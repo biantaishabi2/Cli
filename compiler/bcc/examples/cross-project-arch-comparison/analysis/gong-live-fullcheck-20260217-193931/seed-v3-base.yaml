@@ -1,0 +1,87 @@
+version: 0.2.0
+source_of_truth: architecture_docs
+notes:
+  - "v2 更新：补充了 v1 漏定义的依赖（AGENT→TOOLS, INFRA→PROVIDERS）"
+  - "基于 BCC 分析结果，识别出 2 条正当依赖被误报为额外边"
+
+modules:
+  - module_id: AGENT
+    display_name: Agent 运行时
+    domain_kind: business
+    layer: application
+    precedence: 10
+    path_rules:
+      include:
+        - "gong/agent.ex"
+        - "gong/agent_loop.ex"
+
+  - module_id: PROMPT
+    display_name: Prompt 系统
+    domain_kind: business
+    layer: application
+    precedence: 20
+    path_rules:
+      include:
+        - "gong/prompt*.ex"
+
+  - module_id: COMPACTION
+    display_name: 压缩系统
+    domain_kind: business
+    layer: application
+    precedence: 30
+    path_rules:
+      include:
+        - "gong/compaction*.ex"
+        - "gong/auto_compaction.ex"
+        - "gong/truncate.ex"
+
+  - module_id: PROVIDERS
+    display_name: LLM Providers
+    domain_kind: business
+    layer: application
+    precedence: 40
+    path_rules:
+      include:
+        - "gong/model_registry.ex"
+        - "gong/llm/*.ex"
+        - "gong/providers/*.ex"
+
+  - module_id: EXTENSIONS
+    display_name: 扩展系统
+    domain_kind: business
+    layer: application
+    precedence: 50
+    path_rules:
+      include:
+        - "gong/extension*.ex"
+
+  - module_id: INFRA
+    display_name: 基础设施
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 60
+    path_rules:
+      include:
+        - "gong/application.ex"
+        - "gong/gong.ex"
+
+  - module_id: TOOLS
+    display_name: 工具集
+    domain_kind: business
+    layer: application
+    precedence: 70
+    path_rules:
+      include:
+        - "gong/tools/*.ex"
+
+  - module_id: DATA
+    display_name: 数据层
+    domain_kind: business
+    layer: application
+    precedence: 80
+    path_rules:
+      include:
+        - "gong/tool_result.ex"
+        - "gong/session_state.ex"
+
+__REL_MARK__

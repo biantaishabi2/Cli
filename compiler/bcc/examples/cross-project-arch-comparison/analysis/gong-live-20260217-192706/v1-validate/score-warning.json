@@ -1,0 +1,317 @@
+{
+  "dimensions": [
+    {
+      "contribution": 9.999999999999998,
+      "display_name": "Compliance",
+      "is_blocking": true,
+      "issues": [
+        {
+          "actual": 4.0,
+          "location": null,
+          "message": "Found 4 unexpected dependencies not in target contract",
+          "metric": "unexpected_edges_count",
+          "severity": "error",
+          "threshold": 0.0
+        },
+        {
+          "actual": 4.0,
+          "location": null,
+          "message": "Found 4 expected dependencies missing",
+          "metric": "missing_edges_count",
+          "severity": "warning",
+          "threshold": 0.0
+        }
+      ],
+      "metrics": [
+        {
+          "display_name": "Matched Edges",
+          "name": "matched_edges",
+          "unit": "count",
+          "value": 3.0
+        },
+        {
+          "display_name": "Matched Total Edge Weight",
+          "name": "matched_total_edges",
+          "unit": "edges",
+          "value": 9.0
+        },
+        {
+          "display_name": "Unexpected Edges",
+          "name": "unexpected_edges",
+          "passed": false,
+          "threshold": 0.0,
+          "unit": "count",
+          "value": 4.0
+        },
+        {
+          "display_name": "Unexpected Total Edge Weight",
+          "name": "unexpected_total_edges",
+          "passed": false,
+          "threshold": 0.0,
+          "unit": "edges",
+          "value": 11.0
+        },
+        {
+          "display_name": "Forbidden Edges",
+          "name": "forbidden_edges",
+          "passed": true,
+          "threshold": 0.0,
+          "unit": "count",
+          "value": 0.0
+        },
+        {
+          "display_name": "Forbidden Total Edge Weight",
+          "name": "forbidden_total_edges",
+          "passed": true,
+          "threshold": 0.0,
+          "unit": "edges",
+          "value": 0.0
+        },
+        {
+          "display_name": "Missing Edges",
+          "name": "missing_edges",
+          "passed": false,
+          "threshold": 0.0,
+          "unit": "count",
+          "value": 4.0
+        }
+      ],
+      "name": "compliance",
+      "passed": false,
+      "score": 33.33333333333333,
+      "suggestions": [
+        "Update target contract to include legitimate new dependencies",
+        "Refactor code to remove unnecessary dependencies",
+        "Verify if expected dependencies are still required",
+        "Update target contract if dependencies are no longer needed"
+      ],
+      "weight": 0.3
+    },
+    {
+      "contribution": 25.0,
+      "display_name": "Dependency Density",
+      "is_blocking": true,
+      "issues": [],
+      "metrics": [
+        {
+          "display_name": "Dependency Density",
+          "name": "directed_density_pct",
+          "passed": true,
+          "threshold": 75.0,
+          "unit": "%",
+          "value": 16.67
+        },
+        {
+          "display_name": "Modules Count",
+          "name": "modules_count",
+          "unit": "count",
+          "value": 1.0
+        },
+        {
+          "display_name": "Actual Dependencies",
+          "name": "directed_edges_actual",
+          "unit": "edges",
+          "value": 0.0
+        },
+        {
+          "display_name": "Possible Dependencies",
+          "name": "directed_edges_possible",
+          "unit": "edges",
+          "value": 0.0
+        }
+      ],
+      "name": "density",
+      "passed": true,
+      "score": 100.0,
+      "suggestions": [
+        "Dependency density is within ideal range. Good architecture!"
+      ],
+      "weight": 0.25
+    },
+    {
+      "contribution": 25.0,
+      "display_name": "Layer Clarity",
+      "is_blocking": true,
+      "issues": [],
+      "metrics": [
+        {
+          "display_name": "Layer Violations",
+          "name": "layer_violations",
+          "passed": true,
+          "threshold": 0.0,
+          "unit": "count",
+          "value": 0.0
+        },
+        {
+          "display_name": "Total Dependencies",
+          "name": "total_dependencies",
+          "unit": "count",
+          "value": 7.0
+        },
+        {
+          "display_name": "Layer: api",
+          "name": "layer_api",
+          "unit": "precedence",
+          "value": 1.0
+        },
+        {
+          "display_name": "Layer: service",
+          "name": "layer_service",
+          "unit": "precedence",
+          "value": 2.0
+        },
+        {
+          "display_name": "Layer: dao",
+          "name": "layer_dao",
+          "unit": "precedence",
+          "value": 3.0
+        },
+        {
+          "display_name": "Layer: core",
+          "name": "layer_core",
+          "unit": "precedence",
+          "value": 2.0
+        },
+        {
+          "display_name": "Layer: support",
+          "name": "layer_support",
+          "unit": "precedence",
+          "value": 2.0
+        }
+      ],
+      "name": "layering",
+      "passed": true,
+      "score": 100.0,
+      "suggestions": [
+        "Layer architecture is well maintained. Keep it up!"
+      ],
+      "weight": 0.25
+    },
+    {
+      "contribution": 10.0,
+      "display_name": "Acyclic Dependencies",
+      "is_blocking": true,
+      "issues": [],
+      "metrics": [
+        {
+          "display_name": "Bidirectional Pairs",
+          "name": "bidirectional_pair_count",
+          "passed": true,
+          "threshold": 0.0,
+          "unit": "pairs",
+          "value": 0.0
+        },
+        {
+          "display_name": "Total Possible Pairs",
+          "name": "total_module_pairs",
+          "unit": "pairs",
+          "value": 0.0
+        },
+        {
+          "display_name": "Acyclic Ratio",
+          "name": "acyclic_ratio",
+          "passed": true,
+          "threshold": 100.0,
+          "unit": "%",
+          "value": 100.0
+        }
+      ],
+      "name": "acyclic",
+      "passed": true,
+      "score": 100.0,
+      "suggestions": [
+        "No circular dependencies detected. Excellent!"
+      ],
+      "weight": 0.1
+    },
+    {
+      "contribution": 0.0,
+      "display_name": "Test Coverage",
+      "is_blocking": false,
+      "issues": [
+        {
+          "actual": 0.0,
+          "location": null,
+          "message": "BDD coverage (0.0%) is below threshold (60.0%)",
+          "metric": "bdd_coverage",
+          "severity": "error",
+          "threshold": 60.0
+        },
+        {
+          "actual": 0.0,
+          "location": null,
+          "message": "Contract test coverage (0.0%) is below threshold (60.0%)",
+          "metric": "contract_coverage",
+          "severity": "error",
+          "threshold": 60.0
+        }
+      ],
+      "metrics": [
+        {
+          "display_name": "BDD Scenario Coverage",
+          "name": "bdd_coverage",
+          "passed": false,
+          "threshold": 60.0,
+          "unit": "%",
+          "value": 0.0
+        },
+        {
+          "display_name": "Contract Test Coverage",
+          "name": "contract_coverage",
+          "passed": false,
+          "threshold": 60.0,
+          "unit": "%",
+          "value": 0.0
+        },
+        {
+          "display_name": "Weighted Coverage",
+          "name": "weighted_coverage",
+          "passed": false,
+          "threshold": 60.0,
+          "unit": "%",
+          "value": 0.0
+        }
+      ],
+      "name": "coverage",
+      "passed": false,
+      "score": 0.0,
+      "suggestions": [
+        "Add BDD scenarios for uncovered architectural flows",
+        "Prioritize critical path scenarios first",
+        "Implement contract tests for module boundaries",
+        "Use consumer-driven contract testing for service dependencies"
+      ],
+      "weight": 0.1
+    }
+  ],
+  "generated_at": "2026-02-17T11:31:07.120253574+00:00",
+  "recommendations": [
+    {
+      "affected_modules": [],
+      "category": "compliance",
+      "message": "[Compliance] Update target contract to include legitimate new dependencies",
+      "priority": "high"
+    },
+    {
+      "affected_modules": [],
+      "category": "coverage",
+      "message": "[Test Coverage] Add BDD scenarios for uncovered architectural flows",
+      "priority": "medium"
+    }
+  ],
+  "summary": {
+    "grade": "C",
+    "issue_counts": {
+      "critical": 0,
+      "error": 3,
+      "info": 0,
+      "total": 4,
+      "warning": 1
+    },
+    "mode": "warning",
+    "passed": true,
+    "threshold": 60.0,
+    "total_score": 70.0
+  },
+  "version": "1.0"
+}
