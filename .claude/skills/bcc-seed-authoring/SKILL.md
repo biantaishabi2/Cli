@@ -28,42 +28,76 @@ bcc-seed-authoring/
 - **新项目**：从零创建 seed 文件
 - **存量项目**：根据代码反推完善 seed
 - **迭代维护**：根据 BCC 反馈更新 seed
-- **从 AST 创建**：基于 `bcc extract` 输出的 AST 数据创建 seed
+
+## 核心原则
+
+**AST + 架构理解 = 准确的 Seed**
+
+```
+┌─────────────────────────────────────────┐
+│  AST 数据（代码事实）                    │
+│  - 文件路径                             │
+│  - 导入/导出                            │
+│  - 本地依赖                             │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  架构理解（设计意图）                    │
+│  - 业务模块划分                         │
+│  - 功能边界定义                         │
+│  - 依赖类型识别（框架/直接/配置）        │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  Seed 文件（架构契约）                   │
+│  - 模块定义                             │
+│  - 依赖关系                             │
+│  - 设计 rationale                       │
+└─────────────────────────────────────────┘
+```
+
+**AST 是基础，但不是全部。**
+
+AST 告诉你"代码中有什么"，但 seed 需要表达"架构设计意图"。
 
 ## 用法
 
-### 模式 1：从代码分析创建（新项目/存量项目）
+### 推荐流程：AST 辅助 + 人工审查
+
+```bash
+# 1. 提取 AST（获取代码事实）
+bcc extract /path/to/project/lib \
+  --batch \
+  --lang <elixir|typescript|go|rust|php> \
+  --output project-ast.json
+
+# 2. 基于 AST 生成初步 seed（自动推断）
+/bcc-seed-authoring --from-ast project-ast.json --lang elixir
+
+# 3. 人工审查和修正（补充设计意图）
+# - 调整模块粒度
+# - 补充 rationale
+# - 标注 injection_type
+# - 识别 AST 无法捕获的依赖
+
+# 4. 运行 BCC 验证（检查完整性）
+bcc arch matrix --seed-file seed.yaml --ast-file ast.json --out-dir matrix
+
+# 5. 根据反馈迭代更新 seed
+```
+
+### 备选：纯代码分析（无 AST）
 
 ```
 /bcc-seed-authoring <项目路径> [--lang <语言>] [--reference <参考项目>]
 ```
 
-示例：
-```
-/bcc-seed-authoring /home/wangbo/document/gong --lang elixir
-/bcc-seed-authoring /home/wangbo/document/pi-mono --lang typescript --reference openclaw-arch
-```
-
-### 模式 2：从 AST 数据创建（推荐）
-
-```
-/bcc-seed-authoring --from-ast <ast.json> [--lang <语言>]
-```
-
-示例：
-```bash
-# 1. 先提取 AST
-bcc extract /path/to/project/lib --batch --lang elixir --output project-ast.json
-
-# 2. 基于 AST 创建 seed
-/bcc-seed-authoring --from-ast project-ast.json --lang elixir
-```
-
-**为什么推荐从 AST 创建？**
-- AST 已经包含完整的依赖关系（imports, exports, localDependencies）
-- 可以自动识别模块间的调用关系
-- 减少人工分析代码的工作量
-- 避免遗漏隐式依赖
+适用于：
+- 无法运行 bcc extract 的环境
+- 需要完全手动控制的情况
+- 参考类似项目的架构设计
 
 ## Seed 文件结构
 
@@ -96,9 +130,9 @@ relations_expected:
 
 ## 执行步骤
 
-### 模式 A：从 AST 数据创建（推荐）
+### 推荐流程：AST 辅助 + 人工审查
 
-#### 1. 提取 AST（如果还没有）
+#### 1. 提取 AST（获取代码事实）
 
 ```bash
 bcc extract /path/to/project/lib \
@@ -107,52 +141,122 @@ bcc extract /path/to/project/lib \
   --output project-ast.json
 ```
 
-#### 2. 分析 AST 结构
+#### 2. 分析 AST（自动推断）
+
+**AST 能提供的信息**：
 
 ```bash
-# 查看 AST 结构
-head -100 project-ast.json
+# 文件路径模式 → 模块划分
+jq '.records[].sourcePath' project-ast.json | sort | uniq
+# 输出：
+# "gong/agent.ex"
+# "gong/tools/bash.ex"
+# "gong/prompt.ex"
+# ...
 
-# 统计文件数
-jq '.source_count' project-ast.json
-
-# 查看模块依赖关系
-jq '.records[] | select(.localDependencies | length > 0) | {file: .sourcePath, deps: .localDependencies}' project-ast.json | head -50
+# 本地依赖 → 依赖关系
+jq '.records[] | {file: .sourcePath, deps: .localDependencies}' project-ast.json
+# 输出：
+# { "file": "gong/agent.ex", "deps": ["gong/tools/bash.ex"] }
+# ...
 ```
 
-#### 3. 从 AST 反推模块划分
+**AST 不能提供的信息**（需要人工补充）：
+- 模块的业务含义（AGENT 是做什么的？）
+- 架构分层（哪些是业务层？哪些是基础设施？）
+- 依赖类型（是框架注入还是直接调用？）
+- 设计 rationale（为什么需要这个依赖？）
 
-根据 AST 中的 `sourcePath` 和 `localDependencies`：
+#### 3. 生成初步 seed（AST 自动推断 + 人工调整）
+
+**步骤 3a：AST 自动推断模块**
 
 ```
-AST 数据：
-  sourcePath: "gong/agent.ex"
-  localDependencies: ["gong/tools/bash.ex", "gong/prompt.ex"]
-  
-推断模块：
-  - AGENT (gong/agent*.ex)
-  - TOOLS (gong/tools/*.ex)
-  - PROMPT (gong/prompt*.ex)
-  
-推断依赖：
-  - AGENT -> TOOLS
-  - AGENT -> PROMPT
+AST 文件路径          →  推断模块        →  人工确认
+─────────────────────────────────────────────────────
+gong/agent*.ex        →  AGENT          →  ✅ Agent 运行时
+gong/tools/*.ex       →  TOOLS          →  ✅ 工具集
+gong/prompt*.ex       →  PROMPT         →  ✅ Prompt 系统
+gong/compaction*.ex   →  COMPACTION     →  ✅ 压缩系统
+gong/extension*.ex    →  EXTENSIONS     →  ✅ 扩展系统
+gong/application.ex   →  INFRA          →  ✅ 基础设施
 ```
 
-#### 4. 生成初步 seed
+**步骤 3b：AST 自动推断依赖**
 
-基于 AST 分析生成 seed.yaml：
-- 从文件路径推断模块划分
-- 从 localDependencies 推断依赖关系
-- 标注依赖类型（direct/framework/external）
+```
+AST 依赖关系                          →  推断依赖              →  人工确认
+────────────────────────────────────────────────────────────────────────
+agent.ex → tools/bash.ex             →  AGENT → TOOLS        →  ✅
+agent.ex → tools/write.ex            →  AGENT → TOOLS        →  ✅（已存在）
+agent_loop.ex → tool_result.ex       →  AGENT → DATA         →  ✅
+application.ex → providers/deepseek  →  INFRA → PROVIDERS    →  ✅
+```
 
-#### 5. 人工审查和修正
+**步骤 3c：人工补充 AST 无法捕获的信息**
 
-- 调整模块粒度（合并/拆分）
-- 补充 rationale
-- 标注 injection_type
+```yaml
+# AST 可以推断的
+modules:
+  - module_id: AGENT
+    path_rules:
+      include: ["gong/agent*.ex"]
 
-### 模式 B：从代码分析创建（备选）
+# AST 无法推断的（需要人工补充）
+  - module_id: AGENT
+    display_name: "Agent 运行时"
+    domain_kind: business        # ← 业务层
+    layer: application
+    rationale: "基于 Jido 的 ReAct Agent 实现"
+
+relations_expected:
+  - caller: AGENT
+    callee: TOOLS
+    allowed: true
+    rationale: "Agent 调用工具完成用户任务"  # ← 人工补充
+    injection_type: "framework"              # ← 人工补充（AST 只知道有依赖，不知道类型）
+```
+
+#### 4. 人工审查要点
+
+**审查模块划分**：
+- [ ] 粒度是否合适？（5-15 个模块）
+- [ ] 边界是否清晰？（业务/技术分离）
+- [ ] 命名是否一致？
+
+**审查依赖关系**：
+- [ ] 是否遗漏了框架注入依赖？（Jido, Spring 等）
+- [ ] 是否遗漏了外部库包装的内部模块？
+- [ ] 是否遗漏了启动初始化依赖？
+- [ ] 依赖方向是否符合分层架构？
+
+**补充设计意图**：
+- [ ] 每个模块有 rationale 吗？
+- [ ] 每个依赖有 rationale 吗？
+- [ ] injection_type 标注了吗？
+
+#### 5. 运行 BCC 验证（检查完整性）
+
+```bash
+# 生成矩阵
+bcc arch matrix --seed-file seed.yaml --ast-file ast.json --out-dir matrix
+
+# 分析额外边
+cat matrix/v3.transition-matrix.yaml
+```
+
+**额外边分析**：
+- 正当依赖但漏定义 → 补充 seed
+- 真正的架构违反 → 保持额外边，规划整改
+- BCC 提取问题 → 理解上下文
+
+#### 6. 迭代更新
+
+根据 BCC 反馈调整 seed，重复步骤 4-5。
+
+### 备选：纯代码分析（无 AST）
+
+适用于无法运行 bcc extract 的情况：
 
 #### 1. 项目结构分析
 
