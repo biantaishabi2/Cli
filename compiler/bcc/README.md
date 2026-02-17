@@ -1,34 +1,57 @@
-# BCC — Backend Compiler & Code Knowledge Graph
+# BCC — Architecture Compiler
 
-**代码知识图谱 + 架构治理工具**
+**架构编译器：把架构约束当作语法规则来检查**
 
-从代码中提取结构（函数/类/模块/调用关系），持久化为可查询的 SQLite 图谱，
-支持架构验证、影响分析和测试生成。
+就像传统编译器检查语法错误，BCC 检查架构错误。
+从代码中提取结构，构建代码知识图谱，验证架构合规性，生成治理报告。
 
-## 核心价值
+## 架构编译器 vs 传统编译器
+
+| 维度 | 传统编译器 (GCC) | 架构编译器 (BCC) |
+|------|-----------------|-----------------|
+| 输入 | 源代码 | 代码结构 + 架构约束 |
+| 输出 | 机器码 | 架构合规性报告 + 测试 |
+| 核心 | 语法 → 语义 → 生成 | 结构 → 关系 → 验证 → 治理 |
+| 错误检查 | `if (x = 1)` 语法错误 | `api → dao` 架构违规 |
+
+## 编译流程
 
 ```
-源码 (Elixir/TS/PHP)
-    ↓ extract --batch
-AST 快照 (JSON)
-    ↓ graph-index build
-代码知识图谱 (SQLite)
+源代码 (Elixir/TS/PHP)
+    ↓ extract --batch          [Frontend: 解析代码结构]
+AST / 代码结构
+    ↓ graph-index build        [IR: 构建中间表示]
+代码知识图谱 (SQLite)          [中间表示: 持久化的代码关系]
     ├── 函数调用图 (caller → callee)
     ├── 类继承图 (parent → child)
     └── 模块依赖图 (import → export)
-    ↓ arch validate
-架构合规性报告 (违规调用检测)
-    ↓ bugfix
-BDD 回归测试场景
-    ↓ bddc
+    ↓ arch validate            [Optimizer: 验证架构约束]
+架构约束检查
+    ├── 分层合规 (api→service→dao)
+    ├── 依赖方向 (core 不依赖 support)
+    └── 循环依赖检测
+    ↓ bugfix / bdd seed        [Backend: 生成测试]
+架构报告 / 违规列表 / BDD 场景
+    ↓ bddc                     [Runtime: 执行验证]
 可执行测试
 ```
 
+## 核心价值
+
+1. **代码知识图谱**：持久化代码结构，支持跨版本查询
+2. **架构门禁**：CI 中自动检测架构违规，防止技术债务
+3. **影响分析**：改动前预知影响范围，降低重构风险
+4. **测试生成**：从 bugfix 历史自动生成回归测试
+
 ## 与 BDDC 的关系
 
-BCC 生成 BDD 场景，BDDC 执行测试，形成闭环：
-- BCC：`bugfix` 生成 `docs/bdd/**/*.dsl`
-- BDDC：编译 DSL 为 ExUnit 测试并执行
+```
+BCC (架构编译器)          BDDC (测试运行时)
+    ↓ 生成 BDD 场景    →      ↓ 执行测试
+   docs/bdd/**/*.dsl  →    ExUnit 测试报告
+```
+
+BCC 生成测试场景，BDDC 执行验证，形成"架构约束 → 测试验证"的闭环。
 
 ## 安装
 

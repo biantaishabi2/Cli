@@ -17,13 +17,14 @@
   与 BCC 配合形成闭环：BCC 生成场景 → BDDC 执行测试 → 报告结果。
 
 - [**`bcc/`**](compiler/bcc/README.md)（Rust + Elixir emit，已就绪）
-  **代码知识图谱 + 架构治理工具**：从代码提取结构（函数/类/模块/调用关系），
-  持久化为可查询图谱，支持架构验证和测试生成。
+  **架构编译器**：把架构约束当作语法规则来检查。
+  从代码提取结构，构建知识图谱，验证架构合规性，生成治理报告。
   
   核心价值：
-  - **代码图谱**：extract → 持久化到 SQLite → 图搜索（caller/callee/继承/模块依赖）
-  - **架构治理**：arch validate 检测分层违规（如 api→dao 跳过 service）
-  - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行
+  - **代码知识图谱**：extract → SQLite 持久化 → 图搜索（caller/callee/继承/模块依赖）
+  - **架构门禁**：arch validate 检测分层违规（如 api→dao 跳过 service），CI 自动拦截
+  - **影响分析**：改动前预知影响范围，降低重构风险
+  - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行验证
   
   典型链路：
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
