@@ -5,6 +5,8 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Barrier;
+use std::thread;
 
 #[derive(Debug, Deserialize)]
 struct CaseConfig {
@@ -68,13 +70,65 @@ fn extract_golden() {
     );
     let rules: CrossLangRules = load_yaml(&rules_file);
 
-    let mut executed_cases = Vec::with_capacity(case_config.cases.len());
-    for case in &case_config.cases {
-        let executed = run_case(case, &manifest_dir, update_golden);
-        executed_cases.push(executed);
-    }
+    let executed_cases = run_all_cases(&case_config.cases, &manifest_dir, update_golden);
 
     assert_cross_lang_consistency(&executed_cases, &rules);
+}
+
+fn run_all_cases(
+    cases: &[GoldenCase],
+    manifest_dir: &Path,
+    update_golden: bool,
+) -> Vec<ExecutedCase> {
+    let mut shared_golden_cases = Vec::new();
+    let mut normal_cases = Vec::new();
+
+    for case in cases {
+        if case.tags.iter().any(|tag| tag == "shared_golden") {
+            shared_golden_cases.push(case);
+        } else {
+            normal_cases.push(case);
+        }
+    }
+
+    let mut executed_cases = Vec::with_capacity(cases.len());
+    for case in normal_cases {
+        executed_cases.push(run_case(case, manifest_dir, update_golden));
+    }
+
+    if shared_golden_cases.is_empty() {
+        return executed_cases;
+    }
+
+    // shared_golden 用例在严格比对模式下并发读取同一 golden，覆盖并发读安全场景。
+    if update_golden {
+        for case in shared_golden_cases {
+            executed_cases.push(run_case(case, manifest_dir, true));
+        }
+    } else {
+        let start_barrier = Barrier::new(shared_golden_cases.len());
+        thread::scope(|scope| {
+            let handles: Vec<_> = shared_golden_cases
+                .iter()
+                .map(|case| {
+                    let barrier = &start_barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        run_case(case, manifest_dir, false)
+                    })
+                })
+                .collect();
+            for handle in handles {
+                executed_cases.push(
+                    handle
+                        .join()
+                        .expect("shared_golden concurrent run should not panic"),
+                );
+            }
+        });
+    }
+
+    executed_cases
 }
 
 fn run_case(case: &GoldenCase, manifest_dir: &Path, update_golden: bool) -> ExecutedCase {
