@@ -264,7 +264,7 @@ pub struct AstSnapshotRecord {
     pub localCallTargets: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calls: Vec<AstSnapshotCallRecord>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub imports: Vec<AstSnapshotImportRecord>,
     pub exports_count: usize,
     pub imports_count: usize,
