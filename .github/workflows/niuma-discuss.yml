@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: niuma-discuss-${{ github.event.issue.number || 'schedule' }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   discussion-check:
