@@ -1,0 +1,24 @@
+{
+  "calls": [
+    {
+      "callee": "helper",
+      "line": 4
+    }
+  ],
+  "imports": [
+    {
+      "kind": "import",
+      "specifier": "./shared"
+    }
+  ],
+  "exports": [
+    {
+      "name": "sharedAccess",
+      "kind": "function",
+      "signature": null,
+      "line": 3
+    }
+  ],
+  "declarations": 1,
+  "loc_lines": 5
+}

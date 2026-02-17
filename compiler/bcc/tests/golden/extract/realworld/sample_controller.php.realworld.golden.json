@@ -29,12 +29,6 @@
   ],
   "exports": [
     {
-      "name": "initialize",
-      "kind": "method",
-      "signature": "public function initialize()",
-      "line": 11
-    },
-    {
       "name": "attentionnewsAction",
       "kind": "method",
       "signature": "public function attentionnewsAction()",
@@ -45,6 +39,12 @@
       "kind": "method",
       "signature": "public function commentAction()",
       "line": 24
+    },
+    {
+      "name": "initialize",
+      "kind": "method",
+      "signature": "public function initialize()",
+      "line": 11
     }
   ],
   "declarations": 5,

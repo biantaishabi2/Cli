@@ -17,6 +17,24 @@ cases:
     golden: tests/golden/extract/typescript/boundary_empty.typescript.golden.json
     tags: [boundary]
 
+  - name: typescript_depth_recursive_limit
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/depth_recursive_limit.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/depth_recursive_limit.typescript.golden.json
+    tags: [boundary, depth, recursive]
+
+  - name: typescript_shared_golden_access_reader_a
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/shared_golden_access.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/shared_golden_access.typescript.golden.json
+    tags: [concurrency, shared_golden]
+
+  - name: typescript_shared_golden_access_reader_b
+    lang: typescript
+    fixture: tests/fixtures/extract_golden/typescript/shared_golden_access.typescript.fixture.ts
+    golden: tests/golden/extract/typescript/shared_golden_access.typescript.golden.json
+    tags: [concurrency, shared_golden]
+
   - name: typescript_cross_lang_service_process
     lang: typescript
     fixture: tests/fixtures/extract_golden/typescript/cross_lang_service.typescript.fixture.ts

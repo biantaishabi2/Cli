@@ -17,16 +17,16 @@
   ],
   "exports": [
     {
-      "name": "run",
-      "kind": "function",
-      "signature": "fn run(config: &Config)",
-      "line": 7
-    },
-    {
       "name": "Config",
       "kind": "struct",
       "signature": null,
       "line": 3
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "signature": "fn run(config: &Config)",
+      "line": 7
     }
   ],
   "declarations": 2,
