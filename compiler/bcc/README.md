@@ -196,6 +196,20 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 | TypeScript | .ts .tsx | .ts .tsx | tree-sitter-typescript 0.23 |
 | PHP | .php | .php | tree-sitter-php 0.24 |
 
+## Extract 架构
+
+`extract` 模块已拆分为三层，降低多语言实现重复代码：
+
+- `extract/adapter.rs`：语言适配器注册与分发，统一入口调度。
+- `extract/common.rs`：通用工具（AST 节点取值、调用去重/排序、副作用默认值）。
+- `extract/testing.rs`：跨语言测试辅助函数，减少重复断言代码。
+
+新增语言时可按以下最小步骤接入：
+
+1. 实现 `extract/<lang>.rs` 的提取逻辑。
+2. 在 `extract/adapter.rs` 注册 `LanguageAdapter`。
+3. 复用 `extract/common.rs` 与 `extract/testing.rs`，避免重复样板。
+
 ## 测试
 
 ```bash

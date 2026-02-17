@@ -3,10 +3,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod adapter;
+pub mod common;
 pub mod elixir;
-pub mod typescript;
 pub mod php;
 pub mod rust;
+pub mod testing;
+pub mod typescript;
 
 #[derive(Debug, Serialize)]
 pub struct FileRecord {
@@ -66,22 +69,17 @@ pub fn run(path: &str, mode: &str, output: Option<&str>) {
         }
     };
 
-    let lang = detect_language(path);
-    let record = match lang.as_str() {
-        "elixir" => elixir::extract(&content, path),
-        "typescript" | "tsx" => typescript::extract(&content, path, &lang),
-        "php" => php::extract(&content, path),
-        "rust" => rust::extract(&content, path),
-        other => {
-            eprintln!("unsupported language: {}", other);
+    let lang = adapter::detect_language(path);
+    let record = match adapter::get_adapter(&lang) {
+        Some(lang_adapter) => lang_adapter.extract(&content, path),
+        None => {
+            eprintln!("unsupported language: {}", lang);
             std::process::exit(1);
         }
     };
 
     let result = match mode {
-        "ast" => {
-            serde_json::to_string_pretty(&record).expect("JSON serialization failed")
-        }
+        "ast" => serde_json::to_string_pretty(&record).expect("JSON serialization failed"),
         "doc" => render_doc(&record),
         "yaml" => render_yaml(&record),
         other => {
@@ -99,24 +97,6 @@ pub fn run(path: &str, mode: &str, output: Option<&str>) {
             println!("Written: {}", path);
         }
         None => println!("{}", result),
-    }
-}
-
-fn detect_language(path: &str) -> String {
-    if path.ends_with(".ex") || path.ends_with(".exs") {
-        "elixir".into()
-    } else if path.ends_with(".tsx") {
-        "tsx".into()
-    } else if path.ends_with(".ts") {
-        "typescript".into()
-    } else if path.ends_with(".go") {
-        "go".into()
-    } else if path.ends_with(".rs") {
-        "rust".into()
-    } else if path.ends_with(".php") {
-        "php".into()
-    } else {
-        "unknown".into()
     }
 }
 
@@ -141,7 +121,10 @@ fn render_doc(record: &FileRecord) -> String {
     if !record.exports.is_empty() {
         for ex in &record.exports {
             let sig = ex.signature.as_deref().unwrap_or("-");
-            out.push_str(&format!("- `{}` ({}, L{}) — {}\n", ex.name, ex.kind, ex.line, sig));
+            out.push_str(&format!(
+                "- `{}` ({}, L{}) — {}\n",
+                ex.name, ex.kind, ex.line, sig
+            ));
         }
     } else {
         out.push_str("<!-- TODO: agent 补写 -->\n");
@@ -177,11 +160,21 @@ fn render_doc(record: &FileRecord) -> String {
     out.push_str("\n## 状态与副作用\n\n");
     let se = &record.side_effects;
     let mut effects = Vec::new();
-    if se.has_async { effects.push("async"); }
-    if se.has_http { effects.push("http"); }
-    if se.has_genserver { effects.push("genserver"); }
-    if se.has_file_io { effects.push("file_io"); }
-    if se.has_pubsub { effects.push("pubsub"); }
+    if se.has_async {
+        effects.push("async");
+    }
+    if se.has_http {
+        effects.push("http");
+    }
+    if se.has_genserver {
+        effects.push("genserver");
+    }
+    if se.has_file_io {
+        effects.push("file_io");
+    }
+    if se.has_pubsub {
+        effects.push("pubsub");
+    }
     if !effects.is_empty() {
         out.push_str(&format!("{}\n", effects.join(", ")));
     } else {
@@ -198,7 +191,8 @@ fn render_yaml(record: &FileRecord) -> String {
     out.push_str("# [EXTRACTED — 需人工确认]\n");
 
     // 从 file_path 推断模块名
-    let module_name = record.file_path
+    let module_name = record
+        .file_path
         .rsplit('/')
         .next()
         .unwrap_or(&record.file_path)
@@ -342,7 +336,15 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         };
 
         // 解析 localDependencies：将 import specifier 转为相对路径
-        let mut local_deps = resolve_dependencies(&record, root, file_path, &lang_norm, &module_map, &package_map, &content);
+        let mut local_deps = resolve_dependencies(
+            &record,
+            root,
+            file_path,
+            &lang_norm,
+            &module_map,
+            &package_map,
+            &content,
+        );
         // 过滤自引用（全文扫描会匹配到 defmodule 自身定义的模块名）
         local_deps.retain(|d| d != &rel_path);
 
@@ -384,24 +386,17 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
 /// 对单个文件调用对应语言的 extract，返回 FileRecord 或错误
 fn extract_file(content: &str, path: &Path, lang: &str) -> Result<FileRecord, String> {
     let path_str = path.to_string_lossy();
+    let actual_lang = if lang == "typescript" && path_str.ends_with(".tsx") {
+        "tsx"
+    } else {
+        lang
+    };
+
+    let lang_adapter = adapter::get_adapter(actual_lang)
+        .ok_or_else(|| format!("unsupported language: {}", actual_lang))?;
+
     // 使用 catch_unwind 防止 tree-sitter panic 导致整个 batch 中断
-    let result = std::panic::catch_unwind(|| match lang {
-        "typescript" => {
-            let sub_lang = if path_str.ends_with(".tsx") {
-                "tsx"
-            } else {
-                "typescript"
-            };
-            typescript::extract(content, &path_str, sub_lang)
-        }
-        "elixir" => elixir::extract(content, &path_str),
-        "php" => php::extract(content, &path_str),
-        "rust" => rust::extract(content, &path_str),
-        other => {
-            // 不应到达此处，collect_files 已按语言过滤
-            panic!("unsupported language: {}", other);
-        }
-    });
+    let result = std::panic::catch_unwind(|| lang_adapter.extract(content, &path_str));
     result.map_err(|_| "parser panic".to_string())
 }
 
@@ -714,7 +709,9 @@ fn scan_elixir_module_refs(content: &str) -> Vec<String> {
         if bytes[i].is_ascii_uppercase() {
             let start = i;
             // 收集连续的 字母/数字/下划线/点
-            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+            while i < len
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
+            {
                 i += 1;
             }
             let raw = &content[start..i];
@@ -830,12 +827,19 @@ fn collect_package_jsons(dir: &Path, root: &Path, map: &mut HashMap<String, Stri
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             if name == "node_modules" || name == ".git" || name == "dist" || name == ".next" {
                 continue;
             }
             collect_package_jsons(&path, root, map);
-        } else if path.file_name().map(|n| n.to_string_lossy() == "package.json").unwrap_or(false) {
+        } else if path
+            .file_name()
+            .map(|n| n.to_string_lossy() == "package.json")
+            .unwrap_or(false)
+        {
             parse_package_json(&path, root, map);
         }
     }
@@ -884,7 +888,10 @@ fn parse_package_json(pkg_path: &Path, root: &Path, map: &mut HashMap<String, St
 
     // 如果 exports 没有 "." 入口，用 main/module 字段
     if !map.contains_key(&pkg_name) {
-        let main_field = json.get("module").or_else(|| json.get("main")).and_then(|m| m.as_str());
+        let main_field = json
+            .get("module")
+            .or_else(|| json.get("main"))
+            .and_then(|m| m.as_str());
         if let Some(main) = main_field {
             let abs_entry = pkg_dir.join(main);
             if let Some(resolved) = resolve_entry_path(&abs_entry, root) {
@@ -949,7 +956,10 @@ fn resolve_entry_path(abs_path: &Path, root: &Path) -> Option<String> {
 }
 
 /// 解析 TypeScript 非相对导入：查 monorepo 包名映射表
-fn resolve_ts_package_import(specifier: &str, package_map: &HashMap<String, String>) -> Option<String> {
+fn resolve_ts_package_import(
+    specifier: &str,
+    package_map: &HashMap<String, String>,
+) -> Option<String> {
     // 精确匹配：@scope/pkg 或 @scope/pkg/sub
     if let Some(resolved) = package_map.get(specifier) {
         return Some(resolved.clone());
@@ -1027,12 +1037,16 @@ fn extract_nested_module_refs(specifier: &str) -> Vec<String> {
         if bytes[i].is_ascii_uppercase() {
             let start = i;
             // 收集 模块名段: 大写字母开头 + 字母数字下划线，用 . 连接
-            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+            while i < len
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
+            {
                 i += 1;
             }
             let candidate = &specifier[start..i];
             // 至少两段（Foo.Bar）才是模块引用，排除单段如 String
-            if candidate.contains('.') && candidate.chars().next().map_or(false, |c| c.is_uppercase()) {
+            if candidate.contains('.')
+                && candidate.chars().next().map_or(false, |c| c.is_uppercase())
+            {
                 refs.push(candidate.to_string());
             }
         } else {
@@ -1048,7 +1062,8 @@ fn extract_nested_module_refs(specifier: &str) -> Vec<String> {
 fn strip_keyword_options(s: &str) -> &str {
     let trimmed = s.trim();
     // 找第一个逗号或换行，取前面部分
-    let end = trimmed.find(',')
+    let end = trimmed
+        .find(',')
         .unwrap_or(trimmed.len())
         .min(trimmed.find('\n').unwrap_or(trimmed.len()));
     trimmed[..end].trim()
@@ -1070,7 +1085,10 @@ mod tests {
     fn expand_multi_alias() {
         let mut result = expand_elixir_specifier("Gong.Tape.{Entry, Index, FileStore}");
         result.sort();
-        assert_eq!(result, vec!["Gong.Tape.Entry", "Gong.Tape.FileStore", "Gong.Tape.Index"]);
+        assert_eq!(
+            result,
+            vec!["Gong.Tape.Entry", "Gong.Tape.FileStore", "Gong.Tape.Index"]
+        );
     }
 
     #[test]
@@ -1100,7 +1118,10 @@ mod tests {
     #[test]
     fn resolve_ts_package_exact_match() {
         let mut map = HashMap::new();
-        map.insert("@mariozechner/pi-ai".to_string(), "ai/src/index.ts".to_string());
+        map.insert(
+            "@mariozechner/pi-ai".to_string(),
+            "ai/src/index.ts".to_string(),
+        );
         assert_eq!(
             resolve_ts_package_import("@mariozechner/pi-ai", &map),
             Some("ai/src/index.ts".to_string())
@@ -1110,7 +1131,10 @@ mod tests {
     #[test]
     fn resolve_ts_package_prefix_match() {
         let mut map = HashMap::new();
-        map.insert("@mariozechner/pi-ai".to_string(), "ai/src/index.ts".to_string());
+        map.insert(
+            "@mariozechner/pi-ai".to_string(),
+            "ai/src/index.ts".to_string(),
+        );
         // import "@mariozechner/pi-ai/providers/openai" 应匹配包名
         assert_eq!(
             resolve_ts_package_import("@mariozechner/pi-ai/providers/openai", &map),
@@ -1135,7 +1159,8 @@ mod tests {
     #[test]
     fn extract_nested_module_refs_from_use_args() {
         // use Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write]
-        let spec = "Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write], model: \"deepseek\"";
+        let spec =
+            "Jido.AI.ReActAgent, tools: [Gong.Tools.Read, Gong.Tools.Write], model: \"deepseek\"";
         let mut refs = extract_nested_module_refs(spec);
         refs.sort();
         assert_eq!(refs, vec!["Gong.Tools.Read", "Gong.Tools.Write"]);
@@ -1222,8 +1247,14 @@ end
 end"#;
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(!refs.iter().any(|r| r == "Gong.Compaction"), "不应从 @moduledoc 中提取 Gong.Compaction");
-        assert!(!refs.iter().any(|r| r == "Gong.Truncate"), "不应从 @moduledoc 中提取 Gong.Truncate");
+        assert!(
+            !refs.iter().any(|r| r == "Gong.Compaction"),
+            "不应从 @moduledoc 中提取 Gong.Compaction"
+        );
+        assert!(
+            !refs.iter().any(|r| r == "Gong.Truncate"),
+            "不应从 @moduledoc 中提取 Gong.Truncate"
+        );
     }
 
     #[test]
@@ -1231,7 +1262,10 @@ end"#;
         let content = "# 使用 Foo.Bar 处理数据\ndefmodule Baz do\nend";
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从注释中提取 Foo.Bar");
+        assert!(
+            !refs.iter().any(|r| r == "Foo.Bar"),
+            "不应从注释中提取 Foo.Bar"
+        );
     }
 
     #[test]
@@ -1239,7 +1273,10 @@ end"#;
         let content = r#"x = "调用 Foo.Bar.run()""#;
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从字符串字面量中提取 Foo.Bar");
+        assert!(
+            !refs.iter().any(|r| r == "Foo.Bar"),
+            "不应从字符串字面量中提取 Foo.Bar"
+        );
     }
 
     #[test]
@@ -1247,7 +1284,10 @@ end"#;
         let content = "defmodule A do\n  def run, do: B.Worker.start()\nend";
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(refs.contains(&"B.Worker".to_string()), "应保留真实代码依赖 B.Worker");
+        assert!(
+            refs.contains(&"B.Worker".to_string()),
+            "应保留真实代码依赖 B.Worker"
+        );
     }
 
     #[test]
@@ -1260,9 +1300,18 @@ end"#;
 end"#;
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(refs.contains(&"Mix.Real".to_string()), "应保留真实依赖 Mix.Real");
-        assert!(!refs.iter().any(|r| r == "Mix.Helper"), "不应从 @doc 字符串中提取 Mix.Helper");
-        assert!(!refs.iter().any(|r| r == "Mix.Utils"), "不应从注释中提取 Mix.Utils");
+        assert!(
+            refs.contains(&"Mix.Real".to_string()),
+            "应保留真实依赖 Mix.Real"
+        );
+        assert!(
+            !refs.iter().any(|r| r == "Mix.Helper"),
+            "不应从 @doc 字符串中提取 Mix.Helper"
+        );
+        assert!(
+            !refs.iter().any(|r| r == "Mix.Utils"),
+            "不应从注释中提取 Mix.Utils"
+        );
     }
 
     #[test]
@@ -1279,7 +1328,10 @@ end"#;
 def run, do: Baz.Qux.call()"#;
         let cleaned = strip_elixir_non_code(content);
         let refs = scan_elixir_module_refs(&cleaned);
-        assert!(!refs.iter().any(|r| r == "Foo.Bar"), "不应从单行 @doc 中提取");
+        assert!(
+            !refs.iter().any(|r| r == "Foo.Bar"),
+            "不应从单行 @doc 中提取"
+        );
         assert!(refs.contains(&"Baz.Qux".to_string()), "应保留真实依赖");
     }
 }

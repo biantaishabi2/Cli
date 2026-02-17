@@ -1,13 +1,18 @@
-use tree_sitter::Parser;
+use super::common;
 use super::*;
+use tree_sitter::Parser;
 
 /// 使用 tree-sitter-php 解析 PHP 源码并提取结构信息
 pub fn extract(content: &str, path: &str) -> FileRecord {
     let mut parser = Parser::new();
     let language = tree_sitter_php::LANGUAGE_PHP;
-    parser.set_language(&language.into()).expect("failed to set php grammar");
+    parser
+        .set_language(&language.into())
+        .expect("failed to set php grammar");
 
-    let tree = parser.parse(content, None).expect("failed to parse php source");
+    let tree = parser
+        .parse(content, None)
+        .expect("failed to parse php source");
     let root = tree.root_node();
     let source = content.as_bytes();
 
@@ -19,23 +24,29 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
 
     let mut cursor = root.walk();
     extract_php_recursive(
-        &mut cursor, source,
-        &mut exports, &mut imports, &mut calls,
-        &mut declarations, &mut class_name,
+        &mut cursor,
+        source,
+        &mut exports,
+        &mut imports,
+        &mut calls,
+        &mut declarations,
+        &mut class_name,
     );
 
-    // 去重 calls
-    let mut seen = std::collections::HashSet::new();
-    calls.retain(|c| seen.insert(c.callee.clone()));
+    common::dedup_calls_by_callee(&mut calls);
 
     // PHP 副作用检测（关键词扫描）
     let side_effects = SideEffects {
         has_async: content.contains("dispatch(") || content.contains("Queue::"),
-        has_http: content.contains("curl_") || content.contains("file_get_contents(")
-            || content.contains("Guzzle") || content.contains("Http::"),
+        has_http: content.contains("curl_")
+            || content.contains("file_get_contents(")
+            || content.contains("Guzzle")
+            || content.contains("Http::"),
         has_genserver: false,
-        has_file_io: content.contains("fopen(") || content.contains("file_put_contents(")
-            || content.contains("fwrite(") || content.contains("unlink("),
+        has_file_io: content.contains("fopen(")
+            || content.contains("file_put_contents(")
+            || content.contains("fwrite(")
+            || content.contains("unlink("),
         has_pubsub: content.contains("event(") || content.contains("Event::"),
     };
 
@@ -75,7 +86,7 @@ fn extract_php_recursive(
                 *declarations += 1;
                 // 提取类名
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = node_text(name_node, source);
+                    let name = common::node_text(name_node, source);
                     *class_name = Some(name.clone());
 
                     // 提取 extends（base_clause 是子节点类型，非命名字段）
@@ -86,7 +97,7 @@ fn extract_php_recursive(
                                 for j in 0..child.child_count() {
                                     if let Some(name_child) = child.child(j) {
                                         if name_child.kind() == "name" {
-                                            let parent_name = node_text(name_child, source);
+                                            let parent_name = common::node_text(name_child, source);
                                             if !parent_name.is_empty() {
                                                 imports.push(ImportRecord {
                                                     specifier: parent_name,
@@ -103,7 +114,15 @@ fn extract_php_recursive(
 
                 // 递归进入 class body
                 if cursor.goto_first_child() {
-                    extract_php_recursive(cursor, source, exports, imports, calls, declarations, class_name);
+                    extract_php_recursive(
+                        cursor,
+                        source,
+                        exports,
+                        imports,
+                        calls,
+                        declarations,
+                        class_name,
+                    );
                     cursor.goto_parent();
                 }
             }
@@ -111,8 +130,12 @@ fn extract_php_recursive(
             // use trait 语句
             "use_declaration" => {
                 // use Trait1, Trait2;
-                let text = node_text(node, source);
-                let text = text.trim_start_matches("use").trim().trim_end_matches(';').trim();
+                let text = common::node_text(node, source);
+                let text = text
+                    .trim_start_matches("use")
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim();
                 for trait_name in text.split(',') {
                     let t = trait_name.trim();
                     if !t.is_empty() && t.chars().next().map_or(false, |c| c.is_uppercase()) {
@@ -129,14 +152,15 @@ fn extract_php_recursive(
                 *declarations += 1;
                 let visibility = get_method_visibility(&node, source);
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = node_text(name_node, source);
+                    let name = common::node_text(name_node, source);
                     let line = node.start_position().row + 1;
 
                     // 只有 public 方法进 exports
                     if visibility == "public" {
                         // 构造 signature
-                        let params = node.child_by_field_name("parameters")
-                            .map(|p| node_text(p, source))
+                        let params = node
+                            .child_by_field_name("parameters")
+                            .map(|p| common::node_text(p, source))
                             .unwrap_or_default();
                         let signature = format!("public function {}{}", name, params);
 
@@ -151,7 +175,15 @@ fn extract_php_recursive(
 
                 // 递归进入 method body 提取 calls
                 if cursor.goto_first_child() {
-                    extract_php_recursive(cursor, source, exports, imports, calls, declarations, class_name);
+                    extract_php_recursive(
+                        cursor,
+                        source,
+                        exports,
+                        imports,
+                        calls,
+                        declarations,
+                        class_name,
+                    );
                     cursor.goto_parent();
                 }
             }
@@ -159,10 +191,12 @@ fn extract_php_recursive(
             // 静态方法调用: Class::method(...)
             "scoped_call_expression" => {
                 if let Some(scope) = node.child_by_field_name("scope") {
-                    let callee = node_text(scope, source);
+                    let callee = common::node_text(scope, source);
                     // 过滤 $this、self、parent、static
                     if !callee.starts_with('$')
-                        && callee != "self" && callee != "parent" && callee != "static"
+                        && callee != "self"
+                        && callee != "parent"
+                        && callee != "static"
                     {
                         let line = node.start_position().row + 1;
                         calls.push(CallRecord { callee, line });
@@ -170,7 +204,15 @@ fn extract_php_recursive(
                 }
                 // 继续递归
                 if cursor.goto_first_child() {
-                    extract_php_recursive(cursor, source, exports, imports, calls, declarations, class_name);
+                    extract_php_recursive(
+                        cursor,
+                        source,
+                        exports,
+                        imports,
+                        calls,
+                        declarations,
+                        class_name,
+                    );
                     cursor.goto_parent();
                 }
             }
@@ -179,14 +221,22 @@ fn extract_php_recursive(
             "object_creation_expression" => {
                 // new SomeClass(...)
                 if let Some(class_node) = node.child_by_field_name("class") {
-                    let callee = node_text(class_node, source);
+                    let callee = common::node_text(class_node, source);
                     if callee.chars().next().map_or(false, |c| c.is_uppercase()) {
                         let line = node.start_position().row + 1;
                         calls.push(CallRecord { callee, line });
                     }
                 }
                 if cursor.goto_first_child() {
-                    extract_php_recursive(cursor, source, exports, imports, calls, declarations, class_name);
+                    extract_php_recursive(
+                        cursor,
+                        source,
+                        exports,
+                        imports,
+                        calls,
+                        declarations,
+                        class_name,
+                    );
                     cursor.goto_parent();
                 }
             }
@@ -194,7 +244,15 @@ fn extract_php_recursive(
             // 其他节点：递归遍历子节点
             _ => {
                 if cursor.goto_first_child() {
-                    extract_php_recursive(cursor, source, exports, imports, calls, declarations, class_name);
+                    extract_php_recursive(
+                        cursor,
+                        source,
+                        exports,
+                        imports,
+                        calls,
+                        declarations,
+                        class_name,
+                    );
                     cursor.goto_parent();
                 }
             }
@@ -212,14 +270,10 @@ fn get_method_visibility(node: &tree_sitter::Node, source: &[u8]) -> String {
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.kind() == "visibility_modifier" {
-                return node_text(child, source).to_lowercase();
+                return common::node_text(child, source).to_lowercase();
             }
         }
     }
     // PHP 默认 public
     "public".into()
-}
-
-fn node_text(node: tree_sitter::Node, source: &[u8]) -> String {
-    node.utf8_text(source).unwrap_or("").to_string()
 }
