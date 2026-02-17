@@ -148,13 +148,11 @@ func TestParseReviewResponse_InCodeBlock(t *testing.T) {
 	assert.Equal(t, "通过", result.Summary)
 }
 
-func TestParseReviewResponse_Fallback(t *testing.T) {
+func TestParseReviewResponse_RejectsNonJSON(t *testing.T) {
 	raw := "代码有一些问题需要修复。"
-
-	result, err := ParseReviewResponse(raw)
-	require.NoError(t, err)
-	assert.False(t, result.Approved)
-	assert.Equal(t, raw, result.Summary)
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "缺少 JSON")
 }
 
 func TestParseReviewResponse_Empty(t *testing.T) {
@@ -204,25 +202,18 @@ func TestExtractJSON_MultipleCodeBlocks(t *testing.T) {
 	assert.NotContains(t, jsonStr, "analysis")
 }
 
-func TestParseReviewResponse_FallbackInferApproved(t *testing.T) {
-	// AI 没输出 JSON，但文字明确说"建议合并"
-	raw := `## 审查结论
-
-所有 26 个历史问题均已修复或接受解释，无新 P0/P1 问题。
-
-**建议合并。**`
-
-	result, err := ParseReviewResponse(raw)
-	require.NoError(t, err)
-	assert.True(t, result.Approved) // 从文字推断通过
+func TestParseReviewResponse_MissingApprovedField(t *testing.T) {
+	raw := `{"summary":"有结论但没有 approved", "issues":[]}`
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "approved")
 }
 
-func TestParseReviewResponse_FallbackInferRejected(t *testing.T) {
-	raw := `审查发现 2 个问题仍需修改，不建议合并。`
-
-	result, err := ParseReviewResponse(raw)
-	require.NoError(t, err)
-	assert.False(t, result.Approved)
+func TestParseReviewResponse_MissingSummaryField(t *testing.T) {
+	raw := `{"approved":false, "issues":["P1 - 仍需修改"]}`
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "summary")
 }
 
 func TestExtractJSON_BracesInText(t *testing.T) {
