@@ -1,0 +1,1122 @@
+{
+  "source_count": 78,
+  "skipped_count": 0,
+  "records": [
+    {
+      "sourcePath": "gong/abort.ex",
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 65,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/agent.ex",
+      "localDependencies": [
+        "gong/tools/bash.ex",
+        "gong/tools/edit.ex",
+        "gong/tools/find.ex",
+        "gong/tools/grep.ex",
+        "gong/tools/ls.ex",
+        "gong/tools/read.ex",
+        "gong/tools/write.ex"
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 24,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/agent_loop.ex",
+      "localDependencies": [
+        "gong/hook_runner.ex",
+        "gong/retry.ex",
+        "gong/steering.ex",
+        "gong/tool_result.ex"
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 412,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/application.ex",
+      "localDependencies": [
+        "gong/providers/deepseek.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 23,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/auth.ex",
+      "localDependencies": [
+        "gong/model_registry.ex"
+      ],
+      "exports_count": 11,
+      "imports_count": 0,
+      "loc_lines": 153,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/auto_compaction.ex",
+      "localDependencies": [
+        "gong/compaction.ex",
+        "gong/compaction/lock.ex",
+        "gong/compaction/token_estimator.ex"
+      ],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 55,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/abort.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 198,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/agent.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 308,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/agent_loop.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 432,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/auth.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 155,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/common.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 203,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/compaction.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 383,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/cost.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 86,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/cross_provider.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 250,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/extension.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 208,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/follow_up.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 76,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/generated.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 6,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/hook.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 142,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/model.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 248,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/partial_json.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 19,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/prompt.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 224,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/provider_registry.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 130,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/resource.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 123,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/rpc.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 81,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/settings.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 181,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/stream.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 130,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tape.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 629,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/template.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 77,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/thinking.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_config.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 31,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_extra.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_result.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 23,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tools.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 427,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registry.ex",
+      "localDependencies": [
+        "gong/bdd/instruction_registries/abort.ex",
+        "gong/bdd/instruction_registries/agent.ex",
+        "gong/bdd/instruction_registries/agent_loop.ex",
+        "gong/bdd/instruction_registries/auth.ex",
+        "gong/bdd/instruction_registries/common.ex",
+        "gong/bdd/instruction_registries/compaction.ex",
+        "gong/bdd/instruction_registries/cost.ex",
+        "gong/bdd/instruction_registries/cross_provider.ex",
+        "gong/bdd/instruction_registries/extension.ex",
+        "gong/bdd/instruction_registries/follow_up.ex",
+        "gong/bdd/instruction_registries/generated.ex",
+        "gong/bdd/instruction_registries/hook.ex",
+        "gong/bdd/instruction_registries/model.ex",
+        "gong/bdd/instruction_registries/partial_json.ex",
+        "gong/bdd/instruction_registries/prompt.ex",
+        "gong/bdd/instruction_registries/provider_registry.ex",
+        "gong/bdd/instruction_registries/resource.ex",
+        "gong/bdd/instruction_registries/rpc.ex",
+        "gong/bdd/instruction_registries/settings.ex",
+        "gong/bdd/instruction_registries/stream.ex",
+        "gong/bdd/instruction_registries/tape.ex",
+        "gong/bdd/instruction_registries/template.ex",
+        "gong/bdd/instruction_registries/thinking.ex",
+        "gong/bdd/instruction_registries/tool_config.ex",
+        "gong/bdd/instruction_registries/tool_extra.ex",
+        "gong/bdd/instruction_registries/tool_result.ex",
+        "gong/bdd/instruction_registries/tools.ex"
+      ],
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 51,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/command_registry.ex",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 93,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction/lock.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction/token_estimator.ex",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 83,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction.ex",
+      "localDependencies": [
+        "gong/compaction/token_estimator.ex",
+        "gong/tape/store.ex"
+      ],
+      "exports_count": 7,
+      "imports_count": 1,
+      "loc_lines": 267,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/cost_tracker.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 120,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/cross_provider.ex",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 111,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/context.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 63,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/loader.ex",
+      "localDependencies": [
+        "gong/extension.ex"
+      ],
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 135,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/runner.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 65,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/source.ex",
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 85,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension.ex",
+      "exports_count": 5,
+      "imports_count": 1,
+      "loc_lines": 29,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/hook.ex",
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 54,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/hook_runner.ex",
+      "exports_count": 9,
+      "imports_count": 0,
+      "loc_lines": 223,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/model_registry.ex",
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 191,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/partial_json.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 142,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/path_utils.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/prompt.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 144,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/prompt_template.ex",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 126,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/provider.ex",
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/provider_registry.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 150,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/providers/deepseek.ex",
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 13,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/resource_loader.ex",
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/retry.ex",
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 52,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/rpc.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/settings.ex",
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 141,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/steering.ex",
+      "exports_count": 10,
+      "imports_count": 0,
+      "loc_lines": 67,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/stream.ex",
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 205,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/entry.ex",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/file_store.ex",
+      "localDependencies": [
+        "gong/tape/entry.ex"
+      ],
+      "exports_count": 7,
+      "imports_count": 1,
+      "loc_lines": 89,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/index.ex",
+      "exports_count": 16,
+      "imports_count": 0,
+      "loc_lines": 257,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/store.ex",
+      "localDependencies": [
+        "gong/tape/entry.ex",
+        "gong/tape/file_store.ex",
+        "gong/tape/index.ex"
+      ],
+      "exports_count": 23,
+      "imports_count": 1,
+      "loc_lines": 462,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/thinking.ex",
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 71,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tool_config.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tool_result.ex",
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/bash.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/truncate.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 257,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/edit.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 475,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/find.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 164,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/grep.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/truncate.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 201,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/ls.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 126,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/read.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/truncate.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 245,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/truncate.ex",
+      "localDependencies": [
+        "gong/truncate.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 37,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/write.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 64,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/truncate.ex",
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 255,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong.ex",
+      "localDependencies": [
+        "gong/agent.ex",
+        "gong/compaction.ex",
+        "gong/truncate.ex"
+      ],
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 16,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    }
+  ]
+}

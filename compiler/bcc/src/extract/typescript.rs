@@ -1,22 +1,18 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::path::Path;
-use std::env;
-use tree_sitter::Parser;
+use super::common;
 use super::*;
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// 使用 tree-sitter-typescript 解析源码并提取结构信息
 pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
-    let mut parser = Parser::new();
-
     let language = if lang == "tsx" {
         tree_sitter_typescript::LANGUAGE_TSX
     } else {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT
     };
-    parser.set_language(&language.into()).expect("failed to set typescript grammar");
-
-    let tree = parser.parse(content, None).expect("failed to parse typescript source");
+    let tree = common::parse_tree(content, language, "typescript");
     let root = tree.root_node();
     let source = content.as_bytes();
 
@@ -39,19 +35,37 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         &mut declarations,
     );
 
-    // 去重 calls
-    let mut seen = std::collections::HashSet::new();
-    calls.retain(|c| seen.insert(c.callee.clone()));
-    calls.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.callee.cmp(&b.callee)));
+    common::dedup_sort_calls(&mut calls);
     local_call_symbols.clear();
     for call in &calls {
         local_call_symbols.insert(call.callee.clone());
     }
 
+    // 收集本地函数定义（用于本地函数调用）
+    let mut local_functions: HashSet<String> = HashSet::new();
+    for export in &exports {
+        local_functions.insert(export.name.clone());
+    }
+
+    // 从 declarations 中提取更多本地函数名（简化处理）
+    // 实际应该从 AST 中提取所有函数定义
+
     let mut local_call_targets_set = HashSet::new();
-    for symbol in local_call_symbols {
-        if let Some(specifier) = import_aliases.get(&symbol) {
+    for symbol in &local_call_symbols {
+        // 1. 检查是否是 import 的函数
+        if let Some(specifier) = import_aliases.get(symbol) {
             if let Some(target) = resolve_local_import(path, specifier) {
+                local_call_targets_set.insert(target);
+            }
+        }
+        // 2. 检查是否是本地函数（同一文件内的函数）
+        else if local_functions.contains(symbol) {
+            // 本地函数调用，目标就是当前文件
+            local_call_targets_set.insert(path.to_string());
+        }
+        // 3. 尝试解析为相对路径导入
+        else if symbol.contains('/') || symbol.starts_with('.') {
+            if let Some(target) = resolve_local_import(path, symbol) {
                 local_call_targets_set.insert(target);
             }
         }
@@ -61,9 +75,13 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
 
     let side_effects = SideEffects {
         has_async: content.contains("async ") || content.contains("await "),
-        has_http: content.contains("fetch(") || content.contains("axios") || content.contains("ky("),
+        has_http: content.contains("fetch(")
+            || content.contains("axios")
+            || content.contains("ky("),
         has_genserver: false,
-        has_file_io: content.contains("fs.") || content.contains("readFile") || content.contains("writeFile"),
+        has_file_io: content.contains("fs.")
+            || content.contains("readFile")
+            || content.contains("writeFile"),
         has_pubsub: content.contains("EventEmitter") || content.contains(".emit("),
     };
 
@@ -108,7 +126,7 @@ fn extract_ts_recursive(
                                 *declarations += 1;
                                 if let Some(name_node) = child.child_by_field_name("name") {
                                     exports.push(ExportRecord {
-                                        name: node_text(name_node, source),
+                                        name: common::node_text(name_node, source),
                                         kind: "function".into(),
                                         signature: None,
                                         line: child.start_position().row + 1,
@@ -119,7 +137,7 @@ fn extract_ts_recursive(
                                 *declarations += 1;
                                 if let Some(name_node) = child.child_by_field_name("name") {
                                     exports.push(ExportRecord {
-                                        name: node_text(name_node, source),
+                                        name: common::node_text(name_node, source),
                                         kind: "class".into(),
                                         signature: None,
                                         line: child.start_position().row + 1,
@@ -134,9 +152,11 @@ fn extract_ts_recursive(
                                     loop {
                                         let decl_child = decl_cursor.node();
                                         if decl_child.kind() == "variable_declarator" {
-                                            if let Some(name_node) = decl_child.child_by_field_name("name") {
+                                            if let Some(name_node) =
+                                                decl_child.child_by_field_name("name")
+                                            {
                                                 exports.push(ExportRecord {
-                                                    name: node_text(name_node, source),
+                                                    name: common::node_text(name_node, source),
                                                     kind: "const".into(),
                                                     signature: None,
                                                     line: decl_child.start_position().row + 1,
@@ -153,7 +173,7 @@ fn extract_ts_recursive(
                                 *declarations += 1;
                                 if let Some(name_node) = child.child_by_field_name("name") {
                                     exports.push(ExportRecord {
-                                        name: node_text(name_node, source),
+                                        name: common::node_text(name_node, source),
                                         kind: "interface".into(),
                                         signature: None,
                                         line: child.start_position().row + 1,
@@ -164,7 +184,7 @@ fn extract_ts_recursive(
                                 *declarations += 1;
                                 if let Some(name_node) = child.child_by_field_name("name") {
                                     exports.push(ExportRecord {
-                                        name: node_text(name_node, source),
+                                        name: common::node_text(name_node, source),
                                         kind: "type".into(),
                                         signature: None,
                                         line: child.start_position().row + 1,
@@ -175,7 +195,7 @@ fn extract_ts_recursive(
                                 *declarations += 1;
                                 if let Some(name_node) = child.child_by_field_name("name") {
                                     exports.push(ExportRecord {
-                                        name: node_text(name_node, source),
+                                        name: common::node_text(name_node, source),
                                         kind: "enum".into(),
                                         signature: None,
                                         line: child.start_position().row + 1,
@@ -193,11 +213,11 @@ fn extract_ts_recursive(
             // import_statement
             "import_statement" => {
                 if let Some(source_node) = node.child_by_field_name("source") {
-                    let spec = node_text(source_node, source)
+                    let spec = common::node_text(source_node, source)
                         .trim_matches(|c: char| c == '\'' || c == '"')
                         .to_string();
                     if !spec.is_empty() {
-                        let import_text = node_text(node, source);
+                        let import_text = common::node_text(node, source);
                         let aliases = extract_import_aliases(&import_text);
                         for alias in aliases {
                             import_aliases.insert(alias, spec.clone());
@@ -210,22 +230,33 @@ fn extract_ts_recursive(
                 }
             }
             // 非导出的声明也计入 declarations
-            "function_declaration" | "class_declaration" | "interface_declaration"
-            | "type_alias_declaration" | "enum_declaration" => {
+            "function_declaration"
+            | "class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration"
+            | "enum_declaration" => {
                 // 只有不在 export_statement 内的才独立计数
-                if node.parent().map_or(true, |p| p.kind() != "export_statement") {
+                if node
+                    .parent()
+                    .map_or(true, |p| p.kind() != "export_statement")
+                {
                     *declarations += 1;
                 }
             }
             "lexical_declaration" => {
-                if node.parent().map_or(true, |p| p.kind() != "export_statement") {
+                if node
+                    .parent()
+                    .map_or(true, |p| p.kind() != "export_statement")
+                {
                     *declarations += 1;
                 }
             }
             // 模块调用检测: 以 call_expression 根调用符作为本地调用候选
             "call_expression" => {
                 if let Some(func_node) = node.child_by_field_name("function") {
-                    if let Some(callee) = extract_call_root(func_node, source) {
+                    // 提取各种调用类型
+                    let callees = extract_call_targets(func_node, source);
+                    for callee in callees {
                         local_call_symbols.insert(callee.clone());
                         calls.push(CallRecord {
                             callee,
@@ -264,10 +295,6 @@ fn extract_ts_recursive(
     }
 }
 
-fn node_text(node: tree_sitter::Node, source: &[u8]) -> String {
-    node.utf8_text(source).unwrap_or("").to_string()
-}
-
 fn to_posix_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -280,7 +307,11 @@ fn resolve_local_import(source_path: &str, specifier: &str) -> Option<String> {
     let cwd = env::current_dir().ok()?;
     let source_file = Path::new(source_path);
     let source_dir = source_file.parent()?;
-    let normalized_spec = if specifier.ends_with(".ts") || specifier.ends_with(".tsx") || specifier.ends_with(".cts") || specifier.ends_with(".mts") {
+    let normalized_spec = if specifier.ends_with(".ts")
+        || specifier.ends_with(".tsx")
+        || specifier.ends_with(".cts")
+        || specifier.ends_with(".mts")
+    {
         specifier
             .trim_end_matches(".ts")
             .trim_end_matches(".tsx")
@@ -309,7 +340,9 @@ fn resolve_local_import(source_path: &str, specifier: &str) -> Option<String> {
             continue;
         }
 
-        let absolute = candidate.canonicalize().unwrap_or_else(|_| candidate.to_path_buf());
+        let absolute = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.to_path_buf());
         let rel = absolute.strip_prefix(&cwd).ok()?;
         let rel_str = to_posix_path(rel);
         if rel_str.starts_with("src/") {
@@ -408,14 +441,95 @@ fn extract_named_binding_alias(item: &str) -> Option<String> {
     }
 }
 
+/// 提取所有调用目标（包括方法调用、属性访问等）
+fn extract_call_targets(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut targets = Vec::new();
+
+    match node.kind() {
+        // 简单标识符调用: foo()
+        "identifier" => {
+            if let Some(name) = node.utf8_text(source).ok() {
+                targets.push(name.to_string());
+            }
+        }
+        // 属性访问调用: obj.method() 或 this.method()
+        "member_expression" => {
+            // 提取完整的属性链: obj.method 或 this.method
+            if let Some(text) = extract_member_chain(node, source) {
+                targets.push(text);
+            }
+            // 同时提取方法名本身
+            if let Some(prop) = node.child_by_field_name("property") {
+                if let Some(name) = prop.utf8_text(source).ok() {
+                    targets.push(name.to_string());
+                }
+            }
+        }
+        // 带可选链的调用: obj?.method()
+        "call_expression" => {
+            // 递归处理嵌套调用
+            if let Some(func) = node.child_by_field_name("function") {
+                targets.extend(extract_call_targets(func, source));
+            }
+        }
+        // 其他情况使用原来的提取逻辑
+        _ => {
+            if let Some(callee) = extract_call_root(node, source) {
+                targets.push(callee);
+            }
+        }
+    }
+
+    targets
+}
+
+/// 提取属性访问链: obj.prop1.prop2 -> "obj.prop1.prop2"
+fn extract_member_chain(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut current = node;
+
+    loop {
+        match current.kind() {
+            "member_expression" => {
+                if let Some(prop) = current.child_by_field_name("property") {
+                    if let Ok(name) = prop.utf8_text(source) {
+                        parts.push(name.to_string());
+                    }
+                }
+                if let Some(obj) = current.child_by_field_name("object") {
+                    current = obj;
+                } else {
+                    break;
+                }
+            }
+            "identifier" | "this" | "super" => {
+                if let Ok(name) = current.utf8_text(source) {
+                    parts.push(name.to_string());
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        parts.reverse();
+        Some(parts.join("."))
+    }
+}
+
 fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" => Some(node_text(node, source)),
+        "identifier" => Some(common::node_text(node, source)),
         "member_expression" => {
             let mut current = node;
             loop {
                 match current.child_by_field_name("object") {
-                    Some(obj) if obj.kind() == "identifier" => return Some(node_text(obj, source)),
+                    Some(obj) if obj.kind() == "identifier" => {
+                        return Some(common::node_text(obj, source))
+                    }
                     Some(obj) if obj.kind() == "member_expression" => current = obj,
                     Some(_) => return None,
                     None => return None,
@@ -429,8 +543,9 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use crate::extract::testing;
     use std::env;
+    use std::fs;
 
     #[test]
     fn extracts_direct_and_member_calls() {
@@ -446,9 +561,19 @@ function run() {
 "#;
 
         let record = extract(source, "src/sample.ts", "typescript");
-        let calls: Vec<_> = record.calls.into_iter().map(|c| c.callee).collect();
+        let calls = testing::call_names(&record);
 
-        assert_eq!(calls, vec!["formatName".to_string(), "Helper".to_string(), "Foo".to_string()]);
+        // 增强后的解析器现在能捕获更多调用类型
+        assert_eq!(
+            calls,
+            vec![
+                "formatName".to_string(),
+                "Helper.log".to_string(),
+                "log".to_string(),
+                "Foo.bar.baz".to_string(),
+                "baz".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -459,7 +584,8 @@ function run() {
         let util_file = fixture_dir.join("util.ts");
 
         fs::create_dir_all(&fixture_dir).expect("create fixture dir");
-        fs::write(&util_file, "export function formatName() { return 'x'; }\n").expect("write util");
+        fs::write(&util_file, "export function formatName() { return 'x'; }\n")
+            .expect("write util");
 
         let source = r#"
 import { formatName } from './util';
@@ -470,11 +596,7 @@ function run() {
 "#;
         fs::write(&src_file, source).expect("write src");
 
-        let record = extract(
-            source,
-            src_file.to_string_lossy().as_ref(),
-            "typescript",
-        );
+        let record = extract(source, src_file.to_string_lossy().as_ref(), "typescript");
         assert_eq!(
             record.local_call_targets,
             vec![String::from("src/tmp-ts-call-targets-test/util.ts")]

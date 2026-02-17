@@ -30,7 +30,6 @@ type OrchestratorConfig struct {
 	// 工作流配置
 	RequirePlanApproval bool     // 方案定稿后是否需要人工审批
 	MaxIterateRounds    int      // 最大自动迭代轮数（0=默认3）
-	AllowedPrefixes     []string // 额外允许修改的目录前缀
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -173,6 +172,7 @@ func (o *Orchestrator) DoDiscussionCheck(ctx context.Context) error {
 	}
 	if summaryMC != nil {
 		input.DiscussionSummary = summaryMC.Marker
+		input.AIShouldFinish = summaryMC.Marker.Finish
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker
@@ -239,20 +239,15 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 		return err
 	}
 
-	// 安全校验
-	var extraPrefixes []string
-	if o.config != nil {
-		extraPrefixes = o.config.AllowedPrefixes
-	}
-	validation := ValidateChanges(finalPlan.FileChanges, extraPrefixes...)
-	if !validation.IsClean() {
-		errorBody := FormatValidationError(validation)
-		_, _ = o.github.AddComment(ctx, o.issueNumber, errorBody)
-		return fmt.Errorf("方案路径校验失败: %d 个路径被拒绝", len(validation.Rejected))
-	}
 	// 高风险路径警告（允许通过但提醒）
-	if len(validation.HighRisk) > 0 {
-		_, _ = o.github.AddComment(ctx, o.issueNumber, FormatHighRiskWarning(validation))
+	var highRiskPaths []string
+	for _, fc := range finalPlan.FileChanges {
+		if IsHighRiskChange(fc.Path) {
+			highRiskPaths = append(highRiskPaths, fc.Path)
+		}
+	}
+	if len(highRiskPaths) > 0 {
+		_, _ = o.github.AddComment(ctx, o.issueNumber, FormatHighRiskWarning(highRiskPaths))
 	}
 
 	// 发评论 + 创建 marker
@@ -314,8 +309,11 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 		return err
 	}
 
+	// 解析最终方案中的 FileChanges（用于 implement 后 diff 对比）
+	plannedChanges := ParseFileChangesFromComment(finalMC.Comment.GetBody())
+
 	// 实现逻辑封装，失败时回滚状态
-	prNumber, implErr := o.doImplementInner(ctx, input, workDir)
+	prNumber, implErr := o.doImplementInner(ctx, input, workDir, plannedChanges)
 	if implErr != nil {
 		// 回滚状态并通知
 		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateImplementing), string(prevState))
@@ -350,7 +348,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 // doImplementInner 执行实现的内部逻辑，返回 PR 号（0 表示无变更或无 worktree）
 // 有 worktree 时：创建 worktree → AI 执行 → commit → push → 创建 PR
 // 无 worktree 时：AI 在 workDir 中执行，返回 prNumber=0（调用方回滚状态）
-func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput, workDir string) (int, error) {
+func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput, workDir string, plannedChanges []FileChange) (int, error) {
 	actualWorkDir := workDir
 	var gitOps *GitOps
 	var branchName string
@@ -415,6 +413,22 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 			prNumber = pr.GetNumber()
 			// 成功创建 PR，保留 worktree 供 iterate 复用
 			cleanupWorktree = nil
+
+			// diff 对比：计划声明 vs 实际改动
+			if len(plannedChanges) > 0 {
+				baseBranch := gitOps.DefaultBranch()
+				changedFiles, err := gitOps.ChangedFiles(baseBranch)
+				if err != nil {
+					_, _ = o.github.AddComment(ctx, prNumber,
+						fmt.Sprintf("## ⚠️ diff 对比失败\n\n无法获取改动文件列表: %v", err))
+				} else {
+					diffResult := CheckDiffAgainstPlan(changedFiles, plannedChanges)
+					if !diffResult.IsClean() {
+						comment := FormatDiffCheckComment(diffResult)
+						_, _ = o.github.AddComment(ctx, prNumber, comment)
+					}
+				}
+			}
 		}
 	}
 
@@ -758,6 +772,7 @@ func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, existing *gh
 		Type:     marker.TypeDiscussionSummary,
 		Issue:    o.issueNumber,
 		Revision: rev,
+		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
@@ -815,6 +830,7 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *
 		Type:     marker.TypeDiscussionSummary,
 		Issue:    o.issueNumber,
 		Revision: rev,
+		Finish:   summary.ShouldFinish,
 	}
 	body := FormatDiscussionSummary(summary, m)
 	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)

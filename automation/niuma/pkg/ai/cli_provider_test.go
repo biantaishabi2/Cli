@@ -125,3 +125,15 @@ func TestCLIProvider_WorkDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "found", result)
 }
+
+func TestCLIProvider_WorkDirPlaceholderFallback(t *testing.T) {
+	p := &CLIProvider{
+		ProviderName: "workdir-fallback",
+		Cmd:          "test -d {workdir} && echo ok",
+		MaxRetries:   -1,
+	}
+
+	result, err := p.Complete(context.Background(), "prompt")
+	require.NoError(t, err)
+	assert.Equal(t, "ok", result)
+}

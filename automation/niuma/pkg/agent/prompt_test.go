@@ -80,6 +80,29 @@ func TestBuildIteratePrompt(t *testing.T) {
 	assert.Contains(t, result, "CreateUser")
 }
 
+func TestBuildReviewPrompt_CrossFunctionAndPlanChecks(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle: "test issue",
+		FinalPlan:  "some plan",
+		PRDiff:     "some diff",
+	}
+
+	result, err := BuildReviewPrompt(input)
+	require.NoError(t, err)
+
+	// 新增检查维度存在
+	assert.Contains(t, result, "4. **跨函数逻辑一致性**")
+	assert.Contains(t, result, "5. **方案 ↔ 实现完整性**")
+
+	// P1 分级标准包含新描述
+	assert.Contains(t, result, "跨函数逻辑不一致、方案要求未实现")
+
+	// 现有检查项未被破坏
+	assert.Contains(t, result, "测试覆盖缺口")
+	assert.Contains(t, result, "CLI 接口一致性")
+	assert.Contains(t, result, "错误处理完整性")
+}
+
 func TestBuildPrompt_EmptyInput(t *testing.T) {
 	input := &PromptInput{}
 	result, err := BuildDraftPrompt(input)

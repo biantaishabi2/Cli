@@ -140,11 +140,45 @@ const finalPlanTmpl = `你是一个高级软件架构师。请根据以下讨论
   "file_changes": [
     {"path": "path/to/file.go", "action": "modify", "description": "变更描述"}
   ],
+  "test_strategy": {
+    "unit_tests": [
+      {"name": "单元测试名", "scenario": "测试场景", "assertions": ["断言1", "断言2"]}
+    ],
+    "integration_tests": [
+      {"name": "集成测试名", "setup": "前置条件", "verification": "验证点"}
+    ],
+    "bdd_tests": [
+      {"name": "BDD 场景名", "given": "前置条件", "when": "操作", "then": "预期结果"}
+    ],
+    "ci_inclusion": {
+      "unit": "是否纳入 CI（是/否，原因）",
+      "integration": "是否纳入 CI（是/否，原因）",
+      "bdd": "是否纳入 CI（是/否，原因）"
+    }
+  },
   "test_scenarios": [
     {"name": "测试场景名", "input": "输入", "expected": "预期输出"}
-  ]
+  ],
+  "cli_interface": {
+    "commands": [
+      {"name": "命令名", "args": ["--flag", "value"], "description": "功能描述"}
+    ],
+    "consistency": "CLI 参数风格是否统一（是/否，说明）"
+  },
+  "error_handling": {
+    "error_types": [
+      {"name": "错误类型", "exit_code": 1, "description": "触发场景"}
+    ],
+    "recovery_strategy": "恢复策略"
+  }
 }
-` + "```"
+` + "```" + `
+
+注意：
+1. test_strategy 必须明确单元测试、集成测试、BDD 测试的分层
+2. ci_inclusion 必须说明每种测试是否纳入 CI，以及原因
+3. cli_interface 必须检查参数风格一致性
+4. error_handling 必须定义错误码和恢复策略`
 
 const implementTmpl = `你是一个高级软件工程师。请根据以下方案实现代码。
 
@@ -182,16 +216,42 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 
 ## 审查要求
 
-只报告**确定的 bug 和安全漏洞**，不要报告以下内容：
+### 必须检查（严格）
+
+1. **测试覆盖缺口**
+   - 并发安全测试（如多线程访问同一资源）
+   - 边界条件测试（空值、极值、循环边界）
+   - 深度/递归限制测试（搜索深度、继承链深度）
+
+2. **CLI 接口一致性**
+   - 参数风格是否统一（全用 --flag 或混合 positional）
+   - 命名是否一致（--id vs --from vs --input）
+
+3. **错误处理完整性**
+   - 错误码是否定义
+   - 恢复策略是否说明
+   - 边界错误是否处理
+
+4. **跨函数逻辑一致性**
+   - 工具函数/辅助函数是否在所有需要的地方都被调用
+   - 同类操作（如多个入口函数）是否使用了一致的前置处理步骤
+   - 如果函数 A 和函数 B 做类似的事，A 有某个关键步骤而 B 没有，标记为 P1
+
+5. **方案 ↔ 实现完整性**
+   - 逐条对照最终方案的设计要求，检查是否都已实现
+   - 方案中提到的算法/排序/校验步骤是否在代码中体现
+   - 缺失的方案要求标记为 P1
+
+### 不报告（避免噪音）
+
 - 设计选择和代码风格偏好（除非明显违反 Go 惯例）
-- build tag、测试组织方式、CI 配置（这些是项目维护者的决定）
 - 理论上的竞态条件（GitHub Actions concurrency group 已在 workflow 层面防护）
 - 你不确定的推测（如"可能会..."、"也许..."）
 
 ## 分级标准
 
 - P0：运行时必然崩溃（nil panic、死循环、数据丢失）
-- P1：特定条件下的 bug（边界情况、错误处理遗漏）
+- P1：特定条件下的 bug（边界情况、错误处理遗漏、跨函数逻辑不一致、方案要求未实现）
 - P2：可以改进但不影响正确性
 
 ## 验证要求
@@ -201,6 +261,10 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 - 确认问题确实存在（不要猜测 build tag 或 API 行为）
 - 如果涉及外部系统行为（如 GitHub API），标明"需确认"
 
+**approved 判定规则（必须严格遵守）：**
+**- 存在任何 P0 或 P1 问题 → 必须设 approved=false**
+**- 只有 P2 问题或无问题 → 设 approved=true**
+
 {{- if .ReviewComment}}
 
 ## 讨论回应要求
@@ -209,10 +273,7 @@ PR 历史中包含之前的 review 和回复。你必须：
 1. 逐条检查之前提出的每个问题，确认是否已修复
 2. 对于 implementer 反驳的问题（认为不是 bug），明确表态你是否接受其解释
 3. **resolved_items 是必填字段，不能为空数组**——必须逐条列出每个历史问题的结论
-
-**approved 判定规则：**
-**- 当 resolved_items 中所有条目都是"已修复"或"接受解释"，且无新的 P0/P1 问题时 → 必须设 approved=true**
-**- 当 resolved_items 中有任何"仍需修改"的条目，或存在新的 P0/P1 问题时 → 必须设 approved=false**
+4. 当 resolved_items 中有"仍需修改"的条目 → 也必须设 approved=false
 {{- end}}
 
 **最终输出格式（必须严格遵守）：**

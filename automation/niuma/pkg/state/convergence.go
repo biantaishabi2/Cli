@@ -57,6 +57,7 @@ type ConvergenceInput struct {
 	DiscussionSummary *marker.Marker // 可为 nil
 	ConvergeWarning   *marker.Marker // 可为 nil
 	WarningTime       time.Time      // 预警评论的创建时间
+	AIShouldFinish    bool           // AI 建议结束讨论（discussion summary 中的 should_finish）
 }
 
 // Check 纯函数：根据输入数据检查收敛条件
@@ -71,6 +72,11 @@ func (c *ConvergenceChecker) Check(input *ConvergenceInput) ConvergeResult {
 		case "/hold":
 			return NotConverged
 		}
+	}
+
+	// 1. AI 建议收敛：discussion summary 中 should_finish=true
+	if input.AIShouldFinish {
+		return ShouldFinalize
 	}
 
 	// 2. 轮次收敛：讨论汇总更新 ≥ MaxRounds 次
@@ -125,6 +131,7 @@ func (m *Machine) CheckConvergence(ctx context.Context, checker *ConvergenceChec
 	}
 	if summaryMC != nil {
 		input.DiscussionSummary = summaryMC.Marker
+		input.AIShouldFinish = summaryMC.Marker.Finish
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker

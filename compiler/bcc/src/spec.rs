@@ -33,6 +33,8 @@ pub struct PortSpec {
 #[derive(Debug, Deserialize)]
 pub struct RelationSpec {
     pub callee: String,
+    // TODO: 实现调用模式校验（sync/async/parallel）
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     #[serde(default)]
     pub mode: Option<String>,
 }

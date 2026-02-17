@@ -6,13 +6,9 @@ on:
   pull_request_review:
     types: [submitted]
 
-defaults:
-  run:
-    working-directory: automation/niuma
-
 concurrency:
   group: niuma-iterate-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # AI 自审不通过 → 自动迭代
@@ -27,27 +23,18 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache-dependency-path: automation/niuma/go.sum
-
-      - name: Tidy modules
-        run: go mod tidy
-
-      - name: Build niuma
-        run: go build -o niuma ./cmd/niuma
+          fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
 
       - name: Find PR Number
         id: find_pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
-          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | tail -1)
+          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&sort=created&direction=desc" \
+            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | head -1)
           if [ -z "$PR_NUMBER" ]; then
             echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到 PR 号"
           fi
@@ -56,13 +43,13 @@ jobs:
       - name: Iterate on Review
         if: steps.find_pr.outputs.pr_number != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          ./niuma iterate \
+          niuma iterate \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
@@ -80,22 +67,13 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache-dependency-path: automation/niuma/go.sum
-
-      - name: Tidy modules
-        run: go mod tidy
-
-      - name: Build niuma
-        run: go build -o niuma ./cmd/niuma
+          fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
 
       - name: Extract Issue Number from PR
         id: extract
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
@@ -106,13 +84,13 @@ jobs:
       - name: Iterate on Review
         if: steps.extract.outputs.issue_number != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
           PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          ./niuma iterate \
+          niuma iterate \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \

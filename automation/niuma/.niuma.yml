@@ -1,0 +1,23 @@
+ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}"
+    codex:
+      cmd: "codex exec -C {workdir} - < {prompt_file}"
+      cmd_agent: "codex exec --full-auto -C {workdir} - < {prompt_file}"
+
+  # 讨论阶段：claude 和 codex 左右互搏
+  discussion:
+    providers:
+      - claude
+      - codex
+    consolidator: claude
+
+  # 实现阶段：claude
+  implementation:
+    provider: claude
+
+workflow:
+  allowed_prefixes:
+    - "automation/"

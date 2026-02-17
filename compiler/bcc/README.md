@@ -1,6 +1,57 @@
-# BCC — Backend Compiler
+# BCC — Architecture Compiler
 
-YAML 驱动的后端编译器，含源码结构提取、文档覆盖审计、架构矩阵校验和 BDD 场景生成。
+**架构编译器：把架构约束当作语法规则来检查**
+
+就像传统编译器检查语法错误，BCC 检查架构错误。
+从代码中提取结构，构建代码知识图谱，验证架构合规性，生成治理报告。
+
+## 架构编译器 vs 传统编译器
+
+| 维度 | 传统编译器 (GCC) | 架构编译器 (BCC) |
+|------|-----------------|-----------------|
+| 输入 | 源代码 | 代码结构 + 架构约束 |
+| 输出 | 机器码 | 架构合规性报告 + 测试 |
+| 核心 | 语法 → 语义 → 生成 | 结构 → 关系 → 验证 → 治理 |
+| 错误检查 | `if (x = 1)` 语法错误 | `api → dao` 架构违规 |
+
+## 编译流程
+
+```
+源代码 (Elixir/TS/PHP)
+    ↓ extract --batch          [Frontend: 解析代码结构]
+AST / 代码结构
+    ↓ graph-index build        [IR: 构建中间表示]
+代码知识图谱 (SQLite)          [中间表示: 持久化的代码关系]
+    ├── 函数调用图 (caller → callee)
+    ├── 类继承图 (parent → child)
+    └── 模块依赖图 (import → export)
+    ↓ arch validate            [Optimizer: 验证架构约束]
+架构约束检查
+    ├── 分层合规 (api→service→dao)
+    ├── 依赖方向 (core 不依赖 support)
+    └── 循环依赖检测
+    ↓ bugfix / bdd seed        [Backend: 生成测试]
+架构报告 / 违规列表 / BDD 场景
+    ↓ bddc                     [Runtime: 执行验证]
+可执行测试
+```
+
+## 核心价值
+
+1. **代码知识图谱**：持久化代码结构，支持跨版本查询
+2. **架构门禁**：CI 中自动检测架构违规，防止技术债务
+3. **影响分析**：改动前预知影响范围，降低重构风险
+4. **测试生成**：从 bugfix 历史自动生成回归测试
+
+## 与 BDDC 的关系
+
+```
+BCC (架构编译器)          BDDC (测试运行时)
+    ↓ 生成 BDD 场景    →      ↓ 执行测试
+   docs/bdd/**/*.dsl  →    ExUnit 测试报告
+```
+
+BCC 生成测试场景，BDDC 执行验证，形成"架构约束 → 测试验证"的闭环。
 
 ## 安装
 
@@ -144,6 +195,20 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 | Elixir | .ex .exs | .ex .exs | tree-sitter-elixir 0.3 |
 | TypeScript | .ts .tsx | .ts .tsx | tree-sitter-typescript 0.23 |
 | PHP | .php | .php | tree-sitter-php 0.24 |
+
+## Extract 架构
+
+`extract` 模块已拆分为三层，降低多语言实现重复代码：
+
+- `extract/adapter.rs`：语言适配器注册与分发，统一入口调度。
+- `extract/common.rs`：通用工具（Parser 初始化与解析、AST 节点取值、调用去重/排序、副作用默认值）。
+- `extract/testing.rs`：跨语言测试辅助函数，减少重复断言代码。
+
+新增语言时可按以下最小步骤接入：
+
+1. 实现 `extract/<lang>.rs` 的提取逻辑。
+2. 在 `extract/adapter.rs` 注册 `LanguageAdapter`。
+3. 复用 `extract/common.rs` 与 `extract/testing.rs`，避免重复样板。
 
 ## 测试
 

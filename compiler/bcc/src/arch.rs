@@ -38,7 +38,11 @@ struct SeedSpec {
 struct SeedModule {
     module_id: String,
     display_name: Option<String>,
+    // TODO: 实现分层校验（api/service/dao 调用合规性）
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     layer: Option<String>,
+    // TODO: 实现领域分析（core/support 模块比例统计）
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     domain_kind: Option<String>,
     precedence: Option<i64>,
     path_rules: Option<PathRules>,
@@ -185,6 +189,8 @@ struct StructureStat {
     directed_edges_possible: i64,
     directed_edges_actual: i64,
     directed_density_pct: f64,
+    // TODO: 在 arch report 中输出模块依赖权重分析
+    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     total_module_edge_weight: i64,
     bidirectional_pair_count: i64,
     bidirectional_pairs_top: Vec<(String, i64, i64, i64)>,
@@ -316,29 +322,49 @@ fn map_files_to_modules(
         ));
     }
 
-    let mut out = HashMap::new();
-    for rec in &ast.records {
-        let path = to_posix(&rec.sourcePath);
+    // 将路径匹配到模块的闭包
+    let match_path = |path: &str, compiled: &[(String, i64, Vec<Regex>, Vec<Regex>)]| -> Option<String> {
         let mut candidates: Vec<(String, i64)> = Vec::new();
-
-        for (module_id, precedence, includes, excludes) in &compiled {
-            let include_hit = includes.iter().any(|re| re.is_match(&path));
+        for (module_id, precedence, includes, excludes) in compiled {
+            let include_hit = includes.iter().any(|re| re.is_match(path));
             if !include_hit {
                 continue;
             }
-            let exclude_hit = excludes.iter().any(|re| re.is_match(&path));
+            let exclude_hit = excludes.iter().any(|re| re.is_match(path));
             if exclude_hit {
                 continue;
             }
             candidates.push((module_id.clone(), *precedence));
         }
-
         if candidates.is_empty() {
-            continue;
+            return None;
         }
-
         candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        out.insert(path, candidates[0].0.clone());
+        Some(candidates[0].0.clone())
+    };
+
+    let mut out = HashMap::new();
+
+    // 第一遍：通过 sourcePath 建立映射
+    for rec in &ast.records {
+        let path = to_posix(&rec.sourcePath);
+        if let Some(module_id) = match_path(&path, &compiled) {
+            out.insert(path, module_id);
+        }
+    }
+
+    // 第二遍：遍历 localDependencies 和 localCallTargets，
+    // 将依赖目标路径也通过 glob 规则匹配到模块（sourcePath 优先，不覆盖）
+    for rec in &ast.records {
+        for dep in rec.localDependencies.iter().chain(rec.localCallTargets.iter()) {
+            let dep_path = to_posix(dep);
+            if out.contains_key(&dep_path) {
+                continue;
+            }
+            if let Some(module_id) = match_path(&dep_path, &compiled) {
+                out.insert(dep_path, module_id);
+            }
+        }
     }
 
     Ok(out)
@@ -1713,5 +1739,117 @@ profiles:
         assert_eq!(report_code, 0);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// dep-path ≠ source-path 时，localDependencies 中的路径也能被 glob 匹配到正确模块
+    #[test]
+    fn map_files_includes_dep_paths_not_in_source_paths() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "TOOLS".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    precedence: Some(10),
+                    path_rules: Some(PathRules {
+                        include: vec!["gong/tools/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+                SeedModule {
+                    module_id: "COMPACTION".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    precedence: Some(10),
+                    path_rules: Some(PathRules {
+                        include: vec!["gong/truncate.ex".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        // sourcePath 是 gong/tools/truncate.ex，但 localDependencies 中引用 gong/truncate.ex
+        let ast = AstSnapshot {
+            source_count: 1,
+            records: vec![AstRecord {
+                sourcePath: "gong/tools/truncate.ex".to_string(),
+                localDependencies: vec!["gong/truncate.ex".to_string()],
+                localCallTargets: vec![],
+            }],
+        };
+
+        let ftm = map_files_to_modules(&seed, &ast).expect("map ok");
+
+        // sourcePath 应映射到 TOOLS
+        assert_eq!(ftm.get("gong/tools/truncate.ex"), Some(&"TOOLS".to_string()));
+        // dep 路径 gong/truncate.ex 应映射到 COMPACTION
+        assert_eq!(ftm.get("gong/truncate.ex"), Some(&"COMPACTION".to_string()));
+
+        // derive_actual_relations 应检测到 TOOLS → COMPACTION 边
+        let rels = derive_actual_relations(&ast, &ftm);
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].caller, "TOOLS");
+        assert_eq!(rels[0].callee, "COMPACTION");
+        assert_eq!(rels[0].import_edges, 1);
+    }
+
+    /// sourcePath 已有映射时，dep 路径不应覆盖
+    #[test]
+    fn dep_path_does_not_override_source_path() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "MOD_A".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    precedence: Some(10),
+                    path_rules: Some(PathRules {
+                        include: vec!["src/a/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+                SeedModule {
+                    module_id: "MOD_B".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    precedence: Some(10),
+                    path_rules: Some(PathRules {
+                        include: vec!["src/b/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        let ast = AstSnapshot {
+            source_count: 2,
+            records: vec![
+                AstRecord {
+                    sourcePath: "src/a/foo.ts".to_string(),
+                    localDependencies: vec!["src/b/bar.ts".to_string()],
+                    localCallTargets: vec![],
+                },
+                AstRecord {
+                    sourcePath: "src/b/bar.ts".to_string(),
+                    localDependencies: vec![],
+                    localCallTargets: vec![],
+                },
+            ],
+        };
+
+        let ftm = map_files_to_modules(&seed, &ast).expect("map ok");
+        // src/b/bar.ts 既是 sourcePath 又是 dep，应保持 sourcePath 的映射
+        assert_eq!(ftm.get("src/b/bar.ts"), Some(&"MOD_B".to_string()));
     }
 }

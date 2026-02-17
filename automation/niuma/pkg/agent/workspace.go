@@ -26,9 +26,8 @@ func NewWorkspace(repoDir string) *Workspace {
 }
 
 // Create 创建 worktree 并切出新分支
-// base 指定从哪个分支切出，为空时默认从 master
 // 返回 worktree 的绝对路径
-func (w *Workspace) Create(issueNum int, slug string, base string) (string, error) {
+func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 	wtPath := w.Path(issueNum)
 	branch := w.branchName(issueNum, slug)
 
@@ -42,22 +41,16 @@ func (w *Workspace) Create(issueNum int, slug string, base string) (string, erro
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// base 为空时默认 master
-	if base == "" {
-		base = "master"
-	}
-
-	// 确保 base 是最新的（有 origin 时 fetch）
+	// 确保 base 是最新的：有 origin 时用 origin/master，否则用本地 master
+	base := "master"
 	if w.hasOrigin() {
-		// fetch 失败不阻断，使用本地分支
-		_ = w.fetchRef(base)
-		// 优先使用 origin/base，不存在时回退到本地 base
-		if out, err := w.gitOutput("branch", "--list", "-r", "origin/"+base); err == nil && strings.TrimSpace(out) != "" {
-			base = "origin/" + base
+		if err := w.fetchRef("master"); err != nil {
+			return "", fmt.Errorf("fetch master 失败: %w", err)
 		}
+		base = "origin/master"
 	}
 
-	// git worktree add -b <branch> <path> <base>
+	// 基于 base 创建新分支的 worktree
 	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, base)
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
@@ -69,7 +62,8 @@ func (w *Workspace) Create(issueNum int, slug string, base string) (string, erro
 }
 
 // Checkout 从已有分支创建 worktree（不创建新分支）
-// 用于 iterate 阶段重建已被清理的 worktree（分支在 implement 阶段已创建）
+// 用于 iterate 阶段重建已被清理的 worktree（分支在 implement 阶段已创建并推到远程）
+// branch 参数不带 origin/ 前缀，如 "fix/37-slug"
 func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 	wtPath := w.Path(issueNum)
 
@@ -83,12 +77,31 @@ func (w *Workspace) Checkout(issueNum int, branch string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// git worktree add <path> <branch>（不带 -b，使用已有分支）
-	cmd := exec.Command("git", "worktree", "add", wtPath, branch)
-	cmd.Dir = w.RepoDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+	// 有 origin 时先 fetch，再用 -b 创建本地分支跟踪远程（确保 push 时有本地分支）
+	// 没有 origin 时直接用本地分支
+	if w.hasOrigin() {
+		if err := w.fetchRef(branch); err != nil {
+			return "", fmt.Errorf("fetch %s 失败: %w", branch, err)
+		}
+		// 删除可能残留的同名本地分支（避免 -b 冲突）
+		del := exec.Command("git", "branch", "-D", branch)
+		del.Dir = w.RepoDir
+		del.Run() // 忽略错误（分支不存在时会失败）
+
+		// 创建 worktree 并建立本地分支跟踪 origin/<branch>
+		cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "origin/"+branch)
+		cmd.Dir = w.RepoDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+		}
+	} else {
+		cmd := exec.Command("git", "worktree", "add", wtPath, branch)
+		cmd.Dir = w.RepoDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("checkout worktree 失败: %w\n%s", err, string(out))
+		}
 	}
 
 	return wtPath, nil
@@ -181,15 +194,4 @@ func (w *Workspace) fetchRef(ref string) error {
 		return fmt.Errorf("git fetch origin %s: %w\n%s", ref, err, string(out))
 	}
 	return nil
-}
-
-// gitOutput 执行 git 命令并返回输出
-func (w *Workspace) gitOutput(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = w.RepoDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }

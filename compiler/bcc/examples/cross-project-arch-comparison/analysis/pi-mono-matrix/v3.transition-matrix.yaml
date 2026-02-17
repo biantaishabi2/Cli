@@ -1,0 +1,79 @@
+version: v3
+kind: transition_contract
+base: ../../analysis/pi-mono-matrix/v3.target-matrix.yaml
+intent: Transition contract between current codebase and target
+notes:
+- temporary_allow_edges are tolerated only during migration
+- blocked_edges are immediate cleanup targets
+temporary_allow_edges:
+- caller: PI_AI_CORE
+  callee: PI_AI_PROVIDERS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CLI
+  callee: PI_CODING_TOOLS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_COMPACTION
+  callee: PI_CODING_CORE
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CORE
+  callee: PI_CODING_CLI
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CORE
+  callee: PI_CODING_COMPACTION
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CORE
+  callee: PI_CODING_EXTENSIONS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CORE
+  callee: PI_CODING_MODES
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_CORE
+  callee: PI_CODING_TOOLS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_EXTENSIONS
+  callee: PI_CODING_COMPACTION
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_EXTENSIONS
+  callee: PI_CODING_MODES
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_EXTENSIONS
+  callee: PI_CODING_TOOLS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_MODES
+  callee: PI_CODING_COMPACTION
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_MODES
+  callee: PI_CODING_EXTENSIONS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+- caller: PI_CODING_MODES
+  callee: PI_CODING_TOOLS
+  owner: tbd-owner
+  due: 2099-12-31
+  reason: derived from actual but not in target
+blocked_edges: []

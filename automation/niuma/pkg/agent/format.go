@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -90,6 +91,12 @@ func FormatFinalPlan(plan *FinalPlan, m *marker.Marker) string {
 	}
 
 	sb.WriteString("\n\n---\n*方案已定稿，即将开始实现。*")
+
+	// 嵌入 FileChanges JSON 到 HTML comment，供 implement 阶段 diff 对比
+	if len(plan.FileChanges) > 0 {
+		jsonBytes, _ := json.Marshal(plan.FileChanges)
+		sb.WriteString(fmt.Sprintf("\n<!-- PLAN_FILES:%s -->", string(jsonBytes)))
+	}
 
 	return sb.String()
 }

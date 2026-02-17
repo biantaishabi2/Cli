@@ -3,6 +3,10 @@
 [![CI](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/biantaishabi2/Cli/actions/workflows/ci.yml)
 [![Release](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml/badge.svg)](https://github.com/biantaishabi2/Cli/actions/workflows/release.yml)
 
+> **LLM 时代的软件工程操作系统**：taskctl 编排复杂工作流，BCC 编译代码结构为可验证的知识图谱，niuma 实现从需求到合并的全自动开发，BDDC 执行行为驱动测试。人定义规则和目标，机器处理执行和验证。
+>
+> 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
+
 承载多个命令行工具的 monorepo，按职责分类管理。
 
 ## 目录：工具总览
@@ -13,20 +17,40 @@
 
 ### `compiler/`
 - [**`bddc/`**](compiler/bddc/README.md)（Elixir escript，已就绪）
-  BDD 编译器：DSL 解析 → 指令集生成 → 运行时覆盖校验 → 测试代码生成。从 shop 项目迁入。
+  **BDD 测试运行时**：执行 BCC 生成的 BDD 场景，实现"测试即文档"。
+  与 BCC 配合形成闭环：BCC 生成场景 → BDDC 执行测试 → 报告结果。
 
 - [**`bcc/`**](compiler/bcc/README.md)（Rust + Elixir emit，已就绪）
-  后端编译器：六命令（compile/extract/trace/arch/bugfix/bdd seed）已就绪，覆盖新/旧代码闭环。
+  **架构编译器**：把架构约束当作语法规则来检查。
+  从代码提取结构，构建知识图谱，验证架构合规性，生成治理报告。
+  
+  核心价值：
+  - **代码知识图谱**：extract → SQLite 持久化 → 图搜索（caller/callee/继承/模块依赖）
+  - **架构门禁**：arch validate 检测分层违规（如 api→dao 跳过 service），CI 自动拦截
+  - **影响分析**：改动前预知影响范围，降低重构风险
+  - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行验证
+  
   典型链路：
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
-  - Brownfield：`extract -> arch validate -> export-module-map -> bugfix`
-  - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/) - 完整架构分析示例（1685 文件项目，含 v0→v3 版本演进）
+  - Brownfield：`extract -> graph-index build -> arch validate -> bugfix`
+  - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/)
 
 ### `automation/`
-- [**`niuma/`**](automation/niuma/README.md)（Go，已就绪）
-  AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterate。
-  支持多 AI provider "左右互搏"、worktree 隔离、review-iterate 自动交流。
-  给 Issue 加 `bot:fix` 标签即触发全流程，人只在 PR Review 阶段介入。
+- [**`niuma/`**](automation/niuma/README.md)（Go，Phase 2.5/2.6 已就绪，Phase 3 开发中）
+  **AI 驱动的全自动开发机器人**：Issue → Plan → Code → PR → Iterate → **Control（多 Issue 协调）**
+  
+  **Phase 2.5/2.6（已就绪）**：
+  - 多 AI provider "左右互搏"讨论
+  - worktree 隔离开发
+  - review-iterate 自动交流
+  - 给 Issue 加 `bot:fix` 标签即触发全流程
+  
+  **Phase 3（开发中）**：
+  - **多 Issue 协调** (`niuma control`)：扫描所有 bot:fix issue → AI 分析依赖 → 调 taskctl 建 DAG → 按序执行
+  - **Integration 分支**：批量 PR 合并验证，CI 联合检查冲突
+  - **批量合并**：按拓扑序自动合并，人只需最终批准
+  
+  人只做三件事：建 issue + 加 `bot:fix` 标签 + 最终批准合并。其他全部 AI 自动化。
 
 ## 快速上手
 
