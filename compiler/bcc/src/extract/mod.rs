@@ -21,6 +21,8 @@ pub struct FileRecord {
     pub calls: Vec<CallRecord>,
     #[serde(rename = "localCallTargets", default)]
     pub local_call_targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relation_hints: Vec<RelationHintRecord>,
     pub side_effects: SideEffects,
     /// 源码总行数
     pub loc_lines: usize,
@@ -46,6 +48,21 @@ pub struct ImportRecord {
 pub struct CallRecord {
     pub callee: String,
     pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationHintRecord {
+    pub target: String,
+    #[serde(default)]
+    pub call_type_hint: String,
+    #[serde(default)]
+    pub via: String,
+    #[serde(default)]
+    pub confidence: f64,
+    #[serde(default)]
+    pub detector: String,
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// 副作用分类标签——行为检测的分类维度，标注模块的外部交互类型
@@ -262,6 +279,12 @@ pub struct AstSnapshotRecord {
     pub localDependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub localCallTargets: Vec<String>,
+    #[serde(
+        rename = "relationHints",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub relation_hints: Vec<RelationHintRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calls: Vec<AstSnapshotCallRecord>,
     #[serde(default)]
@@ -362,11 +385,20 @@ pub fn run_batch(dir: &str, lang: &str, output: &str) {
         );
         // 过滤自引用（全文扫描会匹配到 defmodule 自身定义的模块名）
         local_deps.retain(|d| d != &rel_path);
+        let relation_hints = resolve_relation_hints(
+            &record,
+            root,
+            file_path,
+            &lang_norm,
+            &module_map,
+            &package_map,
+        );
 
         records.push(AstSnapshotRecord {
             sourcePath: rel_path,
             localDependencies: local_deps,
             localCallTargets: record.local_call_targets.clone(),
+            relation_hints,
             calls: normalized_snapshot_calls(&record),
             imports: normalized_snapshot_imports(&record),
             exports_count: record.exports.len(),
@@ -619,6 +651,70 @@ fn resolve_dependencies(
     deps
 }
 
+/// 将语言提取阶段产出的 relation_hints 归一化为可被 arch matrix 消费的目标路径。
+fn resolve_relation_hints(
+    record: &FileRecord,
+    root: &Path,
+    file_path: &Path,
+    lang: &str,
+    module_map: &HashMap<String, String>,
+    package_map: &HashMap<String, String>,
+) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+    let file_dir = file_path.parent().unwrap_or(root);
+
+    for hint in &record.relation_hints {
+        let target = hint.target.trim();
+        if target.is_empty() {
+            continue;
+        }
+
+        let resolved_target = match lang {
+            "typescript" => {
+                if target.starts_with('.') {
+                    resolve_ts_import(file_dir, target, root)
+                } else {
+                    resolve_ts_package_import(target, package_map)
+                }
+            }
+            "elixir" => module_map.get(target).cloned(),
+            _ => None,
+        };
+
+        let normalized = resolved_target.unwrap_or_else(|| target.replace('\\', "/"));
+        hints.push(RelationHintRecord {
+            target: normalized,
+            call_type_hint: hint.call_type_hint.clone(),
+            via: hint.via.clone(),
+            confidence: hint.confidence,
+            detector: hint.detector.clone(),
+            reason: hint.reason.clone(),
+        });
+    }
+
+    // 保持输出稳定，便于回归比较。
+    hints.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then_with(|| a.call_type_hint.cmp(&b.call_type_hint))
+            .then_with(|| a.via.cmp(&b.via))
+            .then_with(|| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    hints.dedup_by(|a, b| {
+        a.target == b.target
+            && a.call_type_hint == b.call_type_hint
+            && a.via == b.via
+            && (a.confidence - b.confidence).abs() < f64::EPSILON
+            && a.detector == b.detector
+            && a.reason == b.reason
+    });
+    hints
+}
+
 /// 剥离 Elixir 源码中的非代码文本（注释、文档字符串、普通字符串字面量）
 /// 返回清洗后的文本，用于 scan_elixir_module_refs 避免假依赖
 fn strip_elixir_non_code(content: &str) -> String {
@@ -797,12 +893,17 @@ fn scan_elixir_module_refs(content: &str) -> Vec<String> {
 /// 解析 TypeScript 相对导入为相对于 root 的路径
 fn resolve_ts_import(file_dir: &Path, specifier: &str, root: &Path) -> Option<String> {
     let base = file_dir.join(specifier);
+    let base_text = base.to_string_lossy();
     let candidates = [
         base.clone(),
-        base.with_extension("ts"),
-        base.with_extension("tsx"),
+        PathBuf::from(format!("{}.ts", base_text)),
+        PathBuf::from(format!("{}.tsx", base_text)),
+        PathBuf::from(format!("{}.mts", base_text)),
+        PathBuf::from(format!("{}.cts", base_text)),
         base.join("index.ts"),
         base.join("index.tsx"),
+        base.join("index.mts"),
+        base.join("index.cts"),
     ];
 
     // canonicalize root 以便 strip_prefix 正确工作

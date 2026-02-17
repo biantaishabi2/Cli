@@ -2,6 +2,7 @@ use bcc::extract::testing as extract_testing;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -670,7 +671,10 @@ fn validate_export_bdd_source_generates_yaml() {
 
     // forbidden 边 X->Y 生成 YAML（edge_class: blocked）
     let forbidden_yaml = bdd_dir.join("X_Y.yaml");
-    assert!(forbidden_yaml.exists(), "X_Y.yaml should exist for forbidden edge");
+    assert!(
+        forbidden_yaml.exists(),
+        "X_Y.yaml should exist for forbidden edge"
+    );
     let content = fs::read_to_string(&forbidden_yaml).expect("read X_Y.yaml");
     assert!(content.contains("module: X"));
     assert!(content.contains("edge_class: blocked"));
@@ -680,7 +684,10 @@ fn validate_export_bdd_source_generates_yaml() {
 
     // unexpected 边 B->A 生成 YAML（edge_class: temporary）
     let unexpected_yaml = bdd_dir.join("B_A.yaml");
-    assert!(unexpected_yaml.exists(), "B_A.yaml should exist for unexpected edge");
+    assert!(
+        unexpected_yaml.exists(),
+        "B_A.yaml should exist for unexpected edge"
+    );
     let content2 = fs::read_to_string(&unexpected_yaml).expect("read B_A.yaml");
     assert!(content2.contains("module: B"));
     assert!(content2.contains("edge_class: temporary"));
@@ -821,12 +828,7 @@ profiles:
     let yaml_count = fs::read_dir(&bdd_dir)
         .expect("read bdd_dir")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
     assert_eq!(yaml_count, 0, "no yaml files expected for clean actual");
 
@@ -847,10 +849,7 @@ fn validate_truncate_removed_full_output() {
     let mut forbid_edges = String::new();
     let mut actual_entries = Vec::new();
     for i in 0..15 {
-        forbid_edges.push_str(&format!(
-            "  - caller: M{}\n    callee: N{}\n",
-            i, i
-        ));
+        forbid_edges.push_str(&format!("  - caller: M{}\n    callee: N{}\n", i, i));
         actual_entries.push(format!(
             r#"  {{"caller":"M{}","callee":"N{}","import_edges":{},"call_edges":0,"total_edges":{}}}"#,
             i, i, i + 1, i + 1
@@ -911,10 +910,7 @@ profiles:
     max_bidirectional_pair_count: 999
 "#,
     );
-    write(
-        &actual,
-        &format!("[\n{}\n]", actual_entries.join(",\n")),
-    );
+    write(&actual, &format!("[\n{}\n]", actual_entries.join(",\n")));
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
@@ -945,12 +941,7 @@ profiles:
     let yaml_count = fs::read_dir(&bdd_dir)
         .expect("read bdd_dir")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
     assert!(
         yaml_count > 10,
@@ -959,8 +950,7 @@ profiles:
     );
 
     // 验证 markdown 报告中包含 "showing top 20 of" 标注
-    let report = fs::read_to_string(out.join("v3-validation-report.md"))
-        .expect("read report");
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
     assert!(
         report.contains("showing top 20 of"),
         "report should contain 'showing top 20 of' annotation"
@@ -1008,14 +998,13 @@ fn validate_export_then_bdd_seed_e2e() {
     let yaml_count = fs::read_dir(&bdd_source)
         .expect("read bdd_source")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "yaml").unwrap_or(false))
         .count();
-    assert!(yaml_count >= 2, "expected >= 2 yaml files, got {}", yaml_count);
+    assert!(
+        yaml_count >= 2,
+        "expected >= 2 yaml files, got {}",
+        yaml_count
+    );
 
     // 第二步：bdd seed --source <bdd_source> --step organize --force
     let seed_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -1037,22 +1026,29 @@ fn validate_export_then_bdd_seed_e2e() {
     assert!(seed_status.success());
 
     // 验证 bdd seed 输出结构
-    assert!(bdd_output.join("contexts").exists(), "contexts dir should exist");
-    assert!(bdd_output.join("scenarios").exists(), "scenarios dir should exist");
-    assert!(bdd_output.join("features").exists(), "features dir should exist");
-    assert!(bdd_output.join("coverage.md").exists(), "coverage.md should exist");
+    assert!(
+        bdd_output.join("contexts").exists(),
+        "contexts dir should exist"
+    );
+    assert!(
+        bdd_output.join("scenarios").exists(),
+        "scenarios dir should exist"
+    );
+    assert!(
+        bdd_output.join("features").exists(),
+        "features dir should exist"
+    );
+    assert!(
+        bdd_output.join("coverage.md").exists(),
+        "coverage.md should exist"
+    );
 
     // 验证 context JSON 被正确生成（X_Y.yaml → module=X, B_A.yaml → module=B）
     let contexts_dir = bdd_output.join("contexts");
     let context_files: Vec<_> = fs::read_dir(&contexts_dir)
         .expect("read contexts")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "json")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
         .collect();
     assert!(
         context_files.len() >= 2,
@@ -1072,26 +1068,31 @@ fn validate_export_then_bdd_seed_e2e() {
             found_module_b = true;
         }
     }
-    assert!(found_module_x, "should have a context with module=X (from X_Y.yaml)");
-    assert!(found_module_b, "should have a context with module=B (from B_A.yaml)");
+    assert!(
+        found_module_x,
+        "should have a context with module=X (from X_Y.yaml)"
+    );
+    assert!(
+        found_module_b,
+        "should have a context with module=B (from B_A.yaml)"
+    );
 
     // 验证 coverage.md 包含模块名
     let coverage = fs::read_to_string(bdd_output.join("coverage.md")).expect("read coverage");
-    assert!(coverage.contains("| X |") || coverage.contains("| x |"),
-        "coverage should mention module X");
-    assert!(coverage.contains("| B |") || coverage.contains("| b |"),
-        "coverage should mention module B");
+    assert!(
+        coverage.contains("| X |") || coverage.contains("| x |"),
+        "coverage should mention module X"
+    );
+    assert!(
+        coverage.contains("| B |") || coverage.contains("| b |"),
+        "coverage should mention module B"
+    );
 
     // 验证 features 目录下生成了 DSL 文件
     let feature_files: Vec<_> = fs::read_dir(bdd_output.join("features"))
         .expect("read features")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "dsl")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "dsl").unwrap_or(false))
         .collect();
     assert!(
         feature_files.len() >= 2,
@@ -1345,7 +1346,10 @@ fn batch_extract_error_tolerance() {
         &src.join("bad.ts"),
         "export const {{{ = syntax error @@@;\n",
     );
-    write(&src.join("ok.ts"), "export function ok() { return true; }\n");
+    write(
+        &src.join("ok.ts"),
+        "export function ok() { return true; }\n",
+    );
 
     let output = root.join("ast.json");
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -1513,10 +1517,13 @@ end
 end
 "#,
     );
-    write(&root.join("mix.exs"), r#"defmodule MyApp.MixProject do
+    write(
+        &root.join("mix.exs"),
+        r#"defmodule MyApp.MixProject do
   use Mix.Project
 end
-"#);
+"#,
+    );
 
     let output = root.join("ast.json");
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
@@ -1676,10 +1683,15 @@ fn batch_extract_monorepo_package_name_resolution() {
         .expect("find alpha record");
     let deps = alpha_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
-        deps.iter().any(|d| d.contains("beta") && d.contains("index.ts")),
+        deps.iter()
+            .any(|d| d.contains("beta") && d.contains("index.ts")),
         "alpha should depend on beta's index.ts via package name, got deps: {:?}",
         deps
     );
@@ -1705,8 +1717,14 @@ fn batch_extract_monorepo_with_exports_field() {
   }
 }"#,
     );
-    write(&pkg_b.join("src/index.ts"), "export function betaMain() { return 1; }\n");
-    write(&pkg_b.join("src/providers/index.ts"), "export function betaProvider() { return 2; }\n");
+    write(
+        &pkg_b.join("src/index.ts"),
+        "export function betaMain() { return 1; }\n",
+    );
+    write(
+        &pkg_b.join("src/providers/index.ts"),
+        "export function betaProvider() { return 2; }\n",
+    );
 
     write(
         &pkg_a.join("package.json"),
@@ -1742,7 +1760,11 @@ fn batch_extract_monorepo_with_exports_field() {
         .expect("find alpha record");
     let deps = alpha_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         deps.iter().any(|d| d.contains("providers")),
@@ -1798,7 +1820,11 @@ fn batch_extract_elixir_multi_alias_resolution() {
         .expect("find core record");
     let deps = core_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         deps.iter().any(|d| d.contains("tape.ex")),
@@ -1860,7 +1886,11 @@ fn batch_extract_elixir_skips_moduledoc_module_refs() {
         .expect("find gong.ex record");
     let deps = gong_record["localDependencies"]
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     assert!(
         !deps.iter().any(|d| d.contains("compaction.ex")),
@@ -1940,6 +1970,338 @@ fn batch_extract_then_arch_matrix_actual_edges_gt_zero() {
         "should have actual_edges=1 (ACCOUNT->BILLING), stdout: {}",
         stdout
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn gong_external_register_is_classified_as_external_registration() {
+    let root = temp_dir("bcc_gong_injection_bdd");
+    let lib = root.join("lib");
+    fs::create_dir_all(lib.join("gong/provider")).expect("create dirs");
+    write(
+        &lib.join("gong/application.ex"),
+        "defmodule Gong.Application do\n  def init do\n    ReqLLM.Providers.register(Gong.Provider.Anthropic)\n  end\nend\n",
+    );
+    write(
+        &lib.join("gong/provider/anthropic.ex"),
+        "defmodule Gong.Provider.Anthropic do\n  def run, do: :ok\nend\n",
+    );
+
+    let ast_file = root.join("ast.json");
+    let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "elixir",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run elixir extract");
+    assert!(extract.success());
+
+    let seed = root.join("seed.yaml");
+    write(
+        &seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: INFRA\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/application.ex\"]\n  - module_id: PROVIDERS\n    precedence: 10\n    path_rules:\n      include: [\"lib/gong/provider/**\"]\nrelations_expected: []\n",
+    );
+
+    let out = root.join("out");
+    let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix");
+    assert!(matrix.success());
+
+    let report = fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+    let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+    assert!(rows.as_array().unwrap().iter().any(|row| {
+        row["caller"] == "INFRA"
+            && row["callee"] == "PROVIDERS"
+            && row["call_type"] == "external_registration"
+    }));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pi_mono_module_imports_are_classified_as_framework_injection() {
+    let root = temp_dir("bcc_pi_mono_injection_bdd");
+    let api = root.join("apps/api/src");
+    let user = root.join("apps/user/src");
+    let prisma = root.join("apps/prisma/src");
+    fs::create_dir_all(&api).expect("create api");
+    fs::create_dir_all(&user).expect("create user");
+    fs::create_dir_all(&prisma).expect("create prisma");
+
+    write(
+        &api.join("app.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { UserModule } from '../../user/src/user.module';\nimport { PrismaModule } from '../../prisma/src/prisma.module';\n\n@Module({\n  imports: [UserModule, PrismaModule],\n})\nexport class AppModule {}\n",
+    );
+    write(&user.join("user.module.ts"), "export class UserModule {}\n");
+    write(
+        &prisma.join("prisma.module.ts"),
+        "export class PrismaModule {}\n",
+    );
+
+    let ast_file = root.join("ast.json");
+    let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run ts extract");
+    assert!(extract.success());
+
+    let seed = root.join("seed.yaml");
+    write(
+        &seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/**\"]\n  - module_id: USER\n    precedence: 10\n    path_rules:\n      include: [\"apps/user/src/**\"]\n  - module_id: PRISMA\n    precedence: 10\n    path_rules:\n      include: [\"apps/prisma/src/**\"]\nrelations_expected: []\n",
+    );
+
+    let out = root.join("out");
+    let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix");
+    assert!(matrix.success());
+
+    let report = fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+    let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+    assert!(rows.as_array().unwrap().iter().any(|row| {
+        row["caller"] == "API"
+            && row["callee"] == "USER"
+            && row["call_type"] == "framework_injection"
+    }));
+    assert!(rows.as_array().unwrap().iter().any(|row| {
+        row["caller"] == "API"
+            && row["callee"] == "PRISMA"
+            && row["call_type"] == "framework_injection"
+    }));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn bdd_injection_pipeline_is_stable_in_parallel_runs() {
+    let mut handles = Vec::new();
+
+    for i in 0..2 {
+        handles.push(thread::spawn(move || {
+            let root = temp_dir(&format!("bcc_bdd_injection_parallel_{}", i));
+            let api = root.join("apps/api/src");
+            let user = root.join("apps/user/src");
+            fs::create_dir_all(&api).expect("create api");
+            fs::create_dir_all(&user).expect("create user");
+
+            write(
+                &api.join("app.module.ts"),
+                "import { Module } from '@nestjs/common';\nimport { UserModule } from '../../user/src/user.module';\n\n@Module({\n  imports: [UserModule],\n})\nexport class AppModule {}\n",
+            );
+            write(&user.join("user.module.ts"), "export class UserModule {}\n");
+
+            let ast_file = root.join("ast.json");
+            let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                .args([
+                    "extract",
+                    &root.to_string_lossy(),
+                    "--batch",
+                    "--lang",
+                    "typescript",
+                    "--output",
+                    &ast_file.to_string_lossy(),
+                ])
+                .status()
+                .expect("run ts extract in parallel");
+            assert!(extract.success());
+
+            let seed = root.join("seed.yaml");
+            write(
+                &seed,
+                "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/**\"]\n  - module_id: USER\n    precedence: 10\n    path_rules:\n      include: [\"apps/user/src/**\"]\nrelations_expected: []\n",
+            );
+
+            let out = root.join("out");
+            let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                .args([
+                    "arch",
+                    "matrix",
+                    "--seed-file",
+                    &seed.to_string_lossy(),
+                    "--ast-file",
+                    &ast_file.to_string_lossy(),
+                    "--out-dir",
+                    &out.to_string_lossy(),
+                    "--version",
+                    "v3",
+                    "--emit",
+                    "all",
+                    "--detect-injection",
+                ])
+                .status()
+                .expect("run matrix in parallel");
+            assert!(matrix.success());
+
+            let report =
+                fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+            let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+            let rows = rows.as_array().expect("classification rows");
+            assert!(rows.iter().any(|row| {
+                row["caller"] == "API"
+                    && row["callee"] == "USER"
+                    && row["call_type"] == "framework_injection"
+            }));
+
+            let _ = fs::remove_dir_all(&root);
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread should not panic");
+    }
+}
+
+#[test]
+fn bdd_injection_pipeline_handles_deep_module_imports() {
+    let depth = 64usize;
+    let root = temp_dir("bcc_bdd_injection_deep");
+    let api = root.join("apps/api/src");
+    fs::create_dir_all(&api).expect("create api");
+
+    let mut app_module = String::from("import { Module } from '@nestjs/common';\n");
+    for i in 0..depth {
+        app_module.push_str(&format!(
+            "import {{ F{}Module }} from './f{}.module';\n",
+            i, i
+        ));
+    }
+    app_module.push_str("\n@Module({\n  imports: [");
+    for i in 0..depth {
+        if i > 0 {
+            app_module.push_str(", ");
+        }
+        app_module.push_str(&format!("F{}Module", i));
+    }
+    app_module.push_str("],\n})\nexport class AppModule {}\n");
+    write(&api.join("app.module.ts"), &app_module);
+
+    for i in 0..depth {
+        write(
+            &api.join(format!("f{}.module.ts", i)),
+            &format!("export class F{}Module {{}}\n", i),
+        );
+    }
+
+    let ast_file = root.join("ast.json");
+    let extract = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "extract",
+            &root.to_string_lossy(),
+            "--batch",
+            "--lang",
+            "typescript",
+            "--output",
+            &ast_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run ts extract");
+    assert!(extract.success());
+
+    let ast_content = fs::read_to_string(&ast_file).expect("read ast json");
+    let ast_json: serde_json::Value = serde_json::from_str(&ast_content).expect("parse ast json");
+    let app_record = ast_json["records"]
+        .as_array()
+        .and_then(|records| {
+            records.iter().find(|record| {
+                record["sourcePath"]
+                    .as_str()
+                    .map(|p| p.ends_with("apps/api/src/app.module.ts"))
+                    .unwrap_or(false)
+            })
+        })
+        .expect("app.module.ts record");
+    let hint_count = app_record["relationHints"]
+        .as_array()
+        .map(|h| {
+            h.iter()
+                .filter(|item| item["via"] == "@Module.imports")
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(hint_count, depth);
+
+    let seed = root.join("seed.yaml");
+    write(
+        &seed,
+        "version: v3\nsource_of_truth: test\nmodules:\n  - module_id: API\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/app.module.ts\"]\n  - module_id: FEATURE\n    precedence: 10\n    path_rules:\n      include: [\"apps/api/src/f*.module.ts\"]\nrelations_expected: []\n",
+    );
+
+    let out = root.join("out");
+    let matrix = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast_file.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+            "--detect-injection",
+        ])
+        .status()
+        .expect("run matrix");
+    assert!(matrix.success());
+
+    let report = fs::read_to_string(out.join("v3.relation-classification.json")).expect("read");
+    let rows: serde_json::Value = serde_json::from_str(&report).expect("parse report");
+    let rows = rows.as_array().expect("classification rows");
+    assert!(rows.iter().any(|row| {
+        row["caller"] == "API"
+            && row["callee"] == "FEATURE"
+            && row["call_type"] == "framework_injection"
+    }));
 
     let _ = fs::remove_dir_all(&root);
 }

@@ -131,6 +131,14 @@ bcc arch matrix \
   --out-dir docs/backend-trace/trace2contract/seed \
   --version v3 --emit all
 
+# 启用注入识别（MVP 内置规则）
+bcc arch matrix \
+  --seed-file docs/backend-trace/module-registry.seed.yaml \
+  --ast-file docs/backend-trace/artifacts/trace2contract/module-relations.json \
+  --out-dir docs/backend-trace/trace2contract/seed \
+  --version v3 --emit all \
+  --detect-injection
+
 # 2) 用实际关系回放并做门禁验证
 bcc arch validate \
   --target docs/backend-trace/trace2contract/seed/v3.target-matrix.yaml \
@@ -156,6 +164,18 @@ bcc arch report \
   --summary docs/backend-trace/artifacts/trace2contract/versions/v3-draft/summary.json \
   --out docs/backend-trace/artifacts/trace2contract/versions/v3-draft/architecture-debt.md
 ```
+
+`--detect-injection` 开启后会额外输出 `<version>.relation-classification.json`，每条边包含：
+`caller` / `callee` / `call_type` / `via` / `confidence` / `source` / `detector` / `reason`。
+
+`call_type` 当前支持：
+- `direct_call`：默认直接调用（含低置信度自动降级）
+- `framework_injection`：框架注入（Elixir `use`、NestJS `@Module` / `@Injectable` / `@Controller`）
+- `external_registration`：外部库注册（如 `ExternalLib(.Providers).register(InternalModule)`）
+
+兼容性说明：
+- 默认不开启 `--detect-injection`，输出与既有 `target/transition/gates` 一致。
+- `--injection-patterns` 参数已预留，MVP 阶段仅占位，不参与规则匹配。
 
 ### bcc bdd seed
 
