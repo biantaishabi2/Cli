@@ -6,13 +6,13 @@ on:
   issue_comment:
     types: [created]
 
-concurrency:
-  group: niuma-discuss-${{ github.event.issue.number }}
-  cancel-in-progress: true
-
 jobs:
   discussion-check:
     runs-on: self-hosted
+    timeout-minutes: 30
+    concurrency:
+      group: niuma-discuss-${{ github.event.issue.number }}
+      cancel-in-progress: true
     if: >
       github.event.issue.pull_request == null &&
       (
@@ -47,5 +47,5 @@ jobs:
           if echo "$LABELS" | grep -q "bot:needs-discussion"; then
             "$NIUMA_BIN" discuss \
               --repo "$REPO" \
-              --issue "$ISSUE_NUMBER" || true
+              --issue "$ISSUE_NUMBER"
           fi
