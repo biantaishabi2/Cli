@@ -71,14 +71,14 @@ func TestWorkspace_CreateAndRemove(t *testing.T) {
 	repoDir := initTestRepo(t)
 	ws := NewWorkspace(repoDir)
 
-	// 创建 worktree（从 master，base 传空字符串）
-	wtPath, err := ws.Create(1, "test-fix", "")
+	// 创建 worktree（默认从 master）
+	wtPath, err := ws.Create(1, "test-fix")
 	require.NoError(t, err)
 	assert.DirExists(t, wtPath)
 	assert.True(t, ws.Exists(1))
 
 	// 重复创建应幂等
-	wtPath2, err := ws.Create(1, "test-fix", "")
+	wtPath2, err := ws.Create(1, "test-fix")
 	require.NoError(t, err)
 	assert.Equal(t, wtPath, wtPath2)
 
