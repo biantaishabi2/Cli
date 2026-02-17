@@ -4,19 +4,27 @@
 
 **负重前行，代码自动生成**
 
-AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterate
+AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterate → **Control（多 Issue 协调）**
 
 ## 定位
 
 `niuma`（牛马）是 Cli 工具链的自动化层，负责：
 
+**单 Issue 全流程（Phase 2.5/2.6 已就绪）**：
 - 接收 Issue（bug/feature/refactor）
 - 自动分析并输出方案（含测试场景）
 - 自动改代码、加测试
 - 自动提 PR
 - 根据 Review 意见自动迭代
 
-人只在 PR Review 阶段介入，其他全部自动化。
+**多 Issue 协调（Phase 3 开发中）**：
+- 扫描所有带 `bot:fix` 标签的 Issue
+- AI 分析 Issue 间依赖关系
+- 调用 taskctl 构建 DAG（有依赖的自动编排执行顺序）
+- 构建 Integration 分支（批量 PR 联合验证）
+- 按拓扑序批量合并到 master
+
+**人只做三件事**：建 issue + 加 `bot:fix` 标签 + 最终批准合并。其他全部 AI 自动化。
 
 ## 目录结构
 
@@ -27,7 +35,12 @@ automation/niuma/
 ├── cmd/niumad/          # 服务入口（可选）
 │   └── main.go
 ├── pkg/
-│   ├── agent/           # 核心逻辑（状态机/计划/实现）
+│   ├── agent/           # 核心逻辑（状态机/计划/实现/迭代）
+│   ├── control/         # 【Phase 3】多 Issue 协调控制层
+│   │   ├── taskctl.go   # taskctl CLI 封装
+│   │   ├── analyzer.go  # AI 依赖分析
+│   │   ├── integration.go # Integration 分支构建
+│   │   └── controller.go # 协调循环核心
 │   ├── github/          # GitHub API 封装
 │   ├── ai/              # AI Provider 抽象（支持 Kimi/OpenCode/Codex 等多后端）
 │   ├── state/           # Label 状态机
@@ -38,6 +51,8 @@ automation/niuma/
 ```
 
 ## 核心流程
+
+### 单 Issue 流程（Phase 2.5/2.6）
 
 ```
 Issue 创建
@@ -55,6 +70,34 @@ PR Created
 Iterate（根据意见自动修复）
     ↓
 Merged
+```
+
+### 多 Issue 协调流程（Phase 3）
+
+```
+扫描所有 bot:fix Issues
+    ↓
+AI 分析依赖关系（depends-on + LLM 推理）
+    ↓
+调 taskctl 构建 DAG（blocked_by 设置）
+    ↓
+按拓扑序推进 ready tasks（复用单 Issue 流程）
+    ↓
+收集 PRs → 构建 Integration 分支
+    ↓
+CI 联合验证（检测冲突）
+    ↓
+人批准 → 按拓扑序批量合并
+    ↓
+全部 Merged
+```
+
+### Control 命令
+
+```bash
+niuma control run      # 执行一次完整协调循环
+niuma control status   # 查看全局状态（DAG + 各 task 进度）
+niuma control merge --issues 40,41,42  # 人批准后批量合并
 ```
 
 ## 状态机（Labels）
