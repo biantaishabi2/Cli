@@ -84,6 +84,11 @@ fn compare_hint(a: &RelationHint, b: &RelationHint) -> Ordering {
         .then_with(|| a.detector.len().cmp(&b.detector.len()))
 }
 
+fn hint_passes_threshold(hint: &RelationHint) -> bool {
+    hint.call_type_hint == CallType::DirectCall
+        || normalize_confidence(hint.confidence) >= MIN_HINT_CONFIDENCE
+}
+
 fn direct_classification(
     caller: &str,
     callee: &str,
@@ -113,22 +118,31 @@ pub fn classify_edge(
         return direct_classification(caller, callee, "fallback", "detect_injection disabled");
     }
 
-    let Some(best) = hints.iter().max_by(|a, b| compare_hint(a, b)) else {
+    let Some(best) = hints
+        .iter()
+        .filter(|hint| hint_passes_threshold(hint))
+        .max_by(|a, b| compare_hint(a, b))
+    else {
+        if let Some(best_non_direct) = hints
+            .iter()
+            .filter(|hint| hint.call_type_hint != CallType::DirectCall)
+            .max_by(|a, b| compare_hint(a, b))
+        {
+            let confidence = normalize_confidence(best_non_direct.confidence);
+            return direct_classification(
+                caller,
+                callee,
+                "fallback",
+                &format!(
+                    "hint confidence {:.2} below threshold {:.2}",
+                    confidence, MIN_HINT_CONFIDENCE
+                ),
+            );
+        }
         return direct_classification(caller, callee, "fallback", "no relation hint");
     };
 
     let confidence = normalize_confidence(best.confidence);
-    if best.call_type_hint != CallType::DirectCall && confidence < MIN_HINT_CONFIDENCE {
-        return direct_classification(
-            caller,
-            callee,
-            "fallback",
-            &format!(
-                "hint confidence {:.2} below threshold {:.2}",
-                confidence, MIN_HINT_CONFIDENCE
-            ),
-        );
-    }
 
     RelationClassification {
         caller: caller.to_string(),
@@ -222,6 +236,32 @@ mod tests {
         let row = classify_edge("A", "B", &hints, true);
         assert_eq!(row.call_type, CallType::DirectCall);
         assert_eq!(row.source, "fallback");
+    }
+
+    #[test]
+    fn low_confidence_high_priority_does_not_override_high_confidence_candidate() {
+        let hints = vec![
+            RelationHint {
+                target: "a".to_string(),
+                call_type_hint: CallType::FrameworkInjection,
+                via: "@Module.imports".to_string(),
+                confidence: 0.95,
+                detector: "ts.nest".to_string(),
+                reason: "framework".to_string(),
+            },
+            RelationHint {
+                target: "a".to_string(),
+                call_type_hint: CallType::ExternalRegistration,
+                via: "ReqLLM.Providers.register".to_string(),
+                confidence: 0.20,
+                detector: "elixir.register".to_string(),
+                reason: "weak register".to_string(),
+            },
+        ];
+
+        let row = classify_edge("A", "B", &hints, true);
+        assert_eq!(row.call_type, CallType::FrameworkInjection);
+        assert_eq!(row.source, "ast_hint");
     }
 
     #[test]

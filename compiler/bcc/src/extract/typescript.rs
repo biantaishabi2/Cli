@@ -22,6 +22,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     let mut calls = Vec::new();
     let mut local_call_symbols: HashSet<String> = HashSet::new();
     let mut import_aliases: HashMap<String, String> = HashMap::new();
+    let mut import_alias_sources: HashMap<String, HashSet<String>> = HashMap::new();
     let mut declarations: usize = 0;
 
     let mut cursor = root.walk();
@@ -31,6 +32,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         &mut exports,
         &mut imports,
         &mut import_aliases,
+        &mut import_alias_sources,
         &mut calls,
         &mut local_call_symbols,
         &mut declarations,
@@ -73,7 +75,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     }
     let mut local_call_targets: Vec<String> = local_call_targets_set.into_iter().collect();
     local_call_targets.sort_unstable();
-    let relation_hints = detect_relation_hints(content, &import_aliases);
+    let relation_hints = detect_relation_hints(content, &import_alias_sources);
 
     let side_effects = SideEffects {
         has_async: content.contains("async ") || content.contains("await "),
@@ -108,6 +110,7 @@ fn extract_ts_recursive(
     exports: &mut Vec<ExportRecord>,
     imports: &mut Vec<ImportRecord>,
     import_aliases: &mut HashMap<String, String>,
+    import_alias_sources: &mut HashMap<String, HashSet<String>>,
     calls: &mut Vec<CallRecord>,
     local_call_symbols: &mut HashSet<String>,
     declarations: &mut usize,
@@ -223,7 +226,11 @@ fn extract_ts_recursive(
                         let import_text = common::node_text(node, source);
                         let aliases = extract_import_aliases(&import_text);
                         for alias in aliases {
-                            import_aliases.insert(alias, spec.clone());
+                            import_aliases.insert(alias.clone(), spec.clone());
+                            import_alias_sources
+                                .entry(alias)
+                                .or_default()
+                                .insert(spec.clone());
                         }
                         imports.push(ImportRecord {
                             specifier: spec,
@@ -284,6 +291,7 @@ fn extract_ts_recursive(
                     exports,
                     imports,
                     import_aliases,
+                    import_alias_sources,
                     calls,
                     local_call_symbols,
                     declarations,
@@ -545,7 +553,7 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 
 fn detect_relation_hints(
     content: &str,
-    import_aliases: &HashMap<String, String>,
+    import_alias_sources: &HashMap<String, HashSet<String>>,
 ) -> Vec<RelationHintRecord> {
     let mut hints = Vec::new();
     let module_re = Regex::new(r"(?s)@Module\s*\(\s*\{(.*?)\}\s*\)").expect("valid module regex");
@@ -572,11 +580,12 @@ fn detect_relation_hints(
             };
             for symbol_cap in symbol_re.captures_iter(items) {
                 let symbol = symbol_cap.as_str();
-                let Some(specifier) = import_aliases.get(symbol) else {
+                let Some(specifier) = resolve_unique_hint_target(symbol, import_alias_sources)
+                else {
                     continue;
                 };
                 hints.push(RelationHintRecord {
-                    target: specifier.clone(),
+                    target: specifier,
                     call_type_hint: "framework_injection".to_string(),
                     via: format!("@Module.{}", field),
                     confidence,
@@ -612,11 +621,11 @@ fn detect_relation_hints(
             let Some(symbol) = ty_cap.get(1).map(|m| m.as_str()) else {
                 continue;
             };
-            let Some(specifier) = import_aliases.get(symbol) else {
+            let Some(specifier) = resolve_unique_hint_target(symbol, import_alias_sources) else {
                 continue;
             };
             hints.push(RelationHintRecord {
-                target: specifier.clone(),
+                target: specifier,
                 call_type_hint: "framework_injection".to_string(),
                 via: format!("@{} constructor", decorator),
                 confidence: 0.86,
@@ -639,6 +648,39 @@ fn detect_relation_hints(
             && a.detector == b.detector
     });
     hints
+}
+
+fn resolve_unique_hint_target(
+    symbol: &str,
+    import_alias_sources: &HashMap<String, HashSet<String>>,
+) -> Option<String> {
+    let candidates = import_alias_sources.get(symbol)?;
+    if candidates.len() == 1 {
+        return candidates.iter().next().cloned();
+    }
+
+    let mut internal = candidates
+        .iter()
+        .filter(|spec| is_internal_specifier(spec))
+        .cloned()
+        .collect::<Vec<_>>();
+    internal.sort_unstable();
+    internal.dedup();
+    if internal.len() == 1 {
+        return internal.into_iter().next();
+    }
+
+    None
+}
+
+fn is_internal_specifier(specifier: &str) -> bool {
+    let spec = specifier.trim();
+    spec.starts_with("./")
+        || spec.starts_with("../")
+        || spec.starts_with('/')
+        || spec.starts_with("@app/")
+        || spec.starts_with("@/")
+        || spec.starts_with("~/")
 }
 
 #[cfg(test)]
