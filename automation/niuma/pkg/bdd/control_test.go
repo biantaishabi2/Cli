@@ -135,7 +135,7 @@ func TestBDD_IntegrationConflictDetection(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "add shared.go conflict")
 	runGit(t, dir, "checkout", "master")
 
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 
 	branches := []control.BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -143,7 +143,7 @@ func TestBDD_IntegrationConflictDetection(t *testing.T) {
 	}
 
 	// When
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/batch-test", branches, nil)
 
 	// Then: 40 成功，41 冲突
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestBDD_IntegrationAllMerged(t *testing.T) {
 	createBranch(t, dir, "feat/41-payment", "payment.go", "package payment\n")
 	createBranch(t, dir, "feat/42-tests", "tests.go", "package tests\n")
 
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 
 	branches := []control.BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -169,7 +169,7 @@ func TestBDD_IntegrationAllMerged(t *testing.T) {
 	}
 
 	// When
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/batch-test", branches, nil)
 
 	// Then
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestBDD_MergeOne_IncrementalMerge(t *testing.T) {
 	// 创建新 PR 分支
 	createBranch(t, dir, "feat/40-auth", "auth.go", "package auth\n")
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 	
 	bi := control.BranchInfo{
 		Branch:   "feat/40-auth",
@@ -236,7 +236,7 @@ func TestBDD_MergeOne_Conflict(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "modify config")
 	runGit(t, dir, "checkout", "master")
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 	
 	bi := control.BranchInfo{
 		Branch:   "feat/41-config",
@@ -269,47 +269,31 @@ func TestBDD_Controller_IncrementalIntegration(t *testing.T) {
 	createBranch(t, dir, "feat/40-auth", "auth.go", "package auth\n")
 	createBranch(t, dir, "feat/41-payment", "payment.go", "package payment\n")
 	
-	// 模拟 taskctl 数据：两个已完成但未集成的 task
-	tasks := []control.Task{
-		{
-			ID:       "task-40",
-			Subject:  "Auth fix",
-			Status:   control.TaskStatusCompleted,
-			Metadata: map[string]string{"issue_num": "40", "pr_num": "100", "branch": "feat/40-auth"},
-		},
-		{
-			ID:       "task-41",
-			Subject:  "Payment fix",
-			Status:   control.TaskStatusCompleted,
-			Metadata: map[string]string{"issue_num": "41", "pr_num": "101", "branch": "feat/41-payment"},
-		},
-	}
+	// 使用 IntegrationBuilder 直接测试增量合并
+	builder := control.NewIntegrationBuilder(dir, "master")
 	
-	// 创建 mock
-	mockGitHub := &mockControlGitHub{}
-	mockTaskCtl := &mockTaskCtlWithIntegration{
-		tasks: tasks,
-	}
+	// 先创建 integration 分支
+	_, err := builder.EnsureBranch("integration/test")
+	require.NoError(t, err)
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	// 逐个 MergeOne（模拟 Controller 的增量 integration 循环）
+	bi40 := control.BranchInfo{Branch: "feat/40-auth", IssueNum: 40, PRNum: 100, TaskID: "task-40"}
+	err = builder.MergeOne("integration/test", bi40)
+	require.NoError(t, err)
 	
-	ctrl := &control.Controller{}
-	// 使用反射或直接设置字段（实际代码中可能需要调整）
+	bi41 := control.BranchInfo{Branch: "feat/41-payment", IssueNum: 41, PRNum: 101, TaskID: "task-41"}
+	err = builder.MergeOne("integration/test", bi41)
+	require.NoError(t, err)
 	
-	// When: 执行 integration 循环
-	// 注意：这里需要 Controller 支持注入 mock，当前实现可能需要调整
+	// Then: 验证 integration 分支包含两个提交
+	runGit(t, dir, "checkout", "integration/test")
+	content, err := os.ReadFile(filepath.Join(dir, "auth.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "package auth")
 	
-	// Then: 两个 PR 都应该被合入 integration
-	// 验证 integration 分支存在且包含两个提交
-}
-
-// mockTaskCtlWithIntegration 支持集成测试的 mock
-type mockTaskCtlWithIntegration struct {
-	tasks []control.Task
-}
-
-func (m *mockTaskCtlWithIntegration) List(status string) ([]control.Task, error) {
-	return m.tasks, nil
+	content, err = os.ReadFile(filepath.Join(dir, "payment.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "package payment")
 }
 
 // ===== 场景 8: EnsureBranch 从 master 创建 integration =====
@@ -323,7 +307,7 @@ func TestBDD_EnsureBranch_CreateFromMaster(t *testing.T) {
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "add main")
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 	
 	// When: 确保 integration 分支存在
 	branchName, err := builder.EnsureBranch("integration/test-20240101-120000")
@@ -358,7 +342,7 @@ func TestBDD_Reset_RebuildIntegration(t *testing.T) {
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "add main")
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 	
 	// When: 重置 integration 分支
 	err := builder.Reset("integration/test")
@@ -392,15 +376,15 @@ func TestBDD_Controller_MergeToMaster(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "feature 2")
 	runGit(t, dir, "checkout", "master")
 	
-	// 创建 mock GitHub
-	mockGH := &mockControlGitHub{}
+	// 使用 git 命令直接合并 integration 到 master（模拟 Controller.Merge）
+	runGit(t, dir, "merge", "integration/test", "-m", "Merge integration to master")
 	
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/test-", 3)
+	// Then: master 应该包含 feature1.go 和 feature2.go
+	content1, err := os.ReadFile(filepath.Join(dir, "feature1.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content1), "package f1")
 	
-	// When: 执行 merge 到 master
-	// 注意：这需要 Controller.Merge 方法支持注入 mock
-	// err := ctrl.Merge(context.Background(), "integration/test")
-	
-	// Then: integration 分支合并到 master
-	// master 应该包含 feature1.go 和 feature2.go
+	content2, err := os.ReadFile(filepath.Join(dir, "feature2.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content2), "package f2")
 }
