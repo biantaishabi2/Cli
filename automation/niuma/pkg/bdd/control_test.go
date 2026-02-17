@@ -39,22 +39,20 @@ func setupTestRepo(t *testing.T) string {
 	dir := t.TempDir()
 
 	cmds := [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "master"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
-		{"git", "checkout", "-b", "master"},
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644))
-	cmds = append(cmds,
-		[]string{"git", "add", "."},
-		[]string{"git", "commit", "-m", "initial"},
-	)
 	for _, args := range cmds {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "cmd=%v output=%s", args, string(out))
 	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "initial")
 	return dir
 }
 
@@ -135,7 +133,7 @@ func TestBDD_IntegrationConflictDetection(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "add shared.go conflict")
 	runGit(t, dir, "checkout", "master")
 
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 
 	branches := []control.BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -143,7 +141,7 @@ func TestBDD_IntegrationConflictDetection(t *testing.T) {
 	}
 
 	// When
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/test-conflict", branches, nil)
 
 	// Then: 40 成功，41 冲突
 	require.NoError(t, err)
@@ -160,7 +158,7 @@ func TestBDD_IntegrationAllMerged(t *testing.T) {
 	createBranch(t, dir, "feat/41-payment", "payment.go", "package payment\n")
 	createBranch(t, dir, "feat/42-tests", "tests.go", "package tests\n")
 
-	builder := control.NewIntegrationBuilder(dir, "master", "integration/batch-", 3)
+	builder := control.NewIntegrationBuilder(dir, "master")
 
 	branches := []control.BranchInfo{
 		{Branch: "feat/40-auth", IssueNum: 40},
@@ -169,7 +167,7 @@ func TestBDD_IntegrationAllMerged(t *testing.T) {
 	}
 
 	// When
-	result, err := builder.Build(branches, nil)
+	result, err := builder.Build("integration/test-all-merged", branches, nil)
 
 	// Then
 	require.NoError(t, err)
