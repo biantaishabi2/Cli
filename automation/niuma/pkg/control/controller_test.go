@@ -1138,6 +1138,86 @@ func TestController_ProcessIssue_IdempotencyConcurrentDuplicateUsesLatestSnapsho
 	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
 }
 
+func TestController_ProcessIssue_RepeatedWakeupLockThenIdempotencyNoop(t *testing.T) {
+	repo := "biantaishabi2/Cli"
+	phase := "fix"
+	inputHash := "abc"
+	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
+	taskctl, logPath := newTaskCtlStatefulIdempotencyClient(t, idempotencyKey)
+	mockGH := newMockGitHubOps()
+	store := newInMemoryIssueLockStore()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	mockGH.replaceLabelHook = func() {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+	}
+
+	ctrlA := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         store,
+		issueLockTTL:       5 * time.Minute,
+		issueLockHeartbeat: 0,
+		ownerID:            "runner-a",
+	}
+	ctrlB := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         store,
+		issueLockTTL:       5 * time.Minute,
+		issueLockHeartbeat: 0,
+		ownerID:            "runner-b",
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+		},
+	}
+
+	firstErrCh := make(chan error, 1)
+	go func() {
+		firstErrCh <- ctrlA.ProcessIssue(context.Background(), task)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首个唤醒进入副作用阶段超时")
+	}
+
+	lockOutput := captureControllerStdout(t, func() {
+		err := ctrlB.ProcessIssue(context.Background(), task)
+		require.NoError(t, err)
+	})
+	assert.Contains(t, lockOutput, "[control][issue_lock]")
+	assert.Contains(t, lockOutput, "status=skipped")
+	assert.Contains(t, lockOutput, "reason=locked")
+
+	close(release)
+	require.NoError(t, <-firstErrCh)
+
+	idempotencyOutput := captureControllerStdout(t, func() {
+		err := ctrlB.ProcessIssue(context.Background(), task)
+		require.NoError(t, err)
+	})
+	assert.Contains(t, idempotencyOutput, "[control][idempotency]")
+	assert.Contains(t, idempotencyOutput, "action=no-op")
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+}
+
 func TestController_ProcessIssue_IssueLockTTLRecoveryAfterSkip(t *testing.T) {
 	taskctl, logPath := newTaskCtlLoggingClient(t)
 	mockGH := newMockGitHubOps()

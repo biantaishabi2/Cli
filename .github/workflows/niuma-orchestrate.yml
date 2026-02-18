@@ -5,18 +5,21 @@ on:
     types: [labeled]
   pull_request:
     types: [closed]
+  repository_dispatch:
+    types: [niuma.task.completed]
   schedule:
     - cron: '*/5 * * * *'  # 每5分钟检查一次
 
 concurrency:
-  group: niuma-orchestrate-${{ github.event.issue.number || github.event.pull_request.number || 'schedule' }}
+  group: niuma-orchestrate-${{ github.event.issue.number || github.event.client_payload.source_issue || github.event.pull_request.number || github.event.client_payload.trigger_pr || github.event_name }}
   cancel-in-progress: false
 
 jobs:
   orchestrate:
     runs-on: self-hosted
     if: >
-      (github.event_name == 'issues' && (github.event.label.name == 'bot:orchestrate' || github.event.label.name == 'bot:pr-reviewable')) ||
+      (github.event_name == 'issues' && (github.event.label.name == 'bot:orchestrate' || github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable')) ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
       github.event_name == 'schedule'
     permissions:
       issues: write
@@ -25,6 +28,47 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.NIUMA_PAT }}
+
+      - name: Resolve Trigger Context
+        id: trigger_context
+        run: |
+          trigger_source="${GITHUB_EVENT_NAME}"
+          issue=""
+          event_id="${{ github.event.client_payload.event_id }}"
+
+          if [ "$GITHUB_EVENT_NAME" = "issues" ]; then
+            trigger_source="issues:${{ github.event.label.name }}"
+            issue="${{ github.event.issue.number }}"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            trigger_source="pull_request:${{ github.event.action }}"
+            issue="${{ github.event.pull_request.number }}"
+          elif [ "$GITHUB_EVENT_NAME" = "repository_dispatch" ]; then
+            payload_source="${{ github.event.client_payload.event_source }}"
+            if [ -n "$payload_source" ]; then
+              trigger_source="repository_dispatch:${payload_source}"
+            else
+              trigger_source="repository_dispatch:${{ github.event.action }}"
+            fi
+            issue="${{ github.event.client_payload.source_issue }}"
+            if [ -z "$issue" ]; then
+              issue="${{ github.event.client_payload.trigger_pr }}"
+            fi
+          fi
+
+          if [ -z "$issue" ]; then
+            issue="schedule"
+          fi
+          if [ -z "$event_id" ]; then
+            event_id="run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
+          fi
+
+          triggered_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "trigger_source=$trigger_source" >> "$GITHUB_OUTPUT"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+          echo "event_id=$event_id" >> "$GITHUB_OUTPUT"
+          echo "triggered_at=$triggered_at" >> "$GITHUB_OUTPUT"
+          printf '[orchestrate.trigger] {"trigger_source":"%s","issue":"%s","event_id":"%s","triggered_at":"%s"}\n' \
+            "$trigger_source" "$issue" "$event_id" "$triggered_at"
 
       - name: Build niuma from current commit
         run: |
@@ -94,6 +138,23 @@ jobs:
         run: |
           echo "integration gate 仍在等待结果，本轮不推进后续自动流程。"
 
+      - name: Log Orchestrate Result
+        if: always()
+        run: |
+          result="success"
+          if [ "${{ steps.control_run.outcome }}" != "success" ]; then
+            result="control_failed"
+          elif [ -n "${{ steps.gate_status.outputs.integration_gate_status }}" ]; then
+            result="gate_${{ steps.gate_status.outputs.integration_gate_status }}"
+          fi
+
+          printf '[orchestrate.result] {"trigger_source":"%s","issue":"%s","event_id":"%s","triggered_at":"%s","result":"%s"}\n' \
+            "${{ steps.trigger_context.outputs.trigger_source }}" \
+            "${{ steps.trigger_context.outputs.issue }}" \
+            "${{ steps.trigger_context.outputs.event_id }}" \
+            "${{ steps.trigger_context.outputs.triggered_at }}" \
+            "$result"
+
   close-after-integration-merge:
     runs-on: self-hosted
     if: >
@@ -119,13 +180,74 @@ jobs:
           echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
 
       - name: Close Sub/Parent Issues After Integration Merge
+        id: close_merged
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           WORKSPACE: ${{ github.workspace }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -o pipefail
+          output_file="$(mktemp)"
           "$NIUMA_BIN" control close-merged \
             --repo "$REPO" \
             --repo-dir "$WORKSPACE" \
-            --pr "$PR_NUMBER"
+            --pr "$PR_NUMBER" | tee "$output_file"
+
+          source_issues_json="[]"
+          source_issue=""
+          issues_line="$(grep -Eo '目标 issues: \[[0-9 ]+\]' "$output_file" | tail -n 1 || true)"
+          if [ -n "$issues_line" ]; then
+            issues_raw="$(echo "$issues_line" | sed -E 's/.*\[([^]]*)\].*/\1/')"
+            source_issues_json="$(printf '%s\n' "$issues_raw" | tr ' ' '\n' | sed '/^$/d' | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)')"
+            source_issue="$(echo "$source_issues_json" | jq -r '.[0] // ""')"
+          fi
+
+          echo "source_issue=$source_issue" >> "$GITHUB_OUTPUT"
+          echo "source_issues=$source_issues_json" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch orchestrate wakeup
+        id: dispatch_orchestrate_wakeup
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SOURCE_ISSUE: ${{ steps.close_merged.outputs.source_issue }}
+          SOURCE_ISSUES: ${{ steps.close_merged.outputs.source_issues }}
+        run: |
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          event_id="pr-${PR_NUMBER}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          source_issues_json="$SOURCE_ISSUES"
+          if [ -z "$source_issues_json" ]; then
+            source_issues_json="[]"
+          fi
+
+          request_payload="$(jq -nc \
+            --arg source_issue "$SOURCE_ISSUE" \
+            --arg source_issues "$source_issues_json" \
+            --arg trigger_pr "$PR_NUMBER" \
+            --arg completed_at "$completed_at" \
+            --arg event_id "$event_id" \
+            '{
+              event_type: "niuma.task.completed",
+              client_payload: {
+                source_issue: (if ($source_issue | length) > 0 then ($source_issue | tonumber) else null end),
+                source_issues: (($source_issues | fromjson) // []),
+                trigger_pr: ($trigger_pr | tonumber),
+                completed_at: $completed_at,
+                event_source: "close-after-integration-merge",
+                event_id: $event_id
+              }
+            }'
+          )"
+
+          gh api "repos/$REPO/dispatches" --method POST --input - <<<"$request_payload"
+          printf '[orchestrate.dispatch] {"trigger_source":"close-after-integration-merge","issue":"%s","event_id":"%s","triggered_at":"%s","result":"dispatched"}\n' \
+            "${SOURCE_ISSUE:-$PR_NUMBER}" "$event_id" "$completed_at"
+
+      - name: Warn Dispatch Failure
+        if: steps.dispatch_orchestrate_wakeup.outcome != 'success'
+        run: |
+          echo "::warning title=orchestrate dispatch failed::niuma.task.completed dispatch failed for PR #${{ github.event.pull_request.number }}; schedule fallback remains active."

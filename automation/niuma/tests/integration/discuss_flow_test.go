@@ -210,6 +210,7 @@ type controlFlowGitHubMock struct {
 	stateTransitions  map[int]int
 	replaceLabelCalls map[int]int
 	replaceLabelHook  func(issueNumber int)
+	blockedBy         map[int]map[int]struct{}
 }
 
 func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
@@ -227,6 +228,7 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 		commentBodies:     map[int][]string{},
 		stateTransitions:  map[int]int{},
 		replaceLabelCalls: map[int]int{},
+		blockedBy:         map[int]map[int]struct{}{},
 	}
 }
 
@@ -323,6 +325,39 @@ func (m *controlFlowGitHubMock) CloseIssue(_ context.Context, issueNumber int) e
 }
 
 func (m *controlFlowGitHubMock) MergePR(_ context.Context, _ int, _ string) error {
+	return nil
+}
+
+func (m *controlFlowGitHubMock) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	blockedSet := m.blockedBy[issueNumber]
+	result := make([]int, 0, len(blockedSet))
+	for dep := range blockedSet {
+		result = append(result, dep)
+	}
+	return result, nil
+}
+
+func (m *controlFlowGitHubMock) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.blockedBy[issueNumber]; !ok {
+		m.blockedBy[issueNumber] = make(map[int]struct{})
+	}
+	m.blockedBy[issueNumber][blockedByIssueNumber] = struct{}{}
+	return nil
+}
+
+func (m *controlFlowGitHubMock) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if blockedSet, ok := m.blockedBy[issueNumber]; ok {
+		delete(blockedSet, blockedByIssueNumber)
+	}
 	return nil
 }
 
