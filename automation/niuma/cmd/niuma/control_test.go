@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
@@ -144,6 +145,126 @@ func TestGitHubControlOps_ResolvePRMetadata_APIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "github api down")
 }
 
+func TestGitHubControlOps_ResolvePRReviewStatus_Conflicting(t *testing.T) {
+	client := &stubGitHubControlClient{
+		findMarkerResp: &gh.MarkerComment{
+			Marker: &marker.Marker{
+				Type:  marker.TypePRCreated,
+				Issue: 321,
+				PR:    123,
+			},
+		},
+		prs: map[int]*ghapi.PullRequest{
+			123: {
+				State:          ghapi.Ptr("open"),
+				MergeableState: ghapi.Ptr("dirty"),
+				Head: &ghapi.PullRequestBranch{
+					Ref: ghapi.Ptr("feat/321-fix"),
+					SHA: ghapi.Ptr("abc123"),
+				},
+			},
+		},
+	}
+	ops := &gitHubControlOps{client: client}
+
+	status, err := ops.ResolvePRReviewStatus(context.Background(), 321)
+	require.NoError(t, err)
+	assert.Equal(t, control.PRMergeableConflicting, status.Mergeable)
+	assert.Equal(t, "DIRTY", status.MergeStateStatus)
+	assert.Equal(t, "abc123", status.HeadSHA)
+}
+
+func TestGitHubControlOps_ResolvePRReviewStatus_MergeableFalseIsConflicting(t *testing.T) {
+	client := &stubGitHubControlClient{
+		findMarkerResp: &gh.MarkerComment{
+			Marker: &marker.Marker{
+				Type:  marker.TypePRCreated,
+				Issue: 321,
+				PR:    123,
+			},
+		},
+		prs: map[int]*ghapi.PullRequest{
+			123: {
+				State:          ghapi.Ptr("open"),
+				Mergeable:      ghapi.Ptr(false),
+				MergeableState: ghapi.Ptr("clean"),
+				Head: &ghapi.PullRequestBranch{
+					Ref: ghapi.Ptr("feat/321-fix"),
+					SHA: ghapi.Ptr("abc123"),
+				},
+			},
+		},
+	}
+	ops := &gitHubControlOps{client: client}
+
+	status, err := ops.ResolvePRReviewStatus(context.Background(), 321)
+	require.NoError(t, err)
+	assert.Equal(t, control.PRMergeableConflicting, status.Mergeable)
+	assert.Equal(t, "CLEAN", status.MergeStateStatus)
+}
+
+func TestResolveIntegrationGateMaxRetries(t *testing.T) {
+	value, err := resolveIntegrationGateMaxRetries(-1, "")
+	require.NoError(t, err)
+	assert.Equal(t, 2, value)
+
+	value, err = resolveIntegrationGateMaxRetries(-1, "4")
+	require.NoError(t, err)
+	assert.Equal(t, 4, value)
+
+	value, err = resolveIntegrationGateMaxRetries(6, "4")
+	require.NoError(t, err)
+	assert.Equal(t, 6, value)
+}
+
+func TestResolveIntegrationGateMaxRetries_InvalidEnv(t *testing.T) {
+	_, err := resolveIntegrationGateMaxRetries(-1, "bad")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NIUMA_INTEGRATION_GATE_MAX_RETRIES")
+}
+
+func TestResolvePRConflictRetryThreshold(t *testing.T) {
+	value, err := resolvePRConflictRetryThreshold(-1, "")
+	require.NoError(t, err)
+	assert.Equal(t, 3, value)
+
+	value, err = resolvePRConflictRetryThreshold(-1, "5")
+	require.NoError(t, err)
+	assert.Equal(t, 5, value)
+
+	value, err = resolvePRConflictRetryThreshold(2, "5")
+	require.NoError(t, err)
+	assert.Equal(t, 2, value)
+}
+
+func TestResolvePRConflictRetryThreshold_InvalidEnv(t *testing.T) {
+	_, err := resolvePRConflictRetryThreshold(-1, "-2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NIUMA_PR_CONFLICT_RETRY_THRESHOLD")
+}
+
+func TestResolvePRConflictUnknownBackoffs(t *testing.T) {
+	backoffs, err := resolvePRConflictUnknownBackoffs("", "")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}, backoffs)
+
+	backoffs, err = resolvePRConflictUnknownBackoffs("", "1s,2s")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{1 * time.Second, 2 * time.Second}, backoffs)
+
+	backoffs, err = resolvePRConflictUnknownBackoffs("3s,4s", "1s,2s")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{3 * time.Second, 4 * time.Second}, backoffs)
+}
+
+func TestResolvePRConflictUnknownBackoffs_InvalidInput(t *testing.T) {
+	_, err := resolvePRConflictUnknownBackoffs("", "bad")
+	require.Error(t, err)
+
+	_, err = resolvePRConflictUnknownBackoffs("", "1s,-2s")
+	require.Error(t, err)
+}
+
 func TestWorkflowGateStatusJQ_ObjectTasksPending(t *testing.T) {
 	status := runWorkflowGateStatusJQ(t, `{"version":"1","tasks":{"a":{"metadata":{"integration_gate_status":"pending"}}}}`)
 	assert.Equal(t, "pending", status)
@@ -214,6 +335,18 @@ func (s *stubGitHubControlClient) GetIssue(_ context.Context, _ int) (*ghapi.Iss
 	return nil, nil
 }
 
+func (s *stubGitHubControlClient) UpdateIssueBody(_ context.Context, _ int, _ string) error {
+	return nil
+}
+
+func (s *stubGitHubControlClient) ListComments(_ context.Context, _ int) ([]*ghapi.IssueComment, error) {
+	return nil, nil
+}
+
+func (s *stubGitHubControlClient) AddComment(_ context.Context, _ int, _ string) (*ghapi.IssueComment, error) {
+	return &ghapi.IssueComment{}, nil
+}
+
 func (s *stubGitHubControlClient) CloseIssue(_ context.Context, _ int) error {
 	return nil
 }
@@ -228,6 +361,18 @@ func (s *stubGitHubControlClient) ReplaceLabel(_ context.Context, _ int, _, _ st
 
 func (s *stubGitHubControlClient) ReplaceLabelIfPresent(_ context.Context, _ int, _, _ string) (bool, error) {
 	return false, nil
+}
+
+func (s *stubGitHubControlClient) ListIssueBlockedBy(_ context.Context, _ int) ([]int, error) {
+	return nil, nil
+}
+
+func (s *stubGitHubControlClient) AddIssueBlockedBy(_ context.Context, _, _ int) error {
+	return nil
+}
+
+func (s *stubGitHubControlClient) RemoveIssueBlockedBy(_ context.Context, _, _ int) error {
+	return nil
 }
 
 func (s *stubGitHubControlClient) FindMarker(_ context.Context, _ int, _ marker.Type) (*gh.MarkerComment, error) {

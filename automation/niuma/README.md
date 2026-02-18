@@ -83,6 +83,10 @@ Merged
     ↓
 写入 taskctl blocked_by（先落盘）
     ↓
+单向同步 DAG -> GitHub 依赖展示
+    ↓
+定时巡检对账（漂移自动纠偏）
+    ↓
 计算并推进 ready tasks（后放行）
     ↓
 收集 PRs → 构建 Integration 分支
@@ -99,13 +103,40 @@ CI 联合验证（检测冲突）
 - `parent` 仅表示结构归属与收口关系，不隐式作为执行依赖边
 - `ready` 判定前必须完成 `blocked_by` 写入；写入失败时本轮跳过放行，等待下轮重试
 
+### DAG SSOT 边界
+
+- 调度判定（ready/blocking）只读 `taskctl DAG + task metadata`，不读取 GitHub 展示依赖
+- 同步方向严格为 `DAG -> GitHub`，禁止 `GitHub -> DAG` 自动回写
+- 展示层同步失败仅记录日志与状态，不阻塞 control 主流程
+- 同步状态文件：`automation/niuma/.state/dag_sync.json`
+
 ### Control 命令
 
 ```bash
 niuma control run      # 执行一次完整协调循环
 niuma control status   # 查看全局状态（DAG + 各 task 进度）
+niuma control dag-sync --dry-run      # 手动触发 DAG 同步（仅预览）
+niuma control dag-reconcile --dry-run # 手动触发巡检纠偏（仅预览）
 niuma control merge --issues 40,41,42  # 人批准后批量合并
 ```
+
+`control.dag_sync` 默认配置：
+
+```yaml
+control:
+  dag_sync:
+    poll_interval: 5m
+    max_retry: 3
+    retry_backoff: [10s, 30s, 60s]
+    rate_limit_rps: 10
+    timeout: 30s
+    skipped_edge_threshold: 20
+```
+
+`niuma control run` 关键参数：
+- `--integration-gate-max-retries`（默认 2）
+- `--pr-conflict-retry-threshold`（默认 3）
+- `--pr-conflict-unknown-backoffs`（默认 `5s,15s,30s`）
 
 ## 状态机（Labels）
 
@@ -121,6 +152,15 @@ niuma control merge --issues 40,41,42  # 人批准后批量合并
 | `bot:pr-needs-fix` | 自检/审核失败，需修复 |
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
+
+### `pr-reviewable` 冲突自动回退
+
+- control 循环会持续检查 `bot:pr-reviewable` 对应 PR 的 `mergeable / mergeStateStatus / headSha`
+- 命中冲突条件（`mergeable=CONFLICTING` 或 `mergeStateStatus in {DIRTY,BLOCKED}`）时，自动回退到 `bot:pr-needs-fix` 并触发 iterate
+- `UNKNOWN` 状态会按指数退避短重试（默认 `5s,15s,30s`），仍为 UNKNOWN 则保守 no-op
+- issue body 维护 `<!-- PR_CONFLICT_RETRY:N -->` 计数；PR 恢复可合并时自动重置为 `0`
+- 超过阈值（默认 `N=3`）自动升级 `needs-human`，停止自动冲突回退循环
+- 冲突评论带去重标记 `<!-- BOT:CONFLICT_DETECTED sha:<headSha> -->`，同一 headSha 仅评论一次
 
 ## Discussion 协议（当前）
 
@@ -162,6 +202,7 @@ export GITHUB_TOKEN="ghp_xxx"
 ```bash
 export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
 export NIUMA_TEST_TOKEN="ghp_xxx"
+export GH_TOKEN="$NIUMA_TEST_TOKEN"
 ```
 
 ### 3. 手动触发（调试）
@@ -271,6 +312,71 @@ Final Plan 必须包含可执行的测试：
 ```
 
 每次执行前检查同类 marker，找到则更新或退出。
+
+## 幂等与重入锁
+
+### 行为矩阵
+
+| 场景 | 输入 | 预期 |
+|------|------|------|
+| 重复触发 | 同一 issue 在 1s 内连续触发 3 次 `bot:orchestrate`（或等价触发） | `state_transition_count == 1`，首个触发生效，后续 `no-op/skipped` |
+| 并发 control run | 人工并发执行两次 `niuma control run` 处理同一 issue | 单 issue 串行，仅持锁实例推进；未持锁实例无副作用 |
+| 锁过期恢复 | 执行中断后等待 `LockTTL + Buffer` 再触发 | 锁自动过期，后续触发可恢复推进 |
+
+### 回归时间常量
+
+- `LockTTL = 30s`
+- `ConcurrencyWaitMax = 60s`
+- `LockRecoveryBuffer = 5s`
+
+### 观测日志字段
+
+- 锁竞争/释放：`[control][issue_lock] issue=<num> status=<succeeded|failed|skipped> reason=<locked|heartbeat_refresh_failed|release_failed|...> owner=<owner> lock_owner=<owner> expires_at=<rfc3339>`
+- 幂等决策：`[control][idempotency] repo=<owner/repo> issue=<num> phase=<phase> key=<sha256> action=<recorded|no-op>`
+
+建议将日志与 taskctl 记录同时留档，以便确认“未持锁实例无副作用（无状态推进）”。
+
+### 实仓演练（`biantaishabi2/Cli-niuma-test`）
+
+```bash
+export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
+export NIUMA_TEST_TOKEN="ghp_xxx"
+export GH_TOKEN="$NIUMA_TEST_TOKEN"
+
+# 1) 重复触发：同一 issue 快速重复触发
+for i in 1 2 3; do
+  gh issue comment <ISSUE_NUM> --repo "$NIUMA_TEST_REPO" --body "bot:orchestrate"
+done
+
+# 2) 并发触发：并行执行两次 control run
+(niuma control run --repo "$NIUMA_TEST_REPO") &
+(niuma control run --repo "$NIUMA_TEST_REPO") &
+wait
+
+# 3) 锁恢复：模拟中断后等待 TTL+Buffer 再触发
+# （先人工中断一次执行，再等待 35s）
+sleep 35
+niuma control run --repo "$NIUMA_TEST_REPO"
+```
+
+### 证据回填模板
+
+```markdown
+### sub(#314) 回归记录
+
+- 场景: <重复触发 | 并发 control run | 锁恢复>
+- Issue: #<num>
+- 触发时间(UTC): <YYYY-MM-DDTHH:MM:SSZ>
+- 运行链接: <workflow/job URL>
+- 关键观测:
+  - issue_lock: <status/reason/owner/lock_owner>
+  - idempotency: <action/key>
+  - state_transition_count: <num>
+- 结论: <通过|失败>
+- 原因/备注: <失败原因或补充说明>
+```
+
+完成实仓演练后，请将以上记录回填 parent issue `#314`。
 
 ## 与 Cli 其他工具的关系
 

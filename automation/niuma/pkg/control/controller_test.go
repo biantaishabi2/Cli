@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
@@ -18,26 +21,58 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues                []IssueInfo
-	issuesByLabel         map[string][]IssueInfo
-	issuesByNumber        map[int]IssueInfo
-	mergedPRs             []int
-	mergeError            map[int]error
-	resolvePRMetadata     map[int]PRMetadata
-	resolvePRMetadataErr  map[int]error
-	resolvePRMetadataCall []int
-	replaceLabelCalls     []replaceLabelCall
-	replaceLabelError     map[string]error
-	replaceLabelPairError map[string]error
-	replaceLabelFails     map[string]int
-	closeIssueCalls       []int
-	closeIssueError       map[int]error
+	issues                    []IssueInfo
+	issuesByLabel             map[string][]IssueInfo
+	issuesByNumber            map[int]IssueInfo
+	getIssueOverride          map[int]IssueInfo
+	mergedPRs                 []int
+	mergeError                map[int]error
+	resolvePRMetadata         map[int]PRMetadata
+	resolvePRMetadataErr      map[int]error
+	resolvePRMetadataCall     []int
+	resolvePRReviewStatus     map[int]PRReviewStatus
+	resolvePRReviewStatusSeq  map[int][]PRReviewStatus
+	resolvePRReviewStatusIdx  map[int]int
+	resolvePRReviewStatusErr  map[int]error
+	resolvePRReviewStatusCall []int
+	replaceLabelCalls         []replaceLabelCall
+	replaceLabelError         map[string]error
+	replaceLabelPairError     map[string]error
+	replaceLabelFails         map[string]int
+	updateIssueBodyCalls      []updateIssueBodyCall
+	listCommentBodies         map[int][]string
+	addIssueCommentCalls      []addIssueCommentCall
+	closeIssueCalls           []int
+	closeIssueError           map[int]error
+	blockedBy                 map[int]map[int]struct{}
+	listBlockedByErr          map[int]error
+	addBlockedByErr           map[string]error
+	removeBlockedByErr        map[string]error
+	addBlockedByCalls         []blockedByCall
+	removeBlockedByCalls      []blockedByCall
+	listBlockedByCalls        int
+	replaceLabelHook          func()
 }
 
 type replaceLabelCall struct {
 	issueNumber int
 	oldLabel    string
 	newLabel    string
+}
+
+type updateIssueBodyCall struct {
+	issueNumber int
+	body        string
+}
+
+type addIssueCommentCall struct {
+	issueNumber int
+	body        string
+}
+
+type blockedByCall struct {
+	issueNumber          int
+	blockedByIssueNumber int
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
@@ -47,16 +82,26 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	}
 
 	return &mockGitHubOps{
-		issues:                issues,
-		issuesByLabel:         make(map[string][]IssueInfo),
-		issuesByNumber:        issuesByNumber,
-		mergeError:            make(map[int]error),
-		resolvePRMetadata:     make(map[int]PRMetadata),
-		resolvePRMetadataErr:  make(map[int]error),
-		replaceLabelError:     make(map[string]error),
-		replaceLabelPairError: make(map[string]error),
-		replaceLabelFails:     make(map[string]int),
-		closeIssueError:       make(map[int]error),
+		issues:                   issues,
+		issuesByLabel:            make(map[string][]IssueInfo),
+		issuesByNumber:           issuesByNumber,
+		getIssueOverride:         make(map[int]IssueInfo),
+		mergeError:               make(map[int]error),
+		resolvePRMetadata:        make(map[int]PRMetadata),
+		resolvePRMetadataErr:     make(map[int]error),
+		resolvePRReviewStatus:    make(map[int]PRReviewStatus),
+		resolvePRReviewStatusSeq: make(map[int][]PRReviewStatus),
+		resolvePRReviewStatusIdx: make(map[int]int),
+		resolvePRReviewStatusErr: make(map[int]error),
+		replaceLabelError:        make(map[string]error),
+		replaceLabelPairError:    make(map[string]error),
+		replaceLabelFails:        make(map[string]int),
+		listCommentBodies:        make(map[int][]string),
+		closeIssueError:          make(map[int]error),
+		blockedBy:                make(map[int]map[int]struct{}),
+		listBlockedByErr:         make(map[int]error),
+		addBlockedByErr:          make(map[string]error),
+		removeBlockedByErr:       make(map[string]error),
 	}
 }
 
@@ -86,11 +131,43 @@ func (m *mockGitHubOps) ListIssuesByState(_ context.Context, state string) ([]Is
 }
 
 func (m *mockGitHubOps) GetIssue(_ context.Context, issueNumber int) (IssueInfo, error) {
+	if issue, ok := m.getIssueOverride[issueNumber]; ok {
+		return issue, nil
+	}
 	issue, ok := m.issuesByNumber[issueNumber]
 	if !ok {
 		return IssueInfo{}, fmt.Errorf("issue #%d not found", issueNumber)
 	}
 	return issue, nil
+}
+
+func (m *mockGitHubOps) UpdateIssueBody(_ context.Context, issueNumber int, body string) error {
+	m.updateIssueBodyCalls = append(m.updateIssueBodyCalls, updateIssueBodyCall{
+		issueNumber: issueNumber,
+		body:        body,
+	})
+	issue, ok := m.issuesByNumber[issueNumber]
+	if ok {
+		issue.Body = body
+		m.issuesByNumber[issueNumber] = issue
+	}
+	return nil
+}
+
+func (m *mockGitHubOps) ListCommentBodies(_ context.Context, issueNumber int) ([]string, error) {
+	bodies := m.listCommentBodies[issueNumber]
+	copied := make([]string, len(bodies))
+	copy(copied, bodies)
+	return copied, nil
+}
+
+func (m *mockGitHubOps) AddIssueComment(_ context.Context, issueNumber int, body string) error {
+	m.addIssueCommentCalls = append(m.addIssueCommentCalls, addIssueCommentCall{
+		issueNumber: issueNumber,
+		body:        body,
+	})
+	m.listCommentBodies[issueNumber] = append(m.listCommentBodies[issueNumber], body)
+	return nil
 }
 
 func (m *mockGitHubOps) CloseIssue(_ context.Context, issueNumber int) error {
@@ -123,6 +200,25 @@ func (m *mockGitHubOps) ResolvePRMetadata(_ context.Context, issueNumber int) (P
 		return metadata, nil
 	}
 	return PRMetadata{}, ErrPRMarkerNotFound
+}
+
+func (m *mockGitHubOps) ResolvePRReviewStatus(_ context.Context, issueNumber int) (PRReviewStatus, error) {
+	m.resolvePRReviewStatusCall = append(m.resolvePRReviewStatusCall, issueNumber)
+	if err, ok := m.resolvePRReviewStatusErr[issueNumber]; ok {
+		return PRReviewStatus{}, err
+	}
+	if statuses, ok := m.resolvePRReviewStatusSeq[issueNumber]; ok && len(statuses) > 0 {
+		idx := m.resolvePRReviewStatusIdx[issueNumber]
+		if idx >= len(statuses) {
+			idx = len(statuses) - 1
+		}
+		m.resolvePRReviewStatusIdx[issueNumber] = idx + 1
+		return statuses[idx], nil
+	}
+	if status, ok := m.resolvePRReviewStatus[issueNumber]; ok {
+		return status, nil
+	}
+	return PRReviewStatus{}, ErrPRMarkerNotFound
 }
 
 func (m *mockGitHubOps) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
@@ -160,19 +256,36 @@ func (m *mockGitHubOps) replaceLabelCore(issueNumber int, oldLabel, newLabel str
 		return false, err
 	}
 
-	issue := m.issuesByNumber[issueNumber]
-	for i, label := range issue.Labels {
-		if label == oldLabel {
-			issue.Labels[i] = newLabel
-			m.issuesByNumber[issueNumber] = issue
-			return true, nil
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		if m.replaceLabelHook != nil {
+			m.replaceLabelHook()
 		}
+		return false, nil
 	}
-	if addWhenMissing {
-		issue.Labels = append(issue.Labels, newLabel)
+	found := false
+	filtered := make([]string, 0, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if label == oldLabel {
+			found = true
+			continue
+		}
+		if label == newLabel {
+			continue
+		}
+		filtered = append(filtered, label)
+	}
+	if found || addWhenMissing {
+		if newLabel != "" {
+			filtered = append(filtered, newLabel)
+		}
+		issue.Labels = filtered
 		m.issuesByNumber[issueNumber] = issue
 	}
-	return false, nil
+	if m.replaceLabelHook != nil {
+		m.replaceLabelHook()
+	}
+	return found, nil
 }
 
 func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
@@ -182,6 +295,50 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 
 func (m *mockGitHubOps) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
 	return m.replaceLabelCore(issueNumber, oldLabel, newLabel, false)
+}
+
+func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	m.listBlockedByCalls++
+	if err, ok := m.listBlockedByErr[issueNumber]; ok {
+		return nil, err
+	}
+	blockedSet := m.blockedBy[issueNumber]
+	result := make([]int, 0, len(blockedSet))
+	for dep := range blockedSet {
+		result = append(result, dep)
+	}
+	return result, nil
+}
+
+func (m *mockGitHubOps) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.addBlockedByCalls = append(m.addBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.addBlockedByErr[key]; ok {
+		return err
+	}
+	if _, ok := m.blockedBy[issueNumber]; !ok {
+		m.blockedBy[issueNumber] = make(map[int]struct{})
+	}
+	m.blockedBy[issueNumber][blockedByIssueNumber] = struct{}{}
+	return nil
+}
+
+func (m *mockGitHubOps) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.removeBlockedByCalls = append(m.removeBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.removeBlockedByErr[key]; ok {
+		return err
+	}
+	if set, ok := m.blockedBy[issueNumber]; ok {
+		delete(set, blockedByIssueNumber)
+	}
+	return nil
 }
 
 // mockTaskCtlClient 用于 controller 测试的 taskctl mock
@@ -276,12 +433,96 @@ func (m *mockTaskCtlClient) ready() ([]Task, error) {
 	return ready, nil
 }
 
+func newScriptTaskCtlClient(t *testing.T, listJSON, dagJSON string) *TaskCtlClient {
+	t.Helper()
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -e
+cmd="$1"
+case "$cmd" in
+  list)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  dag)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  ready)
+    echo '[]'
+    ;;
+  create)
+    cat <<'JSON'
+{"id":"task-created","subject":"created","description":"created","status":"pending","metadata":{"issue_num":"999"}}
+JSON
+    ;;
+  update|get)
+    echo '{}'
+    ;;
+  *)
+    echo '[]'
+    ;;
+esac
+`, listJSON, dagJSON)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	return &TaskCtlClient{
+		BinPath:   bin,
+		StorePath: filepath.Join(tmp, "tasks.json"),
+	}
+}
+
 // inMemController 使用内存 mock 创建 Controller（绕过真实 taskctl 二进制）
 type inMemController struct {
 	*Controller
 	mockTaskCtl *mockTaskCtlClient
 	mockGitHub  *mockGitHubOps
 	mockAI      *ai.MockProvider
+}
+
+type heartbeatFailIssueLockStore struct {
+	base              IssueLockStore
+	mu                sync.Mutex
+	refreshCount      int
+	lastReleaseResult IssueLockResult
+}
+
+func newHeartbeatFailIssueLockStore() *heartbeatFailIssueLockStore {
+	return &heartbeatFailIssueLockStore{
+		base: newInMemoryIssueLockStore(),
+	}
+}
+
+func (s *heartbeatFailIssueLockStore) TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error) {
+	return s.base.TryAcquire(issueNumber, owner, now, ttl)
+}
+
+func (s *heartbeatFailIssueLockStore) Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error) {
+	s.mu.Lock()
+	s.refreshCount++
+	s.mu.Unlock()
+	return IssueLockRecord{}, fmt.Errorf("inject refresh failure")
+}
+
+func (s *heartbeatFailIssueLockStore) Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error {
+	s.mu.Lock()
+	s.lastReleaseResult = lastResult
+	s.mu.Unlock()
+	return s.base.Release(issueNumber, owner, now, lastResult)
+}
+
+func (s *heartbeatFailIssueLockStore) RefreshCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshCount
+}
+
+func (s *heartbeatFailIssueLockStore) LastReleaseResult() IssueLockResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastReleaseResult
 }
 
 func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
@@ -404,6 +645,617 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 	return nil
 }
 
+func newIssueLockTestController(owner string, store IssueLockStore, ttl, heartbeat time.Duration, nowFn func() time.Time) *Controller {
+	if store == nil {
+		store = newInMemoryIssueLockStore()
+	}
+	if owner == "" {
+		owner = "test-owner"
+	}
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	if heartbeat <= 0 {
+		heartbeat = 100 * time.Second
+	}
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return &Controller{
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: heartbeat,
+		nowFn:              nowFn,
+		ownerID:            owner,
+	}
+}
+
+func newTaskCtlLoggingClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nset -e\nprintf '%%s\\n' \"$*\" >> %q\necho '{}'\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
+func newTaskCtlStatefulIdempotencyClient(t *testing.T, idempotencyKey string) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	statePath := filepath.Join(dir, "state")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ -n "$cmd" ]]; then
+	shift
+fi
+printf '%%s %%s\n' "$cmd" "$*" >> %q
+state=""
+if [[ -f %q ]]; then
+	state="$(cat %q)"
+fi
+case "$cmd" in
+	get)
+		if [[ "$state" == "recorded" ]]; then
+			cat <<'JSON'
+{"id":"task-314","subject":"issue 314","description":"issue 314","status":"pending","blocked_by":[],"metadata":{"issue_num":"314","repo":"biantaishabi2/Cli","phase":"fix","input_hash":"abc","idempotency.key.fix":"%s"}}
+JSON
+		else
+			cat <<'JSON'
+{"id":"task-314","subject":"issue 314","description":"issue 314","status":"pending","blocked_by":[],"metadata":{"issue_num":"314","repo":"biantaishabi2/Cli","phase":"fix","input_hash":"abc"}}
+JSON
+		fi
+		;;
+	update)
+		if [[ "$*" == *"idempotency.key.fix"* ]]; then
+			printf 'recorded' > %q
+		fi
+		echo '{}'
+		;;
+	*)
+		echo '{}'
+		;;
+esac
+`, logPath, statePath, statePath, idempotencyKey, statePath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
+func newTaskCtlGetFailClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ -n "$cmd" ]]; then
+	shift
+fi
+printf '%%s %%s\n' "$cmd" "$*" >> %q
+if [[ "$cmd" == "get" ]]; then
+	echo "get failed" >&2
+	exit 1
+fi
+echo '{}'
+`, logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
+func countTaskctlLogMatches(t *testing.T, logPath, target string) int {
+	t.Helper()
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		require.NoError(t, err)
+	}
+
+	count := 0
+	for _, line := range splitNonEmpty(string(content)) {
+		if strings.Contains(line, target) {
+			count++
+		}
+	}
+	return count
+}
+
+func captureControllerStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer r.Close()
+
+	os.Stdout = w
+	defer func() {
+		os.Stdout = originalStdout
+	}()
+
+	outputCh := make(chan string, 1)
+	go func() {
+		data, copyErr := io.ReadAll(r)
+		if copyErr != nil {
+			outputCh <- ""
+			return
+		}
+		outputCh <- string(data)
+	}()
+
+	fn()
+	require.NoError(t, w.Close())
+
+	return <-outputCh
+}
+
+func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
+	store := newInMemoryIssueLockStore()
+	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 100*time.Second, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+			close(started)
+			<-done
+			return nil
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首个持锁流程超时")
+	}
+
+	secondExecuted := false
+	output := captureControllerStdout(t, func() {
+		err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+			secondExecuted = true
+			return nil
+		})
+		require.NoError(t, err)
+	})
+	assert.False(t, secondExecuted)
+	assert.Contains(t, output, "[control][issue_lock]")
+	assert.Contains(t, output, "status=skipped")
+	assert.Contains(t, output, "reason=locked")
+
+	close(done)
+	require.NoError(t, <-errCh)
+}
+
+func TestController_WithIssueLock_ReleasesAfterCompletion(t *testing.T) {
+	ctrl := newIssueLockTestController("owner-a", nil, 5*time.Minute, 100*time.Second, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	runCount := 0
+	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+		runCount++
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+		runCount++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, runCount)
+}
+
+func TestController_IssueLock_TTLExpiryRecovery(t *testing.T) {
+	store := newInMemoryIssueLockStore()
+	ttl := 5 * time.Minute
+
+	var mu sync.Mutex
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+
+	ctrlA := newIssueLockTestController("owner-a", store, ttl, 100*time.Second, nowFn)
+	ctrlB := newIssueLockTestController("owner-b", store, ttl, 100*time.Second, nowFn)
+	issue := IssueInfo{Number: 315}
+
+	acquired, _, err := ctrlA.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	assert.False(t, acquired)
+
+	advance(ttl + time.Second)
+
+	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	assert.True(t, acquired)
+}
+
+func TestController_WithIssueLock_HeartbeatRefreshFailureReturnsError(t *testing.T) {
+	store := newHeartbeatFailIssueLockStore()
+	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 10*time.Millisecond, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	err := ctrl.withIssueLock(context.Background(), issue, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "锁心跳刷新失败")
+	assert.GreaterOrEqual(t, store.RefreshCount(), 1)
+	assert.Equal(t, IssueLockResultFailed, store.LastReleaseResult())
+}
+
+func TestInMemoryIssueLockStore_ValidationAndOwnerMismatch(t *testing.T) {
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	store := newInMemoryIssueLockStore()
+
+	_, _, err := store.TryAcquire(0, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "issue 编号无效")
+
+	_, _, err = store.TryAcquire(1, "", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	_, _, err = store.TryAcquire(1, "owner-a", now, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "ttl 必须大于 0")
+
+	_, err = store.Refresh(0, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "issue 编号无效")
+
+	_, err = store.Refresh(1, "", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	_, err = store.Refresh(1, "owner-a", now, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "ttl 必须大于 0")
+
+	_, err = store.Refresh(1, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "未持锁")
+
+	_, acquired, err := store.TryAcquire(1, "owner-a", now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	_, err = store.Refresh(1, "owner-b", now.Add(10*time.Second), time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不匹配")
+
+	err = store.Release(1, "", now, IssueLockResultFailed)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	err = store.Release(1, "owner-b", now, IssueLockResultFailed)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不匹配")
+}
+
+func TestController_ProcessIssue_IdempotencyHitSkipsSideEffects(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	repo := "biantaishabi2/Cli"
+	phase := "fix"
+	inputHash := "abc"
+	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+			phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, phase): idempotencyKey,
+		},
+	}
+
+	output := captureControllerStdout(t, func() {
+		err := ctrl.ProcessIssue(context.Background(), task)
+		require.NoError(t, err)
+	})
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key."+phase))
+	assert.Contains(t, output, "[control][idempotency]")
+	assert.Contains(t, output, "action=no-op")
+}
+
+func TestController_ProcessIssue_IdempotencyGetFailureStopsSideEffects(t *testing.T) {
+	taskctl, logPath := newTaskCtlGetFailClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "读取任务最新 metadata 失败")
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
+}
+
+func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	task.Metadata[metaKeyTaskInputHash] = "def"
+	err = ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(
+		t,
+		buildIssueIdempotencyKey("biantaishabi2/Cli", 314, "fix", "def"),
+		task.Metadata[phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, "fix")],
+	)
+}
+
+func TestController_ProcessIssue_IdempotencyBackfillsLegacyMetadataAndNoopsOnRepeat(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		nowFn: func() time.Time {
+			return time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+	err = ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	idempotencyKeyMeta := phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, "fix")
+	idempotencyHashMeta := phaseScopedMetadataKey(metadataKeyIdempotencyInputHashPrefix, "fix")
+	idempotencyTimeMeta := phaseScopedMetadataKey(metadataKeyIdempotencyTimestampPrefix, "fix")
+	assert.Equal(t, buildIssueIdempotencyKey("biantaishabi2/Cli", 314, "fix", "abc"), task.Metadata[idempotencyKeyMeta])
+	assert.Equal(t, "abc", task.Metadata[idempotencyHashMeta])
+	assert.Equal(t, "2026-02-18T12:00:00Z", task.Metadata[idempotencyTimeMeta])
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+}
+
+func TestController_ProcessIssue_IdempotencyConcurrentDuplicateUsesLatestSnapshot(t *testing.T) {
+	repo := "biantaishabi2/Cli"
+	phase := "fix"
+	inputHash := "abc"
+	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
+	taskctl, logPath := newTaskCtlStatefulIdempotencyClient(t, idempotencyKey)
+	mockGH := newMockGitHubOps()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	mockGH.replaceLabelHook = func() {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+	}
+	ctrl := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         newInMemoryIssueLockStore(),
+		issueLockTTL:       5 * time.Minute,
+		issueLockHeartbeat: 0,
+		ownerID:            "test-owner",
+	}
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+		},
+	}
+	staleTask := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+		},
+	}
+
+	firstErrCh := make(chan error, 1)
+	go func() {
+		firstErrCh <- ctrl.ProcessIssue(context.Background(), task)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首个流程进入副作用阶段超时")
+	}
+
+	secondErrCh := make(chan error, 1)
+	go func() {
+		secondErrCh <- ctrl.ProcessIssue(context.Background(), staleTask)
+	}()
+
+	select {
+	case err := <-secondErrCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待并发重复触发返回超时")
+	}
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	close(release)
+	require.NoError(t, <-firstErrCh)
+
+	err := ctrl.ProcessIssue(context.Background(), staleTask)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
+}
+
+func TestController_ProcessIssue_IssueLockTTLRecoveryAfterSkip(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	store := newInMemoryIssueLockStore()
+	ttl := 30 * time.Second
+
+	var mu sync.Mutex
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+
+	holder := &Controller{
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: 0,
+		nowFn:              nowFn,
+		ownerID:            "owner-a",
+	}
+	acquired, _, err := holder.tryAcquireIssueLock(IssueInfo{Number: 314})
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	ctrl := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: 0,
+		nowFn:              nowFn,
+		ownerID:            "owner-b",
+	}
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	firstOutput := captureControllerStdout(t, func() {
+		require.NoError(t, ctrl.ProcessIssue(context.Background(), task))
+	})
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Contains(t, firstOutput, "status=skipped")
+	assert.Contains(t, firstOutput, "reason=locked")
+
+	advance(ttl + 5*time.Second)
+
+	secondOutput := captureControllerStdout(t, func() {
+		require.NoError(t, ctrl.ProcessIssue(context.Background(), task))
+	})
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Contains(t, secondOutput, "[control][idempotency]")
+	assert.Contains(t, secondOutput, "action=recorded")
+}
 func TestController_NewIssueDiscovery(t *testing.T) {
 	issues := []IssueInfo{
 		{Number: 40, Title: "Auth fix", Body: "fix auth"},
@@ -1233,6 +2085,276 @@ func TestSyncPRReviewableMetadata_PersistFailureReturnsError(t *testing.T) {
 	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "持久化 PR 元数据失败")
+}
+
+func TestReconcilePRReviewableConflicts_ConflictRollbackAndCommentDedup(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "conflict body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "abc123",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, "bot:pr-needs-fix"), 0)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "<!-- BOT:CONFLICT_DETECTED sha:abc123 -->")
+
+	err = ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Len(t, mockGH.addIssueCommentCalls, 1)
+}
+
+func TestReconcilePRReviewableConflicts_MergeableNoopAndResetRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ok body\n\n<!-- PR_CONFLICT_RETRY:2 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "def456",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_UnknownRetriesThenNoop(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "unknown body\n\n<!-- PR_CONFLICT_RETRY:2 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatusSeq[321] = []PRReviewStatus{
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.resolvePRReviewStatusCall, 4)
+	assert.Equal(t, 2, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_ExceedThresholdEscalatesNeedsHuman(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "escalate body\n\n<!-- PR_CONFLICT_RETRY:3 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-escalate",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "BLOCKED",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 4, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, needsHumanLabel), 0)
+	assert.Equal(t, 0, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, "bot:pr-needs-fix"))
+	require.Len(t, mockGH.addIssueCommentCalls, 2)
+	assert.Contains(t, mockGH.addIssueCommentCalls[1].body, "BOT:CONFLICT_ESCALATED")
+}
+
+func TestReconcilePRReviewableConflicts_LabelChangedSkipsTransition(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "race body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.getIssueOverride[321] = IssueInfo{
+		Number: 321,
+		Body:   "race body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+		Labels: []string{"bot:pr-needs-fix"},
+	}
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-race",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_LabelSyncFailedDoesNotPersistRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "label-fail body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-label-fail",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+	mockGH.replaceLabelError["bot:pr-needs-fix"] = errors.New("replace failed")
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "状态回退失败")
+	assert.Equal(t, 1, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.getIssueOverride[321] = IssueInfo{
+		Number: 321,
+		Labels: []string{"bot:pr-needs-fix"},
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+	task := Task{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+	assert.Equal(t, []string{"bot:pr-needs-fix"}, issueByNumber[321].Labels)
+}
+
+func TestEnsureIssueCommentWithMarker_DedupByMarker(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.listCommentBodies[321] = []string{
+		"已存在评论\n\n<!-- BOT:CONFLICT_DETECTED sha:abc123 -->",
+	}
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.ensureIssueCommentWithMarker(context.Background(), 321, "<!-- BOT:CONFLICT_DETECTED sha:abc123 -->", "new body")
+	require.NoError(t, err)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
 }
 
 func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
