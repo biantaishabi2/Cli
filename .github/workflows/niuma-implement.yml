@@ -4,14 +4,13 @@ on:
   issues:
     types: [labeled]
 
-concurrency:
-  group: niuma-impl-${{ github.event.issue.number }}
-  cancel-in-progress: false
-
 jobs:
   implement:
     runs-on: self-hosted
     if: github.event.label.name == 'bot:plan-final'
+    concurrency:
+      group: niuma-impl-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       issues: write
       pull-requests: write

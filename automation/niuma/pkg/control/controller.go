@@ -970,6 +970,10 @@ func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, ta
 func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targetLabel string) error {
 	var firstErr error
 	for _, oldLabel := range integrationAutomationLabels {
+		// 避免 old==new 导致“先删后加”同一标签，触发无意义的 labeled/unlabeled 事件。
+		if oldLabel == targetLabel {
+			continue
+		}
 		if err := c.github.ReplaceLabel(ctx, issueNum, oldLabel, targetLabel); err != nil && firstErr == nil {
 			firstErr = err
 		}

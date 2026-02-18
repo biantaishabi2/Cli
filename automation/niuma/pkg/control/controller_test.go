@@ -24,6 +24,7 @@ type mockGitHubOps struct {
 	mergeError        map[int]error
 	replaceLabelCalls []replaceLabelCall
 	replaceLabelError map[string]error
+	replaceLabelPairError map[string]error
 	replaceLabelFails map[string]int
 	closeIssueCalls   []int
 	closeIssueError   map[int]error
@@ -47,6 +48,7 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		issuesByNumber:    issuesByNumber,
 		mergeError:        make(map[int]error),
 		replaceLabelError: make(map[string]error),
+		replaceLabelPairError: make(map[string]error),
 		replaceLabelFails: make(map[string]int),
 		closeIssueError:   make(map[int]error),
 	}
@@ -112,6 +114,9 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 		oldLabel:    oldLabel,
 		newLabel:    newLabel,
 	})
+	if err, ok := m.replaceLabelPairError[fmt.Sprintf("%s=>%s", oldLabel, newLabel)]; ok {
+		return err
+	}
 
 	if remaining := m.replaceLabelFails[newLabel]; remaining > 0 {
 		m.replaceLabelFails[newLabel] = remaining - 1
@@ -853,6 +858,19 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 
 	assert.NotContains(t, mockGH.closeIssueCalls, 214)
 	assert.NotContains(t, mockGH.closeIssueCalls, 210)
+}
+
+func TestSyncIssueStateLabel_SkipsSelfReplacement(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.replaceLabelPairError["bot:fix=>bot:fix"] = errors.New("self replacement should not happen")
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.syncIssueStateLabel(context.Background(), 41, "bot:fix")
+	require.NoError(t, err)
+	require.NotEmpty(t, mockGH.replaceLabelCalls)
+	for _, call := range mockGH.replaceLabelCalls {
+		assert.NotEqual(t, call.oldLabel, call.newLabel)
+	}
 }
 
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
