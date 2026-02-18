@@ -71,6 +71,37 @@ func TestBuildDagSyncPlan_EmptyDagNodes(t *testing.T) {
 	assert.NotEmpty(t, plan.hash)
 }
 
+func TestDagSync_EmptyDagNodesSyncHasHashAndNoWriteError(t *testing.T) {
+	listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+	dagJSON := `{"nodes":[]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		MaxRetry:     0,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      100 * time.Millisecond,
+	}, cfg.RepoDir)
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	result, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+	require.NoError(t, err)
+	assert.Contains(t, []DagSyncStatus{DagSyncStatusSuccess, DagSyncStatusSkipped}, result.Status)
+	assert.NotEmpty(t, result.DagHash)
+	assert.Equal(t, 0, result.TotalEdges)
+	assert.Empty(t, mockGH.addBlockedByCalls)
+	assert.Empty(t, mockGH.removeBlockedByCalls)
+}
+
 func TestDagSync_SameHashSecondRunSkippedWithoutGitHubCalls(t *testing.T) {
 	listJSON := `[
 {"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
@@ -148,6 +179,55 @@ func TestDagSync_RateLimitRetryAndFail(t *testing.T) {
 	assert.Equal(t, DagSyncStatusFailed, result.Status)
 	assert.Equal(t, ghpkg.DependencyErrorTypeRateLimit, result.ErrorType)
 	assert.Len(t, mockGH.addBlockedByCalls, 3)
+}
+
+func TestDagSync_RetryCoverageForClassifiedTypes(t *testing.T) {
+	retryTypes := []string{
+		ghpkg.DependencyErrorTypeAuth,
+		ghpkg.DependencyErrorTypePermission,
+		ghpkg.DependencyErrorTypeRateLimit,
+		ghpkg.DependencyErrorTypeNetworkTimeout,
+		ghpkg.DependencyErrorTypeUnsupported,
+	}
+
+	for _, errType := range retryTypes {
+		t.Run(errType, func(t *testing.T) {
+			listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+			dagJSON := `{"nodes":[
+{"id":"task-40","deps":[],"status":"pending"},
+{"id":"task-41","deps":["task-40"],"status":"pending"}
+]}`
+			taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+			mockGH := newMockGitHubOps()
+			mockGH.addBlockedByErr["40->41"] = &ghpkg.DependencyError{
+				Operation: "add blocked_by",
+				Type:      errType,
+				Err:       errors.New("mock retry error"),
+			}
+			cfg := DefaultControlConfig()
+			cfg.RepoDir = t.TempDir()
+			cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+				MaxRetry:     2,
+				RetryBackoff: []time.Duration{time.Millisecond},
+				Timeout:      100 * time.Millisecond,
+			}, cfg.RepoDir)
+
+			ctrl := &Controller{
+				taskctl: taskctl,
+				github:  mockGH,
+				cfg:     cfg,
+			}
+
+			result, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+			require.Error(t, err)
+			assert.Equal(t, DagSyncStatusFailed, result.Status)
+			assert.Equal(t, errType, result.ErrorType)
+			assert.Len(t, mockGH.addBlockedByCalls, 3)
+		})
+	}
 }
 
 func TestDagSync_ReconcileDetectsDriftAndCorrects(t *testing.T) {

@@ -110,3 +110,56 @@ func TestDagSyncStateStore_DegradedModeConcurrentAccess(t *testing.T) {
 	require.NoError(t, loadErr)
 	assert.NotEmpty(t, state.LastHash)
 }
+
+func TestDagSyncStateStore_LoadFailureDegradedModeConcurrentAccess(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), dagSyncStateFileName)
+	require.NoError(t, os.WriteFile(statePath, []byte("{invalid-json"), 0o644))
+	store := newDagSyncStateStore(statePath)
+
+	// 首次 Load 因损坏文件失败，进入内存降级模式。
+	_, err := store.Load()
+	require.Error(t, err)
+	assert.True(t, store.diskDegraded)
+
+	const workers = 20
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				saveErr := store.Save(DagSyncState{
+					LastHash:     fmt.Sprintf("degraded-%d", i),
+					SuccessCount: i,
+				})
+				if saveErr == nil || !strings.Contains(saveErr.Error(), "降级到内存模式") {
+					errCh <- fmt.Errorf("save 降级错误不符合预期: %v", saveErr)
+				}
+				return
+			}
+
+			if _, loadErr := store.Load(); loadErr != nil {
+				errCh <- fmt.Errorf("load 降级模式失败: %w", loadErr)
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for checkErr := range errCh {
+		require.NoError(t, checkErr)
+	}
+
+	// 降级模式下 Save 会返回错误，但仍应更新内存态。
+	saveErr := store.Save(DagSyncState{LastHash: "final", SuccessCount: 99})
+	require.Error(t, saveErr)
+	assert.Contains(t, saveErr.Error(), "降级到内存模式")
+
+	state, loadErr := store.Load()
+	require.NoError(t, loadErr)
+	assert.Equal(t, "final", state.LastHash)
+	assert.Equal(t, 99, state.SuccessCount)
+}
