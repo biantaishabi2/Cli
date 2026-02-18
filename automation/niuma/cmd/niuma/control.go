@@ -152,10 +152,13 @@ type gitHubControlOps struct {
 type githubControlClient interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]*ghapi.Issue, error)
 	ListIssuesByState(ctx context.Context, state string) ([]*ghapi.Issue, error)
+	ListLabels(ctx context.Context, issueNumber int) ([]string, error)
+	AddLabel(ctx context.Context, issueNumber int, label string) error
 	GetIssue(ctx context.Context, number int) (*ghapi.Issue, error)
 	CloseIssue(ctx context.Context, number int) error
 	MergePR(ctx context.Context, number int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
 	FindMarker(ctx context.Context, issueNumber int, t marker.Type) (*gh.MarkerComment, error)
 	GetPR(ctx context.Context, number int) (*ghapi.PullRequest, error)
 }
@@ -206,6 +209,14 @@ func (g *gitHubControlOps) ListIssuesByState(ctx context.Context, state string) 
 	return result, nil
 }
 
+func (g *gitHubControlOps) ListLabels(ctx context.Context, issueNumber int) ([]string, error) {
+	return g.client.ListLabels(ctx, issueNumber)
+}
+
+func (g *gitHubControlOps) AddLabel(ctx context.Context, issueNumber int, label string) error {
+	return g.client.AddLabel(ctx, issueNumber, label)
+}
+
 func (g *gitHubControlOps) GetIssue(ctx context.Context, issueNumber int) (control.IssueInfo, error) {
 	issue, err := g.client.GetIssue(ctx, issueNumber)
 	if err != nil {
@@ -234,6 +245,10 @@ func (g *gitHubControlOps) MergePR(ctx context.Context, prNum int, method string
 
 func (g *gitHubControlOps) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error {
 	return g.client.ReplaceLabel(ctx, issueNumber, oldLabel, newLabel)
+}
+
+func (g *gitHubControlOps) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	return g.client.ReplaceLabelIfPresent(ctx, issueNumber, oldLabel, newLabel)
 }
 
 func (g *gitHubControlOps) ResolvePRMetadata(ctx context.Context, issueNumber int) (control.PRMetadata, error) {

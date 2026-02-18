@@ -43,15 +43,21 @@ func (c *Client) AddLabel(ctx context.Context, issueNumber int, label string) er
 
 // RemoveLabel 移除 issue 的 label
 func (c *Client) RemoveLabel(ctx context.Context, issueNumber int, label string) error {
+	_, err := c.removeLabelIfPresent(ctx, issueNumber, label)
+	return err
+}
+
+// removeLabelIfPresent 移除 issue 的 label，并返回是否命中。
+func (c *Client) removeLabelIfPresent(ctx context.Context, issueNumber int, label string) (bool, error) {
 	_, err := c.gh.Issues.RemoveLabelForIssue(ctx, c.owner, c.repo, issueNumber, label)
 	if err != nil {
 		// label 不存在不算错误
 		if ghErr, ok := err.(*github.ErrorResponse); ok && ghErr.Response.StatusCode == http.StatusNotFound {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("移除 label %q 失败: %w", label, err)
+		return false, fmt.Errorf("移除 label %q 失败: %w", label, err)
 	}
-	return nil
+	return true, nil
 }
 
 // ReplaceLabel 替换 label：移除 old，添加 new
@@ -60,6 +66,25 @@ func (c *Client) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, ne
 		return err
 	}
 	return c.AddLabel(ctx, issueNumber, newLabel)
+}
+
+// ReplaceLabelIfPresent 替换 label：仅当 old 存在时才会写入 new。
+// 返回 replaced=false 表示 old 不存在，未做任何写入。
+func (c *Client) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	replaced, err := c.removeLabelIfPresent(ctx, issueNumber, oldLabel)
+	if err != nil {
+		return false, err
+	}
+	if !replaced {
+		return false, nil
+	}
+	if oldLabel == newLabel {
+		return true, nil
+	}
+	if err := c.AddLabel(ctx, issueNumber, newLabel); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EnsureLabelsExist 确保仓库中存在指定的 label，不存在则创建

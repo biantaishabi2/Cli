@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,30 +125,70 @@ func (m *mockGitHubOps) ResolvePRMetadata(_ context.Context, issueNumber int) (P
 	return PRMetadata{}, ErrPRMarkerNotFound
 }
 
-func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+func (m *mockGitHubOps) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		return nil, nil
+	}
+	labels := make([]string, len(issue.Labels))
+	copy(labels, issue.Labels)
+	return labels, nil
+}
+
+func (m *mockGitHubOps) AddLabel(_ context.Context, issueNumber int, label string) error {
+	issue := m.issuesByNumber[issueNumber]
+	issue.Labels = append(issue.Labels, label)
+	m.issuesByNumber[issueNumber] = issue
+	return nil
+}
+
+func (m *mockGitHubOps) replaceLabelCore(issueNumber int, oldLabel, newLabel string, addWhenMissing bool) (bool, error) {
 	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
 		issueNumber: issueNumber,
 		oldLabel:    oldLabel,
 		newLabel:    newLabel,
 	})
 	if err, ok := m.replaceLabelPairError[fmt.Sprintf("%s=>%s", oldLabel, newLabel)]; ok {
-		return err
+		return false, err
 	}
 
 	if remaining := m.replaceLabelFails[newLabel]; remaining > 0 {
 		m.replaceLabelFails[newLabel] = remaining - 1
-		return fmt.Errorf("replace label %q temporary failed", newLabel)
+		return false, fmt.Errorf("replace label %q temporary failed", newLabel)
 	}
 	if err, ok := m.replaceLabelError[newLabel]; ok {
-		return err
+		return false, err
 	}
-	return nil
+
+	issue := m.issuesByNumber[issueNumber]
+	for i, label := range issue.Labels {
+		if label == oldLabel {
+			issue.Labels[i] = newLabel
+			m.issuesByNumber[issueNumber] = issue
+			return true, nil
+		}
+	}
+	if addWhenMissing {
+		issue.Labels = append(issue.Labels, newLabel)
+		m.issuesByNumber[issueNumber] = issue
+	}
+	return false, nil
+}
+
+func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+	_, err := m.replaceLabelCore(issueNumber, oldLabel, newLabel, true)
+	return err
+}
+
+func (m *mockGitHubOps) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	return m.replaceLabelCore(issueNumber, oldLabel, newLabel, false)
 }
 
 // mockTaskCtlClient 用于 controller 测试的 taskctl mock
 type mockTaskCtlClient struct {
 	tasks                  []Task
 	nextID                 int
+	createCallCount        int
 	readyList              []Task
 	readyCallCount         int
 	readyHook              func([]Task) error
@@ -161,6 +202,17 @@ func newMockTaskCtlClient() *mockTaskCtlClient {
 }
 
 func (m *mockTaskCtlClient) create(subject, desc string, meta map[string]string) (*Task, error) {
+	m.createCallCount++
+	issueNum, hasIssue := parseIssueNum(meta)
+	if hasIssue {
+		for i := range m.tasks {
+			if m.tasks[i].IssueNum() == issueNum && isTaskActiveStatus(m.tasks[i].Status) {
+				task := m.tasks[i]
+				return &task, nil
+			}
+		}
+	}
+
 	m.nextID++
 	task := Task{
 		ID:       fmt.Sprintf("task-%d", m.nextID),
@@ -268,10 +320,10 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		return err
 	}
 
-	// 找新 issue
+	// 找新 issue（仅以 active task 去重）
 	existing := make(map[int]bool)
 	for _, t := range c.mockTaskCtl.tasks {
-		if n := t.IssueNum(); n > 0 {
+		if n := t.IssueNum(); n > 0 && isTaskActiveStatus(t.Status) {
 			existing[n] = true
 		}
 	}
@@ -300,6 +352,9 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 			continue
 		}
 		issueToTask[issue.Number] = task.ID
+		if hasLabel(issue.Labels, string(state.StateOrchestrate)) {
+			_ = state.TransitionBotState(ctx, c.mockGitHub, issue.Number, state.StateOrchestrate, state.StateQueued)
+		}
 	}
 
 	// 先落盘 blocked_by，再决定是否推进 ready。
@@ -340,6 +395,9 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		status := TaskStatusInProgress
 		if err := c.mockTaskCtl.update(task.ID, UpdateOpts{Status: &status}); err != nil {
 			return err
+		}
+		if issueNum := task.IssueNum(); issueNum > 0 {
+			_ = state.TransitionBotState(ctx, c.mockGitHub, issueNum, state.StateQueued, state.StateFixRequested)
 		}
 	}
 
@@ -404,6 +462,43 @@ func TestController_Idempotent(t *testing.T) {
 	err = ctrl.RunInMem(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	assert.Equal(t, 1, ctrl.mockTaskCtl.createCallCount)
+}
+
+func TestController_IntakeOnlyOrchestrateIssues(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 101, Title: "entry", Labels: []string{"bot:orchestrate"}},
+		{Number: 102, Title: "single", Labels: []string{"bot:implementing"}},
+	}
+	ctrl := newInMemController(issues, "")
+	ctrl.mockGitHub.issuesByLabel[string(state.StateOrchestrate)] = []IssueInfo{issues[0]}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	assert.Equal(t, 101, ctrl.mockTaskCtl.tasks[0].IssueNum())
+}
+
+func TestController_ReadyProgressDoesNotDowngradeImplementing(t *testing.T) {
+	ctrl := newInMemController([]IssueInfo{
+		{Number: 312, Title: "polluted", Labels: []string{"bot:implementing"}},
+	}, "")
+	ctrl.mockTaskCtl.tasks = []Task{
+		{
+			ID:       "task-312",
+			Status:   TaskStatusPending,
+			Metadata: map[string]string{"issue_num": "312"},
+		},
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	labels, err := ctrl.mockGitHub.ListLabels(context.Background(), 312)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:implementing"}, labels)
+	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[0].Status)
 }
 
 func TestController_ReadyTaskAdvance(t *testing.T) {
@@ -768,8 +863,10 @@ func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T)
 	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-1", errors.New("gate failed once"))
 	require.NoError(t, err)
 
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
-	assert.Equal(t, 0, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel))
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-needs-fix")
+	assert.NotContains(t, labels, integrationGateFailLabel)
 }
 
 func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
@@ -922,7 +1019,9 @@ func TestIntegrationGate(t *testing.T) {
 	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), firstTask, outcome)
 	require.NoError(t, err)
 	assert.False(t, integrated)
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-needs-fix")
 
 	firstAttemptKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
 	require.NoError(t, err)
@@ -962,20 +1061,21 @@ func TestIntegrationGate(t *testing.T) {}
 	assert.Contains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
 }
 
-func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
+func TestCollectAutomationIssues_OnlyOrchestrateEntry(t *testing.T) {
 	mockGH := newMockGitHubOps()
-	mockGH.issuesByLabel["bot:queued"] = []IssueInfo{
-		{Number: 214, Title: "queued task", State: "open", Labels: []string{"bot:queued"}},
+	mockGH.issuesByLabel["bot:orchestrate"] = []IssueInfo{
+		{Number: 214, Title: "entry task", State: "open", Labels: []string{"bot:orchestrate"}},
 	}
-	mockGH.issuesByLabel["bot:fix"] = []IssueInfo{
-		{Number: 215, Title: "in progress task", State: "open", Labels: []string{"bot:fix"}},
+	mockGH.issuesByLabel["bot:implementing"] = []IssueInfo{
+		{Number: 215, Title: "single issue", State: "open", Labels: []string{"bot:implementing"}},
 	}
 
 	ctrl := &Controller{github: mockGH}
 	issues, orchestrateCount, err := ctrl.collectAutomationIssues(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 0, orchestrateCount)
-	assert.Len(t, issues, 2)
+	assert.Equal(t, 1, orchestrateCount)
+	require.Len(t, issues, 1)
+	assert.Equal(t, 214, issues[0].Number)
 }
 
 func TestSyncPRReviewableMetadata_SyncsMetadataBeforeIntegration(t *testing.T) {
@@ -1148,8 +1248,12 @@ func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
 
 	assert.Contains(t, mockGH.closeIssueCalls, 214)
 	assert.Contains(t, mockGH.closeIssueCalls, 210)
-	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 214, botDoneLabel), 0)
-	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 210, botDoneLabel), 0)
+	labels214, err := mockGH.ListLabels(context.Background(), 214)
+	require.NoError(t, err)
+	assert.Contains(t, labels214, botDoneLabel)
+	labels210, err := mockGH.ListLabels(context.Background(), 210)
+	require.NoError(t, err)
+	assert.Contains(t, labels210, botDoneLabel)
 }
 
 func TestFinalizeIntegratedIssues_ParentRemainsOpenWhenSubNotAllClosed(t *testing.T) {
@@ -1185,11 +1289,14 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 func TestSyncIssueStateLabel_SkipsSelfReplacement(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.replaceLabelPairError["bot:fix=>bot:fix"] = errors.New("self replacement should not happen")
+	mockGH.issuesByNumber[41] = IssueInfo{Number: 41}
 	ctrl := &Controller{github: mockGH}
 
 	err := ctrl.syncIssueStateLabel(context.Background(), 41, "bot:fix")
 	require.NoError(t, err)
-	require.NotEmpty(t, mockGH.replaceLabelCalls)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:fix")
 	for _, call := range mockGH.replaceLabelCalls {
 		assert.NotEqual(t, call.oldLabel, call.newLabel)
 	}

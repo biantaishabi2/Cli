@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -430,7 +431,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	prNumber, implErr := o.doImplementInner(ctx, input, workDir, plannedChanges)
 	if implErr != nil {
 		// 回滚状态并通知
-		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateImplementing), string(prevState))
+		_ = o.transitionFrom(ctx, state.StateImplementing, prevState, false)
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			fmt.Sprintf("## ❌ 实现失败\n\n%s\n\n状态已回滚到 `%s`。", implErr.Error(), prevState))
 		return implErr
@@ -440,7 +441,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if prNumber == 0 {
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			"## ℹ️ 代码实现\n\nAI 执行完成，但 worktree 中无文件变更。状态已回滚。")
-		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateImplementing), string(prevState))
+		_ = o.transitionFrom(ctx, state.StateImplementing, prevState, false)
 		return nil
 	}
 
@@ -614,7 +615,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	// 执行迭代逻辑，失败时回滚状态
 	iterateErr := o.doIterateInner(ctx, input, prNumber, workDir)
 	if iterateErr != nil {
-		_ = o.github.ReplaceLabel(ctx, o.issueNumber, string(state.StateIterating), string(prevState))
+		_ = o.transitionFrom(ctx, state.StateIterating, prevState, false)
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			fmt.Sprintf("## ❌ 迭代失败\n\n%s\n\n状态已回滚到 `%s`。", iterateErr.Error(), prevState))
 		return iterateErr
@@ -812,21 +813,18 @@ func (o *Orchestrator) currentState(ctx context.Context) (state.State, error) {
 		return "", err
 	}
 
-	var found []state.State
-	for _, label := range labels {
-		if s, err := state.ParseState(label); err == nil {
-			found = append(found, s)
+	current, found, err := state.CurrentBotState(labels)
+	if err != nil {
+		if errors.Is(err, state.ErrMultipleBotStates) {
+			_, _ = o.github.AddComment(ctx, o.issueNumber,
+				"## ⚠️ 检测到脏状态\n\n同一 issue 存在多个 `bot:*` 状态标签，已停止自动推进，请人工清理后重试。")
 		}
+		return "", err
 	}
-
-	switch len(found) {
-	case 0:
+	if !found {
 		return "", fmt.Errorf("issue #%d 没有 bot: 状态 label", o.issueNumber)
-	case 1:
-		return found[0], nil
-	default:
-		return "", fmt.Errorf("issue #%d 有多个 bot: 状态 label: %v（请手动清理）", o.issueNumber, found)
 	}
+	return current, nil
 }
 
 // transition 执行状态转换
@@ -836,11 +834,11 @@ func (o *Orchestrator) transition(ctx context.Context, to state.State) error {
 		return fmt.Errorf("读取状态失败: %w", err)
 	}
 
-	if !state.IsValidTransition(current, to) {
-		return fmt.Errorf("非法状态转换: %s → %s", current, to)
-	}
+	return o.transitionFrom(ctx, current, to)
+}
 
-	return o.github.ReplaceLabel(ctx, o.issueNumber, string(current), string(to))
+func (o *Orchestrator) transitionFrom(ctx context.Context, from, to state.State, strict ...bool) error {
+	return state.TransitionBotState(ctx, o.github, o.issueNumber, from, to, strict...)
 }
 
 // buildPromptInput 从 GitHub 读取 issue 和评论构建 PromptInput

@@ -5,8 +5,8 @@ package agent
 import (
 	"context"
 
-	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/google/go-github/v68/github"
 )
 
@@ -29,6 +29,7 @@ type GitHubOps interface {
 	AddLabel(ctx context.Context, issueNumber int, label string) error
 	RemoveLabel(ctx context.Context, issueNumber int, label string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
 	EnsureLabelsExist(ctx context.Context, labels []string) error
 
 	// PR 操作

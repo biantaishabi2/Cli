@@ -8,6 +8,8 @@ import "fmt"
 type State string
 
 const (
+	StateOrchestrate     State = "bot:orchestrate"
+	StateQueued          State = "bot:queued"
 	StateFixRequested    State = "bot:fix"
 	StatePlanDraft       State = "bot:plan-draft"
 	StateNeedsDiscussion State = "bot:needs-discussion"
@@ -23,6 +25,8 @@ const (
 
 // AllStates 所有有效状态
 var AllStates = []State{
+	StateOrchestrate,
+	StateQueued,
 	StateFixRequested,
 	StatePlanDraft,
 	StateNeedsDiscussion,
@@ -47,6 +51,8 @@ func AllBotLabels() []string {
 
 // validTransitions 定义合法的状态转换
 var validTransitions = map[State][]State{
+	StateOrchestrate:     {StateQueued},
+	StateQueued:          {StateFixRequested},
 	StateFixRequested:    {StatePlanDraft},
 	StatePlanDraft:       {StateNeedsDiscussion, StatePlanFinal},
 	StateNeedsDiscussion: {StatePlanFinal},
@@ -83,4 +89,22 @@ func ParseState(s string) (State, error) {
 		}
 	}
 	return "", fmt.Errorf("invalid state: %q", s)
+}
+
+// CollectBotStates 从 labels 中提取所有 bot 状态标签（去重，保序）。
+func CollectBotStates(labels []string) []State {
+	seen := make(map[State]struct{})
+	states := make([]State, 0, len(labels))
+	for _, label := range labels {
+		s, err := ParseState(label)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		states = append(states, s)
+	}
+	return states
 }

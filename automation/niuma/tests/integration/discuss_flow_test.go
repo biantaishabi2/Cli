@@ -126,6 +126,17 @@ func (m *flowGitHubMock) ReplaceLabel(_ context.Context, issueNumber int, oldLab
 	return nil
 }
 
+func (m *flowGitHubMock) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	labels := m.labels[issueNumber]
+	for i, item := range labels {
+		if item == oldLabel {
+			m.labels[issueNumber][i] = newLabel
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *flowGitHubMock) EnsureLabelsExist(_ context.Context, _ []string) error {
 	return nil
 }
