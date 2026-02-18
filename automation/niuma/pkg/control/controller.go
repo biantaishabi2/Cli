@@ -459,6 +459,24 @@ func buildProcessIssueIdempotencyContext(task Task) (processIssueIdempotencyCont
 	}, true
 }
 
+func (c *Controller) loadLatestTaskMetadata(task Task) map[string]string {
+	if c == nil || c.taskctl == nil || strings.TrimSpace(task.ID) == "" {
+		return task.Metadata
+	}
+
+	latestTask, err := c.taskctl.Get(task.ID)
+	if err != nil {
+		return task.Metadata
+	}
+	if latestTask == nil {
+		return task.Metadata
+	}
+	if strings.TrimSpace(latestTask.ID) == "" || latestTask.ID != task.ID {
+		return task.Metadata
+	}
+	return latestTask.Metadata
+}
+
 // ProcessIssue 推进单个 issue 的控制流程（主入口）。
 func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 	issue := IssueInfo{
@@ -468,8 +486,10 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 
 	return c.withIssueLock(ctx, issue, func(runCtx context.Context) error {
 		idempotencyContext, enableIdempotency := buildProcessIssueIdempotencyContext(task)
+		idempotencyMetadata := task.Metadata
 		if enableIdempotency {
-			if latestKey := readPhaseIdempotencyKey(task.Metadata, idempotencyContext.Phase); latestKey == idempotencyContext.Key {
+			idempotencyMetadata = c.loadLatestTaskMetadata(task)
+			if latestKey := readPhaseIdempotencyKey(idempotencyMetadata, idempotencyContext.Phase); latestKey == idempotencyContext.Key {
 				fmt.Printf(
 					"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=no-op\n",
 					idempotencyContext.Repo,
@@ -504,7 +524,7 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 
 		update, err := c.taskctl.recordPhaseIdempotency(
 			task.ID,
-			task.Metadata,
+			idempotencyMetadata,
 			idempotencyContext.Phase,
 			idempotencyContext.Key,
 			idempotencyContext.InputHash,

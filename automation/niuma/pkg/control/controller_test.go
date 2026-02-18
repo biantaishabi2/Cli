@@ -25,6 +25,7 @@ type mockGitHubOps struct {
 	mergedPRs             []int
 	mergeError            map[int]error
 	replaceLabelCalls     []replaceLabelCall
+	replaceLabelHook      func()
 	replaceLabelError     map[string]error
 	replaceLabelPairError map[string]error
 	replaceLabelFails     map[string]int
@@ -126,6 +127,9 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 	}
 	if err, ok := m.replaceLabelError[newLabel]; ok {
 		return err
+	}
+	if m.replaceLabelHook != nil {
+		m.replaceLabelHook()
 	}
 	return nil
 }
@@ -415,6 +419,55 @@ func newTaskCtlLoggingClient(t *testing.T) (*TaskCtlClient, string) {
 	}, logPath
 }
 
+func newTaskCtlStatefulIdempotencyClient(t *testing.T, idempotencyKey string) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	statePath := filepath.Join(dir, "state")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ -n "$cmd" ]]; then
+	shift
+fi
+printf '%%s %%s\n' "$cmd" "$*" >> %q
+state=""
+if [[ -f %q ]]; then
+	state="$(cat %q)"
+fi
+case "$cmd" in
+	get)
+		if [[ "$state" == "recorded" ]]; then
+			cat <<'JSON'
+{"id":"task-314","subject":"issue 314","description":"issue 314","status":"pending","blocked_by":[],"metadata":{"issue_num":"314","repo":"biantaishabi2/Cli","phase":"fix","input_hash":"abc","idempotency.key.fix":"%s"}}
+JSON
+		else
+			cat <<'JSON'
+{"id":"task-314","subject":"issue 314","description":"issue 314","status":"pending","blocked_by":[],"metadata":{"issue_num":"314","repo":"biantaishabi2/Cli","phase":"fix","input_hash":"abc"}}
+JSON
+		fi
+		;;
+	update)
+		if [[ "$*" == *"idempotency.key.fix"* ]]; then
+			printf 'recorded' > %q
+		fi
+		echo '{}'
+		;;
+	*)
+		echo '{}'
+		;;
+esac
+`, logPath, statePath, statePath, idempotencyKey, statePath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
 func countTaskctlLogMatches(t *testing.T, logPath, target string) int {
 	t.Helper()
 
@@ -693,6 +746,87 @@ func TestController_ProcessIssue_IdempotencyBackfillsLegacyMetadataAndNoopsOnRep
 	assert.Len(t, mockGH.replaceLabelCalls, 1)
 	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+}
+
+func TestController_ProcessIssue_IdempotencyConcurrentDuplicateUsesLatestSnapshot(t *testing.T) {
+	repo := "biantaishabi2/Cli"
+	phase := "fix"
+	inputHash := "abc"
+	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
+	taskctl, logPath := newTaskCtlStatefulIdempotencyClient(t, idempotencyKey)
+	mockGH := newMockGitHubOps()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	mockGH.replaceLabelHook = func() {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+	}
+	ctrl := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         newInMemoryIssueLockStore(),
+		issueLockTTL:       5 * time.Minute,
+		issueLockHeartbeat: 0,
+		ownerID:            "test-owner",
+	}
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+		},
+	}
+	staleTask := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+		},
+	}
+
+	firstErrCh := make(chan error, 1)
+	go func() {
+		firstErrCh <- ctrl.ProcessIssue(context.Background(), task)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首个流程进入副作用阶段超时")
+	}
+
+	secondErrCh := make(chan error, 1)
+	go func() {
+		secondErrCh <- ctrl.ProcessIssue(context.Background(), staleTask)
+	}()
+
+	select {
+	case err := <-secondErrCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待并发重复触发返回超时")
+	}
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	close(release)
+	require.NoError(t, <-firstErrCh)
+
+	err := ctrl.ProcessIssue(context.Background(), staleTask)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
 }
 
 func TestController_NewIssueDiscovery(t *testing.T) {
