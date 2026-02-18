@@ -153,6 +153,17 @@ export NIUMA_AI_PROVIDER="kimi"
 export GITHUB_TOKEN="ghp_xxx"
 ```
 
+集成测试仓配置（用于 `go test -tags integration`）：
+
+- 默认测试仓：`biantaishabi2/Cli-niuma-test`
+- 可通过 `NIUMA_TEST_REPO` 覆盖测试目标仓库
+- Token 优先级：`NIUMA_TEST_TOKEN` > `GITHUB_TOKEN`
+
+```bash
+export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
+export NIUMA_TEST_TOKEN="ghp_xxx"
+```
+
 ### 3. 手动触发（调试）
 
 ```bash
