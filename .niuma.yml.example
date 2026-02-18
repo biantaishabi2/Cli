@@ -46,15 +46,13 @@ ai:
     providers:
       - claude
       - codex
-    consolidator: claude
 
   # 实现阶段：切换 provider 只需改这里
   implementation:
     provider: codex  # ← 切换这里即可
 
 workflow:
-  # 讨论模式：consolidate（默认）| debate_ab
-  discussion_mode: consolidate
+  # 讨论阶段统一使用 debate_ab
   # discuss 单次 run 内最大轮次（1-20，默认 5）
   max_discussion_rounds: 5
   # discuss 命令超时（分钟，1-120，默认 20）

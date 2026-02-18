@@ -78,7 +78,6 @@ type ConvergenceInput struct {
 	PreviousDisagreementCount int            // 上一轮分歧条目数（debate_ab 用于单调收敛）
 	HasHighRisk               bool           // 是否存在 high-risk 分歧
 	AllLowRiskAutoResolvable  bool           // 是否全部 low-risk 且可自动采纳
-	DiscussionMode            string         // consolidate|debate_ab
 	Round                     int            // 当前 discuss 轮次（可选）
 	MaxRound                  int            // discuss 最大轮次（可选）
 }
@@ -140,15 +139,7 @@ func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *Converg
 			return decision
 		}
 
-		if !strings.EqualFold(input.DiscussionMode, "debate_ab") && input.AllLowRiskAutoResolvable {
-			decision.Result = ShouldFinalize
-			decision.Reason = "low_risk_auto_resolved"
-			decision.ShouldFinish = true
-			return decision
-		}
-
-		if strings.EqualFold(input.DiscussionMode, "debate_ab") &&
-			input.PreviousDisagreementCount > 0 &&
+		if input.PreviousDisagreementCount > 0 &&
 			input.DisagreementCount > input.PreviousDisagreementCount {
 			decision.Result = NotConverged
 			decision.Reason = "disagreements_expanded"
@@ -228,7 +219,6 @@ func (m *Machine) CheckConvergence(ctx context.Context, checker *ConvergenceChec
 		input.Decision = summaryMC.Marker.Decision
 		input.DisagreementCount = summaryMC.Marker.DisagreeCount
 		input.HasHighRisk = strings.EqualFold(summaryMC.Marker.Risk, "high")
-		input.DiscussionMode = summaryMC.Marker.Mode
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker

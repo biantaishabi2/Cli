@@ -1,5 +1,5 @@
 // pkg/agent/plan.go
-// PlanEngine：方案草案 → 讨论汇总 → 最终方案
+// PlanEngine：方案草案 → 最终方案
 package agent
 
 import (
@@ -32,21 +32,6 @@ func (e *PlanEngine) Draft(ctx context.Context, input *PromptInput) (*DraftPlan,
 	}
 
 	return ParseDraftResponse(raw)
-}
-
-// Consolidate 生成讨论汇总
-func (e *PlanEngine) Consolidate(ctx context.Context, input *PromptInput) (*DiscussionSummary, error) {
-	prompt, err := BuildConsolidatePrompt(input)
-	if err != nil {
-		return nil, fmt.Errorf("构建 consolidate prompt 失败: %w", err)
-	}
-
-	raw, err := e.provider.Complete(ctx, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("AI 汇总讨论失败: %w", err)
-	}
-
-	return ParseConsolidateResponse(raw)
 }
 
 // Final 生成最终方案

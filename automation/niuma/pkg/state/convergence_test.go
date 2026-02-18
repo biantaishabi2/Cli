@@ -322,7 +322,7 @@ func TestConvergence_NoDisagreements_ShouldFinalize(t *testing.T) {
 	assert.Equal(t, "no_disagreements", decision.Reason)
 }
 
-func TestConvergence_LowRiskAutoResolvable_ShouldFinalize(t *testing.T) {
+func TestConvergence_LowRiskAutoResolvable_DoesNotAutoFinalize(t *testing.T) {
 	checker := fixedChecker(time.Now())
 	decision := checker.CheckWithDecision(&ConvergenceInput{
 		Comments:                 []*github.IssueComment{},
@@ -330,8 +330,8 @@ func TestConvergence_LowRiskAutoResolvable_ShouldFinalize(t *testing.T) {
 		DisagreementCount:        2,
 		AllLowRiskAutoResolvable: true,
 	})
-	assert.Equal(t, ShouldFinalize, decision.Result)
-	assert.Equal(t, "low_risk_auto_resolved", decision.Reason)
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.Equal(t, "no_human_comments", decision.Reason)
 }
 
 func TestConvergence_HighRisk_RequiresHumanDecision(t *testing.T) {

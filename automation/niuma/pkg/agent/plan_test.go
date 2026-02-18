@@ -41,33 +41,6 @@ func TestPlanEngine_Draft_AIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "AI 生成草案失败")
 }
 
-func TestPlanEngine_Consolidate_HappyPath(t *testing.T) {
-	mock := ai.NewMockProvider(`{
-  "agreements":["用JWT"],
-  "disagreements":[{"topic":"TTL","options":["15m","30m"],"recommendation":"15m","risk":"low"}],
-  "decision":"merge",
-  "requires_human_decision":false,
-  "should_finish":false
-}`)
-	engine := NewPlanEngine(mock)
-
-	input := &PromptInput{
-		IssueTitle: "Auth refactor",
-		IssueBody:  "Move to JWT",
-		Comments:   []string{"JWT sounds good", "What about TTL?"},
-	}
-
-	summary, err := engine.Consolidate(context.Background(), input)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"用JWT"}, summary.Agreements)
-	assert.Equal(t, DecisionMerge, summary.Decision)
-	assert.Len(t, summary.Disagreements, 1)
-
-	// 验证 prompt 包含评论
-	calls := mock.Calls()
-	assert.Contains(t, calls[0].Prompt, "JWT sounds good")
-}
-
 func TestPlanEngine_Final_HappyPath(t *testing.T) {
 	mock := ai.NewMockProvider(`{
 		"title": "JWT认证",

@@ -24,22 +24,6 @@ func TestBuildDraftPrompt(t *testing.T) {
 	assert.Contains(t, result, "I can reproduce this")
 }
 
-func TestBuildConsolidatePrompt(t *testing.T) {
-	input := &PromptInput{
-		IssueTitle: "Add caching",
-		IssueBody:  "We need Redis caching",
-		Comments:   []string{"Redis is fine", "Consider TTL settings"},
-	}
-
-	result, err := BuildConsolidatePrompt(input)
-	require.NoError(t, err)
-	assert.NotEmpty(t, result)
-	assert.Contains(t, result, "Add caching")
-	assert.Contains(t, result, "Redis is fine")
-	assert.Contains(t, result, "\"agreements\"")
-	assert.Contains(t, result, "\"decision\"")
-}
-
 func TestBuildDebatePrompt(t *testing.T) {
 	input := &PromptInput{
 		IssueTitle:     "Debate cache strategy",

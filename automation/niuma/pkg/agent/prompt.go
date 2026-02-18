@@ -28,11 +28,6 @@ func BuildDraftPrompt(input *PromptInput) (string, error) {
 	return renderTemplate("draft", draftTmpl, input)
 }
 
-// BuildConsolidatePrompt 生成讨论汇总的 prompt
-func BuildConsolidatePrompt(input *PromptInput) (string, error) {
-	return renderTemplate("consolidate", consolidateTmpl, input)
-}
-
 // BuildDebatePrompt 生成 debate_ab 轮流评论的 prompt
 func BuildDebatePrompt(input *PromptInput) (string, error) {
 	return renderTemplate("debate_ab", debateABTmpl, input)
@@ -98,39 +93,6 @@ const draftTmpl = `你是一个高级软件工程师。请分析以下 GitHub Is
   "approach": "解决方案描述",
   "affected_files": ["file1.go", "file2.go"],
   "risks": "潜在风险（可选）"
-}
-` + "```"
-
-const consolidateTmpl = `你是一个项目经理。请汇总以下 GitHub Issue 的讨论进展。
-
-## Issue: {{.IssueTitle}}
-
-{{.IssueBody}}
-
-## 讨论内容
-
-{{range .Comments}}
----
-{{.}}
-{{end}}
-
-## 要求
-
-请以 JSON 格式返回讨论汇总：
-` + "```json" + `
-{
-  "agreements": ["已达成一致1", "已达成一致2"],
-  "disagreements": [
-    {
-      "topic": "分歧主题",
-      "options": ["方案A", "方案B"],
-      "recommendation": "建议采用方案A（给出理由）",
-      "risk": "low"
-    }
-  ],
-  "decision": "merge",
-  "requires_human_decision": false,
-  "should_finish": false
 }
 ` + "```"
 

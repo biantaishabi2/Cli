@@ -19,8 +19,6 @@ import (
 type OrchestratorConfig struct {
 	// 讨论阶段：多 provider 参与讨论
 	DiscussionProviders  []ai.Provider // 参与"左右互搏"的 provider 列表
-	Consolidator         ai.Provider   // 汇总讨论用的 provider
-	DiscussionMode       string        // consolidate|debate_ab
 	VisibleRoundInterval int           // 可见评论每 N 轮输出（默认 1）
 	VisibleOnlyOnDiff    bool          // 仅在分歧/决策变化时输出可见评论
 
@@ -50,21 +48,6 @@ func (c *OrchestratorConfig) getMaxDiscussionRounds() int {
 		return 5
 	}
 	return c.MaxDiscussionRounds
-}
-
-// getDiscussionMode 获取讨论模式，默认 consolidate。
-func (c *OrchestratorConfig) getDiscussionMode() string {
-	if c == nil {
-		return "consolidate"
-	}
-	switch strings.ToLower(strings.TrimSpace(c.DiscussionMode)) {
-	case "", "consolidate":
-		return "consolidate"
-	case "debate_ab":
-		return "debate_ab"
-	default:
-		return "consolidate"
-	}
 }
 
 // getVisibleRoundInterval 获取可见评论轮次节流，默认 1。
@@ -114,17 +97,11 @@ func NewOrchestratorWithConfig(ghOps GitHubOps, issueNumber int, cfg *Orchestrat
 		panic("OrchestratorConfig 必须提供至少一个 provider（ImplementProvider 或 DiscussionProviders）")
 	}
 
-	// consolidator 默认用 defaultProvider
-	consolidator := cfg.Consolidator
-	if consolidator == nil {
-		consolidator = defaultProvider
-	}
-
 	return &Orchestrator{
 		github:      ghOps,
 		provider:    defaultProvider,
 		issueNumber: issueNumber,
-		plan:        NewPlanEngine(consolidator),
+		plan:        NewPlanEngine(defaultProvider),
 		config:      cfg,
 	}
 }
@@ -252,18 +229,8 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 		previousCount = summaryMC.Marker.DisagreeCount
 	}
 
-	// 生成本轮讨论摘要。
-	var summary *DiscussionSummary
-	switch o.getDiscussionMode() {
-	case "debate_ab":
-		summary, err = o.doDebateABDiscussion(ctx, round, maxRounds)
-	default:
-		if o.hasMultipleDiscussionProviders() {
-			summary, err = o.doMultiProviderDiscussion(ctx, round, maxRounds)
-		} else {
-			summary, err = o.updateDiscussionSummary(ctx)
-		}
-	}
+	// 生成本轮讨论摘要（仅保留 debate_ab 模式）。
+	summary, err := o.doDebateABDiscussion(ctx, round, maxRounds)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +259,6 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 		PreviousDisagreementCount: nonNegative(previousCount),
 		HasHighRisk:               hasHighRiskDisagreement(summary.Disagreements),
 		AllLowRiskAutoResolvable:  allLowRiskAutoResolvable(summary.Disagreements),
-		DiscussionMode:            o.getDiscussionMode(),
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker
@@ -310,7 +276,7 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	if summaryMC != nil {
 		rev = summaryMC.Marker.Revision + 1
 	}
-	m := buildDiscussionMarker(o.issueNumber, rev, o.getDiscussionMode(), summary)
+	m := buildDiscussionMarker(o.issueNumber, rev, summary)
 	body := FormatDiscussionSummary(summary, m)
 	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body); err != nil {
 		return nil, fmt.Errorf("更新讨论汇总失败: %w", err)
@@ -318,7 +284,7 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 
 	if o.shouldPublishDiscussionSummary(round, summaryMC, summary) {
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
-			FormatDiscussionRoundSummary(round, maxRounds, o.getDiscussionMode(), summary, previousCount))
+			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousCount))
 	}
 
 	if decision.Result == state.ShouldWarn {
@@ -912,24 +878,11 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 	}, nil
 }
 
-// updateDiscussionSummary 生成讨论汇总（单 provider 模式）
-func (o *Orchestrator) updateDiscussionSummary(ctx context.Context) (*DiscussionSummary, error) {
-	input, err := o.buildPromptInput(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	summary, err := o.plan.Consolidate(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	return summary, nil
-}
-
 // doDebateABDiscussion 执行 AB 轮流评论模式。
 func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
-	if len(o.config.DiscussionProviders) < 2 {
-		return nil, fmt.Errorf("debate_ab 模式至少需要 2 个 discussion providers")
+	providers := o.discussionProviders()
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("debate_ab 缺少 discussion providers")
 	}
 
 	speakerIdx := (round - 1) % 2
@@ -952,7 +905,7 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		return nil, fmt.Errorf("构建 debate_ab prompt 失败: %w", err)
 	}
 
-	raw, err := o.config.DiscussionProviders[speakerIdx].Complete(ctx, prompt)
+	raw, err := providers[speakerIdx%len(providers)].Complete(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("debate_%s 生成评论失败: %w", strings.ToLower(speaker), err)
 	}
@@ -975,64 +928,14 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 	}, nil
 }
 
-// hasMultipleDiscussionProviders 检查是否配置了多个讨论 provider
-func (o *Orchestrator) hasMultipleDiscussionProviders() bool {
-	return o.config != nil && len(o.config.DiscussionProviders) > 1
-}
-
-// doMultiProviderDiscussion 多 provider "左右互搏"讨论
-// 每个 provider 独立给出方案，然后 consolidator 汇总
-func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
-	input, err := o.buildPromptInput(ctx)
-	if err != nil {
-		return nil, err
+func (o *Orchestrator) discussionProviders() []ai.Provider {
+	if o.config != nil && len(o.config.DiscussionProviders) > 0 {
+		return o.config.DiscussionProviders
 	}
-
-	prompt, err := BuildDebatePrompt(&PromptInput{
-		IssueTitle:     input.IssueTitle,
-		IssueBody:      input.IssueBody,
-		Comments:       input.Comments,
-		Round:          round,
-		MaxRounds:      maxRounds,
-		DiscussionRole: "A/B",
-		Counterpart:    "-",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("构建讨论 prompt 失败: %w", err)
+	if o.provider == nil {
+		return nil
 	}
-
-	// 收集各 provider 的方案
-	var opinions []string
-	for _, p := range o.config.DiscussionProviders {
-		raw, err := p.Complete(ctx, prompt)
-		if err != nil {
-			opinions = append(opinions, fmt.Sprintf("[%s] (错误: %v)", p.Name(), err))
-			continue
-		}
-		opinions = append(opinions, fmt.Sprintf("[%s 的方案]\n%s", p.Name(), raw))
-	}
-
-	// 用 consolidator 汇总（先 copy 再 append，避免污染 input.Comments 底层数组）
-	merged := make([]string, 0, len(input.Comments)+len(opinions))
-	merged = append(merged, input.Comments...)
-	merged = append(merged, opinions...)
-	consolidateInput := &PromptInput{
-		IssueTitle: input.IssueTitle,
-		IssueBody:  input.IssueBody,
-		Comments:   merged,
-	}
-	summary, err := o.plan.Consolidate(ctx, consolidateInput)
-	if err != nil {
-		return nil, fmt.Errorf("汇总讨论失败: %w", err)
-	}
-	return summary, nil
-}
-
-func (o *Orchestrator) getDiscussionMode() string {
-	if o.config == nil {
-		return "consolidate"
-	}
-	return o.config.getDiscussionMode()
+	return []ai.Provider{o.provider}
 }
 
 func (o *Orchestrator) shouldPublishDiscussionSummary(round int, previous *gh.MarkerComment, summary *DiscussionSummary) bool {
@@ -1080,7 +983,7 @@ func nonNegative(v int) int {
 	return v
 }
 
-func buildDiscussionMarker(issue, rev int, mode string, summary *DiscussionSummary) *marker.Marker {
+func buildDiscussionMarker(issue, rev int, summary *DiscussionSummary) *marker.Marker {
 	return &marker.Marker{
 		Type:          marker.TypeDiscussionSummary,
 		Issue:         issue,
@@ -1090,7 +993,7 @@ func buildDiscussionMarker(issue, rev int, mode string, summary *DiscussionSumma
 		Human:         summary.RequiresHumanDecision,
 		Risk:          string(maxRisk(summary.Disagreements)),
 		DisagreeCount: len(summary.Disagreements),
-		Mode:          mode,
+		Mode:          "debate_ab",
 	}
 }
 

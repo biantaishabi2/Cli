@@ -42,7 +42,7 @@ type Marker struct {
 	Human         bool   // 仅 DISCUSSION_SUMMARY 使用：是否需要人工决策
 	Risk          string // 仅 DISCUSSION_SUMMARY 使用：最高风险（low|medium|high）
 	DisagreeCount int    // 仅 DISCUSSION_SUMMARY 使用：分歧数量
-	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（consolidate|debate_ab）
+	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（当前固定 debate_ab）
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->

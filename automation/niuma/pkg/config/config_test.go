@@ -23,7 +23,6 @@ func TestLoad_ValidConfig(t *testing.T) {
       cmd: "codex exec {prompt}"
   discussion:
     providers: [kimi, codex]
-    consolidator: kimi
   implementation:
     provider: kimi
 `
@@ -39,7 +38,6 @@ func TestLoad_ValidConfig(t *testing.T) {
 
 	// 讨论配置
 	assert.Equal(t, []string{"kimi", "codex"}, cfg.AI.Discussion.Providers)
-	assert.Equal(t, "kimi", cfg.AI.Discussion.Consolidator)
 
 	// 实现配置
 	assert.Equal(t, "kimi", cfg.AI.Implementation.Provider)
@@ -56,7 +54,6 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	assert.NotNil(t, cfg.AI.Providers)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
-	assert.Equal(t, "consolidate", cfg.Workflow.GetDiscussionMode())
 	assert.Equal(t, 1, cfg.Workflow.GetVisibleRoundInterval())
 	assert.True(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }
@@ -73,7 +70,6 @@ workflow:
   max_iterate_rounds: 5
   max_discussion_rounds: 7
   discuss_timeout_minutes: 25
-  discussion_mode: debate_ab
   visible_round_interval: 2
   visible_only_on_diff: false
 `
@@ -88,7 +84,6 @@ workflow:
 	assert.Equal(t, 7, cfg.Workflow.MaxDiscussionRounds)
 	assert.Equal(t, 7, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 25, cfg.Workflow.GetDiscussTimeoutMinutes())
-	assert.Equal(t, "debate_ab", cfg.Workflow.GetDiscussionMode())
 	assert.Equal(t, 2, cfg.Workflow.GetVisibleRoundInterval())
 	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }
@@ -115,12 +110,6 @@ func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
 	w.DiscussTimeoutMinutes = 30
 	assert.Equal(t, 30, w.GetDiscussTimeoutMinutes())
 
-	assert.Equal(t, "consolidate", w.GetDiscussionMode())
-	w.DiscussionMode = "debate_ab"
-	assert.Equal(t, "debate_ab", w.GetDiscussionMode())
-	w.DiscussionMode = "invalid_mode"
-	assert.Equal(t, "consolidate", w.GetDiscussionMode())
-
 	assert.Equal(t, 1, w.GetVisibleRoundInterval())
 	w.VisibleRoundInterval = 3
 	assert.Equal(t, 3, w.GetVisibleRoundInterval())
@@ -141,13 +130,11 @@ func TestLoad_EnvOverride(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Setenv("NIUMA_AI_DEFAULT", "opencode")
-	t.Setenv("NIUMA_DISCUSSION_MODE", "debate_ab")
 	t.Setenv("NIUMA_VISIBLE_ROUND_INTERVAL", "4")
 	t.Setenv("NIUMA_VISIBLE_ONLY_ON_DIFF", "false")
 	cfg, err := Load(dir)
 	require.NoError(t, err)
 	assert.Equal(t, "opencode", cfg.AI.Default)
-	assert.Equal(t, "debate_ab", cfg.Workflow.GetDiscussionMode())
 	assert.Equal(t, 4, cfg.Workflow.GetVisibleRoundInterval())
 	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }

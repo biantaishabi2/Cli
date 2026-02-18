@@ -14,9 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDoDiscuss_ConsolidateMode_Default(t *testing.T) {
-	consolidator := ai.NewMockProvider(
-		`{"agreements":["已收敛"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`,
+func TestDoDiscuss_DebateABMode_Default(t *testing.T) {
+	providerA := ai.NewMockProvider(
+		`{"agreements":["a1"],"disagreements":[{"topic":"t1","options":["A","B"],"recommendation":"A","risk":"low"}],"suggestion":"继续"}`,
+	)
+	providerB := ai.NewMockProvider(
+		`{"agreements":["a2"],"disagreements":[],"suggestion":"可定稿"}`,
+	)
+	finalProvider := ai.NewMockProvider(
 		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/a.go","action":"modify","description":"x"}],"test_scenarios":[{"name":"n","input":"i","expected":"o"}]}`,
 	)
 	mockGH := NewMockGitHub()
@@ -24,9 +29,8 @@ func TestDoDiscuss_ConsolidateMode_Default(t *testing.T) {
 	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
 
 	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
-		DiscussionProviders: []ai.Provider{ai.NewMockProvider(`{"summary":"unused"}`)},
-		Consolidator:        consolidator,
-		DiscussionMode:      "consolidate",
+		DiscussionProviders: []ai.Provider{providerA, providerB},
+		ImplementProvider:   finalProvider,
 	})
 
 	require.NoError(t, orch.DoDiscuss(context.Background(), 2))
@@ -51,8 +55,7 @@ func TestDoDiscuss_DebateABMode_AlternatingAndFinalize(t *testing.T) {
 
 	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
 		DiscussionProviders: []ai.Provider{providerA, providerB},
-		Consolidator:        consolidator,
-		DiscussionMode:      "debate_ab",
+		ImplementProvider:   consolidator,
 		VisibleOnlyOnDiff:   true,
 	})
 
@@ -73,7 +76,6 @@ func TestDoDiscuss_DebateABMode_AlternatingAndFinalize(t *testing.T) {
 func TestShouldPublishDiscussionSummary_VisibleOnlyOnDiff(t *testing.T) {
 	orch := NewOrchestratorWithConfig(NewMockGitHub(), 1, &OrchestratorConfig{
 		DiscussionProviders:  []ai.Provider{ai.NewMockProvider(`{"summary":"unused"}`)},
-		Consolidator:         ai.NewMockProvider(`{"summary":"unused"}`),
 		VisibleRoundInterval: 1,
 		VisibleOnlyOnDiff:    true,
 	})

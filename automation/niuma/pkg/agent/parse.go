@@ -34,68 +34,6 @@ func ParseDraftResponse(raw string) (*DraftPlan, error) {
 	}, nil
 }
 
-// ParseConsolidateResponse 解析 AI 返回的讨论汇总
-func ParseConsolidateResponse(raw string) (*DiscussionSummary, error) {
-	if raw == "" {
-		return nil, fmt.Errorf("空响应")
-	}
-
-	jsonStr := extractJSON(raw)
-	if jsonStr == "" {
-		return nil, fmt.Errorf("无法解析讨论汇总：缺少 JSON 代码块或裸 JSON 对象")
-	}
-
-	rawMap, err := parseJSONObject(jsonStr)
-	if err != nil {
-		return nil, fmt.Errorf("无法解析讨论汇总 JSON: %w", err)
-	}
-
-	required := []string{"agreements", "disagreements", "decision", "requires_human_decision", "should_finish"}
-	missing := missingFields(rawMap, required...)
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("讨论汇总缺少必填字段: %s", strings.Join(missing, ", "))
-	}
-
-	if isJSONNull(rawMap["agreements"]) {
-		return nil, fmt.Errorf("字段 agreements 不能为 null")
-	}
-	var agreements []string
-	if err := json.Unmarshal(rawMap["agreements"], &agreements); err != nil {
-		return nil, fmt.Errorf("字段 agreements 类型错误: %w", err)
-	}
-
-	disagreements, err := parseDisagreements(rawMap["disagreements"])
-	if err != nil {
-		return nil, err
-	}
-
-	var decision string
-	if err := json.Unmarshal(rawMap["decision"], &decision); err != nil {
-		return nil, fmt.Errorf("字段 decision 类型错误: %w", err)
-	}
-	if !isValidDecision(Decision(decision)) {
-		return nil, fmt.Errorf("字段 decision 非法: %s", decision)
-	}
-
-	var requiresHumanDecision bool
-	if err := json.Unmarshal(rawMap["requires_human_decision"], &requiresHumanDecision); err != nil {
-		return nil, fmt.Errorf("字段 requires_human_decision 类型错误: %w", err)
-	}
-
-	var shouldFinish bool
-	if err := json.Unmarshal(rawMap["should_finish"], &shouldFinish); err != nil {
-		return nil, fmt.Errorf("字段 should_finish 类型错误: %w", err)
-	}
-
-	return &DiscussionSummary{
-		Agreements:            agreements,
-		Disagreements:         disagreements,
-		Decision:              Decision(decision),
-		RequiresHumanDecision: requiresHumanDecision,
-		ShouldFinish:          shouldFinish,
-	}, nil
-}
-
 // ParseDebateResponse 解析 AB 轮流评论输出。
 // 要求严格 JSON，字段缺失/类型错误会直接报错。
 func ParseDebateResponse(raw string) (*DebateComment, error) {

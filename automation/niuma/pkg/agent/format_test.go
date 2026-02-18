@@ -111,7 +111,7 @@ func TestFormatDiscussionRoundSummary(t *testing.T) {
 		ShouldFinish:          false,
 	}
 
-	result := FormatDiscussionRoundSummary(2, 5, "consolidate", summary, 2)
+	result := FormatDiscussionRoundSummary(2, 5, "debate_ab", summary, 2)
 	assert.Contains(t, result, "<!-- BOT:DISCUSSION_VISIBLE -->")
 	assert.Contains(t, result, "第 2/5 轮")
 	assert.Contains(t, result, "变化: -1")
