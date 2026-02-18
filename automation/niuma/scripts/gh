@@ -37,39 +37,29 @@ contains_bot_label() {
 
 is_issue_edit_command() {
   local cmd_parts=()
-  local skip_next=false
+  local args=("$@")
 
-  for arg in "$@"; do
-    if [[ "$skip_next" == "true" ]]; then
-      skip_next=false
+  for ((i=0; i<${#args[@]}; i++)); do
+    arg="${args[$i]}"
+    case "$arg" in
+      --repo|--hostname|-R)
+        i=$((i + 1))
+        continue
+        ;;
+      --repo=*|--hostname=*|-R*)
+        continue
+        ;;
+      -h|--help|--version)
+        continue
+        ;;
+    esac
+
+    if [[ "$arg" == -* ]]; then
       continue
     fi
 
-    if [[ ${#cmd_parts[@]} -eq 0 ]]; then
-      case "$arg" in
-        --repo|--hostname|-R)
-          skip_next=true
-          continue
-          ;;
-        --repo=*|--hostname=*|-R*)
-          continue
-          ;;
-        -h|--help|--version)
-          continue
-          ;;
-      esac
-      if [[ "$arg" == -* ]]; then
-        continue
-      fi
-      cmd_parts+=("$arg")
-      continue
-    fi
-
-    if [[ ${#cmd_parts[@]} -eq 1 ]]; then
-      if [[ "$arg" == -* ]]; then
-        continue
-      fi
-      cmd_parts+=("$arg")
+    cmd_parts+=("$arg")
+    if [[ ${#cmd_parts[@]} -ge 2 ]]; then
       break
     fi
   done
