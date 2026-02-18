@@ -159,6 +159,22 @@ func TestAnalyze_FilterInvalidDeps(t *testing.T) {
 	assert.Equal(t, []int{40}, result.Dependencies[42])
 }
 
+func TestAnalyze_IgnoreAIUnknownOwnerIssue(t *testing.T) {
+	mockAI := ai.NewMockProvider(`{"dependencies": {"999": [40], "42": [40]}, "potential_conflicts": []}`)
+	analyzer := NewDependencyAnalyzer(mockAI)
+
+	issues := []IssueInfo{
+		{Number: 40, Title: "Auth", Body: "fix auth"},
+		{Number: 42, Title: "Tests", Body: "add tests"},
+	}
+
+	result, err := analyzer.Analyze(context.Background(), issues)
+	require.NoError(t, err)
+	assert.Equal(t, []int{40}, result.Dependencies[42])
+	_, exists := result.Dependencies[999]
+	assert.False(t, exists)
+}
+
 func TestAnalyze_SelfDependencyFiltered(t *testing.T) {
 	analyzer := NewDependencyAnalyzer(nil)
 

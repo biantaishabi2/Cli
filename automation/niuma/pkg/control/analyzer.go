@@ -79,6 +79,10 @@ func (a *DependencyAnalyzer) Analyze(ctx context.Context, issues []IssueInfo) (*
 		} else {
 			// 合并 AI 结果（仅补全未显式声明 depends-on 的 issue）
 			for issueNum, deps := range aiResult.Dependencies {
+				// 仅接受当前 issue 集合内的 owner，避免 AI 幻觉 key 污染 blocked_by 落盘门禁。
+				if !issueSet[issueNum] {
+					continue
+				}
 				if declared[issueNum] {
 					continue // 显式声明优先，AI 不允许覆盖
 				}
