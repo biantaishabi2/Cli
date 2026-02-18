@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -194,4 +195,31 @@ JSON
 	require.Len(t, tasks, 1)
 	assert.Equal(t, TaskStatusInProgress, tasks[0].Status)
 	assert.Equal(t, "d", tasks[0].Description)
+}
+
+func TestBuildPhaseIdempotencyMetadataPatch_EmptyPhaseOrKeyReturnsNil(t *testing.T) {
+	recordedAt := time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC)
+
+	assert.Nil(t, buildPhaseIdempotencyMetadataPatch(nil, "", "key", "hash", recordedAt))
+	assert.Nil(t, buildPhaseIdempotencyMetadataPatch(nil, "fix", "", "hash", recordedAt))
+	assert.Nil(t, buildPhaseIdempotencyMetadataPatch(nil, "   ", "key", "hash", recordedAt))
+	assert.Nil(t, buildPhaseIdempotencyMetadataPatch(nil, "fix", "   ", "hash", recordedAt))
+}
+
+func TestBuildPhaseIdempotencyMetadataPatch_NilMetadataWritesAllFields(t *testing.T) {
+	recordedAt := time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC)
+
+	update := buildPhaseIdempotencyMetadataPatch(nil, "fix", "key-1", "hash-1", recordedAt)
+	require.Len(t, update, 3)
+	assert.Equal(t, "key-1", update["idempotency.key.fix"])
+	assert.Equal(t, "hash-1", update["idempotency.input_hash.fix"])
+	assert.Equal(t, "2026-02-18T12:00:00Z", update["idempotency.timestamp.fix"])
+}
+
+func TestPhaseScopedMetadataKey_EmptyPrefixOrPhaseReturnsEmpty(t *testing.T) {
+	assert.Equal(t, "idempotency.key.fix", phaseScopedMetadataKey(" idempotency.key ", " fix "))
+	assert.Empty(t, phaseScopedMetadataKey("", "fix"))
+	assert.Empty(t, phaseScopedMetadataKey("idempotency.key", ""))
+	assert.Empty(t, phaseScopedMetadataKey("   ", "fix"))
+	assert.Empty(t, phaseScopedMetadataKey("idempotency.key", "   "))
 }

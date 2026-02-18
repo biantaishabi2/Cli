@@ -14,6 +14,8 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/config"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
+	ghapi "github.com/google/go-github/v68/github"
 	"github.com/spf13/cobra"
 )
 
@@ -169,7 +171,21 @@ func resolveIntegrationGateMaxRetries(flagValue int, envValue string) int {
 
 // gitHubControlOps 适配 gh.Client 到 control.GitHubOps
 type gitHubControlOps struct {
-	client *gh.Client
+	client githubControlClient
+}
+
+type githubControlClient interface {
+	ListIssuesWithLabel(ctx context.Context, label string) ([]*ghapi.Issue, error)
+	ListIssuesByState(ctx context.Context, state string) ([]*ghapi.Issue, error)
+	GetIssue(ctx context.Context, number int) (*ghapi.Issue, error)
+	CloseIssue(ctx context.Context, number int) error
+	MergePR(ctx context.Context, number int, method string) error
+	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
+	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	FindMarker(ctx context.Context, issueNumber int, t marker.Type) (*gh.MarkerComment, error)
+	GetPR(ctx context.Context, number int) (*ghapi.PullRequest, error)
 }
 
 func (g *gitHubControlOps) ListIssuesWithLabel(ctx context.Context, label string) ([]control.IssueInfo, error) {
@@ -258,6 +274,35 @@ func (g *gitHubControlOps) AddIssueBlockedBy(ctx context.Context, issueNumber in
 
 func (g *gitHubControlOps) RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error {
 	return g.client.RemoveIssueBlockedBy(ctx, issueNumber, blockedByIssueNumber)
+}
+
+func (g *gitHubControlOps) ResolvePRMetadata(ctx context.Context, issueNumber int) (control.PRMetadata, error) {
+	found, err := g.client.FindMarker(ctx, issueNumber, marker.TypePRCreated)
+	if err != nil {
+		return control.PRMetadata{}, fmt.Errorf("读取 issue #%d marker 失败: %w", issueNumber, err)
+	}
+	if found == nil || found.Marker == nil || found.Marker.PR <= 0 {
+		return control.PRMetadata{}, fmt.Errorf("issue #%d: %w", issueNumber, control.ErrPRMarkerNotFound)
+	}
+
+	prNum := found.Marker.PR
+	pr, err := g.client.GetPR(ctx, prNum)
+	if err != nil {
+		return control.PRMetadata{}, fmt.Errorf("读取 PR #%d 失败: %w", prNum, err)
+	}
+	if strings.EqualFold(pr.GetState(), "closed") {
+		return control.PRMetadata{}, fmt.Errorf("PR #%d: %w", prNum, control.ErrPRClosed)
+	}
+
+	branch := strings.TrimSpace(pr.GetHead().GetRef())
+	if branch == "" {
+		return control.PRMetadata{}, fmt.Errorf("PR #%d: %w", prNum, control.ErrPRBranchUnavailable)
+	}
+
+	return control.PRMetadata{
+		PRNum:  prNum,
+		Branch: branch,
+	}, nil
 }
 
 func runControlRun(cmd *cobra.Command, args []string) error {
