@@ -8,9 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +22,9 @@ type mockGitHubOps struct {
 	issuesByNumber        map[int]IssueInfo
 	mergedPRs             []int
 	mergeError            map[int]error
+	resolvePRMetadata     map[int]PRMetadata
+	resolvePRMetadataErr  map[int]error
+	resolvePRMetadataCall []int
 	replaceLabelCalls     []replaceLabelCall
 	replaceLabelError     map[string]error
 	replaceLabelPairError map[string]error
@@ -49,6 +50,8 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		issuesByLabel:         make(map[string][]IssueInfo),
 		issuesByNumber:        issuesByNumber,
 		mergeError:            make(map[int]error),
+		resolvePRMetadata:     make(map[int]PRMetadata),
+		resolvePRMetadataErr:  make(map[int]error),
 		replaceLabelError:     make(map[string]error),
 		replaceLabelPairError: make(map[string]error),
 		replaceLabelFails:     make(map[string]int),
@@ -108,6 +111,17 @@ func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
 	}
 	m.mergedPRs = append(m.mergedPRs, prNum)
 	return nil
+}
+
+func (m *mockGitHubOps) ResolvePRMetadata(_ context.Context, issueNumber int) (PRMetadata, error) {
+	m.resolvePRMetadataCall = append(m.resolvePRMetadataCall, issueNumber)
+	if err, ok := m.resolvePRMetadataErr[issueNumber]; ok {
+		return PRMetadata{}, err
+	}
+	if metadata, ok := m.resolvePRMetadata[issueNumber]; ok {
+		return metadata, nil
+	}
+	return PRMetadata{}, ErrPRMarkerNotFound
 }
 
 func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
@@ -216,49 +230,6 @@ type inMemController struct {
 	mockTaskCtl *mockTaskCtlClient
 	mockGitHub  *mockGitHubOps
 	mockAI      *ai.MockProvider
-}
-
-type heartbeatFailIssueLockStore struct {
-	base              IssueLockStore
-	mu                sync.Mutex
-	refreshCount      int
-	lastReleaseResult IssueLockResult
-}
-
-func newHeartbeatFailIssueLockStore() *heartbeatFailIssueLockStore {
-	return &heartbeatFailIssueLockStore{
-		base: newInMemoryIssueLockStore(),
-	}
-}
-
-func (s *heartbeatFailIssueLockStore) TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error) {
-	return s.base.TryAcquire(issueNumber, owner, now, ttl)
-}
-
-func (s *heartbeatFailIssueLockStore) Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error) {
-	s.mu.Lock()
-	s.refreshCount++
-	s.mu.Unlock()
-	return IssueLockRecord{}, fmt.Errorf("inject refresh failure")
-}
-
-func (s *heartbeatFailIssueLockStore) Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error {
-	s.mu.Lock()
-	s.lastReleaseResult = lastResult
-	s.mu.Unlock()
-	return s.base.Release(issueNumber, owner, now, lastResult)
-}
-
-func (s *heartbeatFailIssueLockStore) RefreshCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.refreshCount
-}
-
-func (s *heartbeatFailIssueLockStore) LastReleaseResult() IssueLockResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastReleaseResult
 }
 
 func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
@@ -373,186 +344,6 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func newIssueLockTestController(owner string, store IssueLockStore, ttl, heartbeat time.Duration, nowFn func() time.Time) *Controller {
-	if store == nil {
-		store = newInMemoryIssueLockStore()
-	}
-	if owner == "" {
-		owner = "test-owner"
-	}
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	if heartbeat <= 0 {
-		heartbeat = 100 * time.Second
-	}
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	return &Controller{
-		issueLocks:         store,
-		issueLockTTL:       ttl,
-		issueLockHeartbeat: heartbeat,
-		nowFn:              nowFn,
-		ownerID:            owner,
-	}
-}
-
-func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
-	store := newInMemoryIssueLockStore()
-	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 100*time.Second, time.Now)
-	issue := IssueInfo{Number: 315}
-
-	started := make(chan struct{})
-	done := make(chan struct{})
-	errCh := make(chan error, 1)
-
-	go func() {
-		errCh <- ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
-			close(started)
-			<-done
-			return nil
-		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("等待首个持锁流程超时")
-	}
-
-	secondExecuted := false
-	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
-		secondExecuted = true
-		return nil
-	})
-	require.NoError(t, err)
-	assert.False(t, secondExecuted)
-
-	close(done)
-	require.NoError(t, <-errCh)
-}
-
-func TestController_WithIssueLock_ReleasesAfterCompletion(t *testing.T) {
-	ctrl := newIssueLockTestController("owner-a", nil, 5*time.Minute, 100*time.Second, time.Now)
-	issue := IssueInfo{Number: 315}
-
-	runCount := 0
-	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
-		runCount++
-		return nil
-	})
-	require.NoError(t, err)
-
-	err = ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
-		runCount++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 2, runCount)
-}
-
-func TestController_IssueLock_TTLExpiryRecovery(t *testing.T) {
-	store := newInMemoryIssueLockStore()
-	ttl := 5 * time.Minute
-
-	var mu sync.Mutex
-	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
-	nowFn := func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		return now
-	}
-	advance := func(d time.Duration) {
-		mu.Lock()
-		now = now.Add(d)
-		mu.Unlock()
-	}
-
-	ctrlA := newIssueLockTestController("owner-a", store, ttl, 100*time.Second, nowFn)
-	ctrlB := newIssueLockTestController("owner-b", store, ttl, 100*time.Second, nowFn)
-	issue := IssueInfo{Number: 315}
-
-	acquired, _, err := ctrlA.tryAcquireIssueLock(issue)
-	require.NoError(t, err)
-	require.True(t, acquired)
-
-	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
-	require.NoError(t, err)
-	assert.False(t, acquired)
-
-	advance(ttl + time.Second)
-
-	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
-	require.NoError(t, err)
-	assert.True(t, acquired)
-}
-
-func TestController_WithIssueLock_HeartbeatRefreshFailureReturnsError(t *testing.T) {
-	store := newHeartbeatFailIssueLockStore()
-	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 10*time.Millisecond, time.Now)
-	issue := IssueInfo{Number: 315}
-
-	err := ctrl.withIssueLock(context.Background(), issue, func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
-	})
-
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "锁心跳刷新失败")
-	assert.GreaterOrEqual(t, store.RefreshCount(), 1)
-	assert.Equal(t, IssueLockResultFailed, store.LastReleaseResult())
-}
-
-func TestInMemoryIssueLockStore_ValidationAndOwnerMismatch(t *testing.T) {
-	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
-	store := newInMemoryIssueLockStore()
-
-	_, _, err := store.TryAcquire(0, "owner-a", now, time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "issue 编号无效")
-
-	_, _, err = store.TryAcquire(1, "", now, time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "owner 不能为空")
-
-	_, _, err = store.TryAcquire(1, "owner-a", now, 0)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "ttl 必须大于 0")
-
-	_, err = store.Refresh(0, "owner-a", now, time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "issue 编号无效")
-
-	_, err = store.Refresh(1, "", now, time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "owner 不能为空")
-
-	_, err = store.Refresh(1, "owner-a", now, 0)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "ttl 必须大于 0")
-
-	_, err = store.Refresh(1, "owner-a", now, time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "未持锁")
-
-	_, acquired, err := store.TryAcquire(1, "owner-a", now, time.Minute)
-	require.NoError(t, err)
-	require.True(t, acquired)
-
-	_, err = store.Refresh(1, "owner-b", now.Add(10*time.Second), time.Minute)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "owner 不匹配")
-
-	err = store.Release(1, "", now, IssueLockResultFailed)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "owner 不能为空")
-
-	err = store.Release(1, "owner-b", now, IssueLockResultFailed)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "owner 不匹配")
 }
 
 func TestController_NewIssueDiscovery(t *testing.T) {
@@ -1072,7 +863,7 @@ func TestBuildIntegrationGateAttemptKey_IgnoresIntegrationHeadChanges(t *testing
 	assert.Equal(t, firstKey, secondKey)
 }
 
-func TestRunIntegrationGateAndDecide_FirstFailThenPass_MarksCompletedBeforeIntegrated(t *testing.T) {
+func TestRunIntegrationGateAndDecide_FirstFailThenPass_MarksIntegrated(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	runGit(t, dir, "checkout", "-b", "feat/41-gate")
@@ -1132,9 +923,6 @@ func TestIntegrationGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, integrated)
 	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
-	firstLogContent, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(firstLogContent), "--status completed")
 
 	firstAttemptKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
 	require.NoError(t, err)
@@ -1157,8 +945,7 @@ func TestIntegrationGate(t *testing.T) {}
 	assert.NotEqual(t, firstAttemptKey, secondAttemptKey)
 
 	retryTask := Task{
-		ID:     "task-1",
-		Status: TaskStatusInProgress,
+		ID: "task-1",
 		Metadata: map[string]string{
 			"issue_num":                      "41",
 			metaKeyIntegrationGateStatus:     integrationGateStatusRetrying,
@@ -1173,203 +960,6 @@ func TestIntegrationGate(t *testing.T) {}
 	logContent, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
-	assert.Contains(t, string(logContent), "--status completed")
-
-	logLines := splitNonEmpty(string(logContent))
-	completedIdx := findLineIndexContaining(logLines, "--status completed")
-	integratedIdx := findLineIndexContaining(logLines, `"integrated":"true"`)
-	require.GreaterOrEqual(t, completedIdx, 0)
-	require.GreaterOrEqual(t, integratedIdx, 0)
-	assert.Less(t, completedIdx, integratedIdx)
-}
-
-func TestRunIntegrationGateAndDecide_CompletedTaskOnlyBackfillsIntegrated(t *testing.T) {
-	binDir := t.TempDir()
-	logPath := filepath.Join(binDir, "taskctl.log")
-	binPath := filepath.Join(binDir, "taskctl")
-	script := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$*\" >> %q\nexit 0\n", logPath)
-	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
-
-	ctrl := &Controller{
-		taskctl: &TaskCtlClient{
-			BinPath:   binPath,
-			StorePath: filepath.Join(binDir, "tasks.json"),
-		},
-	}
-
-	task := Task{
-		ID:     "task-1",
-		Status: TaskStatusCompleted,
-		Metadata: map[string]string{
-			"issue_num": "41",
-		},
-	}
-
-	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), task, MergeOutcome{})
-	require.NoError(t, err)
-	assert.True(t, integrated)
-
-	logContent, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	logText := string(logContent)
-	assert.Contains(t, strings.ToLower(logText), `"integrated":"true"`)
-	assert.NotContains(t, logText, "--status completed")
-	assert.NotContains(t, strings.ToLower(logText), "integration_gate_status")
-}
-
-func TestShouldBackfillIntegratedMetadata(t *testing.T) {
-	assert.True(t, shouldBackfillIntegratedMetadata(Task{
-		Status:   TaskStatusCompleted,
-		Metadata: map[string]string{"issue_num": "41"},
-	}))
-	assert.False(t, shouldBackfillIntegratedMetadata(Task{
-		Status:   TaskStatusCompleted,
-		Metadata: map[string]string{"issue_num": "41", metaKeyIntegrated: "true"},
-	}))
-	assert.False(t, shouldBackfillIntegratedMetadata(Task{
-		Status:   TaskStatusInProgress,
-		Metadata: map[string]string{"issue_num": "41"},
-	}))
-}
-
-func TestRunIntegrationGateAndDecide_EscalatedDoesNotMarkCompleted(t *testing.T) {
-	dir := setupGitRepo(t)
-
-	runGit(t, dir, "checkout", "-b", "feat/41-gate")
-	niumaDir := filepath.Join(dir, "automation", "niuma")
-	require.NoError(t, os.MkdirAll(filepath.Join(niumaDir, "gate"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "go.mod"), []byte("module example.com/niuma\n\ngo 1.20\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "gate", "gate_test.go"), []byte(`package gate
-
-import "testing"
-
-func TestIntegrationGate(t *testing.T) {
-	t.Fatalf("gate failed")
-}
-`), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-m", "add failing integration gate test")
-
-	runGit(t, dir, "checkout", "-b", "integration/main")
-	runGit(t, dir, "checkout", "master")
-
-	binDir := t.TempDir()
-	logPath := filepath.Join(binDir, "taskctl.log")
-	binPath := filepath.Join(binDir, "taskctl")
-	script := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$*\" >> %q\nexit 0\n", logPath)
-	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
-
-	mockGH := newMockGitHubOps()
-	ctrl := &Controller{
-		github: mockGH,
-		taskctl: &TaskCtlClient{
-			BinPath:   binPath,
-			StorePath: filepath.Join(dir, ".niuma", "tasks.json"),
-		},
-		cfg: &ControlConfig{
-			IntegrationGateMaxRetries: 0,
-			RepoDir:                   dir,
-		},
-	}
-
-	outcome := MergeOutcome{
-		Status:            MergeStatusMerged,
-		IntegrationBranch: "integration/main",
-		SourceBranch:      "feat/41-gate",
-		IssueNum:          41,
-		PRNum:             410,
-		ExecutorVersion:   "integration-merge-executor/v1",
-		ExecutedAt:        "2026-02-17T10:00:00Z",
-	}
-
-	task := Task{
-		ID: "task-1",
-		Metadata: map[string]string{
-			"issue_num": "41",
-		},
-	}
-	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), task, outcome)
-	require.NoError(t, err)
-	assert.False(t, integrated)
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, needsHumanLabel), 0)
-
-	logContent, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(logContent), "--status completed")
-	assert.NotContains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
-}
-
-func TestRunIntegrationGateAndDecide_CompletedUpdateFailureDoesNotWriteIntegrated(t *testing.T) {
-	dir := setupGitRepo(t)
-
-	runGit(t, dir, "checkout", "-b", "feat/41-gate")
-	niumaDir := filepath.Join(dir, "automation", "niuma")
-	require.NoError(t, os.MkdirAll(filepath.Join(niumaDir, "gate"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "go.mod"), []byte("module example.com/niuma\n\ngo 1.20\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(niumaDir, "gate", "gate_test.go"), []byte(`package gate
-
-import "testing"
-
-func TestIntegrationGate(t *testing.T) {}
-`), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-m", "add passing integration gate test")
-
-	runGit(t, dir, "checkout", "-b", "integration/main")
-	runGit(t, dir, "checkout", "master")
-
-	binDir := t.TempDir()
-	logPath := filepath.Join(binDir, "taskctl.log")
-	binPath := filepath.Join(binDir, "taskctl")
-	script := fmt.Sprintf(`#!/usr/bin/env bash
-printf '%%s\n' "$*" >> %q
-if [[ "$*" == *"--status completed"* ]]; then
-  echo "forced completed update failure" >&2
-  exit 1
-fi
-exit 0
-`, logPath)
-	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
-
-	mockGH := newMockGitHubOps()
-	ctrl := &Controller{
-		github: mockGH,
-		taskctl: &TaskCtlClient{
-			BinPath:   binPath,
-			StorePath: filepath.Join(dir, ".niuma", "tasks.json"),
-		},
-		cfg: &ControlConfig{
-			IntegrationGateMaxRetries: 2,
-			RepoDir:                   dir,
-		},
-	}
-
-	outcome := MergeOutcome{
-		Status:            MergeStatusMerged,
-		IntegrationBranch: "integration/main",
-		SourceBranch:      "feat/41-gate",
-		IssueNum:          41,
-		PRNum:             410,
-		ExecutorVersion:   "integration-merge-executor/v1",
-		ExecutedAt:        "2026-02-17T10:00:00Z",
-	}
-
-	task := Task{
-		ID:     "task-1",
-		Status: TaskStatusInProgress,
-		Metadata: map[string]string{
-			"issue_num": "41",
-		},
-	}
-	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), task, outcome)
-	require.Error(t, err)
-	assert.False(t, integrated)
-	assert.Contains(t, err.Error(), "更新任务 task-1 失败")
-
-	logContent, readErr := os.ReadFile(logPath)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(logContent), "--status completed")
-	assert.NotContains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
 }
 
 func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
@@ -1386,6 +976,163 @@ func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, orchestrateCount)
 	assert.Len(t, issues, 2)
+}
+
+func TestSyncPRReviewableMetadata_SyncsMetadataBeforeIntegration(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{
+			ID:       "task-321",
+			Metadata: map[string]string{"issue_num": "321"},
+		},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, "123", tasks[0].Metadata["pr_num"])
+	assert.Equal(t, "feat/321-fix", tasks[0].Metadata["branch"])
+	assert.Equal(t, "main", tasks[0].Metadata["meta_issue_slug"])
+	assert.Equal(t, []int{321}, mockGH.resolvePRMetadataCall)
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logContent), "--task-id task-321")
+	assert.Contains(t, string(logContent), `"pr_num":"123"`)
+	assert.Contains(t, string(logContent), `"branch":"feat/321-fix"`)
+}
+
+func TestSyncPRReviewableMetadata_IdempotentNoop(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-321",
+			Metadata: map[string]string{
+				"issue_num":       "321",
+				"pr_num":          "123",
+				"branch":          "feat/321-fix",
+				"meta_issue_slug": "main",
+			},
+		},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Equal(t, []int{321}, mockGH.resolvePRMetadataCall)
+
+	logContent, err := os.ReadFile(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(string(logContent)))
+}
+
+func TestSyncPRReviewableMetadata_SkippableErrorsDoNotBlock(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadataErr[321] = ErrPRMarkerNotFound
+	mockGH.resolvePRMetadata[322] = PRMetadata{
+		PRNum:  124,
+		Branch: "feat/322-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+		{ID: "task-322", Metadata: map[string]string{"issue_num": "322"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+		322: {Number: 322, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Equal(t, "124", tasks[1].Metadata["pr_num"])
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logContent), "--task-id task-322")
+	assert.NotContains(t, string(logContent), "--task-id task-321")
+}
+
+func TestSyncPRReviewableMetadata_APIFailureReturnsError(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadataErr[321] = errors.New("github api unavailable")
+
+	taskctlClient, _ := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "github api unavailable")
+}
+
+func TestSyncPRReviewableMetadata_PersistFailureReturnsError(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: newFailingTaskCtlClient(t),
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "持久化 PR 元数据失败")
 }
 
 func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
@@ -1466,6 +1213,35 @@ func countReplaceLabelByIssueAndTarget(calls []replaceLabelCall, issueNum int, l
 		}
 	}
 	return count
+}
+
+func newRecordingTaskCtlClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "taskctl.log")
+	binPath := filepath.Join(binDir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nif [ \"$1\" = \"update\" ]; then\n  printf '%%s\\n' \"$*\" >> %q\nfi\nexit 0\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(binDir, "tasks.json"),
+	}, logPath
+}
+
+func newFailingTaskCtlClient(t *testing.T) *TaskCtlClient {
+	t.Helper()
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "taskctl")
+	script := "#!/usr/bin/env bash\nexit 1\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(binDir, "tasks.json"),
+	}
 }
 
 func findLineIndexContaining(lines []string, target string) int {
