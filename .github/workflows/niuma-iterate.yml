@@ -16,7 +16,8 @@ jobs:
     runs-on: self-hosted
     if: >
       github.event_name == 'issues' &&
-      github.event.label.name == 'bot:pr-needs-fix'
+      github.event.label.name == 'bot:pr-needs-fix' &&
+      github.event.issue.state == 'open'
     permissions:
       issues: write
       pull-requests: write
@@ -50,8 +51,29 @@ jobs:
           fi
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
-      - name: Iterate on Review
+      - name: Check PR State
+        id: pr_state
         if: steps.find_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          PR_STATE=$(gh pr view "$PR_NUMBER" --json state -q '.state')
+          echo "pr_state=$PR_STATE" >> $GITHUB_OUTPUT
+
+      - name: Escalate Human When PR Not Open
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state != 'OPEN'
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-needs-fix --add-label needs-human || true
+          gh issue comment "$ISSUE_NUMBER" --body "## ⚠️ 自动迭代已停止\n\n检测到 PR #$PR_NUMBER 当前状态不是 OPEN，已转人工处理（`needs-human`）。"
+          exit 1
+
+      - name: Iterate on Review
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
@@ -67,7 +89,7 @@ jobs:
 
       - name: Run PR Gate
         id: gate
-        if: steps.find_pr.outputs.pr_number != ''
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -91,7 +113,8 @@ jobs:
     runs-on: self-hosted
     if: >
       github.event_name == 'pull_request_review' &&
-      github.event.review.state == 'changes_requested'
+      github.event.review.state == 'changes_requested' &&
+      github.event.pull_request.state == 'open'
     permissions:
       issues: write
       pull-requests: write
