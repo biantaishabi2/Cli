@@ -19,34 +19,53 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues                []IssueInfo
-	issuesByLabel         map[string][]IssueInfo
-	issuesByNumber        map[int]IssueInfo
-	mergedPRs             []int
-	mergeError            map[int]error
-	resolvePRMetadata     map[int]PRMetadata
-	resolvePRMetadataErr  map[int]error
-	resolvePRMetadataCall []int
-	replaceLabelCalls     []replaceLabelCall
-	replaceLabelHook      func()
-	replaceLabelError     map[string]error
-	replaceLabelPairError map[string]error
-	replaceLabelFails     map[string]int
-	closeIssueCalls       []int
-	closeIssueError       map[int]error
-	blockedBy             map[int]map[int]struct{}
-	listBlockedByErr      map[int]error
-	addBlockedByErr       map[string]error
-	removeBlockedByErr    map[string]error
-	addBlockedByCalls     []blockedByCall
-	removeBlockedByCalls  []blockedByCall
-	listBlockedByCalls    int
+	issues                    []IssueInfo
+	issuesByLabel             map[string][]IssueInfo
+	issuesByNumber            map[int]IssueInfo
+	getIssueOverride          map[int]IssueInfo
+	mergedPRs                 []int
+	mergeError                map[int]error
+	resolvePRMetadata         map[int]PRMetadata
+	resolvePRMetadataErr      map[int]error
+	resolvePRMetadataCall     []int
+	resolvePRReviewStatus     map[int]PRReviewStatus
+	resolvePRReviewStatusSeq  map[int][]PRReviewStatus
+	resolvePRReviewStatusIdx  map[int]int
+	resolvePRReviewStatusErr  map[int]error
+	resolvePRReviewStatusCall []int
+	replaceLabelCalls         []replaceLabelCall
+	replaceLabelError         map[string]error
+	replaceLabelPairError     map[string]error
+	replaceLabelFails         map[string]int
+	updateIssueBodyCalls      []updateIssueBodyCall
+	listCommentBodies         map[int][]string
+	addIssueCommentCalls      []addIssueCommentCall
+	closeIssueCalls           []int
+	closeIssueError           map[int]error
+	blockedBy                 map[int]map[int]struct{}
+	listBlockedByErr          map[int]error
+	addBlockedByErr           map[string]error
+	removeBlockedByErr        map[string]error
+	addBlockedByCalls         []blockedByCall
+	removeBlockedByCalls      []blockedByCall
+	listBlockedByCalls        int
+	replaceLabelHook          func()
 }
 
 type replaceLabelCall struct {
 	issueNumber int
 	oldLabel    string
 	newLabel    string
+}
+
+type updateIssueBodyCall struct {
+	issueNumber int
+	body        string
+}
+
+type addIssueCommentCall struct {
+	issueNumber int
+	body        string
 }
 
 type blockedByCall struct {
@@ -61,20 +80,26 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	}
 
 	return &mockGitHubOps{
-		issues:                issues,
-		issuesByLabel:         make(map[string][]IssueInfo),
-		issuesByNumber:        issuesByNumber,
-		mergeError:            make(map[int]error),
-		resolvePRMetadata:     make(map[int]PRMetadata),
-		resolvePRMetadataErr:  make(map[int]error),
-		replaceLabelError:     make(map[string]error),
-		replaceLabelPairError: make(map[string]error),
-		replaceLabelFails:     make(map[string]int),
-		closeIssueError:       make(map[int]error),
-		blockedBy:             make(map[int]map[int]struct{}),
-		listBlockedByErr:      make(map[int]error),
-		addBlockedByErr:       make(map[string]error),
-		removeBlockedByErr:    make(map[string]error),
+		issues:                   issues,
+		issuesByLabel:            make(map[string][]IssueInfo),
+		issuesByNumber:           issuesByNumber,
+		getIssueOverride:         make(map[int]IssueInfo),
+		mergeError:               make(map[int]error),
+		resolvePRMetadata:        make(map[int]PRMetadata),
+		resolvePRMetadataErr:     make(map[int]error),
+		resolvePRReviewStatus:    make(map[int]PRReviewStatus),
+		resolvePRReviewStatusSeq: make(map[int][]PRReviewStatus),
+		resolvePRReviewStatusIdx: make(map[int]int),
+		resolvePRReviewStatusErr: make(map[int]error),
+		replaceLabelError:        make(map[string]error),
+		replaceLabelPairError:    make(map[string]error),
+		replaceLabelFails:        make(map[string]int),
+		listCommentBodies:        make(map[int][]string),
+		closeIssueError:          make(map[int]error),
+		blockedBy:                make(map[int]map[int]struct{}),
+		listBlockedByErr:         make(map[int]error),
+		addBlockedByErr:          make(map[string]error),
+		removeBlockedByErr:       make(map[string]error),
 	}
 }
 
@@ -104,11 +129,43 @@ func (m *mockGitHubOps) ListIssuesByState(_ context.Context, state string) ([]Is
 }
 
 func (m *mockGitHubOps) GetIssue(_ context.Context, issueNumber int) (IssueInfo, error) {
+	if issue, ok := m.getIssueOverride[issueNumber]; ok {
+		return issue, nil
+	}
 	issue, ok := m.issuesByNumber[issueNumber]
 	if !ok {
 		return IssueInfo{}, fmt.Errorf("issue #%d not found", issueNumber)
 	}
 	return issue, nil
+}
+
+func (m *mockGitHubOps) UpdateIssueBody(_ context.Context, issueNumber int, body string) error {
+	m.updateIssueBodyCalls = append(m.updateIssueBodyCalls, updateIssueBodyCall{
+		issueNumber: issueNumber,
+		body:        body,
+	})
+	issue, ok := m.issuesByNumber[issueNumber]
+	if ok {
+		issue.Body = body
+		m.issuesByNumber[issueNumber] = issue
+	}
+	return nil
+}
+
+func (m *mockGitHubOps) ListCommentBodies(_ context.Context, issueNumber int) ([]string, error) {
+	bodies := m.listCommentBodies[issueNumber]
+	copied := make([]string, len(bodies))
+	copy(copied, bodies)
+	return copied, nil
+}
+
+func (m *mockGitHubOps) AddIssueComment(_ context.Context, issueNumber int, body string) error {
+	m.addIssueCommentCalls = append(m.addIssueCommentCalls, addIssueCommentCall{
+		issueNumber: issueNumber,
+		body:        body,
+	})
+	m.listCommentBodies[issueNumber] = append(m.listCommentBodies[issueNumber], body)
+	return nil
 }
 
 func (m *mockGitHubOps) CloseIssue(_ context.Context, issueNumber int) error {
@@ -143,6 +200,25 @@ func (m *mockGitHubOps) ResolvePRMetadata(_ context.Context, issueNumber int) (P
 	return PRMetadata{}, ErrPRMarkerNotFound
 }
 
+func (m *mockGitHubOps) ResolvePRReviewStatus(_ context.Context, issueNumber int) (PRReviewStatus, error) {
+	m.resolvePRReviewStatusCall = append(m.resolvePRReviewStatusCall, issueNumber)
+	if err, ok := m.resolvePRReviewStatusErr[issueNumber]; ok {
+		return PRReviewStatus{}, err
+	}
+	if statuses, ok := m.resolvePRReviewStatusSeq[issueNumber]; ok && len(statuses) > 0 {
+		idx := m.resolvePRReviewStatusIdx[issueNumber]
+		if idx >= len(statuses) {
+			idx = len(statuses) - 1
+		}
+		m.resolvePRReviewStatusIdx[issueNumber] = idx + 1
+		return statuses[idx], nil
+	}
+	if status, ok := m.resolvePRReviewStatus[issueNumber]; ok {
+		return status, nil
+	}
+	return PRReviewStatus{}, ErrPRMarkerNotFound
+}
+
 func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
 	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
 		issueNumber: issueNumber,
@@ -160,10 +236,32 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 	if err, ok := m.replaceLabelError[newLabel]; ok {
 		return err
 	}
+	issue, ok := m.issuesByNumber[issueNumber]
+	if ok {
+		issue.Labels = replaceIssueLabel(issue.Labels, oldLabel, newLabel)
+		m.issuesByNumber[issueNumber] = issue
+	}
 	if m.replaceLabelHook != nil {
 		m.replaceLabelHook()
 	}
 	return nil
+}
+
+func replaceIssueLabel(labels []string, oldLabel, newLabel string) []string {
+	filtered := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if label == oldLabel {
+			continue
+		}
+		if label == newLabel {
+			continue
+		}
+		filtered = append(filtered, label)
+	}
+	if newLabel != "" {
+		filtered = append(filtered, newLabel)
+	}
+	return filtered
 }
 
 func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
@@ -1787,6 +1885,276 @@ func TestSyncPRReviewableMetadata_PersistFailureReturnsError(t *testing.T) {
 	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "持久化 PR 元数据失败")
+}
+
+func TestReconcilePRReviewableConflicts_ConflictRollbackAndCommentDedup(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "conflict body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "abc123",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, "bot:pr-needs-fix"), 0)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "<!-- BOT:CONFLICT_DETECTED sha:abc123 -->")
+
+	err = ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Len(t, mockGH.addIssueCommentCalls, 1)
+}
+
+func TestReconcilePRReviewableConflicts_MergeableNoopAndResetRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ok body\n\n<!-- PR_CONFLICT_RETRY:2 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "def456",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_UnknownRetriesThenNoop(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "unknown body\n\n<!-- PR_CONFLICT_RETRY:2 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatusSeq[321] = []PRReviewStatus{
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+		{PRNum: 123, HeadSHA: "sha-unknown", Mergeable: PRMergeableUnknown, MergeStateStatus: "UNKNOWN"},
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.resolvePRReviewStatusCall, 4)
+	assert.Equal(t, 2, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_ExceedThresholdEscalatesNeedsHuman(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "escalate body\n\n<!-- PR_CONFLICT_RETRY:3 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-escalate",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "BLOCKED",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, 4, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, needsHumanLabel), 0)
+	assert.Equal(t, 0, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 321, "bot:pr-needs-fix"))
+	require.Len(t, mockGH.addIssueCommentCalls, 2)
+	assert.Contains(t, mockGH.addIssueCommentCalls[1].body, "BOT:CONFLICT_ESCALATED")
+}
+
+func TestReconcilePRReviewableConflicts_LabelChangedSkipsTransition(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "race body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.getIssueOverride[321] = IssueInfo{
+		Number: 321,
+		Body:   "race body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+		Labels: []string{"bot:pr-needs-fix"},
+	}
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-race",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcilePRReviewableConflicts_LabelSyncFailedDoesNotPersistRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "label-fail body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-label-fail",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+	mockGH.replaceLabelError["bot:pr-needs-fix"] = errors.New("replace failed")
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "状态回退失败")
+	assert.Equal(t, 1, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.getIssueOverride[321] = IssueInfo{
+		Number: 321,
+		Labels: []string{"bot:pr-needs-fix"},
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+	task := Task{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+	assert.Equal(t, []string{"bot:pr-needs-fix"}, issueByNumber[321].Labels)
+}
+
+func TestEnsureIssueCommentWithMarker_DedupByMarker(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.listCommentBodies[321] = []string{
+		"已存在评论\n\n<!-- BOT:CONFLICT_DETECTED sha:abc123 -->",
+	}
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.ensureIssueCommentWithMarker(context.Background(), 321, "<!-- BOT:CONFLICT_DETECTED sha:abc123 -->", "new body")
+	require.NoError(t, err)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
 }
 
 func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {

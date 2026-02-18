@@ -16,7 +16,7 @@ jobs:
   orchestrate:
     runs-on: self-hosted
     if: >
-      (github.event_name == 'issues' && github.event.label.name == 'bot:orchestrate') ||
+      (github.event_name == 'issues' && (github.event.label.name == 'bot:orchestrate' || github.event.label.name == 'bot:pr-reviewable')) ||
       github.event_name == 'schedule'
     permissions:
       issues: write
@@ -42,11 +42,15 @@ jobs:
           REPO: ${{ github.repository }}
           WORKSPACE: ${{ github.workspace }}
           NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+          NIUMA_PR_CONFLICT_RETRY_THRESHOLD: ${{ vars.NIUMA_PR_CONFLICT_RETRY_THRESHOLD || '3' }}
+          NIUMA_PR_CONFLICT_UNKNOWN_BACKOFFS: ${{ vars.NIUMA_PR_CONFLICT_UNKNOWN_BACKOFFS || '5s,15s,30s' }}
         run: |
           "$NIUMA_BIN" control run \
             --repo "$REPO" \
             --repo-dir "$WORKSPACE" \
-            --integration-gate-max-retries "$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
+            --integration-gate-max-retries "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" \
+            --pr-conflict-retry-threshold "$NIUMA_PR_CONFLICT_RETRY_THRESHOLD" \
+            --pr-conflict-unknown-backoffs "$NIUMA_PR_CONFLICT_UNKNOWN_BACKOFFS"
 
       - name: Collect Integration Gate Status
         id: gate_status

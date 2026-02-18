@@ -133,6 +133,11 @@ control:
     skipped_edge_threshold: 20
 ```
 
+`niuma control run` 关键参数：
+- `--integration-gate-max-retries`（默认 2）
+- `--pr-conflict-retry-threshold`（默认 3）
+- `--pr-conflict-unknown-backoffs`（默认 `5s,15s,30s`）
+
 ## 状态机（Labels）
 
 | Label | 含义 |
@@ -147,6 +152,15 @@ control:
 | `bot:pr-needs-fix` | 自检/审核失败，需修复 |
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
+
+### `pr-reviewable` 冲突自动回退
+
+- control 循环会持续检查 `bot:pr-reviewable` 对应 PR 的 `mergeable / mergeStateStatus / headSha`
+- 命中冲突条件（`mergeable=CONFLICTING` 或 `mergeStateStatus in {DIRTY,BLOCKED}`）时，自动回退到 `bot:pr-needs-fix` 并触发 iterate
+- `UNKNOWN` 状态会按指数退避短重试（默认 `5s,15s,30s`），仍为 UNKNOWN 则保守 no-op
+- issue body 维护 `<!-- PR_CONFLICT_RETRY:N -->` 计数；PR 恢复可合并时自动重置为 `0`
+- 超过阈值（默认 `N=3`）自动升级 `needs-human`，停止自动冲突回退循环
+- 冲突评论带去重标记 `<!-- BOT:CONFLICT_DETECTED sha:<headSha> -->`，同一 headSha 仅评论一次
 
 ## Discussion 协议（当前）
 
