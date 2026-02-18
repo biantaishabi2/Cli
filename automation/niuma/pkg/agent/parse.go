@@ -56,6 +56,9 @@ func ParseConsolidateResponse(raw string) (*DiscussionSummary, error) {
 		return nil, fmt.Errorf("讨论汇总缺少必填字段: %s", strings.Join(missing, ", "))
 	}
 
+	if isJSONNull(rawMap["agreements"]) {
+		return nil, fmt.Errorf("字段 agreements 不能为 null")
+	}
 	var agreements []string
 	if err := json.Unmarshal(rawMap["agreements"], &agreements); err != nil {
 		return nil, fmt.Errorf("字段 agreements 类型错误: %w", err)
@@ -116,6 +119,9 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 		return nil, fmt.Errorf("AB 评论缺少必填字段: %s", strings.Join(missing, ", "))
 	}
 
+	if isJSONNull(rawMap["agreements"]) {
+		return nil, fmt.Errorf("字段 agreements 不能为 null")
+	}
 	var agreements []string
 	if err := json.Unmarshal(rawMap["agreements"], &agreements); err != nil {
 		return nil, fmt.Errorf("字段 agreements 类型错误: %w", err)
@@ -248,6 +254,9 @@ func missingFields(rawMap map[string]json.RawMessage, required ...string) []stri
 }
 
 func parseDisagreements(raw json.RawMessage) ([]DisagreementItem, error) {
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("字段 disagreements 不能为 null")
+	}
 	var disagreements []DisagreementItem
 	if err := json.Unmarshal(raw, &disagreements); err != nil {
 		return nil, fmt.Errorf("字段 disagreements 类型错误: %w", err)
@@ -267,6 +276,10 @@ func parseDisagreements(raw json.RawMessage) ([]DisagreementItem, error) {
 		}
 	}
 	return disagreements, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }
 
 func isValidDecision(d Decision) bool {

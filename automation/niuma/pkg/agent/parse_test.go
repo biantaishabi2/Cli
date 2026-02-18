@@ -116,6 +116,30 @@ func TestParseConsolidateResponse_TypeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "agreements 类型错误")
 }
 
+func TestParseConsolidateResponse_RejectNullListFields(t *testing.T) {
+	raw := `{
+  "agreements": null,
+  "disagreements": [],
+  "decision": "merge",
+  "requires_human_decision": false,
+  "should_finish": false
+}`
+	_, err := ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agreements 不能为 null")
+
+	raw = `{
+  "agreements": [],
+  "disagreements": null,
+  "decision": "merge",
+  "requires_human_decision": false,
+  "should_finish": false
+}`
+	_, err = ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disagreements 不能为 null")
+}
+
 func TestParseDebateResponse_ValidJSON(t *testing.T) {
 	raw := `{
   "agreements": ["同意使用 Redis"],
@@ -135,6 +159,26 @@ func TestParseDebateResponse_MissingFields(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "缺少必填字段")
 	assert.Contains(t, err.Error(), "suggestion")
+}
+
+func TestParseDebateResponse_RejectNullListFields(t *testing.T) {
+	raw := `{
+  "agreements": null,
+  "disagreements": [],
+  "suggestion": "继续"
+}`
+	_, err := ParseDebateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agreements 不能为 null")
+
+	raw = `{
+  "agreements": [],
+  "disagreements": null,
+  "suggestion": "继续"
+}`
+	_, err = ParseDebateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disagreements 不能为 null")
 }
 
 func TestParseFinalPlanResponse_ValidJSON(t *testing.T) {

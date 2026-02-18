@@ -63,6 +63,9 @@ func TestDoDiscuss_StopsAtRoundLimit(t *testing.T) {
 	warnMC := mockGH.GetMarker(1, marker.TypeDiscussionRoundLimitNotice)
 	require.NotNil(t, warnMC)
 	assert.Contains(t, warnMC.Comment.GetBody(), "讨论已达自动轮次上限")
+	assert.Contains(t, warnMC.Comment.GetBody(), "未收敛原因")
+	assert.Contains(t, warnMC.Comment.GetBody(), "下一步人工决策项")
+	assert.Contains(t, warnMC.Comment.GetBody(), "仍有 1 个未决分歧")
 	assert.Nil(t, mockGH.GetMarker(1, marker.TypeConvergeWarning))
 
 	// 每轮都更新 summary，revision 应等于 max rounds

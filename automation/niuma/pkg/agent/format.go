@@ -238,13 +238,34 @@ func FormatConvergeWarning(m *marker.Marker) string {
 }
 
 // FormatDiscussionRoundLimitWarning 格式化 discuss 达到轮次上限提醒
-func FormatDiscussionRoundLimitWarning(m *marker.Marker, maxRounds int) string {
+func FormatDiscussionRoundLimitWarning(m *marker.Marker, maxRounds int, unresolvedReason string, nextActions []string) string {
 	var sb strings.Builder
 
 	sb.WriteString(marker.Render(m))
 	sb.WriteString("\n\n")
 	sb.WriteString("## ⚠️ 讨论已达自动轮次上限\n\n")
 	sb.WriteString(fmt.Sprintf("当前自动讨论已达到 **%d** 轮，仍未收敛，已停止本次自动推进。\n\n", maxRounds))
+	sb.WriteString("### 未收敛原因\n\n")
+	if strings.TrimSpace(unresolvedReason) == "" {
+		sb.WriteString("- 达到轮次上限后，仍存在待决分歧\n\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("- %s\n\n", unresolvedReason))
+	}
+	sb.WriteString("### 下一步人工决策项\n\n")
+	if len(nextActions) == 0 {
+		sb.WriteString("- 在分歧清单中逐项拍板（接受 A/B 或给出新方案）\n")
+		sb.WriteString("- 如涉及高风险项，请先明确风险缓解条件和回滚方案\n")
+		sb.WriteString("- 补充结论后可评论 `/finalize` 触发定稿\n\n")
+	} else {
+		for _, action := range nextActions {
+			item := strings.TrimSpace(action)
+			if item == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString("- 当前状态保持为 `bot:needs-discussion`\n")
 	sb.WriteString("- 请补充更多上下文、边界条件或明确人工决策\n")
 	sb.WriteString("- 新增一条非 BOT 评论后会触发新一轮 discuss")

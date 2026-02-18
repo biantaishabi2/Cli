@@ -362,8 +362,13 @@ func (o *Orchestrator) notifyMaxDiscussionRoundsReached(ctx context.Context, max
 	if err != nil {
 		return fmt.Errorf("读取预警 marker 失败: %w", err)
 	}
+	summaryMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionSummary)
+	if err != nil {
+		return fmt.Errorf("读取讨论汇总 marker 失败: %w", err)
+	}
+	reason, nextActions := buildRoundLimitReasonAndActions(summaryMC)
 	return o.upsertDiscussionRoundLimitNotice(ctx, noticeMC, func(m *marker.Marker) string {
-		return FormatDiscussionRoundLimitWarning(m, maxRounds)
+		return FormatDiscussionRoundLimitWarning(m, maxRounds, reason, nextActions)
 	})
 }
 
@@ -1087,6 +1092,46 @@ func buildDiscussionMarker(issue, rev int, mode string, summary *DiscussionSumma
 		DisagreeCount: len(summary.Disagreements),
 		Mode:          mode,
 	}
+}
+
+func buildRoundLimitReasonAndActions(summaryMC *gh.MarkerComment) (string, []string) {
+	if summaryMC == nil || summaryMC.Marker == nil {
+		return "未读取到最新讨论摘要，暂无法自动归纳分歧结论", []string{
+			"请补充一条总结评论，明确当前分歧点和推荐方案",
+			"请维护者拍板最终取舍后评论 `/finalize` 或补充新约束继续讨论",
+		}
+	}
+
+	m := summaryMC.Marker
+	var reasons []string
+	if m.Human {
+		reasons = append(reasons, "最新讨论结论标记为 requires_human_decision=true")
+	}
+	if strings.EqualFold(m.Decision, string(DecisionDefer)) {
+		reasons = append(reasons, "最新 decision=defer，表示暂不自动决策")
+	}
+	if strings.EqualFold(m.Risk, string(RiskHigh)) {
+		reasons = append(reasons, "存在 high 风险分歧")
+	}
+	if m.DisagreeCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("仍有 %d 个未决分歧", m.DisagreeCount))
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "达到轮次上限后仍未满足自动定稿条件")
+	}
+
+	nextActions := []string{
+		"请在最新分歧清单中逐项拍板（接受 A/B 或给出合并方案）",
+	}
+	if strings.EqualFold(m.Risk, string(RiskHigh)) {
+		nextActions = append(nextActions, "请先确认高风险项的缓解措施与回滚方案")
+	}
+	if m.Human || strings.EqualFold(m.Decision, string(DecisionDefer)) {
+		nextActions = append(nextActions, "请明确是否需要人工决策人介入，并给出最终裁决")
+	}
+	nextActions = append(nextActions, "补充结论后新增一条非 BOT 评论触发下一轮 discuss，或评论 `/finalize` 直接定稿")
+
+	return strings.Join(reasons, "；"), nextActions
 }
 
 func hasHighRiskDisagreement(items []DisagreementItem) bool {

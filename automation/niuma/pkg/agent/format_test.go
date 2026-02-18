@@ -133,3 +133,20 @@ func TestFormatDebateRoundComment(t *testing.T) {
 	assert.Contains(t, result, "risk=high")
 	assert.Contains(t, result, "先保持兼容默认值")
 }
+
+func TestFormatDiscussionRoundLimitWarning(t *testing.T) {
+	m := &marker.Marker{
+		Type:     marker.TypeDiscussionRoundLimitNotice,
+		Issue:    42,
+		Revision: 1,
+	}
+	result := FormatDiscussionRoundLimitWarning(m, 5, "仍有 2 个未决分歧，且存在 high 风险", []string{
+		"请维护者拍板分歧 A/B 取舍",
+		"请先确认高风险项的缓解与回滚方案",
+	})
+	assert.Contains(t, result, "<!-- BOT:DISCUSSION_ROUND_LIMIT_NOTICE")
+	assert.Contains(t, result, "未收敛原因")
+	assert.Contains(t, result, "仍有 2 个未决分歧")
+	assert.Contains(t, result, "下一步人工决策项")
+	assert.Contains(t, result, "拍板分歧 A/B 取舍")
+}
