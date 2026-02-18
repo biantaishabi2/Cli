@@ -172,3 +172,61 @@ func TestMapStateLabelError(t *testing.T) {
 		})
 	}
 }
+
+func TestRunStateLabelSet_InvalidInputMapsStateExitCode(t *testing.T) {
+	restore := snapshotCLIFlags()
+	defer restore()
+
+	flagRepo = "owner/repo"
+	flagIssue = 325
+
+	t.Run("invalid --to", func(t *testing.T) {
+		flagStateTo = "bot:unknown"
+		flagStateFrom = ""
+
+		err := runStateLabelSet(nil, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+		assert.True(t, errors.Is(err, state.ErrInvalidState))
+	})
+
+	t.Run("invalid --from", func(t *testing.T) {
+		flagStateTo = string(state.StateFixRequested)
+		flagStateFrom = "bot:unknown"
+
+		err := runStateLabelSet(nil, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+		assert.True(t, errors.Is(err, state.ErrInvalidState))
+	})
+}
+
+func TestRunStateLabelNormalize_InvalidPriorityMapsStateExitCode(t *testing.T) {
+	restore := snapshotCLIFlags()
+	defer restore()
+
+	flagRepo = "owner/repo"
+	flagIssue = 325
+	flagStatePriority = "bot:needs-discussion,bot:unknown"
+
+	err := runStateLabelNormalize(nil, nil)
+	require.Error(t, err)
+	assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+	assert.True(t, errors.Is(err, state.ErrInvalidState))
+}
+
+func snapshotCLIFlags() func() {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevStateFrom := flagStateFrom
+	prevStateTo := flagStateTo
+	prevStatePriority := flagStatePriority
+
+	return func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagStateFrom = prevStateFrom
+		flagStateTo = prevStateTo
+		flagStatePriority = prevStatePriority
+	}
+}

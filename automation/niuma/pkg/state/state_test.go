@@ -5,6 +5,7 @@ package state
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,9 +113,11 @@ func TestAllBotLabels(t *testing.T) {
 }
 
 type transitionLabelOpsMock struct {
+	mu                sync.Mutex
 	labels            map[int][]string
 	replaceLabelsCall int
 	listSequences     map[int][][]string
+	replaceBarrier    chan struct{}
 }
 
 func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLabelOpsMock {
@@ -127,6 +130,8 @@ func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLab
 }
 
 func (m *transitionLabelOpsMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if seq := m.listSequences[issueNumber]; len(seq) > 0 {
 		current := seq[0]
 		m.listSequences[issueNumber] = seq[1:]
@@ -141,6 +146,8 @@ func (m *transitionLabelOpsMock) ListLabels(_ context.Context, issueNumber int) 
 }
 
 func (m *transitionLabelOpsMock) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	labels := m.labels[issueNumber]
 	for i, label := range labels {
 		if label == oldLabel {
@@ -153,19 +160,38 @@ func (m *transitionLabelOpsMock) ReplaceLabelIfPresent(_ context.Context, issueN
 }
 
 func (m *transitionLabelOpsMock) AddLabel(_ context.Context, issueNumber int, label string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.labels[issueNumber] = append(m.labels[issueNumber], label)
 	return nil
 }
 
 func (m *transitionLabelOpsMock) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.mu.Lock()
 	m.replaceLabelsCall++
+	currentCall := m.replaceLabelsCall
+	barrier := m.replaceBarrier
 	next := make([]string, len(labels))
 	copy(next, labels)
 	m.labels[issueNumber] = next
+	m.mu.Unlock()
+
+	if barrier != nil {
+		if currentCall == 1 {
+			<-barrier
+		} else if currentCall == 2 {
+			close(barrier)
+			m.mu.Lock()
+			m.replaceBarrier = nil
+			m.mu.Unlock()
+		}
+	}
 	return nil
 }
 
 func (m *transitionLabelOpsMock) setListSequence(issueNumber int, steps ...[]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	copied := make([][]string, 0, len(steps))
 	for _, step := range steps {
 		item := make([]string, len(step))
@@ -173,6 +199,27 @@ func (m *transitionLabelOpsMock) setListSequence(issueNumber int, steps ...[]str
 		copied = append(copied, item)
 	}
 	m.listSequences[issueNumber] = copied
+}
+
+func (m *transitionLabelOpsMock) enableFirstTwoReplaceBarrier() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.replaceBarrier = make(chan struct{})
+}
+
+func (m *transitionLabelOpsMock) getReplaceLabelsCall() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.replaceLabelsCall
+}
+
+func (m *transitionLabelOpsMock) getLabels(issueNumber int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current := m.labels[issueNumber]
+	dup := make([]string, len(current))
+	copy(dup, current)
+	return dup
 }
 
 func TestTransitionBotState_FromMismatchRejected(t *testing.T) {
@@ -266,6 +313,32 @@ func TestTransitionWithRetry_ConflictThenSuccess(t *testing.T) {
 		[]time.Duration{0, 0},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mock.replaceLabelsCall)
-	assert.Equal(t, []string{string(StateNeedsDiscussion)}, mock.labels[325])
+	assert.Equal(t, 2, mock.getReplaceLabelsCall())
+	assert.Equal(t, []string{string(StateNeedsDiscussion)}, mock.getLabels(325))
+}
+
+func TestTransitionWithRetry_ConcurrentWritersConflictAndRecover(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, string(StateFixRequested))
+	mock.enableFirstTwoReplaceBarrier()
+
+	ctx := context.Background()
+	errs := make(chan error, 2)
+
+	go func() {
+		errs <- TransitionWithRetry(ctx, mock, 325, "", StatePlanDraft, []time.Duration{0, 0})
+	}()
+	go func() {
+		errs <- TransitionWithRetry(ctx, mock, 325, "", StateNeedsDiscussion, []time.Duration{0, 0})
+	}()
+
+	err1 := <-errs
+	err2 := <-errs
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+
+	finalLabels := mock.getLabels(325)
+	states := CollectBotStates(finalLabels)
+	require.Len(t, states, 1)
+	assert.Contains(t, []State{StatePlanDraft, StateNeedsDiscussion}, states[0])
+	assert.GreaterOrEqual(t, mock.getReplaceLabelsCall(), 3)
 }

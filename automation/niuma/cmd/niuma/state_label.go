@@ -67,14 +67,14 @@ func runStateLabelSet(cmd *cobra.Command, args []string) error {
 
 	to, err := state.ParseState(strings.TrimSpace(flagStateTo))
 	if err != nil {
-		return fmt.Errorf("--to 非法: %w", err)
+		return mapInvalidStateFlagError("--to", err)
 	}
 
 	from := state.State("")
 	if strings.TrimSpace(flagStateFrom) != "" {
 		from, err = state.ParseState(strings.TrimSpace(flagStateFrom))
 		if err != nil {
-			return fmt.Errorf("--from 非法: %w", err)
+			return mapInvalidStateFlagError("--from", err)
 		}
 	}
 
@@ -97,19 +97,19 @@ func runStateLabelNormalize(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("必须指定 --repo 和 --issue")
 	}
 
-	ctx := context.Background()
-	client, err := gh.NewClientFromEnv(flagRepo)
-	if err != nil {
-		return err
-	}
-
 	rawPriority := strings.TrimSpace(flagStatePriority)
 	if rawPriority == "" {
 		rawPriority = strings.TrimSpace(os.Getenv("NIUMA_STATE_PRIORITY"))
 	}
 	priority, err := state.ParseStatePriority(rawPriority)
 	if err != nil {
-		return fmt.Errorf("解析状态优先级失败: %w", err)
+		return mapInvalidStateFlagError("--priority", err)
+	}
+
+	ctx := context.Background()
+	client, err := gh.NewClientFromEnv(flagRepo)
+	if err != nil {
+		return err
 	}
 
 	target, changed, err := state.Normalize(ctx, client, flagIssue, priority)
@@ -127,6 +127,10 @@ func runStateLabelNormalize(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("issue #%d 已自愈收敛到 %s\n", flagIssue, target)
 	return nil
+}
+
+func mapInvalidStateFlagError(flagName string, err error) error {
+	return mapStateLabelError(fmt.Errorf("%s 非法: %w (%v)", flagName, state.ErrInvalidState, err))
 }
 
 func runStateLabelClear(cmd *cobra.Command, args []string) error {

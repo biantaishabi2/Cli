@@ -35,14 +35,57 @@ contains_bot_label() {
   return 1
 }
 
+is_issue_edit_command() {
+  local cmd_parts=()
+  local skip_next=false
+
+  for arg in "$@"; do
+    if [[ "$skip_next" == "true" ]]; then
+      skip_next=false
+      continue
+    fi
+
+    if [[ ${#cmd_parts[@]} -eq 0 ]]; then
+      case "$arg" in
+        --repo|--hostname|-R)
+          skip_next=true
+          continue
+          ;;
+        --repo=*|--hostname=*|-R*)
+          continue
+          ;;
+        -h|--help|--version)
+          continue
+          ;;
+      esac
+      if [[ "$arg" == -* ]]; then
+        continue
+      fi
+      cmd_parts+=("$arg")
+      continue
+    fi
+
+    if [[ ${#cmd_parts[@]} -eq 1 ]]; then
+      if [[ "$arg" == -* ]]; then
+        continue
+      fi
+      cmd_parts+=("$arg")
+      break
+    fi
+  done
+
+  [[ "${cmd_parts[0]:-}" == "issue" && "${cmd_parts[1]:-}" == "edit" ]]
+}
+
 is_blocked_command=false
-if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
-  for ((i=1; i<=$#; i++)); do
-    arg="${!i}"
+if is_issue_edit_command "$@"; then
+  args=("$@")
+  for ((i=0; i<${#args[@]}; i++)); do
+    arg="${args[$i]}"
     case "$arg" in
       --add-label|--remove-label)
         next_idx=$((i + 1))
-        next_val="${!next_idx:-}"
+        next_val="${args[$next_idx]:-}"
         if contains_bot_label "$next_val"; then
           is_blocked_command=true
           break

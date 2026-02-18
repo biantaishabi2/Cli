@@ -33,6 +33,21 @@ func TestGHWrapper_BlocksDirectBotLabelEdit_CI(t *testing.T) {
 	assert.Contains(t, string(output), "禁止直接通过 gh 修改 bot:* 状态标签")
 }
 
+func TestGHWrapper_BlocksDirectBotLabelEdit_WithGlobalRepoFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash wrapper test is not supported on windows")
+	}
+
+	output, err := runGHWrapper(
+		t,
+		[]string{"-R", "owner/repo", "issue", "edit", "325", "--add-label", "bot:fix"},
+		map[string]string{"CI": "true"},
+	)
+	require.Error(t, err)
+	assert.Equal(t, 2, exitCode(err))
+	assert.Contains(t, string(output), "禁止直接通过 gh 修改 bot:* 状态标签")
+}
+
 func TestGHWrapper_AllowsNonBotLabelEdit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash wrapper test is not supported on windows")
