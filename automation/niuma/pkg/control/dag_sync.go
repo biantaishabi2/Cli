@@ -62,7 +62,7 @@ func (c *Controller) syncDagToGitHub(ctx context.Context, mode DagSyncMode, forc
 		result.Error = "taskctl 或 github 客户端未初始化"
 		result.ErrorType = ghpkg.DependencyErrorTypeUnknown
 		c.logDagSyncResult(result)
-		return result, fmt.Errorf(result.Error)
+			return result, fmt.Errorf("%s", result.Error)
 	}
 
 	tasks, err := c.taskctl.List("")
