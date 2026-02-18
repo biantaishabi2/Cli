@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -531,6 +532,35 @@ func countTaskctlLogMatches(t *testing.T, logPath, target string) int {
 	return count
 }
 
+func captureControllerStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer r.Close()
+
+	os.Stdout = w
+	defer func() {
+		os.Stdout = originalStdout
+	}()
+
+	outputCh := make(chan string, 1)
+	go func() {
+		data, copyErr := io.ReadAll(r)
+		if copyErr != nil {
+			outputCh <- ""
+			return
+		}
+		outputCh <- string(data)
+	}()
+
+	fn()
+	require.NoError(t, w.Close())
+
+	return <-outputCh
+}
+
 func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
 	store := newInMemoryIssueLockStore()
 	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 100*time.Second, time.Now)
@@ -555,12 +585,17 @@ func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
 	}
 
 	secondExecuted := false
-	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
-		secondExecuted = true
-		return nil
+	output := captureControllerStdout(t, func() {
+		err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+			secondExecuted = true
+			return nil
+		})
+		require.NoError(t, err)
 	})
-	require.NoError(t, err)
 	assert.False(t, secondExecuted)
+	assert.Contains(t, output, "[control][issue_lock]")
+	assert.Contains(t, output, "status=skipped")
+	assert.Contains(t, output, "reason=locked")
 
 	close(done)
 	require.NoError(t, <-errCh)
@@ -710,11 +745,15 @@ func TestController_ProcessIssue_IdempotencyHitSkipsSideEffects(t *testing.T) {
 		},
 	}
 
-	err := ctrl.ProcessIssue(context.Background(), task)
-	require.NoError(t, err)
+	output := captureControllerStdout(t, func() {
+		err := ctrl.ProcessIssue(context.Background(), task)
+		require.NoError(t, err)
+	})
 	assert.Len(t, mockGH.replaceLabelCalls, 0)
 	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key."+phase))
+	assert.Contains(t, output, "[control][idempotency]")
+	assert.Contains(t, output, "action=no-op")
 }
 
 func TestController_ProcessIssue_IdempotencyGetFailureStopsSideEffects(t *testing.T) {
@@ -898,6 +937,75 @@ func TestController_ProcessIssue_IdempotencyConcurrentDuplicateUsesLatestSnapsho
 	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
 	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
+}
+
+func TestController_ProcessIssue_IssueLockTTLRecoveryAfterSkip(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	store := newInMemoryIssueLockStore()
+	ttl := 30 * time.Second
+
+	var mu sync.Mutex
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+
+	holder := &Controller{
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: 0,
+		nowFn:              nowFn,
+		ownerID:            "owner-a",
+	}
+	acquired, _, err := holder.tryAcquireIssueLock(IssueInfo{Number: 314})
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	ctrl := &Controller{
+		taskctl:            taskctl,
+		github:             mockGH,
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: 0,
+		nowFn:              nowFn,
+		ownerID:            "owner-b",
+	}
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	firstOutput := captureControllerStdout(t, func() {
+		require.NoError(t, ctrl.ProcessIssue(context.Background(), task))
+	})
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Contains(t, firstOutput, "status=skipped")
+	assert.Contains(t, firstOutput, "reason=locked")
+
+	advance(ttl + 5*time.Second)
+
+	secondOutput := captureControllerStdout(t, func() {
+		require.NoError(t, ctrl.ProcessIssue(context.Background(), task))
+	})
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Contains(t, secondOutput, "[control][idempotency]")
+	assert.Contains(t, secondOutput, "action=recorded")
 }
 func TestController_NewIssueDiscovery(t *testing.T) {
 	issues := []IssueInfo{
