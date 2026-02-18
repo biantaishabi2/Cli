@@ -400,6 +400,41 @@ func newIssueLockTestController(owner string, store IssueLockStore, ttl, heartbe
 	}
 }
 
+func newTaskCtlLoggingClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nset -e\nprintf '%%s\\n' \"$*\" >> %q\necho '{}'\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
+func countTaskctlLogMatches(t *testing.T, logPath, target string) int {
+	t.Helper()
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		require.NoError(t, err)
+	}
+
+	count := 0
+	for _, line := range splitNonEmpty(string(content)) {
+		if strings.Contains(line, target) {
+			count++
+		}
+	}
+	return count
+}
+
 func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
 	store := newInMemoryIssueLockStore()
 	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 100*time.Second, time.Now)
@@ -553,6 +588,111 @@ func TestInMemoryIssueLockStore_ValidationAndOwnerMismatch(t *testing.T) {
 	err = store.Release(1, "owner-b", now, IssueLockResultFailed)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "owner 不匹配")
+}
+
+func TestController_ProcessIssue_IdempotencyHitSkipsSideEffects(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	repo := "biantaishabi2/Cli"
+	phase := "fix"
+	inputHash := "abc"
+	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      repo,
+			metaKeyTaskPhase:     phase,
+			metaKeyTaskInputHash: inputHash,
+			phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, phase): idempotencyKey,
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key."+phase))
+}
+
+func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	task.Metadata[metaKeyTaskInputHash] = "def"
+	err = ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(
+		t,
+		buildIssueIdempotencyKey("biantaishabi2/Cli", 314, "fix", "def"),
+		task.Metadata[phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, "fix")],
+	)
+}
+
+func TestController_ProcessIssue_IdempotencyBackfillsLegacyMetadataAndNoopsOnRepeat(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		nowFn: func() time.Time {
+			return time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+	err = ctrl.ProcessIssue(context.Background(), task)
+	require.NoError(t, err)
+
+	idempotencyKeyMeta := phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, "fix")
+	idempotencyHashMeta := phaseScopedMetadataKey(metadataKeyIdempotencyInputHashPrefix, "fix")
+	idempotencyTimeMeta := phaseScopedMetadataKey(metadataKeyIdempotencyTimestampPrefix, "fix")
+	assert.Equal(t, buildIssueIdempotencyKey("biantaishabi2/Cli", 314, "fix", "abc"), task.Metadata[idempotencyKeyMeta])
+	assert.Equal(t, "abc", task.Metadata[idempotencyHashMeta])
+	assert.Equal(t, "2026-02-18T12:00:00Z", task.Metadata[idempotencyTimeMeta])
+
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
 }
 
 func TestController_NewIssueDiscovery(t *testing.T) {

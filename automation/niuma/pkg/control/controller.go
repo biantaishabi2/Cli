@@ -4,6 +4,8 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +63,10 @@ const (
 	integrationGateErrorLimit        = 800
 	issueLockDefaultTTL              = 5 * time.Minute
 	issueLockDefaultHeartbeat        = 100 * time.Second
+
+	metaKeyTaskRepo      = "repo"
+	metaKeyTaskPhase     = "phase"
+	metaKeyTaskInputHash = "input_hash"
 )
 
 // Controller 多 Issue 协调控制器
@@ -412,6 +418,47 @@ func (c *Controller) withIssueLock(ctx context.Context, issue IssueInfo, fn func
 	return nil
 }
 
+type processIssueIdempotencyContext struct {
+	Repo      string
+	IssueNum  int
+	Phase     string
+	InputHash string
+	Key       string
+}
+
+func buildIssueIdempotencyKey(repo string, issueNum int, phase, inputHash string) string {
+	payload := strings.Join([]string{
+		strings.TrimSpace(repo),
+		strconv.Itoa(issueNum),
+		strings.TrimSpace(phase),
+		strings.TrimSpace(inputHash),
+	}, "\n")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildProcessIssueIdempotencyContext(task Task) (processIssueIdempotencyContext, bool) {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	phase := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskPhase))
+	inputHash := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskInputHash))
+	if phase == "" || inputHash == "" {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	repo := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskRepo))
+	return processIssueIdempotencyContext{
+		Repo:      repo,
+		IssueNum:  issueNum,
+		Phase:     phase,
+		InputHash: inputHash,
+		Key:       buildIssueIdempotencyKey(repo, issueNum, phase, inputHash),
+	}, true
+}
+
 // ProcessIssue 推进单个 issue 的控制流程（主入口）。
 func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 	issue := IssueInfo{
@@ -420,6 +467,20 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 	}
 
 	return c.withIssueLock(ctx, issue, func(runCtx context.Context) error {
+		idempotencyContext, enableIdempotency := buildProcessIssueIdempotencyContext(task)
+		if enableIdempotency {
+			if latestKey := readPhaseIdempotencyKey(task.Metadata, idempotencyContext.Phase); latestKey == idempotencyContext.Key {
+				fmt.Printf(
+					"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=no-op\n",
+					idempotencyContext.Repo,
+					idempotencyContext.IssueNum,
+					idempotencyContext.Phase,
+					idempotencyContext.Key,
+				)
+				return nil
+			}
+		}
+
 		status := TaskStatusInProgress
 		if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
 			return fmt.Errorf("更新任务状态失败 (task %s): %w", task.ID, err)
@@ -437,6 +498,29 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 		}
 
 		fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+		if !enableIdempotency {
+			return nil
+		}
+
+		update, err := c.taskctl.recordPhaseIdempotency(
+			task.ID,
+			task.Metadata,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+			idempotencyContext.InputHash,
+			c.controllerNow(),
+		)
+		if err != nil {
+			return fmt.Errorf("写入幂等 metadata 失败 (task %s): %w", task.ID, err)
+		}
+		task.Metadata = mergeMetadataPatch(task.Metadata, update)
+		fmt.Printf(
+			"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=recorded\n",
+			idempotencyContext.Repo,
+			idempotencyContext.IssueNum,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+		)
 		return nil
 	})
 }
