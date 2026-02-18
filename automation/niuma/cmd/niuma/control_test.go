@@ -154,6 +154,11 @@ func TestWorkflowGateStatusJQ_DefaultPassedWhenStatusesEmpty(t *testing.T) {
 	assert.Equal(t, "passed", status)
 }
 
+func TestWorkflowGateStatusJQ_DefaultPassedWhenTasksMissing(t *testing.T) {
+	status := runWorkflowGateStatusJQ(t, `{"version":"1"}`)
+	assert.Equal(t, "passed", status)
+}
+
 func TestWorkflowGateStatusJQ_PriorityEscalatedFirst(t *testing.T) {
 	status := runWorkflowGateStatusJQ(t, `{"version":"1","tasks":{"a":{"metadata":{"integration_gate_status":"passed"}},"b":{"metadata":{"integration_gate_status":"pending"}},"c":{"metadata":{"integration_gate_status":"escalated"}}}}`)
 	assert.Equal(t, "escalated", status)
@@ -170,7 +175,7 @@ func runWorkflowGateStatusJQ(t *testing.T, tasksJSON string) string {
 	require.NoError(t, os.WriteFile(storePath, []byte(tasksJSON), 0o644))
 
 	expr := `
-      [ .tasks | to_entries[] | .value.metadata.integration_gate_status // empty ] as $s |
+      [ (.tasks // {}) | to_entries[] | .value.metadata.integration_gate_status // empty ] as $s |
       if ($s | index("escalated")) then "escalated"
       elif ($s | index("retrying")) then "retrying"
       elif ($s | index("pending")) then "pending"
