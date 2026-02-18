@@ -768,6 +768,9 @@ func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task,
 	if err := c.markIntegrationGatePassed(task, attemptKey); err != nil {
 		return false, err
 	}
+	if err := c.markTaskCompleted(task); err != nil {
+		return false, err
+	}
 	if err := c.markTaskIntegrated(task, outcome); err != nil {
 		return false, err
 	}
@@ -1123,6 +1126,15 @@ func splitMetadataList(raw string) []string {
 		items = append(items, part)
 	}
 	return items
+}
+
+func (c *Controller) markTaskCompleted(task Task) error {
+	if normalizeTaskStatus(task.Status) == TaskStatusCompleted {
+		return nil
+	}
+
+	status := TaskStatusCompleted
+	return c.taskctl.Update(task.ID, UpdateOpts{Status: &status})
 }
 
 func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {
