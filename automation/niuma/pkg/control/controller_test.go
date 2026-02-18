@@ -17,17 +17,20 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues            []IssueInfo
-	issuesByLabel     map[string][]IssueInfo
-	issuesByNumber    map[int]IssueInfo
-	mergedPRs         []int
-	mergeError        map[int]error
-	replaceLabelCalls []replaceLabelCall
-	replaceLabelError map[string]error
+	issues                []IssueInfo
+	issuesByLabel         map[string][]IssueInfo
+	issuesByNumber        map[int]IssueInfo
+	mergedPRs             []int
+	mergeError            map[int]error
+	resolvePRMetadata     map[int]PRMetadata
+	resolvePRMetadataErr  map[int]error
+	resolvePRMetadataCall []int
+	replaceLabelCalls     []replaceLabelCall
+	replaceLabelError     map[string]error
 	replaceLabelPairError map[string]error
-	replaceLabelFails map[string]int
-	closeIssueCalls   []int
-	closeIssueError   map[int]error
+	replaceLabelFails     map[string]int
+	closeIssueCalls       []int
+	closeIssueError       map[int]error
 }
 
 type replaceLabelCall struct {
@@ -43,14 +46,16 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	}
 
 	return &mockGitHubOps{
-		issues:            issues,
-		issuesByLabel:     make(map[string][]IssueInfo),
-		issuesByNumber:    issuesByNumber,
-		mergeError:        make(map[int]error),
-		replaceLabelError: make(map[string]error),
+		issues:                issues,
+		issuesByLabel:         make(map[string][]IssueInfo),
+		issuesByNumber:        issuesByNumber,
+		mergeError:            make(map[int]error),
+		resolvePRMetadata:     make(map[int]PRMetadata),
+		resolvePRMetadataErr:  make(map[int]error),
+		replaceLabelError:     make(map[string]error),
 		replaceLabelPairError: make(map[string]error),
-		replaceLabelFails: make(map[string]int),
-		closeIssueError:   make(map[int]error),
+		replaceLabelFails:     make(map[string]int),
+		closeIssueError:       make(map[int]error),
 	}
 }
 
@@ -106,6 +111,17 @@ func (m *mockGitHubOps) MergePR(_ context.Context, prNum int, _ string) error {
 	}
 	m.mergedPRs = append(m.mergedPRs, prNum)
 	return nil
+}
+
+func (m *mockGitHubOps) ResolvePRMetadata(_ context.Context, issueNumber int) (PRMetadata, error) {
+	m.resolvePRMetadataCall = append(m.resolvePRMetadataCall, issueNumber)
+	if err, ok := m.resolvePRMetadataErr[issueNumber]; ok {
+		return PRMetadata{}, err
+	}
+	if metadata, ok := m.resolvePRMetadata[issueNumber]; ok {
+		return metadata, nil
+	}
+	return PRMetadata{}, ErrPRMarkerNotFound
 }
 
 func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
@@ -962,6 +978,163 @@ func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
 	assert.Len(t, issues, 2)
 }
 
+func TestSyncPRReviewableMetadata_SyncsMetadataBeforeIntegration(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{
+			ID:       "task-321",
+			Metadata: map[string]string{"issue_num": "321"},
+		},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	assert.Equal(t, "123", tasks[0].Metadata["pr_num"])
+	assert.Equal(t, "feat/321-fix", tasks[0].Metadata["branch"])
+	assert.Equal(t, "main", tasks[0].Metadata["meta_issue_slug"])
+	assert.Equal(t, []int{321}, mockGH.resolvePRMetadataCall)
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logContent), "--task-id task-321")
+	assert.Contains(t, string(logContent), `"pr_num":"123"`)
+	assert.Contains(t, string(logContent), `"branch":"feat/321-fix"`)
+}
+
+func TestSyncPRReviewableMetadata_IdempotentNoop(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-321",
+			Metadata: map[string]string{
+				"issue_num":       "321",
+				"pr_num":          "123",
+				"branch":          "feat/321-fix",
+				"meta_issue_slug": "main",
+			},
+		},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Equal(t, []int{321}, mockGH.resolvePRMetadataCall)
+
+	logContent, err := os.ReadFile(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(string(logContent)))
+}
+
+func TestSyncPRReviewableMetadata_SkippableErrorsDoNotBlock(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadataErr[321] = ErrPRMarkerNotFound
+	mockGH.resolvePRMetadata[322] = PRMetadata{
+		PRNum:  124,
+		Branch: "feat/322-fix",
+	}
+
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+		{ID: "task-322", Metadata: map[string]string{"issue_num": "322"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+		322: {Number: 322, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Equal(t, "124", tasks[1].Metadata["pr_num"])
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logContent), "--task-id task-322")
+	assert.NotContains(t, string(logContent), "--task-id task-321")
+}
+
+func TestSyncPRReviewableMetadata_APIFailureReturnsError(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadataErr[321] = errors.New("github api unavailable")
+
+	taskctlClient, _ := newRecordingTaskCtlClient(t)
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "github api unavailable")
+}
+
+func TestSyncPRReviewableMetadata_PersistFailureReturnsError(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.resolvePRMetadata[321] = PRMetadata{
+		PRNum:  123,
+		Branch: "feat/321-fix",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: newFailingTaskCtlClient(t),
+	}
+
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.syncPRReviewableMetadata(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "持久化 PR 元数据失败")
+}
+
 func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
 	mockGH := newMockGitHubOps(
 		IssueInfo{Number: 210, Title: "parent", State: "open"},
@@ -1040,4 +1213,33 @@ func countReplaceLabelByIssueAndTarget(calls []replaceLabelCall, issueNum int, l
 		}
 	}
 	return count
+}
+
+func newRecordingTaskCtlClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "taskctl.log")
+	binPath := filepath.Join(binDir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nif [ \"$1\" = \"update\" ]; then\n  printf '%%s\\n' \"$*\" >> %q\nfi\nexit 0\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(binDir, "tasks.json"),
+	}, logPath
+}
+
+func newFailingTaskCtlClient(t *testing.T) *TaskCtlClient {
+	t.Helper()
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "taskctl")
+	script := "#!/usr/bin/env bash\nexit 1\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(binDir, "tasks.json"),
+	}
 }
