@@ -162,6 +162,7 @@ export GITHUB_TOKEN="ghp_xxx"
 ```bash
 export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
 export NIUMA_TEST_TOKEN="ghp_xxx"
+export GH_TOKEN="$NIUMA_TEST_TOKEN"
 ```
 
 ### 3. 手动触发（调试）
@@ -300,6 +301,7 @@ Final Plan 必须包含可执行的测试：
 ```bash
 export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
 export NIUMA_TEST_TOKEN="ghp_xxx"
+export GH_TOKEN="$NIUMA_TEST_TOKEN"
 
 # 1) 重复触发：同一 issue 快速重复触发
 for i in 1 2 3; do

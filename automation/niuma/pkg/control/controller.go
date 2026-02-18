@@ -666,18 +666,9 @@ func (c *Controller) Run(ctx context.Context) error {
 			for _, task := range readyTasks {
 				issueNum := task.IssueNum()
 				fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
-				status := TaskStatusInProgress
-				if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
-					fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
+				if err := c.ProcessIssue(ctx, task); err != nil {
+					fmt.Printf("[control] 推进 ready task 失败 (task %s): %v\n", task.ID, err)
 					continue
-				}
-				// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
-				if issueNum > 0 {
-					if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
-						fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
-					} else {
-						fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
-					}
 				}
 			}
 		}

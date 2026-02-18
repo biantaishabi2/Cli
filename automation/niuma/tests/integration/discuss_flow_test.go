@@ -516,6 +516,11 @@ if [[ -f %q ]]; then
 	state="$(cat %q)"
 fi
 case "$cmd" in
+	list|ready)
+		cat <<'JSON'
+[{"id":"task-%d","subject":"issue %d","description":"issue %d","status":"pending","blocked_by":[],"metadata":{"issue_num":"%d","repo":"%s","phase":"%s","input_hash":"%s"}}]
+JSON
+		;;
 	get)
 		if [[ "$state" == "recorded" ]]; then
 			cat <<'JSON'
@@ -541,6 +546,13 @@ esac
 		logPath,
 		statePath,
 		statePath,
+		issueNumber,
+		issueNumber,
+		issueNumber,
+		issueNumber,
+		discussFlowDefaultRepo,
+		discussFlowDefaultPhase,
+		inputHash,
 		issueNumber,
 		issueNumber,
 		issueNumber,
@@ -695,7 +707,6 @@ func TestDiscussFlow_Regression_ConcurrentControlRunOnlyLockOwnerAdvances(t *tes
 
 	ctrlA := newDiscussFlowController(taskctl, mockGH, store, "runner-a", clock.Now)
 	ctrlB := newDiscussFlowController(taskctl, mockGH, store, "runner-b", clock.Now)
-	task := newDiscussFlowTask(issueNumber, inputHash)
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -710,7 +721,7 @@ func TestDiscussFlow_Regression_ConcurrentControlRunOnlyLockOwnerAdvances(t *tes
 	output := captureDiscussFlowStdout(t, func() {
 		firstErrCh := make(chan error, 1)
 		go func() {
-			firstErrCh <- ctrlA.ProcessIssue(context.Background(), task)
+			firstErrCh <- ctrlA.Run(context.Background())
 		}()
 
 		select {
@@ -721,7 +732,7 @@ func TestDiscussFlow_Regression_ConcurrentControlRunOnlyLockOwnerAdvances(t *tes
 
 		secondErrCh := make(chan error, 1)
 		go func() {
-			secondErrCh <- ctrlB.ProcessIssue(context.Background(), task)
+			secondErrCh <- ctrlB.Run(context.Background())
 		}()
 
 		select {
