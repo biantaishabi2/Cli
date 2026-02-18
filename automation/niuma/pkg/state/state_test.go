@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,6 +114,7 @@ func TestAllBotLabels(t *testing.T) {
 type transitionLabelOpsMock struct {
 	labels            map[int][]string
 	replaceLabelsCall int
+	listSequences     map[int][][]string
 }
 
 func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLabelOpsMock {
@@ -120,10 +122,18 @@ func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLab
 		labels: map[int][]string{
 			issueNumber: labels,
 		},
+		listSequences: map[int][][]string{},
 	}
 }
 
 func (m *transitionLabelOpsMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	if seq := m.listSequences[issueNumber]; len(seq) > 0 {
+		current := seq[0]
+		m.listSequences[issueNumber] = seq[1:]
+		dup := make([]string, len(current))
+		copy(dup, current)
+		return dup, nil
+	}
 	current := m.labels[issueNumber]
 	dup := make([]string, len(current))
 	copy(dup, current)
@@ -153,6 +163,16 @@ func (m *transitionLabelOpsMock) ReplaceLabels(_ context.Context, issueNumber in
 	copy(next, labels)
 	m.labels[issueNumber] = next
 	return nil
+}
+
+func (m *transitionLabelOpsMock) setListSequence(issueNumber int, steps ...[]string) {
+	copied := make([][]string, 0, len(steps))
+	for _, step := range steps {
+		item := make([]string, len(step))
+		copy(item, step)
+		copied = append(copied, item)
+	}
+	m.listSequences[issueNumber] = copied
 }
 
 func TestTransitionBotState_FromMismatchRejected(t *testing.T) {
@@ -224,5 +244,28 @@ func TestNormalize_PicksPriorityState(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, StateNeedsDiscussion, target)
+	assert.Equal(t, []string{string(StateNeedsDiscussion)}, mock.labels[325])
+}
+
+func TestTransitionWithRetry_ConflictThenSuccess(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, string(StateFixRequested))
+	mock.setListSequence(
+		325,
+		[]string{string(StateFixRequested)},
+		[]string{string(StatePlanDraft)},
+		[]string{string(StatePlanDraft)},
+		[]string{string(StateNeedsDiscussion)},
+	)
+
+	err := TransitionWithRetry(
+		context.Background(),
+		mock,
+		325,
+		"",
+		StateNeedsDiscussion,
+		[]time.Duration{0, 0},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, mock.replaceLabelsCall)
 	assert.Equal(t, []string{string(StateNeedsDiscussion)}, mock.labels[325])
 }

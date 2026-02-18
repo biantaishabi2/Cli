@@ -1717,6 +1717,22 @@ func hasLabel(labels []string, target string) bool {
 	return false
 }
 
+func (c *Controller) ensureIssueLabel(ctx context.Context, issueNum int, targetLabel string) error {
+	labels, err := c.github.ListLabels(ctx, issueNum)
+	if err != nil {
+		return err
+	}
+	if hasLabel(labels, targetLabel) {
+		return nil
+	}
+	return c.github.AddLabel(ctx, issueNum, targetLabel)
+}
+
+func (c *Controller) clearIssueBotStates(ctx context.Context, issueNum int) error {
+	_, err := state.Clear(ctx, c.github, issueNum)
+	return err
+}
+
 func (c *Controller) transitionWithSelfHeal(ctx context.Context, issueNum int, from, to state.State) error {
 	err := state.TransitionWithRetry(ctx, c.github, issueNum, from, to, nil)
 	if err == nil {
@@ -2080,13 +2096,9 @@ func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, ta
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
 		return
 	}
-	replaced, err := c.github.ReplaceLabelIfPresent(ctx, task.IssueNum(), "bot:fix", integrationGateFailLabel)
-	if err != nil {
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), integrationGateFailLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationGateFailLabel, err)
 		return
-	}
-	if !replaced {
-		fmt.Printf("[control] action=label_skip issue_num=%d from=%s to=%s reason=from_not_found\n", task.IssueNum(), "bot:fix", integrationGateFailLabel)
 	}
 
 	meta := map[string]string{metaKeyIntegrationGateEscalationLabelSynced: "true"}
@@ -2101,10 +2113,16 @@ func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targ
 	if targetState, err := state.ParseState(targetLabel); err == nil {
 		return c.transitionWithSelfHeal(ctx, issueNum, "", targetState)
 	}
+	if err := c.clearIssueBotStates(ctx, issueNum); err != nil {
+		return err
+	}
 
 	var firstErr error
 	replacedAny := false
 	for _, oldLabel := range integrationAutomationLabels {
+		if state.IsBotLabel(oldLabel) {
+			continue
+		}
 		// 避免 old==new 导致“先删后加”同一标签，触发无意义的 labeled/unlabeled 事件。
 		if oldLabel == targetLabel {
 			continue
@@ -2121,7 +2139,7 @@ func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targ
 		return firstErr
 	}
 	if !replacedAny {
-		return c.github.AddLabel(ctx, issueNum, targetLabel)
+		return c.ensureIssueLabel(ctx, issueNum, targetLabel)
 	}
 	return nil
 }
@@ -2232,22 +2250,17 @@ func (c *Controller) escalateIntegrationConflict(ctx context.Context, task Task,
 		return
 	}
 
-	replacedConflict, err := c.github.ReplaceLabelIfPresent(ctx, task.IssueNum(), "bot:fix", integrationConflictLabel)
-	if err != nil {
+	if err := c.clearIssueBotStates(ctx, task.IssueNum()); err != nil {
+		fmt.Printf("[control] issue #%d 清理 bot 状态失败: %v\n", task.IssueNum(), err)
+		return
+	}
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), integrationConflictLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationConflictLabel, err)
 		return
 	}
-	if !replacedConflict {
-		fmt.Printf("[control] action=label_skip issue_num=%d from=%s to=%s reason=from_not_found\n", task.IssueNum(), "bot:fix", integrationConflictLabel)
-	}
-
-	replacedHuman, err := c.github.ReplaceLabelIfPresent(ctx, task.IssueNum(), "bot:fix", needsHumanLabel)
-	if err != nil {
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), needsHumanLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
 		return
-	}
-	if !replacedHuman {
-		fmt.Printf("[control] action=label_skip issue_num=%d from=%s to=%s reason=from_not_found\n", task.IssueNum(), "bot:fix", needsHumanLabel)
 	}
 
 	labelMeta := map[string]string{metaKeyIntegrationConflictLabelSynced: "true"}

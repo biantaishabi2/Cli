@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -28,9 +29,49 @@ var (
 )
 
 func main() {
+	os.Exit(execute())
+}
+
+func execute() int {
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		return exitCodeFromError(err)
 	}
+	return 0
+}
+
+type exitCodeError struct {
+	code int
+	err  error
+}
+
+func (e *exitCodeError) Error() string {
+	return e.err.Error()
+}
+
+func (e *exitCodeError) Unwrap() error {
+	return e.err
+}
+
+func (e *exitCodeError) ExitCode() int {
+	return e.code
+}
+
+func withExitCode(code int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &exitCodeError{code: code, err: err}
+}
+
+func exitCodeFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ec interface{ ExitCode() int }
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return 1
 }
 
 var rootCmd = &cobra.Command{

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveDiscussMaxRounds_Priority(t *testing.T) {
@@ -138,6 +141,34 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestExitCodeFromError_DefaultAndWrapped(t *testing.T) {
+	assert.Equal(t, 0, exitCodeFromError(nil))
+	assert.Equal(t, 1, exitCodeFromError(errors.New("boom")))
+	assert.Equal(t, 23, exitCodeFromError(withExitCode(23, errors.New("mapped"))))
+}
+
+func TestMapStateLabelError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected int
+	}{
+		{name: "conflict", err: state.ErrConflict, expected: exitCodeStateConflict},
+		{name: "invalid state", err: state.ErrInvalidState, expected: exitCodeStateInvalid},
+		{name: "invalid transition", err: state.ErrInvalidTransition, expected: exitCodeStateTransitionEdge},
+		{name: "invariant", err: state.ErrInvariantViolation, expected: exitCodeStateInvariant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped := mapStateLabelError(tt.err)
+			require.Error(t, mapped)
+			assert.Equal(t, tt.expected, exitCodeFromError(mapped))
+			assert.True(t, errors.Is(mapped, tt.err))
 		})
 	}
 }

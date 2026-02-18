@@ -39,6 +39,8 @@ type mockGitHubOps struct {
 	replaceLabelError         map[string]error
 	replaceLabelPairError     map[string]error
 	replaceLabelFails         map[string]int
+	addLabelError             map[string]error
+	addLabelFails             map[string]int
 	updateIssueBodyCalls      []updateIssueBodyCall
 	listCommentBodies         map[int][]string
 	addIssueCommentCalls      []addIssueCommentCall
@@ -96,6 +98,8 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		replaceLabelError:        make(map[string]error),
 		replaceLabelPairError:    make(map[string]error),
 		replaceLabelFails:        make(map[string]int),
+		addLabelError:            make(map[string]error),
+		addLabelFails:            make(map[string]int),
 		listCommentBodies:        make(map[int][]string),
 		closeIssueError:          make(map[int]error),
 		blockedBy:                make(map[int]map[int]struct{}),
@@ -232,6 +236,13 @@ func (m *mockGitHubOps) ListLabels(_ context.Context, issueNumber int) ([]string
 }
 
 func (m *mockGitHubOps) AddLabel(_ context.Context, issueNumber int, label string) error {
+	if remaining := m.addLabelFails[label]; remaining > 0 {
+		m.addLabelFails[label] = remaining - 1
+		return fmt.Errorf("add label %q temporary failed", label)
+	}
+	if err, ok := m.addLabelError[label]; ok {
+		return err
+	}
 	issue := m.issuesByNumber[issueNumber]
 	issue.Labels = append(issue.Labels, label)
 	m.issuesByNumber[issueNumber] = issue
@@ -1639,9 +1650,10 @@ func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.
 		Metadata: map[string]string{"issue_num": "41"},
 	}
 	ctrl.escalateIntegrationConflict(context.Background(), firstTask, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 2)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
-	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[1].newLabel)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, integrationConflictLabel)
+	assert.Contains(t, labels, needsHumanLabel)
 
 	retryTask := Task{
 		ID: "task-1",
@@ -1655,7 +1667,10 @@ func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.
 		},
 	}
 	ctrl.escalateIntegrationConflict(context.Background(), retryTask, outcome)
-	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	labels, err = mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countLabel(labels, integrationConflictLabel))
+	assert.Equal(t, 1, countLabel(labels, needsHumanLabel))
 }
 
 func TestShouldRetryEscalationLabels(t *testing.T) {
@@ -1699,7 +1714,7 @@ func TestMergeOutcomeFromEscalatedTask_FromMetadata(t *testing.T) {
 
 func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *testing.T) {
 	mockGH := newMockGitHubOps()
-	mockGH.replaceLabelFails[integrationConflictLabel] = 1
+	mockGH.addLabelFails[integrationConflictLabel] = 1
 	ctrl := &Controller{
 		github: mockGH,
 		taskctl: &TaskCtlClient{
@@ -1727,13 +1742,16 @@ func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *tes
 	}
 
 	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 1)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.NotContains(t, labels, integrationConflictLabel)
+	assert.NotContains(t, labels, needsHumanLabel)
 
 	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 3)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
-	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
+	labels, err = mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, integrationConflictLabel)
+	assert.Contains(t, labels, needsHumanLabel)
 }
 
 func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T) {
@@ -1797,9 +1815,10 @@ func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
 
 	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-3", errors.New("gate failed third time"))
 	require.NoError(t, err)
-
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, needsHumanLabel), 0)
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel), 0)
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Contains(t, labels, integrationGateFailLabel)
 }
 
 func TestHandleIntegrationGateFailure_DuplicateAttemptNoop(t *testing.T) {
@@ -2510,6 +2529,16 @@ func countReplaceLabelByIssueAndTarget(calls []replaceLabelCall, issueNum int, l
 	count := 0
 	for _, call := range calls {
 		if call.issueNumber == issueNum && call.newLabel == label {
+			count++
+		}
+	}
+	return count
+}
+
+func countLabel(labels []string, target string) int {
+	count := 0
+	for _, label := range labels {
+		if label == target {
 			count++
 		}
 	}

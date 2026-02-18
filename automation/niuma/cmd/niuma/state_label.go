@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,6 +16,13 @@ var (
 	flagStateFrom     string
 	flagStateTo       string
 	flagStatePriority string
+)
+
+const (
+	exitCodeStateConflict       = 20
+	exitCodeStateInvalid        = 21
+	exitCodeStateInvariant      = 22
+	exitCodeStateTransitionEdge = 23
 )
 
 var stateLabelCmd = &cobra.Command{
@@ -77,7 +85,7 @@ func runStateLabelSet(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := state.TransitionWithRetry(ctx, client, flagIssue, from, to, nil); err != nil {
-		return err
+		return mapStateLabelError(err)
 	}
 
 	fmt.Printf("issue #%d 状态已迁移到 %s\n", flagIssue, to)
@@ -106,7 +114,7 @@ func runStateLabelNormalize(cmd *cobra.Command, args []string) error {
 
 	target, changed, err := state.Normalize(ctx, client, flagIssue, priority)
 	if err != nil {
-		return err
+		return mapStateLabelError(err)
 	}
 	if !changed {
 		if target == "" {
@@ -134,7 +142,7 @@ func runStateLabelClear(cmd *cobra.Command, args []string) error {
 
 	changed, err := state.Clear(ctx, client, flagIssue)
 	if err != nil {
-		return err
+		return mapStateLabelError(err)
 	}
 	if !changed {
 		fmt.Printf("issue #%d 无 bot 状态可清理\n", flagIssue)
@@ -142,4 +150,19 @@ func runStateLabelClear(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("issue #%d 已清理全部 bot 状态\n", flagIssue)
 	return nil
+}
+
+func mapStateLabelError(err error) error {
+	switch {
+	case errors.Is(err, state.ErrConflict):
+		return withExitCode(exitCodeStateConflict, err)
+	case errors.Is(err, state.ErrInvalidState):
+		return withExitCode(exitCodeStateInvalid, err)
+	case errors.Is(err, state.ErrInvalidTransition):
+		return withExitCode(exitCodeStateTransitionEdge, err)
+	case errors.Is(err, state.ErrInvariantViolation), errors.Is(err, state.ErrMultipleBotStates):
+		return withExitCode(exitCodeStateInvariant, err)
+	default:
+		return err
+	}
 }
