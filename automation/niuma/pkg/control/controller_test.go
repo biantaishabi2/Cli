@@ -468,6 +468,33 @@ esac
 	}, logPath
 }
 
+func newTaskCtlGetFailClient(t *testing.T) (*TaskCtlClient, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "taskctl.log")
+	binPath := filepath.Join(dir, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ -n "$cmd" ]]; then
+	shift
+fi
+printf '%%s %%s\n' "$cmd" "$*" >> %q
+if [[ "$cmd" == "get" ]]; then
+	echo "get failed" >&2
+	exit 1
+fi
+echo '{}'
+`, logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	return &TaskCtlClient{
+		BinPath:   binPath,
+		StorePath: filepath.Join(dir, "tasks.json"),
+	}, logPath
+}
+
 func countTaskctlLogMatches(t *testing.T, logPath, target string) int {
 	t.Helper()
 
@@ -672,6 +699,34 @@ func TestController_ProcessIssue_IdempotencyHitSkipsSideEffects(t *testing.T) {
 	assert.Len(t, mockGH.replaceLabelCalls, 0)
 	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key."+phase))
+}
+
+func TestController_ProcessIssue_IdempotencyGetFailureStopsSideEffects(t *testing.T) {
+	taskctl, logPath := newTaskCtlGetFailClient(t)
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	err := ctrl.ProcessIssue(context.Background(), task)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "读取任务最新 metadata 失败")
+	assert.Len(t, mockGH.replaceLabelCalls, 0)
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "--status in-progress"))
+	assert.Equal(t, 0, countTaskctlLogMatches(t, logPath, "idempotency.key.fix"))
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "get --task-id task-314"))
 }
 
 func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *testing.T) {
