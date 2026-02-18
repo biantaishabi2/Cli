@@ -216,9 +216,10 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	if err != nil {
 		return nil, fmt.Errorf("查找汇总 marker 失败: %w", err)
 	}
-	previousCount := -1
-	if summaryMC != nil {
-		previousCount = summaryMC.Marker.DisagreeCount
+	var previousFinish *bool
+	if summaryMC != nil && summaryMC.Marker != nil {
+		last := summaryMC.Marker.Finish
+		previousFinish = &last
 	}
 
 	// 生成本轮讨论摘要（仅保留 debate_ab 模式）。
@@ -241,16 +242,10 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	// 构建收敛检查输入
 	checker := state.DefaultChecker()
 	input := &state.ConvergenceInput{
-		Comments:                  comments,
-		Round:                     round,
-		MaxRound:                  maxRounds,
-		AIShouldFinish:            summary.ShouldFinish,
-		RequiresHumanDecision:     summary.RequiresHumanDecision,
-		Decision:                  string(summary.Decision),
-		DisagreementCount:         len(summary.Disagreements),
-		PreviousDisagreementCount: nonNegative(previousCount),
-		HasHighRisk:               hasHighRiskDisagreement(summary.Disagreements),
-		AllLowRiskAutoResolvable:  allLowRiskAutoResolvable(summary.Disagreements),
+		Comments:       comments,
+		Round:          round,
+		MaxRound:       maxRounds,
+		AIShouldFinish: summary.ShouldFinish,
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker
@@ -259,9 +254,6 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 
 	decision := checker.CheckWithDecision(input)
 	summary.ShouldFinish = decision.ShouldFinish
-	if decision.RequiresHumanDecision {
-		summary.RequiresHumanDecision = true
-	}
 
 	// 每轮 upsert 机器可读汇总 marker。
 	rev := 1
@@ -276,7 +268,7 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 
 	if o.shouldPublishDiscussionSummary(round, summaryMC, summary) {
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
-			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousCount))
+			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousFinish))
 	}
 
 	if decision.Result == state.ShouldWarn {
@@ -912,11 +904,8 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 	}
 
 	return &DiscussionSummary{
-		Agreements:            comment.Agreements,
-		Disagreements:         comment.Disagreements,
-		Decision:              DecisionMerge,
-		RequiresHumanDecision: false,
-		ShouldFinish:          false,
+		Conclusion:   comment.Body,
+		ShouldFinish: comment.ShouldFinish,
 	}, nil
 }
 
@@ -947,10 +936,7 @@ func (o *Orchestrator) shouldPublishDiscussionSummary(round int, previous *gh.Ma
 	}
 
 	prev := previous.Marker
-	changed := prev.DisagreeCount != len(summary.Disagreements) ||
-		prev.Decision != string(summary.Decision) ||
-		prev.Human != summary.RequiresHumanDecision ||
-		prev.Risk != string(maxRisk(summary.Disagreements))
+	changed := prev.Finish != summary.ShouldFinish
 	return changed
 }
 
@@ -968,24 +954,13 @@ func (o *Orchestrator) getVisibleOnlyOnDiff() bool {
 	return o.config.getVisibleOnlyOnDiff()
 }
 
-func nonNegative(v int) int {
-	if v < 0 {
-		return 0
-	}
-	return v
-}
-
 func buildDiscussionMarker(issue, rev int, summary *DiscussionSummary) *marker.Marker {
 	return &marker.Marker{
-		Type:          marker.TypeDiscussionSummary,
-		Issue:         issue,
-		Revision:      rev,
-		Finish:        summary.ShouldFinish,
-		Decision:      string(summary.Decision),
-		Human:         summary.RequiresHumanDecision,
-		Risk:          string(maxRisk(summary.Disagreements)),
-		DisagreeCount: len(summary.Disagreements),
-		Mode:          "debate_ab",
+		Type:     marker.TypeDiscussionSummary,
+		Issue:    issue,
+		Revision: rev,
+		Finish:   summary.ShouldFinish,
+		Mode:     "debate_ab",
 	}
 }
 
@@ -998,59 +973,16 @@ func buildRoundLimitReasonAndActions(summaryMC *gh.MarkerComment) (string, []str
 	}
 
 	m := summaryMC.Marker
-	var reasons []string
-	if m.Human {
-		reasons = append(reasons, "最新讨论结论标记为 requires_human_decision=true")
-	}
-	if strings.EqualFold(m.Decision, string(DecisionDefer)) {
-		reasons = append(reasons, "最新 decision=defer，表示暂不自动决策")
-	}
-	if strings.EqualFold(m.Risk, string(RiskHigh)) {
-		reasons = append(reasons, "存在 high 风险分歧")
-	}
-	if m.DisagreeCount > 0 {
-		reasons = append(reasons, fmt.Sprintf("仍有 %d 个未决分歧", m.DisagreeCount))
-	}
-	if len(reasons) == 0 {
-		reasons = append(reasons, "达到轮次上限后仍未满足自动定稿条件")
+	reason := "达到轮次上限后仍未满足自动定稿条件"
+	if m != nil && m.Finish {
+		reason = "已出现 should_finish=true，但仍未进入定稿，请人工确认是否继续推进"
 	}
 
 	nextActions := []string{
-		"请在最新分歧清单中逐项拍板（接受 A/B 或给出合并方案）",
+		"请维护者基于最新讨论内容明确最终取舍并补充一条结论评论",
+		"补充结论后新增一条非 BOT 评论触发下一轮 discuss，或评论 `/finalize` 直接定稿",
 	}
-	if strings.EqualFold(m.Risk, string(RiskHigh)) {
-		nextActions = append(nextActions, "请先确认高风险项的缓解措施与回滚方案")
-	}
-	if m.Human || strings.EqualFold(m.Decision, string(DecisionDefer)) {
-		nextActions = append(nextActions, "请明确是否需要人工决策人介入，并给出最终裁决")
-	}
-	nextActions = append(nextActions, "补充结论后新增一条非 BOT 评论触发下一轮 discuss，或评论 `/finalize` 直接定稿")
-
-	return strings.Join(reasons, "；"), nextActions
-}
-
-func hasHighRiskDisagreement(items []DisagreementItem) bool {
-	for _, item := range items {
-		if item.Risk == RiskHigh {
-			return true
-		}
-	}
-	return false
-}
-
-func allLowRiskAutoResolvable(items []DisagreementItem) bool {
-	if len(items) == 0 {
-		return false
-	}
-	for _, item := range items {
-		if item.Risk != RiskLow {
-			return false
-		}
-		if strings.TrimSpace(item.Recommendation) == "" {
-			return false
-		}
-	}
-	return true
+	return reason, nextActions
 }
 
 // buildPRHistory 读取 PR 上的全部 reviews 和 comments，构建完整历史上下文

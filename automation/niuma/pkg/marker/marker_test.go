@@ -213,9 +213,9 @@ func TestRender_DiscussionSummaryExtendedFields(t *testing.T) {
 		Mode:          "debate_ab",
 	}
 	rendered := Render(m)
-	assert.Contains(t, rendered, "decision=merge")
-	assert.Contains(t, rendered, "human=1")
-	assert.Contains(t, rendered, "risk=high")
-	assert.Contains(t, rendered, "dcount=2")
+	assert.NotContains(t, rendered, "decision=merge")
+	assert.NotContains(t, rendered, "human=1")
+	assert.NotContains(t, rendered, "risk=high")
+	assert.NotContains(t, rendered, "dcount=2")
 	assert.Contains(t, rendered, "mode=debate_ab")
 }

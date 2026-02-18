@@ -157,18 +157,6 @@ func Render(m *Marker) string {
 	if m.Finish {
 		parts = append(parts, "finish=1")
 	}
-	if m.Decision != "" {
-		parts = append(parts, fmt.Sprintf("decision=%s", m.Decision))
-	}
-	if m.Human {
-		parts = append(parts, "human=1")
-	}
-	if m.Risk != "" {
-		parts = append(parts, fmt.Sprintf("risk=%s", m.Risk))
-	}
-	if m.DisagreeCount > 0 {
-		parts = append(parts, fmt.Sprintf("dcount=%d", m.DisagreeCount))
-	}
 	if m.Mode != "" {
 		parts = append(parts, fmt.Sprintf("mode=%s", m.Mode))
 	}

@@ -234,8 +234,8 @@ func TestDoIterate_HappyPath(t *testing.T) {
 func TestDoDiscussionCheck_NotConverged(t *testing.T) {
 	// Mock AI 返回 debate 评论
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["进展中"],"disagreements":[{"topic":"待定","options":["A","B"],"recommendation":"A","risk":"medium"}],"suggestion":"继续"}`,
-		`{"agreements":["进展中"],"disagreements":[{"topic":"待定","options":["A","B"],"recommendation":"A","risk":"medium"}],"suggestion":"继续"}`, // buildPromptInput 也可能触发
+		"进展中。\n```json\n{\"should_finish\":false}\n```",
+		"进展中。\n```json\n{\"should_finish\":false}\n```", // buildPromptInput 也可能触发
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -253,8 +253,8 @@ func TestDoDiscussionCheck_NotConverged(t *testing.T) {
 func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
 	// 两轮讨论都未收敛，summary 应该更新同一条 marker 评论。
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["第一轮"],"disagreements":[{"topic":"待定A","options":["A","B"],"recommendation":"A","risk":"medium"}],"suggestion":"继续"}`,
-		`{"agreements":["第二轮"],"disagreements":[{"topic":"待定B","options":["A","B"],"recommendation":"A","risk":"medium"}],"suggestion":"继续"}`,
+		"第一轮。\n```json\n{\"should_finish\":false}\n```",
+		"第二轮。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -273,7 +273,7 @@ func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
 
 func TestDoDiscussionCheck_Converged_Finalizes(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["已达成一致"],"disagreements":[],"suggestion":"可定稿"}`,
+		"已达成一致，可定稿。\n```json\n{\"should_finish\":true}\n```",
 		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
 	)
 	mockGH := NewMockGitHub()
@@ -291,7 +291,7 @@ func TestDoDiscussionCheck_Converged_Finalizes(t *testing.T) {
 
 func TestDoDiscussionCheck_Converged_FinalizeFailed(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["已达成一致"],"disagreements":[],"suggestion":"可定稿"}`,
+		"已达成一致，可定稿。\n```json\n{\"should_finish\":true}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -353,8 +353,8 @@ func TestDoDiscuss_DebateAlternatesProviders(t *testing.T) {
 	mockGH.SetIssue(1, "Test", "Body")
 	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
 
-	discProvider1 := ai.NewMockProvider(`{"agreements":["A 观点"],"disagreements":[{"topic":"待定A","options":["A","B"],"recommendation":"A","risk":"medium"}],"suggestion":"继续"}`)
-	discProvider2 := ai.NewMockProvider(`{"agreements":["B 观点"],"disagreements":[{"topic":"待定B","options":["A","B"],"recommendation":"B","risk":"medium"}],"suggestion":"继续"}`)
+	discProvider1 := ai.NewMockProvider("A 观点。\n```json\n{\"should_finish\":false}\n```")
+	discProvider2 := ai.NewMockProvider("B 观点。\n```json\n{\"should_finish\":false}\n```")
 
 	cfg := &OrchestratorConfig{
 		DiscussionProviders: []ai.Provider{discProvider1, discProvider2},

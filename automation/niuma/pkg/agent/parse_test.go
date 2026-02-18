@@ -44,44 +44,40 @@ func TestParseDraftResponse_Empty(t *testing.T) {
 }
 
 func TestParseDebateResponse_ValidJSON(t *testing.T) {
-	raw := `{
-  "agreements": ["同意使用 Redis"],
-  "disagreements": [{"topic":"TTL","options":["30m","60m"],"recommendation":"30m","risk":"medium"}],
-  "suggestion": "先压测再定默认值"
-}`
+	raw := `本轮我接受对方关于兼容性的观点，但默认值仍建议保守推进。
+` + "```json" + `
+{"should_finish": false}
+` + "```"
 	comment, err := ParseDebateResponse(raw)
 	require.NoError(t, err)
-	assert.Equal(t, "先压测再定默认值", comment.Suggestion)
-	require.Len(t, comment.Disagreements, 1)
-	assert.Equal(t, RiskMedium, comment.Disagreements[0].Risk)
+	assert.Contains(t, comment.Body, "默认值仍建议保守推进")
+	assert.False(t, comment.ShouldFinish)
 }
 
 func TestParseDebateResponse_MissingFields(t *testing.T) {
-	raw := `{"agreements":[],"disagreements":[]}`
+	raw := `讨论还需要继续。`
 	_, err := ParseDebateResponse(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少必填字段")
-	assert.Contains(t, err.Error(), "suggestion")
+	assert.Contains(t, err.Error(), "should_finish")
 }
 
-func TestParseDebateResponse_RejectNullListFields(t *testing.T) {
-	raw := `{
-  "agreements": null,
-  "disagreements": [],
-  "suggestion": "继续"
-}`
+func TestParseDebateResponse_MissingShouldFinishField(t *testing.T) {
+	raw := `继续讨论。
+` + "```json" + `
+{}
+` + "```"
 	_, err := ParseDebateResponse(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "agreements 不能为 null")
+	assert.Contains(t, err.Error(), "should_finish")
+}
 
-	raw = `{
-  "agreements": [],
-  "disagreements": null,
-  "suggestion": "继续"
-}`
-	_, err = ParseDebateResponse(raw)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "disagreements 不能为 null")
+func TestParseDebateResponse_NakedJSONTail(t *testing.T) {
+	raw := `目前还有一个边界条件待确认。
+{"should_finish":true}`
+	comment, err := ParseDebateResponse(raw)
+	require.NoError(t, err)
+	assert.Contains(t, comment.Body, "边界条件")
+	assert.True(t, comment.ShouldFinish)
 }
 
 func TestParseFinalPlanResponse_ValidJSON(t *testing.T) {

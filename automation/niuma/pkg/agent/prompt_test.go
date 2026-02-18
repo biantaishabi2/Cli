@@ -39,7 +39,7 @@ func TestBuildDebatePrompt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "第 2/5 轮")
 	assert.Contains(t, result, "讨论方 B")
-	assert.Contains(t, result, "\"suggestion\"")
+	assert.Contains(t, result, "\"should_finish\"")
 }
 
 func TestBuildFinalPlanPrompt(t *testing.T) {

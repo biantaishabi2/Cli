@@ -10,47 +10,16 @@ type DraftPlan struct {
 	Risks         string   `json:"risks,omitempty"` // 风险点
 }
 
-// Decision 讨论决策类型
-type Decision string
-
-const (
-	DecisionAdoptA Decision = "adopt_A"
-	DecisionAdoptB Decision = "adopt_B"
-	DecisionMerge  Decision = "merge"
-	DecisionDefer  Decision = "defer"
-)
-
-// RiskLevel 风险等级
-type RiskLevel string
-
-const (
-	RiskLow    RiskLevel = "low"
-	RiskMedium RiskLevel = "medium"
-	RiskHigh   RiskLevel = "high"
-)
-
-// DisagreementItem 分歧项
-type DisagreementItem struct {
-	Topic          string    `json:"topic"`          // 分歧主题
-	Options        []string  `json:"options"`        // 备选方案
-	Recommendation string    `json:"recommendation"` // 推荐方案
-	Risk           RiskLevel `json:"risk"`           // 风险等级
-}
-
 // DiscussionSummary 讨论汇总（收敛判定输入）
 type DiscussionSummary struct {
-	Agreements            []string           `json:"agreements"`              // 已达成一致
-	Disagreements         []DisagreementItem `json:"disagreements"`           // 分歧清单
-	Decision              Decision           `json:"decision"`                // consolidator 决策
-	RequiresHumanDecision bool               `json:"requires_human_decision"` // 是否需要人工决策
-	ShouldFinish          bool               `json:"should_finish"`           // 是否应结束讨论
+	Conclusion   string `json:"conclusion"`    // 本轮自然语言结论
+	ShouldFinish bool   `json:"should_finish"` // 是否应结束讨论
 }
 
 // DebateComment AB 轮流评论输出
 type DebateComment struct {
-	Agreements    []string           `json:"agreements"`    // 同意点
-	Disagreements []DisagreementItem `json:"disagreements"` // 分歧点
-	Suggestion    string             `json:"suggestion"`    // 建议
+	Body         string `json:"body"`          // 评论正文
+	ShouldFinish bool   `json:"should_finish"` // 是否建议结束讨论
 }
 
 // FinalPlan 最终方案

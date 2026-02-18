@@ -32,18 +32,8 @@ func TestFormatDraftPlan(t *testing.T) {
 
 func TestFormatDiscussionSummary(t *testing.T) {
 	summary := &DiscussionSummary{
-		Agreements: []string{"使用 JWT 替换 session"},
-		Disagreements: []DisagreementItem{
-			{
-				Topic:          "Token 过期时间",
-				Options:        []string{"15m", "30m"},
-				Recommendation: "默认 15m",
-				Risk:           RiskLow,
-			},
-		},
-		Decision:              DecisionMerge,
-		RequiresHumanDecision: false,
-		ShouldFinish:          false,
+		Conclusion:   "双方同意先保留兼容逻辑，默认值后续再拍板。",
+		ShouldFinish: false,
 	}
 	m := &marker.Marker{
 		Type:     marker.TypeDiscussionSummary,
@@ -54,9 +44,8 @@ func TestFormatDiscussionSummary(t *testing.T) {
 	result := FormatDiscussionSummary(summary, m)
 	assert.Contains(t, result, "<!-- BOT:DISCUSSION_SUMMARY")
 	assert.Contains(t, result, "讨论汇总")
-	assert.Contains(t, result, "使用 JWT 替换 session")
-	assert.Contains(t, result, "Token 过期时间")
-	assert.Contains(t, result, "decision: `merge`")
+	assert.Contains(t, result, "双方同意先保留兼容逻辑")
+	assert.Contains(t, result, "should_finish: `false`")
 	assert.Contains(t, result, "DISCUSSION_SNAPSHOT")
 }
 
@@ -102,36 +91,28 @@ func TestFormatConvergeWarning(t *testing.T) {
 
 func TestFormatDiscussionRoundSummary(t *testing.T) {
 	summary := &DiscussionSummary{
-		Agreements: []string{"a"},
-		Disagreements: []DisagreementItem{
-			{Topic: "t1", Options: []string{"A", "B"}, Recommendation: "A", Risk: RiskMedium},
-		},
-		Decision:              DecisionMerge,
-		RequiresHumanDecision: false,
-		ShouldFinish:          false,
+		Conclusion:   "仍需确认默认值策略",
+		ShouldFinish: false,
 	}
 
-	result := FormatDiscussionRoundSummary(2, 5, "debate_ab", summary, 2)
+	prevFinish := true
+	result := FormatDiscussionRoundSummary(2, 5, "debate_ab", summary, &prevFinish)
 	assert.Contains(t, result, "<!-- BOT:DISCUSSION_VISIBLE -->")
 	assert.Contains(t, result, "第 2/5 轮")
-	assert.Contains(t, result, "变化: -1")
-	assert.Contains(t, result, "最高风险: `medium`")
+	assert.Contains(t, result, "仍需确认默认值策略")
+	assert.Contains(t, result, "should_finish_change: `changed`")
 }
 
 func TestFormatDebateRoundComment(t *testing.T) {
 	comment := &DebateComment{
-		Agreements: []string{"同意输入校验"},
-		Disagreements: []DisagreementItem{
-			{Topic: "默认值", Options: []string{"A", "B"}, Recommendation: "A", Risk: RiskHigh},
-		},
-		Suggestion: "先保持兼容默认值",
+		Body:         "我同意先补上输入校验，但默认值建议先保持兼容。",
+		ShouldFinish: false,
 	}
 	result := FormatDebateRoundComment(1, 3, "A", comment)
 	assert.Contains(t, result, "<!-- BOT:DEBATE_VISIBLE -->")
 	assert.Contains(t, result, "Debate A")
-	assert.Contains(t, result, "同意输入校验")
-	assert.Contains(t, result, "risk=high")
-	assert.Contains(t, result, "先保持兼容默认值")
+	assert.Contains(t, result, "我同意先补上输入校验")
+	assert.Contains(t, result, "should_finish: `false`")
 }
 
 func TestFormatDiscussionRoundLimitWarning(t *testing.T) {

@@ -35,7 +35,7 @@ func ParseDraftResponse(raw string) (*DraftPlan, error) {
 }
 
 // ParseDebateResponse 解析 AB 轮流评论输出。
-// 要求严格 JSON，字段缺失/类型错误会直接报错。
+// 协议：自然语言正文 + 末尾 JSON（仅 should_finish）。
 func ParseDebateResponse(raw string) (*DebateComment, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("空响应")
@@ -43,40 +43,25 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
-		return nil, fmt.Errorf("无法解析 AB 评论：缺少 JSON 代码块或裸 JSON 对象")
+		return nil, fmt.Errorf("无法解析 AB 评论：缺少 should_finish JSON")
 	}
 
-	rawMap, err := parseJSONObject(jsonStr)
-	if err != nil {
+	type debateJSON struct {
+		ShouldFinish *bool `json:"should_finish"`
+	}
+	var parsed debateJSON
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return nil, fmt.Errorf("无法解析 AB 评论 JSON: %w", err)
 	}
-
-	required := []string{"agreements", "disagreements", "suggestion"}
-	missing := missingFields(rawMap, required...)
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("AB 评论缺少必填字段: %s", strings.Join(missing, ", "))
+	if parsed.ShouldFinish == nil {
+		return nil, fmt.Errorf("AB 评论缺少必填字段: should_finish")
 	}
 
-	if isJSONNull(rawMap["agreements"]) {
-		return nil, fmt.Errorf("字段 agreements 不能为 null")
-	}
-	var agreements []string
-	if err := json.Unmarshal(rawMap["agreements"], &agreements); err != nil {
-		return nil, fmt.Errorf("字段 agreements 类型错误: %w", err)
-	}
-	disagreements, err := parseDisagreements(rawMap["disagreements"])
-	if err != nil {
-		return nil, err
-	}
-	var suggestion string
-	if err := json.Unmarshal(rawMap["suggestion"], &suggestion); err != nil {
-		return nil, fmt.Errorf("字段 suggestion 类型错误: %w", err)
-	}
+	body := strings.TrimSpace(stripLastJSONSegment(raw, jsonStr))
 
 	return &DebateComment{
-		Agreements:    agreements,
-		Disagreements: disagreements,
-		Suggestion:    strings.TrimSpace(suggestion),
+		Body:         body,
+		ShouldFinish: *parsed.ShouldFinish,
 	}, nil
 }
 
@@ -172,6 +157,21 @@ func extractJSON(text string) string {
 	return ""
 }
 
+// stripLastJSONSegment 从文本中剥离最后一个 JSON 片段，保留自然语言正文。
+func stripLastJSONSegment(text, jsonStr string) string {
+	matches := jsonBlockRe.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) > 0 {
+		last := matches[len(matches)-1]
+		return strings.TrimSpace(text[:last[0]] + text[last[1]:])
+	}
+
+	idx := strings.LastIndex(text, jsonStr)
+	if idx >= 0 {
+		return strings.TrimSpace(text[:idx] + text[idx+len(jsonStr):])
+	}
+	return strings.TrimSpace(text)
+}
+
 func parseJSONObject(raw string) (map[string]json.RawMessage, error) {
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &rawMap); err != nil {
@@ -191,49 +191,6 @@ func missingFields(rawMap map[string]json.RawMessage, required ...string) []stri
 	return missing
 }
 
-func parseDisagreements(raw json.RawMessage) ([]DisagreementItem, error) {
-	if isJSONNull(raw) {
-		return nil, fmt.Errorf("字段 disagreements 不能为 null")
-	}
-	var disagreements []DisagreementItem
-	if err := json.Unmarshal(raw, &disagreements); err != nil {
-		return nil, fmt.Errorf("字段 disagreements 类型错误: %w", err)
-	}
-	for i, item := range disagreements {
-		if strings.TrimSpace(item.Topic) == "" {
-			return nil, fmt.Errorf("disagreements[%d].topic 不能为空", i)
-		}
-		if len(item.Options) == 0 {
-			return nil, fmt.Errorf("disagreements[%d].options 不能为空", i)
-		}
-		if strings.TrimSpace(item.Recommendation) == "" {
-			return nil, fmt.Errorf("disagreements[%d].recommendation 不能为空", i)
-		}
-		if !isValidRisk(item.Risk) {
-			return nil, fmt.Errorf("disagreements[%d].risk 非法: %s", i, item.Risk)
-		}
-	}
-	return disagreements, nil
-}
-
 func isJSONNull(raw json.RawMessage) bool {
 	return strings.TrimSpace(string(raw)) == "null"
-}
-
-func isValidDecision(d Decision) bool {
-	switch d {
-	case DecisionAdoptA, DecisionAdoptB, DecisionMerge, DecisionDefer:
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidRisk(r RiskLevel) bool {
-	switch r {
-	case RiskLow, RiskMedium, RiskHigh:
-		return true
-	default:
-		return false
-	}
 }
