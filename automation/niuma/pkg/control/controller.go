@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,7 +27,23 @@ type GitHubOps interface {
 	CloseIssue(ctx context.Context, issueNumber int) error
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ResolvePRMetadata(ctx context.Context, issueNumber int) (PRMetadata, error)
 }
+
+// PRMetadata 表示用于 integration 候选筛选的最小 PR 元数据。
+type PRMetadata struct {
+	PRNum  int
+	Branch string
+}
+
+var (
+	// ErrPRMarkerNotFound 表示 issue 上未找到 BOT:PR_CREATED marker。
+	ErrPRMarkerNotFound = errors.New("pr marker not found")
+	// ErrPRClosed 表示 marker 指向的 PR 已关闭（含已合并）。
+	ErrPRClosed = errors.New("pr is closed")
+	// ErrPRBranchUnavailable 表示 PR head branch 不可用。
+	ErrPRBranchUnavailable = errors.New("pr branch unavailable")
+)
 
 const (
 	integrationConflictLabel = "integration-conflict"
@@ -61,12 +78,18 @@ const (
 
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
+
 	issueLockDefaultTTL              = 5 * time.Minute
 	issueLockDefaultHeartbeat        = 100 * time.Second
 
 	metaKeyTaskRepo      = "repo"
 	metaKeyTaskPhase     = "phase"
 	metaKeyTaskInputHash = "input_hash"
+
+	metadataSyncSkipMarkerNotFound    = "marker_not_found"
+	metadataSyncSkipPRClosed          = "pr_closed"
+	metadataSyncSkipBranchUnavailable = "branch_unavailable"
+	metadataSyncSkipAlreadyUpToDate   = "already_up_to_date"
 )
 
 // Controller 多 Issue 协调控制器
@@ -548,7 +571,6 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 		return nil
 	})
 }
-
 // getIntegrationBranchName 获取当前任务的 integration 分支名
 // 从 task metadata 读取 meta_issue_slug，没有则使用 "main"
 func (c *Controller) getIntegrationBranchName(task *Task) string {
@@ -644,8 +666,18 @@ func (c *Controller) Run(ctx context.Context) error {
 			for _, task := range readyTasks {
 				issueNum := task.IssueNum()
 				fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
-				if err := c.ProcessIssue(ctx, task); err != nil {
-					fmt.Printf("[control] 推进 issue 失败 (task %s issue #%d): %v\n", task.ID, issueNum, err)
+				status := TaskStatusInProgress
+				if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
+					fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
+					continue
+				}
+				// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
+				if issueNum > 0 {
+					if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
+						fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
+					} else {
+						fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+					}
 				}
 			}
 		}
@@ -653,7 +685,17 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	// ⑦ 增量 integration：将刚完成的 PR 合入对应 integration 分支
 	if c.builder != nil {
-		allTasks, _ := c.taskctl.List("")
+		allTasks, err := c.taskctl.List("")
+		if err != nil {
+			return fmt.Errorf("列出现有任务失败: %w", err)
+		}
+		issueByNumber := make(map[int]IssueInfo, len(issues))
+		for _, issue := range issues {
+			issueByNumber[issue.Number] = issue
+		}
+		if err := c.syncPRReviewableMetadata(ctx, allTasks, issueByNumber); err != nil {
+			return fmt.Errorf("同步 PR 元数据失败: %w", err)
+		}
 
 		// 按 integration 分支分组 task
 		branchTasks := make(map[string][]Task)              // integrationBranch → 待合入 tasks
@@ -661,13 +703,12 @@ func (c *Controller) Run(ctx context.Context) error {
 		gateEscalationRetryTasks := make(map[string][]Task) // integrationBranch → gate 升级待补打标签 tasks
 		for _, t := range allTasks {
 			if t.PRNum() > 0 && t.Branch() != "" {
-				if shouldBackfillIntegratedMetadata(t) {
-					if err := c.markTaskIntegratedAudit(t); err != nil {
-						fmt.Printf("[control] task %s 已 completed，补写 integrated 失败: %v\n", t.ID, err)
-					}
-					continue
+				// 检查是否已合入 integration（从 metadata 读）
+				integrated := false
+				if t.Metadata != nil && t.Metadata[metaKeyIntegrated] == "true" {
+					integrated = true
 				}
-				if isTaskIntegrated(t.Metadata) {
+				if integrated {
 					continue
 				}
 
@@ -909,6 +950,99 @@ func (c *Controller) collectAutomationIssues(ctx context.Context) ([]IssueInfo, 
 	})
 
 	return result, orchestrateCount, nil
+}
+
+// syncPRReviewableMetadata 在 integration 候选筛选前回填 PR 元数据。
+// 仅处理 GitHub 状态为 bot:pr-reviewable 的任务，支持幂等 no-op 与可跳过错误。
+func (c *Controller) syncPRReviewableMetadata(ctx context.Context, tasks []Task, issueByNumber map[int]IssueInfo) error {
+	for i := range tasks {
+		task := &tasks[i]
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+
+		issue, ok := issueByNumber[issueNum]
+		if !ok || !hasLabel(issue.Labels, "bot:pr-reviewable") {
+			continue
+		}
+
+		resolved, err := c.github.ResolvePRMetadata(ctx, issueNum)
+		if err != nil {
+			if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+				c.logMetadataSyncSkip(*task, skipReason)
+				continue
+			}
+			return fmt.Errorf("issue #%d 解析 PR 元数据失败: %w", issueNum, err)
+		}
+
+		metaUpdate := buildPRMetadataUpdate(task, resolved)
+		if len(metaUpdate) == 0 {
+			c.logMetadataSyncSkip(*task, metadataSyncSkipAlreadyUpToDate)
+			continue
+		}
+
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+			return fmt.Errorf("task %s 持久化 PR 元数据失败: %w", task.ID, err)
+		}
+
+		if task.Metadata == nil {
+			task.Metadata = make(map[string]string)
+		}
+		for key, value := range metaUpdate {
+			task.Metadata[key] = value
+		}
+
+		fmt.Printf("[control] action=metadata_synced task_key=%s issue_num=%d pr_num=%d branch=%s\n", task.ID, issueNum, resolved.PRNum, resolved.Branch)
+	}
+	return nil
+}
+
+func (c *Controller) logMetadataSyncSkip(task Task, reason string) {
+	fmt.Printf("[control] action=metadata_sync_skipped task_key=%s issue_num=%d skip_reason=%s\n", task.ID, task.IssueNum(), reason)
+}
+
+func buildPRMetadataUpdate(task *Task, resolved PRMetadata) map[string]string {
+	if task.Metadata == nil {
+		task.Metadata = make(map[string]string)
+	}
+
+	metaUpdate := make(map[string]string)
+	resolvedPRNum := strconv.Itoa(resolved.PRNum)
+	if task.Metadata["pr_num"] != resolvedPRNum {
+		metaUpdate["pr_num"] = resolvedPRNum
+	}
+	if task.Metadata["branch"] != resolved.Branch {
+		metaUpdate["branch"] = resolved.Branch
+	}
+
+	if strings.TrimSpace(task.Metadata["meta_issue_slug"]) == "" {
+		metaUpdate["meta_issue_slug"] = inferMetaIssueSlug(resolved.Branch)
+	}
+
+	return metaUpdate
+}
+
+func inferMetaIssueSlug(branch string) string {
+	if strings.HasPrefix(branch, "integration/") {
+		if slug := strings.TrimPrefix(branch, "integration/"); strings.TrimSpace(slug) != "" {
+			return slug
+		}
+	}
+	return "main"
+}
+
+func classifyPRMetadataSkipReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrPRMarkerNotFound):
+		return metadataSyncSkipMarkerNotFound, true
+	case errors.Is(err, ErrPRClosed):
+		return metadataSyncSkipPRClosed, true
+	case errors.Is(err, ErrPRBranchUnavailable):
+		return metadataSyncSkipBranchUnavailable, true
+	default:
+		return "", false
+	}
 }
 
 // checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
@@ -1169,13 +1303,6 @@ var integrationAutomationLabels = []string{
 }
 
 func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task, outcome MergeOutcome) (bool, error) {
-	if shouldBackfillIntegratedMetadata(task) {
-		if err := c.markTaskIntegratedAudit(task); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
 	attemptKey, err := c.buildIntegrationGateAttemptKey(outcome)
 	if err != nil {
 		return false, err
@@ -1196,9 +1323,6 @@ func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task,
 	}
 
 	if err := c.markIntegrationGatePassed(task, attemptKey); err != nil {
-		return false, err
-	}
-	if err := c.markTaskCompleted(task); err != nil {
 		return false, err
 	}
 	if err := c.markTaskIntegrated(task, outcome); err != nil {
@@ -1347,14 +1471,6 @@ func shouldSkipProcessedIntegrationGateAttempt(meta map[string]string, attemptKe
 	}
 	status := valueOrEmpty(meta, metaKeyIntegrationGateStatus)
 	return status == integrationGateStatusRetrying || status == integrationGateStatusEscalated
-}
-
-func isTaskIntegrated(meta map[string]string) bool {
-	return valueOrEmpty(meta, metaKeyIntegrated) == "true"
-}
-
-func shouldBackfillIntegratedMetadata(task Task) bool {
-	return normalizeTaskStatus(task.Status) == TaskStatusCompleted && !isTaskIntegrated(task.Metadata)
 }
 
 func (c *Controller) handleIntegrationGateFailure(ctx context.Context, task Task, attemptKey string, gateErr error) error {
@@ -1566,15 +1682,6 @@ func splitMetadataList(raw string) []string {
 	return items
 }
 
-func (c *Controller) markTaskCompleted(task Task) error {
-	if normalizeTaskStatus(task.Status) == TaskStatusCompleted {
-		return nil
-	}
-
-	status := TaskStatusCompleted
-	return c.taskctl.Update(task.ID, UpdateOpts{Status: &status})
-}
-
 func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {
 	metaUpdate := map[string]string{
 		metaKeyIntegrated:                 "true",
@@ -1586,16 +1693,6 @@ func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {
 		files := append([]string(nil), outcome.AutoResolvedFiles...)
 		sort.Strings(files)
 		metaUpdate[metaKeyIntegrationAutoResolvedFiles] = strings.Join(files, ",")
-	}
-	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
-}
-
-func (c *Controller) markTaskIntegratedAudit(task Task) error {
-	if isTaskIntegrated(task.Metadata) {
-		return nil
-	}
-	metaUpdate := map[string]string{
-		metaKeyIntegrated: "true",
 	}
 	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
 }
