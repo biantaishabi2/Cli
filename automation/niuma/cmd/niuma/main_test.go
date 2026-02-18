@@ -95,6 +95,7 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 		flag     int
 		env      string
 		expected int
+		wantErr  bool
 	}{
 		{
 			name:     "flag 优先",
@@ -109,16 +110,16 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 			expected: 4,
 		},
 		{
-			name:     "env 非法时回退默认",
-			flag:     -1,
-			env:      "bad",
-			expected: 2,
+			name:    "env 非法时返回错误",
+			flag:    -1,
+			env:     "bad",
+			wantErr: true,
 		},
 		{
-			name:     "env 负数时回退默认",
-			flag:     -1,
-			env:      "-1",
-			expected: 2,
+			name:    "env 负数时返回错误",
+			flag:    -1,
+			env:     "-1",
+			wantErr: true,
 		},
 		{
 			name:     "全缺省回退默认",
@@ -130,7 +131,13 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, resolveIntegrationGateMaxRetries(tt.flag, tt.env))
+			got, err := resolveIntegrationGateMaxRetries(tt.flag, tt.env)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
