@@ -130,13 +130,18 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 
 // mockTaskCtlClient 用于 controller 测试的 taskctl mock
 type mockTaskCtlClient struct {
-	tasks     []Task
-	nextID    int
-	readyList []Task
+	tasks                  []Task
+	nextID                 int
+	readyList              []Task
+	readyCallCount         int
+	readyHook              func([]Task) error
+	failBlockedByForTaskID map[string]error
 }
 
 func newMockTaskCtlClient() *mockTaskCtlClient {
-	return &mockTaskCtlClient{}
+	return &mockTaskCtlClient{
+		failBlockedByForTaskID: make(map[string]error),
+	}
 }
 
 func (m *mockTaskCtlClient) create(subject, desc string, meta map[string]string) (*Task, error) {
@@ -153,6 +158,11 @@ func (m *mockTaskCtlClient) create(subject, desc string, meta map[string]string)
 }
 
 func (m *mockTaskCtlClient) update(taskID string, opts UpdateOpts) error {
+	if opts.BlockedBy != nil {
+		if err, ok := m.failBlockedByForTaskID[taskID]; ok {
+			return err
+		}
+	}
 	for i := range m.tasks {
 		if m.tasks[i].ID == taskID {
 			if opts.Status != nil {
@@ -180,6 +190,12 @@ func (m *mockTaskCtlClient) list(_ string) ([]Task, error) {
 }
 
 func (m *mockTaskCtlClient) ready() ([]Task, error) {
+	m.readyCallCount++
+	if m.readyHook != nil {
+		if err := m.readyHook(m.tasks); err != nil {
+			return nil, err
+		}
+	}
 	if m.readyList != nil {
 		return m.readyList, nil
 	}
@@ -197,6 +213,7 @@ type inMemController struct {
 	*Controller
 	mockTaskCtl *mockTaskCtlClient
 	mockGitHub  *mockGitHubOps
+	mockAI      *ai.MockProvider
 }
 
 func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
@@ -204,8 +221,10 @@ func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
 	mockGH := newMockGitHubOps(issues...)
 
 	var provider ai.Provider
+	var mockAI *ai.MockProvider
 	if aiResp != "" {
-		provider = ai.NewMockProvider(aiResp)
+		mockAI = ai.NewMockProvider(aiResp)
+		provider = mockAI
 	}
 
 	analyzer := NewDependencyAnalyzer(provider)
@@ -222,12 +241,13 @@ func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
 		Controller:  ctrl,
 		mockTaskCtl: mockTC,
 		mockGitHub:  mockGH,
+		mockAI:      mockAI,
 	}
 }
 
 // RunInMem 模拟 Run 逻辑但使用内存 mock
 func (c *inMemController) RunInMem(ctx context.Context) error {
-	issues, err := c.github.ListIssuesWithLabel(ctx, "bot:orchestrate")
+	issues, _, err := c.collectAutomationIssues(ctx)
 	if err != nil {
 		return err
 	}
@@ -247,8 +267,8 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		}
 	}
 
-	// 分析依赖
-	analysis, _ := c.analyzer.Analyze(ctx, issues)
+	// 分析依赖：显式 depends-on 优先，AI 仅补全未声明依赖。
+	analysis := c.buildDependencyAnalysis(ctx, issues)
 
 	// 创建 task
 	issueToTask := make(map[int]string)
@@ -266,28 +286,45 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		issueToTask[issue.Number] = task.ID
 	}
 
-	// 设置依赖
+	// 先落盘 blocked_by，再决定是否推进 ready。
+	blockedByPersisted := true
 	for issueNum, deps := range analysis.Dependencies {
 		taskID, ok := issueToTask[issueNum]
 		if !ok {
+			blockedByPersisted = false
 			continue
 		}
 		var blockedBy []string
 		for _, dep := range deps {
-			if depTaskID, ok := issueToTask[dep]; ok {
-				blockedBy = append(blockedBy, depTaskID)
+			depTaskID, ok := issueToTask[dep]
+			if !ok {
+				blockedByPersisted = false
+				continue
 			}
+			blockedBy = append(blockedBy, depTaskID)
 		}
 		if len(blockedBy) > 0 {
-			_ = c.mockTaskCtl.update(taskID, UpdateOpts{BlockedBy: &blockedBy})
+			if err := c.mockTaskCtl.update(taskID, UpdateOpts{BlockedBy: &blockedBy}); err != nil {
+				blockedByPersisted = false
+			}
+		} else if len(deps) > 0 {
+			blockedByPersisted = false
 		}
 	}
 
 	// 推进 ready tasks
-	readyTasks, _ := c.mockTaskCtl.ready()
+	if !blockedByPersisted {
+		return nil
+	}
+	readyTasks, err := c.mockTaskCtl.ready()
+	if err != nil {
+		return err
+	}
 	for _, task := range readyTasks {
 		status := TaskStatusInProgress
-		_ = c.mockTaskCtl.update(task.ID, UpdateOpts{Status: &status})
+		if err := c.mockTaskCtl.update(task.ID, UpdateOpts{Status: &status}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -371,6 +408,118 @@ func TestController_ReadyTaskAdvance(t *testing.T) {
 		case 41:
 			assert.Equal(t, TaskStatusPending, task.Status)
 		}
+	}
+}
+
+func TestController_ManualDependsOnWinsAndAIFillsUndeclared(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 40, Title: "Auth", Body: "fix auth"},
+		{Number: 41, Title: "Payment", Body: "fix payment"},
+		{Number: 42, Title: "Tests", Body: "depends-on: #40"},
+	}
+	aiResp := `{"dependencies":{"41":[40],"42":[41]},"potential_conflicts":[]}`
+
+	ctrl := newInMemController(issues, aiResp)
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	taskByIssue := make(map[int]Task)
+	taskIDByIssue := make(map[int]string)
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		taskByIssue[task.IssueNum()] = task
+		taskIDByIssue[task.IssueNum()] = task.ID
+	}
+
+	require.Contains(t, taskByIssue, 42)
+	assert.Equal(t, []string{taskIDByIssue[40]}, taskByIssue[42].BlockedBy)
+	assert.Equal(t, TaskStatusPending, taskByIssue[42].Status)
+	assert.Equal(t, []string{taskIDByIssue[40]}, taskByIssue[41].BlockedBy)
+}
+
+func TestController_SubIssueWithParentOnlyUsesUnifiedAnalyzePath(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 210, Title: "parent", Body: "parent root"},
+		{Number: 214, Title: "sub", Body: "parent: #210"},
+	}
+	aiResp := `{"dependencies":{"214":[210]},"potential_conflicts":[]}`
+
+	ctrl := newInMemController(issues, aiResp)
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	require.NotNil(t, ctrl.mockAI)
+	assert.Equal(t, 1, ctrl.mockAI.CallCount())
+	assert.Contains(t, ctrl.mockAI.LastPrompt(), "#214")
+
+	taskByIssue := make(map[int]Task)
+	taskIDByIssue := make(map[int]string)
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		taskByIssue[task.IssueNum()] = task
+		taskIDByIssue[task.IssueNum()] = task.ID
+	}
+
+	assert.Equal(t, TaskStatusInProgress, taskByIssue[210].Status)
+	assert.Equal(t, TaskStatusPending, taskByIssue[214].Status)
+	assert.Equal(t, []string{taskIDByIssue[210]}, taskByIssue[214].BlockedBy)
+}
+
+func TestController_SubIssueParentDoesNotOverrideDependsOn(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 210, Title: "parent", Body: "parent root"},
+		{Number: 300, Title: "base", Body: "base impl"},
+		{Number: 214, Title: "sub", Body: "parent: #210\ndepends-on: #300"},
+	}
+	aiResp := `{"dependencies":{"214":[210]},"potential_conflicts":[]}`
+
+	ctrl := newInMemController(issues, aiResp)
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	taskByIssue := make(map[int]Task)
+	taskIDByIssue := make(map[int]string)
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		taskByIssue[task.IssueNum()] = task
+		taskIDByIssue[task.IssueNum()] = task.ID
+	}
+
+	assert.Equal(t, []string{taskIDByIssue[300]}, taskByIssue[214].BlockedBy)
+}
+
+func TestController_ReadyWaitsForBlockedByPersistence(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 40, Title: "Auth", Body: "fix auth"},
+		{Number: 41, Title: "Tests", Body: "depends-on: #40"},
+	}
+
+	ctrl := newInMemController(issues, "")
+	ctrl.mockTaskCtl.readyHook = func(tasks []Task) error {
+		for _, task := range tasks {
+			if task.IssueNum() == 41 && len(task.BlockedBy) == 0 {
+				return fmt.Errorf("ready called before blocked_by persisted for issue #41")
+			}
+		}
+		return nil
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, ctrl.mockTaskCtl.readyCallCount)
+}
+
+func TestController_SkipReadyWhenBlockedByPersistFails(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 40, Title: "Auth", Body: "fix auth"},
+		{Number: 41, Title: "Tests", Body: "depends-on: #40"},
+	}
+
+	ctrl := newInMemController(issues, "")
+	ctrl.mockTaskCtl.failBlockedByForTaskID["task-2"] = fmt.Errorf("write blocked_by failed")
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, ctrl.mockTaskCtl.readyCallCount)
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		assert.Equal(t, TaskStatusPending, task.Status)
 	}
 }
 

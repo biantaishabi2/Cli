@@ -166,38 +166,9 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// ③ 分析依赖（包括 depends-on 和 parent 关系）
-	analysis := &AnalysisResult{Dependencies: make(map[int][]int)}
-
-	// 先解析 parent 关系（Sub-Issue 模式）
-	for _, issue := range issues {
-		if parentNum := parseParent(issue.Body); parentNum > 0 {
-			// 检查 parent 是否也在处理列表中
-			for _, other := range issues {
-				if other.Number == parentNum {
-					// sub-issue 依赖 parent
-					analysis.Dependencies[issue.Number] = append(analysis.Dependencies[issue.Number], parentNum)
-					fmt.Printf("[control] 发现 Sub-Issue 关系: #%d → parent #%d\n", issue.Number, parentNum)
-					break
-				}
-			}
-		}
-	}
-
-	// 再调 AI 分析（补充 depends-on 和其他依赖）
-	if len(issues) > 1 && c.analyzer != nil {
-		aiAnalysis, err := c.analyzer.Analyze(ctx, issues)
-		if err != nil {
-			fmt.Printf("[control] AI 依赖分析失败: %v\n", err)
-		} else {
-			// 合并 AI 结果（parent 关系优先）
-			for issueNum, deps := range aiAnalysis.Dependencies {
-				if _, hasParent := analysis.Dependencies[issueNum]; !hasParent {
-					analysis.Dependencies[issueNum] = deps
-				}
-			}
-		}
-	}
+	// ③ 统一依赖分析：显式 depends-on 优先，AI 仅补全未声明项。
+	// 注意：parent 仅表示结构归属/收口关系，不隐式注入执行依赖边。
+	analysis := c.buildDependencyAnalysis(ctx, issues)
 
 	// ④ 为新 issue 创建 task + 设 blocked_by
 	issueToTask := make(map[int]string) // issueNum → taskID
@@ -227,50 +198,38 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// 设置 blocked_by
-	for issueNum, deps := range analysis.Dependencies {
-		taskID, ok := issueToTask[issueNum]
-		if !ok {
-			continue
-		}
-		var blockedBy []string
-		for _, dep := range deps {
-			if depTaskID, ok := issueToTask[dep]; ok {
-				blockedBy = append(blockedBy, depTaskID)
-			}
-		}
-		if len(blockedBy) > 0 {
-			if err := c.taskctl.Update(taskID, UpdateOpts{BlockedBy: &blockedBy}); err != nil {
-				fmt.Printf("[control] 设置 blocked_by 失败 (task %s): %v\n", taskID, err)
-			}
-		}
-	}
+	// ⑤ 先落盘 blocked_by，再判定 ready（流程不变量门禁）。
+	blockedByPersisted := c.persistBlockedByDependencies(issueToTask, analysis.Dependencies)
 
-	// ⑤ 获取 ready tasks 并推进
-	readyTasks, err := c.taskctl.Ready()
-	if err != nil {
-		fmt.Printf("[control] 获取 ready tasks 失败: %v\n", err)
+	// ⑥ 获取 ready tasks 并推进
+	if !blockedByPersisted {
+		fmt.Println("[control] blocked_by 落盘未完成，跳过本轮 ready 放行，等待下轮重试")
 	} else {
-		for _, task := range readyTasks {
-			issueNum := task.IssueNum()
-			fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
-			status := TaskStatusInProgress
-			if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
-				fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
-				continue
-			}
-			// 将 bot:queued 改为 bot:fix，触发单issue流程
-			if issueNum > 0 {
-				if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
-					fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
-				} else {
-					fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+		readyTasks, err := c.taskctl.Ready()
+		if err != nil {
+			fmt.Printf("[control] 获取 ready tasks 失败: %v\n", err)
+		} else {
+			for _, task := range readyTasks {
+				issueNum := task.IssueNum()
+				fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
+				status := TaskStatusInProgress
+				if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
+					fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
+					continue
+				}
+				// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
+				if issueNum > 0 {
+					if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
+						fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
+					} else {
+						fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+					}
 				}
 			}
 		}
 	}
 
-	// ⑥ 增量 integration：将刚完成的 PR 合入对应 integration 分支
+	// ⑦ 增量 integration：将刚完成的 PR 合入对应 integration 分支
 	if c.builder != nil {
 		allTasks, _ := c.taskctl.List("")
 
@@ -380,10 +339,119 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	// ⑦ 检查父 issue 进度（Sub-Issue 模式）
+	// ⑧ 检查父 issue 进度（Sub-Issue 模式）
 	c.checkParentProgress(ctx, issues)
 
 	return nil
+}
+
+// buildDependencyAnalysis 构建统一依赖视图。
+// 顺序固定为：解析显式 depends-on → AI 补全未声明依赖（不覆盖显式声明）。
+func (c *Controller) buildDependencyAnalysis(ctx context.Context, issues []IssueInfo) *AnalysisResult {
+	manualDeps, declared := buildManualDependencySeed(issues)
+	analysis := &AnalysisResult{
+		Dependencies: manualDeps,
+	}
+
+	if c.analyzer == nil || len(issues) <= 1 {
+		return analysis
+	}
+
+	aiResult, err := c.analyzer.Analyze(ctx, issues)
+	if err != nil {
+		// Analyze 当前实现通常降级返回 nil error；这里保留兜底防护。
+		fmt.Printf("[control][analyzer] degraded=true stage=merge err=%q\n", err)
+		return analysis
+	}
+
+	for issueNum, deps := range aiResult.Dependencies {
+		if _, ok := declared[issueNum]; ok {
+			// 人工 depends-on 优先，AI 不允许覆盖。
+			continue
+		}
+		analysis.Dependencies[issueNum] = deps
+	}
+	analysis.PotentialConflicts = aiResult.PotentialConflicts
+	return analysis
+}
+
+// buildManualDependencySeed 解析显式 depends-on，并记录声明集合。
+func buildManualDependencySeed(issues []IssueInfo) (map[int][]int, map[int]struct{}) {
+	dependencies := make(map[int][]int)
+	declared := make(map[int]struct{})
+	issueSet := make(map[int]bool, len(issues))
+	for _, issue := range issues {
+		issueSet[issue.Number] = true
+	}
+
+	for _, issue := range issues {
+		deps := parseDependsOn(issue.Body)
+		if len(deps) == 0 {
+			continue
+		}
+		declared[issue.Number] = struct{}{}
+		validDeps := filterIssueDeps(issue.Number, deps, issueSet)
+		if len(validDeps) > 0 {
+			dependencies[issue.Number] = validDeps
+		}
+	}
+	return dependencies, declared
+}
+
+// persistBlockedByDependencies 将依赖关系落盘到 taskctl blocked_by 字段。
+// 返回 false 表示本轮未完成完整落盘，调用方应跳过 ready 放行。
+func (c *Controller) persistBlockedByDependencies(issueToTask map[int]string, dependencies map[int][]int) bool {
+	if len(dependencies) == 0 {
+		return true
+	}
+
+	persisted := true
+	issueNums := make([]int, 0, len(dependencies))
+	for issueNum := range dependencies {
+		issueNums = append(issueNums, issueNum)
+	}
+	sort.Ints(issueNums)
+
+	for _, issueNum := range issueNums {
+		deps := dependencies[issueNum]
+		taskID, ok := issueToTask[issueNum]
+		if !ok {
+			fmt.Printf("[control] issue #%d 对应 task 不存在，blocked_by 落盘未完成\n", issueNum)
+			persisted = false
+			continue
+		}
+
+		blockedBy := make([]string, 0, len(deps))
+		missingDeps := make([]int, 0)
+		for _, dep := range deps {
+			depTaskID, ok := issueToTask[dep]
+			if !ok {
+				missingDeps = append(missingDeps, dep)
+				continue
+			}
+			blockedBy = append(blockedBy, depTaskID)
+		}
+
+		if len(missingDeps) > 0 {
+			fmt.Printf("[control] issue #%d 依赖任务缺失: %v，blocked_by 落盘未完成\n", issueNum, missingDeps)
+			persisted = false
+		}
+		if len(blockedBy) == 0 {
+			if len(deps) > 0 {
+				fmt.Printf("[control] issue #%d 依赖为空映射，blocked_by 落盘未完成\n", issueNum)
+				persisted = false
+			}
+			continue
+		}
+
+		if err := c.taskctl.Update(taskID, UpdateOpts{BlockedBy: &blockedBy}); err != nil {
+			fmt.Printf("[control] 设置 blocked_by 失败 (task %s): %v\n", taskID, err)
+			persisted = false
+			continue
+		}
+	}
+
+	return persisted
 }
 
 // collectAutomationIssues 扫描所有自动化标签，合并为统一 issue 集合。
