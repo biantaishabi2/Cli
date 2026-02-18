@@ -106,3 +106,13 @@ func (c *Client) CloseIssue(ctx context.Context, number int) error {
 	}
 	return nil
 }
+
+// UpdateIssueBody 更新 issue body。
+func (c *Client) UpdateIssueBody(ctx context.Context, number int, body string) error {
+	req := &github.IssueRequest{Body: &body}
+	_, _, err := c.gh.Issues.Edit(ctx, c.owner, c.repo, number, req)
+	if err != nil {
+		return fmt.Errorf("更新 issue #%d body 失败: %w", number, err)
+	}
+	return nil
+}

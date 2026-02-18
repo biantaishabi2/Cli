@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,16 +21,69 @@ type GitHubOps interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]IssueInfo, error)
 	ListIssuesByState(ctx context.Context, state string) ([]IssueInfo, error)
 	GetIssue(ctx context.Context, issueNumber int) (IssueInfo, error)
+	UpdateIssueBody(ctx context.Context, issueNumber int, body string) error
+	ListCommentBodies(ctx context.Context, issueNumber int) ([]string, error)
+	AddIssueComment(ctx context.Context, issueNumber int, body string) error
 	CloseIssue(ctx context.Context, issueNumber int) error
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 	ResolvePRMetadata(ctx context.Context, issueNumber int) (PRMetadata, error)
+	ResolvePRReviewStatus(ctx context.Context, issueNumber int) (PRReviewStatus, error)
 }
 
 // PRMetadata 表示用于 integration 候选筛选的最小 PR 元数据。
 type PRMetadata struct {
 	PRNum  int
 	Branch string
+}
+
+// PRMergeable 表示 PR mergeable 字段的归一化结果。
+type PRMergeable string
+
+const (
+	PRMergeableUnknown     PRMergeable = "UNKNOWN"
+	PRMergeableMergeable   PRMergeable = "MERGEABLE"
+	PRMergeableConflicting PRMergeable = "CONFLICTING"
+)
+
+// PRReviewStatus 表示 pr-reviewable 协调所需的 PR 状态快照。
+type PRReviewStatus struct {
+	PRNum            int
+	HeadSHA          string
+	Mergeable        PRMergeable
+	MergeStateStatus string
+}
+
+func (s PRReviewStatus) normalizedMergeStateStatus() string {
+	status := strings.ToUpper(strings.TrimSpace(s.MergeStateStatus))
+	if status == "" {
+		return "UNKNOWN"
+	}
+	return status
+}
+
+func (s PRReviewStatus) IsConflicting() bool {
+	status := s.normalizedMergeStateStatus()
+	return s.Mergeable == PRMergeableConflicting || status == "DIRTY" || status == "BLOCKED"
+}
+
+func (s PRReviewStatus) IsUnknown() bool {
+	if s.IsConflicting() {
+		return false
+	}
+	status := s.normalizedMergeStateStatus()
+	return s.Mergeable == PRMergeableUnknown && status == "UNKNOWN"
+}
+
+func (s PRReviewStatus) IsMergeable() bool {
+	if s.IsConflicting() || s.IsUnknown() {
+		return false
+	}
+	status := s.normalizedMergeStateStatus()
+	if status == "CLEAN" {
+		return true
+	}
+	return s.Mergeable == PRMergeableMergeable
 }
 
 var (
@@ -74,14 +128,22 @@ const (
 
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
+	prConflictRetryDefaultThreshold  = 3
 
-	issueLockDefaultTTL              = 5 * time.Minute
-	issueLockDefaultHeartbeat        = 100 * time.Second
+	issueLockDefaultTTL       = 5 * time.Minute
+	issueLockDefaultHeartbeat = 100 * time.Second
 
 	metadataSyncSkipMarkerNotFound    = "marker_not_found"
 	metadataSyncSkipPRClosed          = "pr_closed"
 	metadataSyncSkipBranchUnavailable = "branch_unavailable"
 	metadataSyncSkipAlreadyUpToDate   = "already_up_to_date"
+)
+
+var (
+	prConflictRetryMarkerRe             = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
+	defaultPRConflictUnknownBackoffs    = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+	prConflictDetectedCommentMarkerFmt  = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
+	prConflictEscalatedCommentMarkerFmt = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
 )
 
 // Controller 多 Issue 协调控制器
@@ -101,6 +163,8 @@ type ControlConfig struct {
 	MaxOldBranches            int    `yaml:"max_old_branches"`          // 默认 3
 	MinPRsForIntegration      int    `yaml:"min_prs_for_integration"`   // 默认 2
 	IntegrationGateMaxRetries int    `yaml:"integration_gate_max_retries"`
+	PRConflictRetryThreshold  int
+	PRConflictUnknownBackoffs []time.Duration
 	RepoDir                   string `yaml:"-"`
 }
 
@@ -112,6 +176,8 @@ func DefaultControlConfig() *ControlConfig {
 		MaxOldBranches:            3,
 		MinPRsForIntegration:      2,
 		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
+		PRConflictRetryThreshold:  prConflictRetryDefaultThreshold,
+		PRConflictUnknownBackoffs: append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...),
 		RepoDir:                   ".",
 	}
 }
@@ -132,6 +198,12 @@ func NewController(
 	}
 	if cfg.IntegrationGateMaxRetries < 0 {
 		cfg.IntegrationGateMaxRetries = integrationGateDefaultMaxRetries
+	}
+	if cfg.PRConflictRetryThreshold < 0 {
+		cfg.PRConflictRetryThreshold = prConflictRetryDefaultThreshold
+	}
+	if len(cfg.PRConflictUnknownBackoffs) == 0 {
+		cfg.PRConflictUnknownBackoffs = append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
 	}
 	return &Controller{
 		taskctl:  taskctl,
@@ -266,6 +338,9 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 		if err := c.syncPRReviewableMetadata(ctx, allTasks, issueByNumber); err != nil {
 			return fmt.Errorf("同步 PR 元数据失败: %w", err)
+		}
+		if err := c.reconcilePRReviewableConflicts(ctx, allTasks, issueByNumber); err != nil {
+			return fmt.Errorf("协调 pr-reviewable 冲突失败: %w", err)
 		}
 
 		// 按 integration 分支分组 task
@@ -614,6 +689,322 @@ func classifyPRMetadataSkipReason(err error) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// reconcilePRReviewableConflicts 协调 bot:pr-reviewable 的冲突回退逻辑。
+func (c *Controller) reconcilePRReviewableConflicts(ctx context.Context, tasks []Task, issueByNumber map[int]IssueInfo) error {
+	for i := range tasks {
+		task := &tasks[i]
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+
+		issue, ok := issueByNumber[issueNum]
+		if !ok || !hasLabel(issue.Labels, "bot:pr-reviewable") {
+			continue
+		}
+
+		reviewStatus, unknownExhausted, err := c.resolvePRReviewStatusWithBackoff(ctx, issueNum)
+		if err != nil {
+			if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+				fmt.Printf("[control] action=pr_reviewable_conflict_skipped issue=%d skip_reason=%s\n", issueNum, skipReason)
+				continue
+			}
+			return fmt.Errorf("issue #%d 解析 PR review 状态失败: %w", issueNum, err)
+		}
+
+		if reviewStatus.IsConflicting() {
+			if err := c.handlePRReviewableConflict(ctx, issueNum, reviewStatus); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if reviewStatus.IsUnknown() || unknownExhausted {
+			c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "noop_unknown")
+			continue
+		}
+
+		if !reviewStatus.IsMergeable() {
+			c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "noop_non_conflicting")
+			continue
+		}
+
+		if err := c.handlePRReviewableMergeable(ctx, issueNum, reviewStatus); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Controller) handlePRReviewableMergeable(ctx context.Context, issueNum int, reviewStatus PRReviewStatus) error {
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取最新状态失败: %w", issueNum, err)
+	}
+	if !hasLabel(issue.Labels, "bot:pr-reviewable") {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", currentAutomationLabel(issue.Labels), parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "skip_race")
+		return nil
+	}
+
+	retryCount := parsePRConflictRetryCount(issue.Body)
+	if retryCount <= 0 {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", 0, c.prConflictRetryThreshold(), "noop_mergeable")
+		return nil
+	}
+
+	if err := c.persistPRConflictRetryCount(ctx, issue, 0); err != nil {
+		return err
+	}
+
+	c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", 0, c.prConflictRetryThreshold(), "reset_retry")
+	return nil
+}
+
+func (c *Controller) handlePRReviewableConflict(ctx context.Context, issueNum int, reviewStatus PRReviewStatus) error {
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取最新状态失败: %w", issueNum, err)
+	}
+	if !hasLabel(issue.Labels, "bot:pr-reviewable") {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", currentAutomationLabel(issue.Labels), parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "skip_race")
+		return nil
+	}
+
+	threshold := c.prConflictRetryThreshold()
+	retryCount := parsePRConflictRetryCount(issue.Body) + 1
+	if err := c.persistPRConflictRetryCount(ctx, issue, retryCount); err != nil {
+		return err
+	}
+
+	headSHA := normalizedHeadSHA(reviewStatus.HeadSHA)
+	oldLabel := "bot:pr-reviewable"
+	newLabel := "bot:pr-needs-fix"
+	decision := "rollback_to_needs_fix"
+	if retryCount > threshold {
+		newLabel = needsHumanLabel
+		decision = "escalate_needs_human"
+	}
+
+	if err := c.ensurePRConflictDetectedComment(ctx, issueNum, reviewStatus, retryCount, threshold, headSHA, newLabel); err != nil {
+		return err
+	}
+
+	if retryCount > threshold {
+		if err := c.ensurePRConflictEscalationComment(ctx, issueNum, reviewStatus, retryCount, threshold, headSHA); err != nil {
+			return err
+		}
+	}
+
+	if err := c.syncIssueStateLabel(ctx, issueNum, newLabel); err != nil {
+		return fmt.Errorf("issue #%d 状态回退失败: %w", issueNum, err)
+	}
+	c.logPRReviewableDecision(issueNum, reviewStatus, oldLabel, newLabel, retryCount, threshold, decision)
+	return nil
+}
+
+func (c *Controller) resolvePRReviewStatusWithBackoff(ctx context.Context, issueNum int) (PRReviewStatus, bool, error) {
+	backoffs := c.prConflictUnknownBackoffs()
+	for attempt := 0; ; attempt++ {
+		reviewStatus, err := c.github.ResolvePRReviewStatus(ctx, issueNum)
+		if err != nil {
+			return PRReviewStatus{}, false, err
+		}
+		reviewStatus.MergeStateStatus = strings.ToUpper(strings.TrimSpace(reviewStatus.MergeStateStatus))
+		if !reviewStatus.IsUnknown() {
+			return reviewStatus, false, nil
+		}
+		if attempt >= len(backoffs) {
+			return reviewStatus, true, nil
+		}
+
+		wait := backoffs[attempt]
+		fmt.Printf(
+			"[control] action=pr_reviewable_unknown_retry issue=%d pr=%d mergeable=%s merge_state_status=%s attempt=%d wait=%s\n",
+			issueNum,
+			reviewStatus.PRNum,
+			reviewStatus.Mergeable,
+			reviewStatus.normalizedMergeStateStatus(),
+			attempt+1,
+			wait,
+		)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return PRReviewStatus{}, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *Controller) ensurePRConflictDetectedComment(
+	ctx context.Context,
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	retryCount int,
+	threshold int,
+	headSHA string,
+	nextLabel string,
+) error {
+	marker := fmt.Sprintf(prConflictDetectedCommentMarkerFmt, headSHA)
+	followup := "已触发既有 iterate 链路继续自动修复。"
+	if nextLabel == needsHumanLabel {
+		followup = "已停止自动回退循环，等待人工介入处理。"
+	}
+	body := fmt.Sprintf(
+		"## ⚠️ 检测到 PR 冲突\n\n- PR: #%d\n- mergeable: `%s`\n- mergeStateStatus: `%s`\n- headSha: `%s`\n- conflict_retry: `%d/%d`\n- 状态变更: `bot:pr-reviewable -> %s`\n\n%s\n\n%s",
+		reviewStatus.PRNum,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		headSHA,
+		retryCount,
+		threshold,
+		nextLabel,
+		followup,
+		marker,
+	)
+	return c.ensureIssueCommentWithMarker(ctx, issueNum, marker, body)
+}
+
+func (c *Controller) ensurePRConflictEscalationComment(
+	ctx context.Context,
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	retryCount int,
+	threshold int,
+	headSHA string,
+) error {
+	marker := fmt.Sprintf(prConflictEscalatedCommentMarkerFmt, headSHA)
+	body := fmt.Sprintf(
+		"## ⚠️ 自动冲突修复已超限，转人工处理\n\n- PR: #%d\n- mergeable: `%s`\n- mergeStateStatus: `%s`\n- headSha: `%s`\n- conflict_retry: `%d`（threshold=%d）\n- 状态变更: `bot:pr-reviewable -> needs-human`\n\n请人工介入处理冲突后再继续流程。\n\n%s",
+		reviewStatus.PRNum,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		headSHA,
+		retryCount,
+		threshold,
+		marker,
+	)
+	return c.ensureIssueCommentWithMarker(ctx, issueNum, marker, body)
+}
+
+func (c *Controller) ensureIssueCommentWithMarker(ctx context.Context, issueNum int, markerLine string, body string) error {
+	commentBodies, err := c.github.ListCommentBodies(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取评论失败: %w", issueNum, err)
+	}
+	for _, commentBody := range commentBodies {
+		if strings.Contains(commentBody, markerLine) {
+			return nil
+		}
+	}
+	if err := c.github.AddIssueComment(ctx, issueNum, body); err != nil {
+		return fmt.Errorf("issue #%d 写入评论失败: %w", issueNum, err)
+	}
+	return nil
+}
+
+func (c *Controller) persistPRConflictRetryCount(ctx context.Context, issue IssueInfo, retryCount int) error {
+	updatedBody, changed := upsertPRConflictRetryMarker(issue.Body, retryCount)
+	if !changed {
+		return nil
+	}
+	if err := c.github.UpdateIssueBody(ctx, issue.Number, updatedBody); err != nil {
+		return fmt.Errorf("issue #%d 更新 PR_CONFLICT_RETRY 失败: %w", issue.Number, err)
+	}
+	return nil
+}
+
+func parsePRConflictRetryCount(body string) int {
+	matches := prConflictRetryMarkerRe.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		return 0
+	}
+	count, err := strconv.Atoi(matches[1])
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
+}
+
+func upsertPRConflictRetryMarker(body string, retryCount int) (string, bool) {
+	markerLine := fmt.Sprintf("<!-- PR_CONFLICT_RETRY:%d -->", retryCount)
+	if loc := prConflictRetryMarkerRe.FindStringIndex(body); loc != nil {
+		current := body[loc[0]:loc[1]]
+		if current == markerLine {
+			return body, false
+		}
+		return body[:loc[0]] + markerLine + body[loc[1]:], true
+	}
+
+	trimmed := strings.TrimRight(body, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return markerLine, true
+	}
+	return trimmed + "\n\n" + markerLine, true
+}
+
+func normalizedHeadSHA(headSHA string) string {
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return "unknown"
+	}
+	return headSHA
+}
+
+func currentAutomationLabel(labels []string) string {
+	for _, candidate := range integrationAutomationLabels {
+		if hasLabel(labels, candidate) {
+			return candidate
+		}
+	}
+	return "-"
+}
+
+func (c *Controller) prConflictRetryThreshold() int {
+	if c.cfg == nil {
+		return prConflictRetryDefaultThreshold
+	}
+	if c.cfg.PRConflictRetryThreshold < 0 {
+		return prConflictRetryDefaultThreshold
+	}
+	return c.cfg.PRConflictRetryThreshold
+}
+
+func (c *Controller) prConflictUnknownBackoffs() []time.Duration {
+	if c.cfg == nil || len(c.cfg.PRConflictUnknownBackoffs) == 0 {
+		return append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
+	}
+	return append([]time.Duration(nil), c.cfg.PRConflictUnknownBackoffs...)
+}
+
+func (c *Controller) logPRReviewableDecision(
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	oldLabel string,
+	newLabel string,
+	retryCount int,
+	threshold int,
+	decision string,
+) {
+	fmt.Printf(
+		"[control] action=pr_reviewable_reconcile issue=%d pr=%d head_sha=%s old_label=%s new_label=%s retry_count=%d threshold=%d mergeable=%s merge_state_status=%s decision=%s\n",
+		issueNum,
+		reviewStatus.PRNum,
+		normalizedHeadSHA(reviewStatus.HeadSHA),
+		oldLabel,
+		newLabel,
+		retryCount,
+		threshold,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		decision,
+	)
 }
 
 // checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
