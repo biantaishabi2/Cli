@@ -10,6 +10,11 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 )
 
+const (
+	visibleDiscussionRoundMarker = "<!-- BOT:DISCUSSION_VISIBLE -->"
+	visibleDebateRoundMarker     = "<!-- BOT:DEBATE_VISIBLE -->"
+)
+
 // FormatDraftPlan 格式化方案草案为 Markdown
 func FormatDraftPlan(plan *DraftPlan, m *marker.Marker) string {
 	var sb strings.Builder
@@ -84,6 +89,8 @@ func FormatDiscussionSummary(summary *DiscussionSummary, m *marker.Marker) strin
 // FormatDiscussionRoundSummary 格式化每轮可见摘要（用于 issue comment）。
 func FormatDiscussionRoundSummary(round, maxRounds int, mode string, summary *DiscussionSummary, previousCount int) string {
 	var sb strings.Builder
+	sb.WriteString(visibleDiscussionRoundMarker)
+	sb.WriteString("\n\n")
 	sb.WriteString(fmt.Sprintf("## 🧭 讨论进展（第 %d/%d 轮）\n\n", round, maxRounds))
 	sb.WriteString(fmt.Sprintf("- mode: `%s`\n", mode))
 	sb.WriteString(fmt.Sprintf("- 分歧数量: `%d`", len(summary.Disagreements)))
@@ -103,6 +110,8 @@ func FormatDiscussionRoundSummary(round, maxRounds int, mode string, summary *Di
 // FormatDebateRoundComment 格式化 AB 轮流评论可见内容。
 func FormatDebateRoundComment(round, maxRounds int, speaker string, comment *DebateComment) string {
 	var sb strings.Builder
+	sb.WriteString(visibleDebateRoundMarker)
+	sb.WriteString("\n\n")
 	sb.WriteString(fmt.Sprintf("## 🗣️ Debate %s（第 %d/%d 轮）\n\n", speaker, round, maxRounds))
 	sb.WriteString("### 同意点\n")
 	if len(comment.Agreements) == 0 {

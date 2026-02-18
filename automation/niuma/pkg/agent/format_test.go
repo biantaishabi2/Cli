@@ -112,6 +112,7 @@ func TestFormatDiscussionRoundSummary(t *testing.T) {
 	}
 
 	result := FormatDiscussionRoundSummary(2, 5, "consolidate", summary, 2)
+	assert.Contains(t, result, "<!-- BOT:DISCUSSION_VISIBLE -->")
 	assert.Contains(t, result, "第 2/5 轮")
 	assert.Contains(t, result, "变化: -1")
 	assert.Contains(t, result, "最高风险: `medium`")
@@ -126,6 +127,7 @@ func TestFormatDebateRoundComment(t *testing.T) {
 		Suggestion: "先保持兼容默认值",
 	}
 	result := FormatDebateRoundComment(1, 3, "A", comment)
+	assert.Contains(t, result, "<!-- BOT:DEBATE_VISIBLE -->")
 	assert.Contains(t, result, "Debate A")
 	assert.Contains(t, result, "同意输入校验")
 	assert.Contains(t, result, "risk=high")

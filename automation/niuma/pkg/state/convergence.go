@@ -156,8 +156,8 @@ func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *Converg
 		}
 	}
 
-	// 2. AI 建议收敛：discussion summary 中 should_finish=true
-	if input.AIShouldFinish {
+	// 2. AI 建议收敛：仅作为无结构化信号时的兼容兜底。
+	if input.AIShouldFinish && !hasStructuredSignal {
 		decision.Result = ShouldFinalize
 		decision.Reason = "ai_should_finish"
 		decision.ShouldFinish = true

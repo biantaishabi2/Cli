@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
+	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -67,4 +68,35 @@ func TestDoDiscuss_DebateABMode_AlternatingAndFinalize(t *testing.T) {
 	}
 	assert.Contains(t, joined, "Debate A")
 	assert.Contains(t, joined, "Debate B")
+}
+
+func TestShouldPublishDiscussionSummary_VisibleOnlyOnDiff(t *testing.T) {
+	orch := NewOrchestratorWithConfig(NewMockGitHub(), 1, &OrchestratorConfig{
+		DiscussionProviders:  []ai.Provider{ai.NewMockProvider(`{"summary":"unused"}`)},
+		Consolidator:         ai.NewMockProvider(`{"summary":"unused"}`),
+		VisibleRoundInterval: 1,
+		VisibleOnlyOnDiff:    true,
+	})
+	summary := &DiscussionSummary{
+		Decision:              DecisionMerge,
+		RequiresHumanDecision: false,
+		Disagreements: []DisagreementItem{
+			{Topic: "t1", Options: []string{"A", "B"}, Recommendation: "A", Risk: RiskMedium},
+		},
+	}
+	previous := &gh.MarkerComment{
+		Marker: &marker.Marker{
+			Decision:      "merge",
+			Human:         false,
+			Risk:          "medium",
+			DisagreeCount: 1,
+		},
+	}
+
+	assert.False(t, orch.shouldPublishDiscussionSummary(2, previous, summary))
+
+	summary.Disagreements = append(summary.Disagreements, DisagreementItem{
+		Topic: "t2", Options: []string{"A", "B"}, Recommendation: "B", Risk: RiskLow,
+	})
+	assert.True(t, orch.shouldPublishDiscussionSummary(3, previous, summary))
 }

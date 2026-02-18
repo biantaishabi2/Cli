@@ -1051,7 +1051,7 @@ func (o *Orchestrator) shouldPublishDiscussionSummary(round int, previous *gh.Ma
 		prev.Decision != string(summary.Decision) ||
 		prev.Human != summary.RequiresHumanDecision ||
 		prev.Risk != string(maxRisk(summary.Disagreements))
-	return intervalHit || changed
+	return changed
 }
 
 func (o *Orchestrator) getVisibleRoundInterval() int {

@@ -288,6 +288,21 @@ func TestConvergence_AIFalse_WithRounds(t *testing.T) {
 	assert.Equal(t, NotConverged, checker.Check(input))
 }
 
+func TestConvergence_AIShouldFinish_DoesNotOverrideStructuredDisagreement(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	checker := fixedChecker(now)
+	decision := checker.CheckWithDecision(&ConvergenceInput{
+		Comments: []*github.IssueComment{
+			makeComment("人的评论", now.Add(-1*time.Minute)),
+		},
+		Decision:          "merge",
+		DisagreementCount: 1,
+		AIShouldFinish:    true,
+	})
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.NotEqual(t, "ai_should_finish", decision.Reason)
+}
+
 func TestReachedDiscussionRoundLimit(t *testing.T) {
 	assert.True(t, ReachedDiscussionRoundLimit(5, 5))
 	assert.True(t, ReachedDiscussionRoundLimit(6, 5))
