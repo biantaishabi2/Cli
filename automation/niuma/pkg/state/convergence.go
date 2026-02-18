@@ -35,11 +35,13 @@ func (r ConvergeResult) String() string {
 
 // ConvergenceDecision 结构化收敛判定结果（供 orchestrator 多轮循环使用）
 type ConvergenceDecision struct {
-	Result       ConvergeResult
-	Reason       string
-	Round        int
-	MaxRound     int
-	RoundLimited bool
+	Result                ConvergeResult
+	Reason                string
+	Round                 int
+	MaxRound              int
+	RoundLimited          bool
+	ShouldFinish          bool
+	RequiresHumanDecision bool
 }
 
 // Converged 是否已收敛可定稿
@@ -65,13 +67,20 @@ func DefaultChecker() *ConvergenceChecker {
 
 // ConvergenceInput 收敛检查的输入数据
 type ConvergenceInput struct {
-	Comments          []*ghapi.IssueComment
-	DiscussionSummary *marker.Marker // 可为 nil
-	ConvergeWarning   *marker.Marker // 可为 nil
-	WarningTime       time.Time      // 预警评论的创建时间
-	AIShouldFinish    bool           // AI 建议结束讨论（discussion summary 中的 should_finish）
-	Round             int            // 当前 discuss 轮次（可选）
-	MaxRound          int            // discuss 最大轮次（可选）
+	Comments                  []*ghapi.IssueComment
+	DiscussionSummary         *marker.Marker // 可为 nil
+	ConvergeWarning           *marker.Marker // 可为 nil
+	WarningTime               time.Time      // 预警评论的创建时间
+	AIShouldFinish            bool           // AI 建议结束讨论（discussion summary 中的 should_finish）
+	RequiresHumanDecision     bool           // 是否需要人工决策
+	Decision                  string         // consolidator 决策（adopt_A|adopt_B|merge|defer）
+	DisagreementCount         int            // 分歧条目数
+	PreviousDisagreementCount int            // 上一轮分歧条目数（debate_ab 用于单调收敛）
+	HasHighRisk               bool           // 是否存在 high-risk 分歧
+	AllLowRiskAutoResolvable  bool           // 是否全部 low-risk 且可自动采纳
+	DiscussionMode            string         // consolidate|debate_ab
+	Round                     int            // 当前 discuss 轮次（可选）
+	MaxRound                  int            // discuss 最大轮次（可选）
 }
 
 // Check 纯函数：根据输入数据检查收敛条件
@@ -89,11 +98,13 @@ func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *Converg
 	}
 
 	decision := &ConvergenceDecision{
-		Result:       NotConverged,
-		Reason:       "continue_discussion",
-		Round:        input.Round,
-		MaxRound:     input.MaxRound,
-		RoundLimited: ReachedDiscussionRoundLimit(input.Round, input.MaxRound),
+		Result:                NotConverged,
+		Reason:                "continue_discussion",
+		Round:                 input.Round,
+		MaxRound:              input.MaxRound,
+		RoundLimited:          ReachedDiscussionRoundLimit(input.Round, input.MaxRound),
+		ShouldFinish:          false,
+		RequiresHumanDecision: false,
 	}
 
 	now := c.Now()
@@ -113,13 +124,47 @@ func (c *ConvergenceChecker) CheckWithDecision(input *ConvergenceInput) *Converg
 	}
 
 	// 1. AI 建议收敛：discussion summary 中 should_finish=true
-	if input.AIShouldFinish {
+	hasStructuredSignal := input.Decision != "" || input.DisagreementCount > 0 || input.RequiresHumanDecision || input.HasHighRisk || input.AllLowRiskAutoResolvable
+	if hasStructuredSignal {
+		if input.RequiresHumanDecision || strings.EqualFold(input.Decision, "defer") || input.HasHighRisk {
+			decision.Result = NotConverged
+			decision.Reason = "requires_human_decision"
+			decision.RequiresHumanDecision = true
+			return decision
+		}
+
+		if input.DisagreementCount == 0 {
+			decision.Result = ShouldFinalize
+			decision.Reason = "no_disagreements"
+			decision.ShouldFinish = true
+			return decision
+		}
+
+		if !strings.EqualFold(input.DiscussionMode, "debate_ab") && input.AllLowRiskAutoResolvable {
+			decision.Result = ShouldFinalize
+			decision.Reason = "low_risk_auto_resolved"
+			decision.ShouldFinish = true
+			return decision
+		}
+
+		if strings.EqualFold(input.DiscussionMode, "debate_ab") &&
+			input.PreviousDisagreementCount > 0 &&
+			input.DisagreementCount > input.PreviousDisagreementCount {
+			decision.Result = NotConverged
+			decision.Reason = "disagreements_expanded"
+			return decision
+		}
+	}
+
+	// 2. AI 建议收敛：仅作为无结构化信号时的兼容兜底。
+	if input.AIShouldFinish && !hasStructuredSignal {
 		decision.Result = ShouldFinalize
 		decision.Reason = "ai_should_finish"
+		decision.ShouldFinish = true
 		return decision
 	}
 
-	// 2. 静默收敛
+	// 3. 静默收敛
 	lastCommentTime := getLastHumanCommentTime(input.Comments)
 	if lastCommentTime.IsZero() {
 		decision.Result = NotConverged
@@ -179,6 +224,11 @@ func (m *Machine) CheckConvergence(ctx context.Context, checker *ConvergenceChec
 	if summaryMC != nil {
 		input.DiscussionSummary = summaryMC.Marker
 		input.AIShouldFinish = summaryMC.Marker.Finish
+		input.RequiresHumanDecision = summaryMC.Marker.Human
+		input.Decision = summaryMC.Marker.Decision
+		input.DisagreementCount = summaryMC.Marker.DisagreeCount
+		input.HasHighRisk = strings.EqualFold(summaryMC.Marker.Risk, "high")
+		input.DiscussionMode = summaryMC.Marker.Mode
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker

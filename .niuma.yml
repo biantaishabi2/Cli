@@ -28,8 +28,11 @@ ai:
     provider: codex
 
 workflow:
+  discussion_mode: consolidate
   max_discussion_rounds: 5
   discuss_timeout_minutes: 20
+  visible_round_interval: 1
+  visible_only_on_diff: true
   max_iterate_rounds: 10
   allowed_prefixes:
     - "automation/"

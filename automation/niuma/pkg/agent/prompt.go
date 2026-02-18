@@ -11,12 +11,16 @@ import (
 
 // PromptInput 构建 prompt 的输入数据
 type PromptInput struct {
-	IssueTitle    string
-	IssueBody     string
-	Comments      []string // 评论内容列表
-	FinalPlan     string   // 最终方案文本（用于实现/迭代）
-	ReviewComment string   // PR review 意见（用于迭代）
-	PRDiff        string   // PR diff 内容（用于迭代）
+	IssueTitle     string
+	IssueBody      string
+	Comments       []string // 评论内容列表
+	Round          int      // 讨论轮次（用于 debate_ab）
+	MaxRounds      int      // 最大轮次（用于 debate_ab）
+	DiscussionRole string   // 当前发言角色（A/B）
+	Counterpart    string   // 对方角色（A/B）
+	FinalPlan      string   // 最终方案文本（用于实现/迭代）
+	ReviewComment  string   // PR review 意见（用于迭代）
+	PRDiff         string   // PR diff 内容（用于迭代）
 }
 
 // BuildDraftPrompt 生成方案草案的 prompt
@@ -27,6 +31,11 @@ func BuildDraftPrompt(input *PromptInput) (string, error) {
 // BuildConsolidatePrompt 生成讨论汇总的 prompt
 func BuildConsolidatePrompt(input *PromptInput) (string, error) {
 	return renderTemplate("consolidate", consolidateTmpl, input)
+}
+
+// BuildDebatePrompt 生成 debate_ab 轮流评论的 prompt
+func BuildDebatePrompt(input *PromptInput) (string, error) {
+	return renderTemplate("debate_ab", debateABTmpl, input)
 }
 
 // BuildFinalPlanPrompt 生成最终方案的 prompt
@@ -110,10 +119,52 @@ const consolidateTmpl = `你是一个项目经理。请汇总以下 GitHub Issue
 请以 JSON 格式返回讨论汇总：
 ` + "```json" + `
 {
-  "consensus": "已达成共识的内容",
-  "open_items": ["待讨论项1", "待讨论项2"],
-  "suggestion": "你的建议",
+  "agreements": ["已达成一致1", "已达成一致2"],
+  "disagreements": [
+    {
+      "topic": "分歧主题",
+      "options": ["方案A", "方案B"],
+      "recommendation": "建议采用方案A（给出理由）",
+      "risk": "low"
+    }
+  ],
+  "decision": "merge",
+  "requires_human_decision": false,
   "should_finish": false
+}
+` + "```"
+
+const debateABTmpl = `你是讨论方 {{.DiscussionRole}}，正在参与 GitHub Issue 的辩论收敛。
+
+## Issue: {{.IssueTitle}}
+
+{{.IssueBody}}
+
+## 讨论上下文（第 {{.Round}}/{{.MaxRounds}} 轮）
+
+{{range .Comments}}
+---
+{{.}}
+{{end}}
+
+## 要求
+
+1. 仅输出 JSON，不要附加解释
+2. 必须给出：同意点、分歧点、建议
+3. 分歧项必须包含 topic/options/recommendation/risk（risk 仅能为 low|medium|high）
+
+` + "```json" + `
+{
+  "agreements": ["你同意的点"],
+  "disagreements": [
+    {
+      "topic": "分歧主题",
+      "options": ["方案A", "方案B"],
+      "recommendation": "建议和理由",
+      "risk": "medium"
+    }
+  ],
+  "suggestion": "本轮给项目维护者的下一步建议"
 }
 ` + "```"
 

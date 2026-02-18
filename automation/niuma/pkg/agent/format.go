@@ -10,6 +10,11 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 )
 
+const (
+	visibleDiscussionRoundMarker = "<!-- BOT:DISCUSSION_VISIBLE -->"
+	visibleDebateRoundMarker     = "<!-- BOT:DEBATE_VISIBLE -->"
+)
+
 // FormatDraftPlan 格式化方案草案为 Markdown
 func FormatDraftPlan(plan *DraftPlan, m *marker.Marker) string {
 	var sb strings.Builder
@@ -47,22 +52,108 @@ func FormatDiscussionSummary(summary *DiscussionSummary, m *marker.Marker) strin
 	sb.WriteString(marker.Render(m))
 	sb.WriteString("\n\n")
 	sb.WriteString("## 📊 讨论汇总\n\n")
-	sb.WriteString("### 已达成共识\n\n")
-	sb.WriteString(summary.Consensus)
-
-	if len(summary.OpenItems) > 0 {
-		sb.WriteString("\n\n### 待讨论项\n\n")
-		for _, item := range summary.OpenItems {
+	sb.WriteString("### 已达成一致\n\n")
+	if len(summary.Agreements) == 0 {
+		sb.WriteString("- （暂无）\n")
+	} else {
+		for _, item := range summary.Agreements {
 			sb.WriteString(fmt.Sprintf("- %s\n", item))
 		}
 	}
 
-	if summary.Suggestion != "" {
-		sb.WriteString("\n### 建议\n\n")
-		sb.WriteString(summary.Suggestion)
+	sb.WriteString("\n\n### 分歧清单\n\n")
+	if len(summary.Disagreements) == 0 {
+		sb.WriteString("- （无）\n")
+	} else {
+		for i, item := range summary.Disagreements {
+			sb.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, item.Topic))
+			sb.WriteString(fmt.Sprintf("   - 选项: %s\n", strings.Join(item.Options, " / ")))
+			sb.WriteString(fmt.Sprintf("   - 建议: %s\n", item.Recommendation))
+			sb.WriteString(fmt.Sprintf("   - 风险: `%s`\n", item.Risk))
+		}
+	}
+
+	sb.WriteString("\n### 当前决策\n\n")
+	sb.WriteString(fmt.Sprintf("- decision: `%s`\n", summary.Decision))
+	sb.WriteString(fmt.Sprintf("- requires_human_decision: `%t`\n", summary.RequiresHumanDecision))
+	sb.WriteString(fmt.Sprintf("- should_finish: `%t`\n", summary.ShouldFinish))
+
+	// 机器可读快照：供后续回放和自动化解析。
+	if raw, err := json.Marshal(summary); err == nil {
+		sb.WriteString(fmt.Sprintf("\n<!-- DISCUSSION_SNAPSHOT:%s -->", string(raw)))
 	}
 
 	return sb.String()
+}
+
+// FormatDiscussionRoundSummary 格式化每轮可见摘要（用于 issue comment）。
+func FormatDiscussionRoundSummary(round, maxRounds int, mode string, summary *DiscussionSummary, previousCount int) string {
+	var sb strings.Builder
+	sb.WriteString(visibleDiscussionRoundMarker)
+	sb.WriteString("\n\n")
+	sb.WriteString(fmt.Sprintf("## 🧭 讨论进展（第 %d/%d 轮）\n\n", round, maxRounds))
+	sb.WriteString(fmt.Sprintf("- mode: `%s`\n", mode))
+	sb.WriteString(fmt.Sprintf("- 分歧数量: `%d`", len(summary.Disagreements)))
+	if previousCount >= 0 {
+		diff := len(summary.Disagreements) - previousCount
+		sb.WriteString(fmt.Sprintf("（变化: %+d）\n", diff))
+	} else {
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("- decision: `%s`\n", summary.Decision))
+	sb.WriteString(fmt.Sprintf("- 最高风险: `%s`\n", maxRisk(summary.Disagreements)))
+	sb.WriteString(fmt.Sprintf("- should_finish: `%t`\n", summary.ShouldFinish))
+	sb.WriteString(fmt.Sprintf("- requires_human_decision: `%t`\n", summary.RequiresHumanDecision))
+	return sb.String()
+}
+
+// FormatDebateRoundComment 格式化 AB 轮流评论可见内容。
+func FormatDebateRoundComment(round, maxRounds int, speaker string, comment *DebateComment) string {
+	var sb strings.Builder
+	sb.WriteString(visibleDebateRoundMarker)
+	sb.WriteString("\n\n")
+	sb.WriteString(fmt.Sprintf("## 🗣️ Debate %s（第 %d/%d 轮）\n\n", speaker, round, maxRounds))
+	sb.WriteString("### 同意点\n")
+	if len(comment.Agreements) == 0 {
+		sb.WriteString("- （暂无）\n")
+	} else {
+		for _, item := range comment.Agreements {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+	}
+
+	sb.WriteString("\n### 分歧点\n")
+	if len(comment.Disagreements) == 0 {
+		sb.WriteString("- （无）\n")
+	} else {
+		for _, item := range comment.Disagreements {
+			sb.WriteString(fmt.Sprintf("- %s（risk=%s）\n", item.Topic, item.Risk))
+		}
+	}
+
+	sb.WriteString("\n### 建议\n")
+	if strings.TrimSpace(comment.Suggestion) == "" {
+		sb.WriteString("- （无）\n")
+	} else {
+		sb.WriteString(comment.Suggestion)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func maxRisk(items []DisagreementItem) RiskLevel {
+	max := RiskLow
+	for _, item := range items {
+		switch item.Risk {
+		case RiskHigh:
+			return RiskHigh
+		case RiskMedium:
+			if max != RiskHigh {
+				max = RiskMedium
+			}
+		}
+	}
+	return max
 }
 
 // FormatFinalPlan 格式化最终方案为 Markdown

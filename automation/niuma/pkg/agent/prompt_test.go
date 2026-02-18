@@ -36,6 +36,26 @@ func TestBuildConsolidatePrompt(t *testing.T) {
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "Add caching")
 	assert.Contains(t, result, "Redis is fine")
+	assert.Contains(t, result, "\"agreements\"")
+	assert.Contains(t, result, "\"decision\"")
+}
+
+func TestBuildDebatePrompt(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle:     "Debate cache strategy",
+		IssueBody:      "Need choose cache ttl",
+		Comments:       []string{"A: prefer 30m", "B: prefer 60m"},
+		Round:          2,
+		MaxRounds:      5,
+		DiscussionRole: "B",
+		Counterpart:    "A",
+	}
+
+	result, err := BuildDebatePrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, result, "第 2/5 轮")
+	assert.Contains(t, result, "讨论方 B")
+	assert.Contains(t, result, "\"suggestion\"")
 }
 
 func TestBuildFinalPlanPrompt(t *testing.T) {

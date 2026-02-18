@@ -56,6 +56,9 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	assert.NotNil(t, cfg.AI.Providers)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
+	assert.Equal(t, "consolidate", cfg.Workflow.GetDiscussionMode())
+	assert.Equal(t, 1, cfg.Workflow.GetVisibleRoundInterval())
+	assert.True(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }
 
 func TestLoad_WorkflowConfig(t *testing.T) {
@@ -70,6 +73,9 @@ workflow:
   max_iterate_rounds: 5
   max_discussion_rounds: 7
   discuss_timeout_minutes: 25
+  discussion_mode: debate_ab
+  visible_round_interval: 2
+  visible_only_on_diff: false
 `
 	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
 	require.NoError(t, err)
@@ -82,6 +88,9 @@ workflow:
 	assert.Equal(t, 7, cfg.Workflow.MaxDiscussionRounds)
 	assert.Equal(t, 7, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 25, cfg.Workflow.GetDiscussTimeoutMinutes())
+	assert.Equal(t, "debate_ab", cfg.Workflow.GetDiscussionMode())
+	assert.Equal(t, 2, cfg.Workflow.GetVisibleRoundInterval())
+	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }
 
 func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
@@ -105,6 +114,21 @@ func TestWorkflowConfig_DefaultMaxRounds(t *testing.T) {
 	assert.Equal(t, 20, w.GetDiscussTimeoutMinutes())
 	w.DiscussTimeoutMinutes = 30
 	assert.Equal(t, 30, w.GetDiscussTimeoutMinutes())
+
+	assert.Equal(t, "consolidate", w.GetDiscussionMode())
+	w.DiscussionMode = "debate_ab"
+	assert.Equal(t, "debate_ab", w.GetDiscussionMode())
+	w.DiscussionMode = "invalid_mode"
+	assert.Equal(t, "consolidate", w.GetDiscussionMode())
+
+	assert.Equal(t, 1, w.GetVisibleRoundInterval())
+	w.VisibleRoundInterval = 3
+	assert.Equal(t, 3, w.GetVisibleRoundInterval())
+
+	assert.True(t, w.GetVisibleOnlyOnDiff())
+	v := false
+	w.VisibleOnlyOnDiff = &v
+	assert.False(t, w.GetVisibleOnlyOnDiff())
 }
 
 func TestLoad_EnvOverride(t *testing.T) {
@@ -117,7 +141,13 @@ func TestLoad_EnvOverride(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Setenv("NIUMA_AI_DEFAULT", "opencode")
+	t.Setenv("NIUMA_DISCUSSION_MODE", "debate_ab")
+	t.Setenv("NIUMA_VISIBLE_ROUND_INTERVAL", "4")
+	t.Setenv("NIUMA_VISIBLE_ONLY_ON_DIFF", "false")
 	cfg, err := Load(dir)
 	require.NoError(t, err)
 	assert.Equal(t, "opencode", cfg.AI.Default)
+	assert.Equal(t, "debate_ab", cfg.Workflow.GetDiscussionMode())
+	assert.Equal(t, 4, cfg.Workflow.GetVisibleRoundInterval())
+	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
 }
