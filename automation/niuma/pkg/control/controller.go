@@ -4,14 +4,18 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,6 +82,10 @@ const (
 	issueLockDefaultTTL              = 5 * time.Minute
 	issueLockDefaultHeartbeat        = 100 * time.Second
 
+	metaKeyTaskRepo      = "repo"
+	metaKeyTaskPhase     = "phase"
+	metaKeyTaskInputHash = "input_hash"
+
 	metadataSyncSkipMarkerNotFound    = "marker_not_found"
 	metadataSyncSkipPRClosed          = "pr_closed"
 	metadataSyncSkipBranchUnavailable = "branch_unavailable"
@@ -86,34 +94,55 @@ const (
 
 // Controller 多 Issue 协调控制器
 type Controller struct {
-	taskctl  *TaskCtlClient
-	analyzer *DependencyAnalyzer
-	github   GitHubOps
-	builder  *IntegrationBuilder
-	cfg      *ControlConfig
+	taskctl            *TaskCtlClient
+	analyzer           *DependencyAnalyzer
+	github             GitHubOps
+	builder            *IntegrationBuilder
+	cfg                *ControlConfig
+	issueLocks         IssueLockStore
+	issueLockTTL       time.Duration
+	issueLockHeartbeat time.Duration
+	nowFn              func() time.Time
+	ownerID            string
 }
 
 // ControlConfig 控制层配置
 type ControlConfig struct {
-	TaskCtlBin                string `yaml:"taskctl_bin"`
-	MergeStrategy             string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix   string `yaml:"integration_branch_prefix"` // 默认 integration/
-	MaxOldBranches            int    `yaml:"max_old_branches"`          // 默认 3
-	MinPRsForIntegration      int    `yaml:"min_prs_for_integration"`   // 默认 2
-	IntegrationGateMaxRetries int    `yaml:"integration_gate_max_retries"`
-	RepoDir                   string `yaml:"-"`
+	TaskCtlBin                 string           `yaml:"taskctl_bin"`
+	MergeStrategy              string           `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix    string           `yaml:"integration_branch_prefix"` // 默认 integration/
+	MaxOldBranches             int              `yaml:"max_old_branches"`          // 默认 3
+	MinPRsForIntegration       int              `yaml:"min_prs_for_integration"`   // 默认 2
+	IntegrationGateMaxRetries  int              `yaml:"integration_gate_max_retries"`
+	RepoDir                    string           `yaml:"-"`
+	IssueLockTTL               time.Duration    `yaml:"-"`
+	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
+	IssueLockStore             IssueLockStore   `yaml:"-"`
+	NowFn                      func() time.Time `yaml:"-"`
+	OwnerID                    string           `yaml:"-"`
 }
 
 // DefaultControlConfig 返回默认配置
 func DefaultControlConfig() *ControlConfig {
 	return &ControlConfig{
-		MergeStrategy:             "merge",
-		IntegrationBranchPrefix:   "integration/",
-		MaxOldBranches:            3,
-		MinPRsForIntegration:      2,
-		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
-		RepoDir:                   ".",
+		MergeStrategy:              "merge",
+		IntegrationBranchPrefix:    "integration/",
+		MaxOldBranches:             3,
+		MinPRsForIntegration:       2,
+		IntegrationGateMaxRetries:  integrationGateDefaultMaxRetries,
+		RepoDir:                    ".",
+		IssueLockTTL:               issueLockDefaultTTL,
+		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
+		OwnerID:                    defaultIssueLockOwnerID(),
 	}
+}
+
+func defaultIssueLockOwnerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "unknown-host"
+	}
+	return fmt.Sprintf("%s:%d", hostname, os.Getpid())
 }
 
 // NewController 创建 Controller
@@ -133,15 +162,415 @@ func NewController(
 	if cfg.IntegrationGateMaxRetries < 0 {
 		cfg.IntegrationGateMaxRetries = integrationGateDefaultMaxRetries
 	}
+	if cfg.IssueLockTTL <= 0 {
+		cfg.IssueLockTTL = issueLockDefaultTTL
+	}
+	if cfg.IssueLockHeartbeatInterval <= 0 {
+		cfg.IssueLockHeartbeatInterval = issueLockDefaultHeartbeat
+	}
+	if cfg.IssueLockHeartbeatInterval >= cfg.IssueLockTTL {
+		cfg.IssueLockHeartbeatInterval = cfg.IssueLockTTL / 3
+		if cfg.IssueLockHeartbeatInterval <= 0 {
+			cfg.IssueLockHeartbeatInterval = time.Second
+		}
+	}
+	if strings.TrimSpace(cfg.OwnerID) == "" {
+		cfg.OwnerID = defaultIssueLockOwnerID()
+	}
+	if cfg.NowFn == nil {
+		cfg.NowFn = time.Now
+	}
+	if cfg.IssueLockStore == nil {
+		cfg.IssueLockStore = newInMemoryIssueLockStore()
+	}
+
 	return &Controller{
-		taskctl:  taskctl,
-		analyzer: analyzer,
-		github:   github,
-		builder:  builder,
-		cfg:      cfg,
+		taskctl:            taskctl,
+		analyzer:           analyzer,
+		github:             github,
+		builder:            builder,
+		cfg:                cfg,
+		issueLocks:         cfg.IssueLockStore,
+		issueLockTTL:       cfg.IssueLockTTL,
+		issueLockHeartbeat: cfg.IssueLockHeartbeatInterval,
+		nowFn:              cfg.NowFn,
+		ownerID:            cfg.OwnerID,
 	}
 }
 
+type inMemoryIssueLockStore struct {
+	mu    sync.Mutex
+	locks map[int]IssueLockRecord
+}
+
+func newInMemoryIssueLockStore() IssueLockStore {
+	return &inMemoryIssueLockStore{
+		locks: make(map[int]IssueLockRecord),
+	}
+}
+
+func (s *inMemoryIssueLockStore) TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error) {
+	if issueNumber <= 0 {
+		return IssueLockRecord{}, false, fmt.Errorf("issue 编号无效: %d", issueNumber)
+	}
+	if owner == "" {
+		return IssueLockRecord{}, false, fmt.Errorf("owner 不能为空")
+	}
+	if ttl <= 0 {
+		return IssueLockRecord{}, false, fmt.Errorf("ttl 必须大于 0")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if ok && record.Owner != "" && now.Before(record.ExpiresAt) {
+		return record, false, nil
+	}
+
+	lastResult := record.LastResult
+	record = IssueLockRecord{
+		IssueNumber: issueNumber,
+		Owner:       owner,
+		AcquiredAt:  now,
+		ExpiresAt:   now.Add(ttl),
+		HeartbeatAt: now,
+		LastResult:  lastResult,
+	}
+	s.locks[issueNumber] = record
+	return record, true, nil
+}
+
+func (s *inMemoryIssueLockStore) Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error) {
+	if issueNumber <= 0 {
+		return IssueLockRecord{}, fmt.Errorf("issue 编号无效: %d", issueNumber)
+	}
+	if owner == "" {
+		return IssueLockRecord{}, fmt.Errorf("owner 不能为空")
+	}
+	if ttl <= 0 {
+		return IssueLockRecord{}, fmt.Errorf("ttl 必须大于 0")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if !ok || record.Owner == "" {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 未持锁", issueNumber)
+	}
+	if record.Owner != owner {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 锁 owner 不匹配: current=%s expect=%s", issueNumber, record.Owner, owner)
+	}
+	if !now.Before(record.ExpiresAt) {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 锁已过期: expires_at=%s", issueNumber, record.ExpiresAt.Format(time.RFC3339))
+	}
+
+	record.HeartbeatAt = now
+	record.ExpiresAt = now.Add(ttl)
+	s.locks[issueNumber] = record
+	return record, nil
+}
+
+func (s *inMemoryIssueLockStore) Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error {
+	if issueNumber <= 0 {
+		return nil
+	}
+	if owner == "" {
+		return fmt.Errorf("owner 不能为空")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if !ok {
+		return nil
+	}
+	if record.Owner != "" && record.Owner != owner {
+		return fmt.Errorf("issue #%d 锁 owner 不匹配: current=%s expect=%s", issueNumber, record.Owner, owner)
+	}
+
+	record.Owner = ""
+	record.HeartbeatAt = now
+	record.ExpiresAt = now
+	record.LastResult = lastResult
+	s.locks[issueNumber] = record
+	return nil
+}
+
+func (c *Controller) controllerNow() time.Time {
+	if c.nowFn == nil {
+		return time.Now().UTC()
+	}
+	return c.nowFn().UTC()
+}
+
+func (c *Controller) lockOwnerID() string {
+	if strings.TrimSpace(c.ownerID) == "" {
+		return defaultIssueLockOwnerID()
+	}
+	return c.ownerID
+}
+
+func (c *Controller) lockTTL() time.Duration {
+	if c.issueLockTTL <= 0 {
+		return issueLockDefaultTTL
+	}
+	return c.issueLockTTL
+}
+
+func (c *Controller) tryAcquireIssueLock(issue IssueInfo) (bool, IssueLockRecord, error) {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return true, IssueLockRecord{}, nil
+	}
+
+	record, acquired, err := c.issueLocks.TryAcquire(issue.Number, c.lockOwnerID(), c.controllerNow(), c.lockTTL())
+	if err != nil {
+		return false, IssueLockRecord{}, err
+	}
+	return acquired, record, nil
+}
+
+func (c *Controller) refreshIssueLock(issue IssueInfo) error {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return nil
+	}
+	_, err := c.issueLocks.Refresh(issue.Number, c.lockOwnerID(), c.controllerNow(), c.lockTTL())
+	return err
+}
+
+func (c *Controller) releaseIssueLock(issue IssueInfo, lastResult IssueLockResult) error {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return nil
+	}
+	return c.issueLocks.Release(issue.Number, c.lockOwnerID(), c.controllerNow(), lastResult)
+}
+
+func (c *Controller) withIssueLock(ctx context.Context, issue IssueInfo, fn func(context.Context) error) (retErr error) {
+	if fn == nil {
+		return nil
+	}
+
+	acquired, current, err := c.tryAcquireIssueLock(issue)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		fmt.Printf(
+			"[control][issue_lock] issue=%d status=%s reason=%s owner=%s lock_owner=%s expires_at=%s\n",
+			issue.Number,
+			IssueLockResultSkipped,
+			IssueLockResultLocked,
+			c.lockOwnerID(),
+			current.Owner,
+			current.ExpiresAt.Format(time.RFC3339),
+		)
+		return nil
+	}
+
+	lastResult := IssueLockResultSucceeded
+	defer func() {
+		if releaseErr := c.releaseIssueLock(issue, lastResult); releaseErr != nil {
+			fmt.Printf(
+				"[control][issue_lock] issue=%d status=%s reason=release_failed owner=%s err=%v\n",
+				issue.Number,
+				IssueLockResultFailed,
+				c.lockOwnerID(),
+				releaseErr,
+			)
+			if retErr == nil {
+				retErr = releaseErr
+			}
+		}
+	}()
+
+	lockCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	heartbeatErrCh := make(chan error, 1)
+	stopHeartbeat := make(chan struct{})
+	defer close(stopHeartbeat)
+	if c.issueLockHeartbeat > 0 {
+		go func() {
+			ticker := time.NewTicker(c.issueLockHeartbeat)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopHeartbeat:
+					return
+				case <-lockCtx.Done():
+					return
+				case <-ticker.C:
+					if refreshErr := c.refreshIssueLock(issue); refreshErr != nil {
+						select {
+						case heartbeatErrCh <- refreshErr:
+						default:
+						}
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	runErr := fn(lockCtx)
+	var heartbeatErr error
+	select {
+	case heartbeatErr = <-heartbeatErrCh:
+	default:
+	}
+	if heartbeatErr != nil {
+		lastResult = IssueLockResultFailed
+		fmt.Printf(
+			"[control][issue_lock] issue=%d status=%s reason=heartbeat_refresh_failed owner=%s err=%v\n",
+			issue.Number,
+			IssueLockResultFailed,
+			c.lockOwnerID(),
+			heartbeatErr,
+		)
+		if runErr == nil || runErr == context.Canceled {
+			runErr = fmt.Errorf("issue #%d 锁心跳刷新失败: %w", issue.Number, heartbeatErr)
+		}
+	}
+	if runErr != nil {
+		lastResult = IssueLockResultFailed
+		return runErr
+	}
+	return nil
+}
+
+type processIssueIdempotencyContext struct {
+	Repo      string
+	IssueNum  int
+	Phase     string
+	InputHash string
+	Key       string
+}
+
+func buildIssueIdempotencyKey(repo string, issueNum int, phase, inputHash string) string {
+	payload := strings.Join([]string{
+		strings.TrimSpace(repo),
+		strconv.Itoa(issueNum),
+		strings.TrimSpace(phase),
+		strings.TrimSpace(inputHash),
+	}, "\n")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildProcessIssueIdempotencyContext(task Task) (processIssueIdempotencyContext, bool) {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	phase := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskPhase))
+	inputHash := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskInputHash))
+	if phase == "" || inputHash == "" {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	repo := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskRepo))
+	return processIssueIdempotencyContext{
+		Repo:      repo,
+		IssueNum:  issueNum,
+		Phase:     phase,
+		InputHash: inputHash,
+		Key:       buildIssueIdempotencyKey(repo, issueNum, phase, inputHash),
+	}, true
+}
+
+func (c *Controller) loadLatestTaskMetadata(task Task) (map[string]string, error) {
+	if c == nil || c.taskctl == nil || strings.TrimSpace(task.ID) == "" {
+		return task.Metadata, nil
+	}
+
+	latestTask, err := c.taskctl.Get(task.ID)
+	if err != nil {
+		return nil, err
+	}
+	if latestTask == nil {
+		return task.Metadata, nil
+	}
+	if strings.TrimSpace(latestTask.ID) == "" || latestTask.ID != task.ID {
+		return task.Metadata, nil
+	}
+	return latestTask.Metadata, nil
+}
+
+// ProcessIssue 推进单个 issue 的控制流程（主入口）。
+func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
+	issue := IssueInfo{
+		Number: task.IssueNum(),
+		Title:  task.Subject,
+	}
+
+	return c.withIssueLock(ctx, issue, func(runCtx context.Context) error {
+		idempotencyContext, enableIdempotency := buildProcessIssueIdempotencyContext(task)
+		idempotencyMetadata := task.Metadata
+		if enableIdempotency {
+			var err error
+			idempotencyMetadata, err = c.loadLatestTaskMetadata(task)
+			if err != nil {
+				return fmt.Errorf("读取任务最新 metadata 失败 (task %s): %w", task.ID, err)
+			}
+			if latestKey := readPhaseIdempotencyKey(idempotencyMetadata, idempotencyContext.Phase); latestKey == idempotencyContext.Key {
+				fmt.Printf(
+					"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=no-op\n",
+					idempotencyContext.Repo,
+					idempotencyContext.IssueNum,
+					idempotencyContext.Phase,
+					idempotencyContext.Key,
+				)
+				return nil
+			}
+		}
+
+		status := TaskStatusInProgress
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
+			return fmt.Errorf("更新任务状态失败 (task %s): %w", task.ID, err)
+		}
+
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			return nil
+		}
+
+		// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
+		if err := c.github.ReplaceLabel(runCtx, issueNum, "bot:queued", "bot:fix"); err != nil {
+			fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
+			return nil
+		}
+
+		fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+		if !enableIdempotency {
+			return nil
+		}
+
+		update, err := c.taskctl.recordPhaseIdempotency(
+			task.ID,
+			idempotencyMetadata,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+			idempotencyContext.InputHash,
+			c.controllerNow(),
+		)
+		if err != nil {
+			return fmt.Errorf("写入幂等 metadata 失败 (task %s): %w", task.ID, err)
+		}
+		task.Metadata = mergeMetadataPatch(task.Metadata, update)
+		fmt.Printf(
+			"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=recorded\n",
+			idempotencyContext.Repo,
+			idempotencyContext.IssueNum,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+		)
+		return nil
+	})
+}
 // getIntegrationBranchName 获取当前任务的 integration 分支名
 // 从 task metadata 读取 meta_issue_slug，没有则使用 "main"
 func (c *Controller) getIntegrationBranchName(task *Task) string {
