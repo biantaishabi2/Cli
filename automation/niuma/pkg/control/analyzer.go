@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -47,20 +48,17 @@ func (a *DependencyAnalyzer) Analyze(ctx context.Context, issues []IssueInfo) (*
 	}
 
 	// Phase 1: 解析 depends-on 人工声明
-	declared := make(map[int]bool) // 已有人工声明的 issue
+	declared := make(map[int]bool) // 仅用于保护显式声明，不允许 AI 覆盖
 	for _, issue := range issues {
 		deps := parseDependsOn(issue.Body)
 		if len(deps) > 0 {
 			// 过滤：只保留在当前 issue 集合中的依赖
-			var validDeps []int
-			for _, d := range deps {
-				if issueSet[d] && d != issue.Number {
-					validDeps = append(validDeps, d)
-				}
-			}
+			validDeps := filterIssueDeps(issue.Number, deps, issueSet)
 			if len(validDeps) > 0 {
 				result.Dependencies[issue.Number] = validDeps
 			}
+			// 只要写了 depends-on，就视为显式声明（即使最终过滤为空）
+			// 这样可以保证 "显式 depends-on > AI 推断" 的优先级边界不被破坏。
 			declared[issue.Number] = true
 		}
 	}
@@ -76,20 +74,15 @@ func (a *DependencyAnalyzer) Analyze(ctx context.Context, issues []IssueInfo) (*
 	if len(undeclared) > 0 && a.provider != nil {
 		aiResult, err := a.aiAnalyze(ctx, issues, undeclared)
 		if err != nil {
-			// AI 失败 fallback：全部视为独立
-			fmt.Printf("[control] AI 依赖分析失败，fallback 到全部独立: %v\n", err)
+			// AI 失败降级：保留人工依赖结果，未声明项按独立处理。
+			fmt.Printf("[control][analyzer] degraded=true stage=ai-dependency undeclared=%v err=%q\n", issueNumbers(undeclared), err)
 		} else {
-			// 合并 AI 结果（仅对未人工声明的 issue）
+			// 合并 AI 结果（仅补全未显式声明 depends-on 的 issue）
 			for issueNum, deps := range aiResult.Dependencies {
 				if declared[issueNum] {
-					continue // 人工声明优先
+					continue // 显式声明优先，AI 不允许覆盖
 				}
-				var validDeps []int
-				for _, d := range deps {
-					if issueSet[d] && d != issueNum {
-						validDeps = append(validDeps, d)
-					}
-				}
+				validDeps := filterIssueDeps(issueNum, deps, issueSet)
 				if len(validDeps) > 0 {
 					result.Dependencies[issueNum] = validDeps
 				}
@@ -99,6 +92,38 @@ func (a *DependencyAnalyzer) Analyze(ctx context.Context, issues []IssueInfo) (*
 	}
 
 	return result, nil
+}
+
+// filterIssueDeps 过滤非法依赖：只保留当前 issue 集合内、且非自引用的依赖。
+func filterIssueDeps(issueNum int, deps []int, issueSet map[int]bool) []int {
+	if len(deps) == 0 {
+		return nil
+	}
+	validDeps := make([]int, 0, len(deps))
+	seen := make(map[int]struct{}, len(deps))
+	for _, d := range deps {
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		if issueSet[d] && d != issueNum {
+			validDeps = append(validDeps, d)
+		}
+	}
+	return validDeps
+}
+
+// issueNumbers 返回 issue 编号列表（升序），用于结构化日志。
+func issueNumbers(issues []IssueInfo) []int {
+	if len(issues) == 0 {
+		return nil
+	}
+	nums := make([]int, 0, len(issues))
+	for _, issue := range issues {
+		nums = append(nums, issue.Number)
+	}
+	sort.Ints(nums)
+	return nums
 }
 
 // parseDependsOn 从 issue body 解析 depends-on 声明

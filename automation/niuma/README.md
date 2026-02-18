@@ -77,11 +77,13 @@ Merged
 ```
 扫描所有 bot:fix Issues
     ↓
-AI 分析依赖关系（depends-on + LLM 推理）
+解析显式 depends-on（人工声明优先）
     ↓
-调 taskctl 构建 DAG（blocked_by 设置）
+对未声明 depends-on 的 issue 做统一 AI 依赖补全（含仅有 parent 的 sub issue）
     ↓
-按拓扑序推进 ready tasks（复用单 Issue 流程）
+写入 taskctl blocked_by（先落盘）
+    ↓
+计算并推进 ready tasks（后放行）
     ↓
 收集 PRs → 构建 Integration 分支
     ↓
@@ -91,6 +93,11 @@ CI 联合验证（检测冲突）
     ↓
 全部 Merged
 ```
+
+依赖语义约束：
+- 执行依赖优先级：`depends-on` > AI 推断（AI 仅补全未声明项，不覆盖人工声明）
+- `parent` 仅表示结构归属与收口关系，不隐式作为执行依赖边
+- `ready` 判定前必须完成 `blocked_by` 写入；写入失败时本轮跳过放行，等待下轮重试
 
 ### Control 命令
 

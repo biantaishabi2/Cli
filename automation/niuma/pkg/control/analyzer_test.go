@@ -82,6 +82,21 @@ func TestAnalyze_AIFailureFallback(t *testing.T) {
 	assert.Empty(t, result.Dependencies)
 }
 
+func TestAnalyze_AIFailureFallbackKeepsManualDependsOn(t *testing.T) {
+	mockAI := ai.NewMockProviderWithError(fmt.Errorf("API timeout"))
+	analyzer := NewDependencyAnalyzer(mockAI)
+
+	issues := []IssueInfo{
+		{Number: 40, Title: "Auth", Body: "fix auth"},
+		{Number: 41, Title: "Payment", Body: "fix payment"},
+		{Number: 42, Title: "Tests", Body: "depends-on: #40"},
+	}
+
+	result, err := analyzer.Analyze(context.Background(), issues)
+	require.NoError(t, err)
+	assert.Equal(t, []int{40}, result.Dependencies[42])
+}
+
 func TestAnalyze_ManualOverridesAI(t *testing.T) {
 	// AI 认为 42 依赖 41，但人工声明 42 依赖 40
 	mockAI := ai.NewMockProvider(`{"dependencies": {"42": [41]}, "potential_conflicts": []}`)
@@ -97,6 +112,38 @@ func TestAnalyze_ManualOverridesAI(t *testing.T) {
 	require.NoError(t, err)
 	// 人工声明优先：42 依赖 40，不是 41
 	assert.Equal(t, []int{40}, result.Dependencies[42])
+}
+
+func TestAnalyze_ParentOnlySubIssueIncludedInAIInput(t *testing.T) {
+	mockAI := ai.NewMockProvider(`{"dependencies": {"214": [210]}, "potential_conflicts": []}`)
+	analyzer := NewDependencyAnalyzer(mockAI)
+
+	issues := []IssueInfo{
+		{Number: 210, Title: "parent", Body: "parent root issue"},
+		{Number: 214, Title: "sub", Body: "parent: #210"},
+	}
+
+	result, err := analyzer.Analyze(context.Background(), issues)
+	require.NoError(t, err)
+	assert.Equal(t, []int{210}, result.Dependencies[214])
+	assert.Equal(t, 1, mockAI.CallCount())
+	assert.Contains(t, mockAI.LastPrompt(), "需要分析依赖的 issues")
+	assert.Contains(t, mockAI.LastPrompt(), "#214")
+}
+
+func TestAnalyze_ParentDoesNotOverrideExplicitDependsOn(t *testing.T) {
+	mockAI := ai.NewMockProvider(`{"dependencies": {"214": [210]}, "potential_conflicts": []}`)
+	analyzer := NewDependencyAnalyzer(mockAI)
+
+	issues := []IssueInfo{
+		{Number: 210, Title: "parent", Body: "parent root issue"},
+		{Number: 300, Title: "base", Body: "base impl"},
+		{Number: 214, Title: "sub", Body: "parent: #210\ndepends-on: #300"},
+	}
+
+	result, err := analyzer.Analyze(context.Background(), issues)
+	require.NoError(t, err)
+	assert.Equal(t, []int{300}, result.Dependencies[214])
 }
 
 func TestAnalyze_FilterInvalidDeps(t *testing.T) {
