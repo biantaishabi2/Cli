@@ -111,6 +111,27 @@ func TestGHWrapper_DoesNotRecurseWhenPathIncludesDot(t *testing.T) {
 	assert.Contains(t, string(output), "REAL_GH_VERSION")
 }
 
+func TestGHWrapper_FailsFastWhenNoRealGHFound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash wrapper test is not supported on windows")
+	}
+
+	helperBin := t.TempDir()
+	for _, binary := range []string{"dirname", "basename", "realpath", "readlink"} {
+		path, lookupErr := exec.LookPath(binary)
+		require.NoError(t, lookupErr)
+		linkErr := os.Symlink(path, filepath.Join(helperBin, binary))
+		require.NoError(t, linkErr)
+	}
+
+	output, runErr := runGHWrapper(t, []string{"--version"}, map[string]string{
+		"PATH": "." + string(os.PathListSeparator) + helperBin,
+	})
+	require.Error(t, runErr)
+	assert.Equal(t, 127, exitCode(runErr))
+	assert.Contains(t, string(output), "未找到真实 gh 可执行文件")
+}
+
 func runGHWrapper(t *testing.T, args []string, extraEnv map[string]string) ([]byte, error) {
 	t.Helper()
 

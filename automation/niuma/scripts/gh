@@ -52,7 +52,7 @@ find_real_gh() {
     fi
   done
 
-  echo "gh"
+  return 1
 }
 
 contains_bot_label() {
@@ -132,5 +132,8 @@ if [[ "$is_blocked_command" == "true" ]]; then
   exit 1
 fi
 
-REAL_GH="$(find_real_gh)"
+if ! REAL_GH="$(find_real_gh)"; then
+  echo "未找到真实 gh 可执行文件，请安装 gh 或设置 GH_REAL_BIN" >&2
+  exit 127
+fi
 exec "$REAL_GH" "$@"
