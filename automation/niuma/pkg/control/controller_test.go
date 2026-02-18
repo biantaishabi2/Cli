@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/stretchr/testify/assert"
@@ -17,17 +19,17 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues            []IssueInfo
-	issuesByLabel     map[string][]IssueInfo
-	issuesByNumber    map[int]IssueInfo
-	mergedPRs         []int
-	mergeError        map[int]error
-	replaceLabelCalls []replaceLabelCall
-	replaceLabelError map[string]error
+	issues                []IssueInfo
+	issuesByLabel         map[string][]IssueInfo
+	issuesByNumber        map[int]IssueInfo
+	mergedPRs             []int
+	mergeError            map[int]error
+	replaceLabelCalls     []replaceLabelCall
+	replaceLabelError     map[string]error
 	replaceLabelPairError map[string]error
-	replaceLabelFails map[string]int
-	closeIssueCalls   []int
-	closeIssueError   map[int]error
+	replaceLabelFails     map[string]int
+	closeIssueCalls       []int
+	closeIssueError       map[int]error
 }
 
 type replaceLabelCall struct {
@@ -43,14 +45,14 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	}
 
 	return &mockGitHubOps{
-		issues:            issues,
-		issuesByLabel:     make(map[string][]IssueInfo),
-		issuesByNumber:    issuesByNumber,
-		mergeError:        make(map[int]error),
-		replaceLabelError: make(map[string]error),
+		issues:                issues,
+		issuesByLabel:         make(map[string][]IssueInfo),
+		issuesByNumber:        issuesByNumber,
+		mergeError:            make(map[int]error),
+		replaceLabelError:     make(map[string]error),
 		replaceLabelPairError: make(map[string]error),
-		replaceLabelFails: make(map[string]int),
-		closeIssueError:   make(map[int]error),
+		replaceLabelFails:     make(map[string]int),
+		closeIssueError:       make(map[int]error),
 	}
 }
 
@@ -328,6 +330,121 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func newIssueLockTestController(owner string, store IssueLockStore, ttl, heartbeat time.Duration, nowFn func() time.Time) *Controller {
+	if store == nil {
+		store = newInMemoryIssueLockStore()
+	}
+	if owner == "" {
+		owner = "test-owner"
+	}
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	if heartbeat <= 0 {
+		heartbeat = 100 * time.Second
+	}
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return &Controller{
+		issueLocks:         store,
+		issueLockTTL:       ttl,
+		issueLockHeartbeat: heartbeat,
+		nowFn:              nowFn,
+		ownerID:            owner,
+	}
+}
+
+func TestController_WithIssueLock_MutualExclusion(t *testing.T) {
+	store := newInMemoryIssueLockStore()
+	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 100*time.Second, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+			close(started)
+			<-done
+			return nil
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首个持锁流程超时")
+	}
+
+	secondExecuted := false
+	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+		secondExecuted = true
+		return nil
+	})
+	require.NoError(t, err)
+	assert.False(t, secondExecuted)
+
+	close(done)
+	require.NoError(t, <-errCh)
+}
+
+func TestController_WithIssueLock_ReleasesAfterCompletion(t *testing.T) {
+	ctrl := newIssueLockTestController("owner-a", nil, 5*time.Minute, 100*time.Second, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	runCount := 0
+	err := ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+		runCount++
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = ctrl.withIssueLock(context.Background(), issue, func(context.Context) error {
+		runCount++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, runCount)
+}
+
+func TestController_IssueLock_TTLExpiryRecovery(t *testing.T) {
+	store := newInMemoryIssueLockStore()
+	ttl := 5 * time.Minute
+
+	var mu sync.Mutex
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+
+	ctrlA := newIssueLockTestController("owner-a", store, ttl, 100*time.Second, nowFn)
+	ctrlB := newIssueLockTestController("owner-b", store, ttl, 100*time.Second, nowFn)
+	issue := IssueInfo{Number: 315}
+
+	acquired, _, err := ctrlA.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	assert.False(t, acquired)
+
+	advance(ttl + time.Second)
+
+	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
+	require.NoError(t, err)
+	assert.True(t, acquired)
 }
 
 func TestController_NewIssueDiscovery(t *testing.T) {

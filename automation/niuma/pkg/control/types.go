@@ -2,7 +2,10 @@
 // 控制层核心类型定义
 package control
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
 // TaskStatus 任务状态
 type TaskStatus string
@@ -143,6 +146,33 @@ type MergeOutcome struct {
 	Conflict          *ConflictSummary `json:"conflict,omitempty"`
 	ExecutorVersion   string           `json:"executor_version,omitempty"`
 	ExecutedAt        string           `json:"executed_at,omitempty"`
+}
+
+// IssueLockResult issue 锁执行结果
+type IssueLockResult string
+
+const (
+	IssueLockResultSucceeded IssueLockResult = "succeeded"
+	IssueLockResultFailed    IssueLockResult = "failed"
+	IssueLockResultSkipped   IssueLockResult = "skipped"
+	IssueLockResultLocked    IssueLockResult = "locked"
+)
+
+// IssueLockRecord issue 锁记录
+type IssueLockRecord struct {
+	IssueNumber int             `json:"issue_number"`
+	Owner       string          `json:"owner"`
+	AcquiredAt  time.Time       `json:"acquired_at"`
+	ExpiresAt   time.Time       `json:"expires_at"`
+	HeartbeatAt time.Time       `json:"heartbeat_at"`
+	LastResult  IssueLockResult `json:"last_result,omitempty"`
+}
+
+// IssueLockStore issue 锁存储接口
+type IssueLockStore interface {
+	TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error)
+	Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error)
+	Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error
 }
 
 // ControlStatus 全局控制状态
