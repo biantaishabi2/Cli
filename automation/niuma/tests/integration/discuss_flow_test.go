@@ -217,6 +217,7 @@ type controlFlowGitHubMock struct {
 	mu                sync.Mutex
 	issues            map[int]control.IssueInfo
 	labels            map[int][]string
+	blockedBy         map[int]map[int]struct{}
 	commentBodies     map[int][]string
 	stateTransitions  map[int]int
 	replaceLabelCalls map[int]int
@@ -232,13 +233,14 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 				State:  "open",
 			},
 		},
-		labels: map[int][]string{
-			issueNumber: {"bot:queued"},
-		},
-		commentBodies:     map[int][]string{},
-		stateTransitions:  map[int]int{},
-		replaceLabelCalls: map[int]int{},
-	}
+			labels: map[int][]string{
+				issueNumber: {"bot:queued"},
+			},
+			blockedBy:         map[int]map[int]struct{}{},
+			commentBodies:     map[int][]string{},
+			stateTransitions:  map[int]int{},
+			replaceLabelCalls: map[int]int{},
+		}
 }
 
 func (m *controlFlowGitHubMock) ListIssuesWithLabel(_ context.Context, label string) ([]control.IssueInfo, error) {
@@ -337,6 +339,19 @@ func (m *controlFlowGitHubMock) MergePR(_ context.Context, _ int, _ string) erro
 	return nil
 }
 
+func (m *controlFlowGitHubMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.labels[issueNumber]...), nil
+}
+
+func (m *controlFlowGitHubMock) AddLabel(_ context.Context, issueNumber int, label string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.labels[issueNumber] = append(m.labels[issueNumber], label)
+	return nil
+}
+
 func (m *controlFlowGitHubMock) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
 	m.mu.Lock()
 	labels := m.labels[issueNumber]
@@ -360,6 +375,58 @@ func (m *controlFlowGitHubMock) ReplaceLabel(_ context.Context, issueNumber int,
 	m.mu.Unlock()
 	if hook != nil {
 		hook(issueNumber)
+	}
+	return nil
+}
+
+func (m *controlFlowGitHubMock) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	m.mu.Lock()
+	labels := m.labels[issueNumber]
+	m.replaceLabelCalls[issueNumber]++
+	for i, item := range labels {
+		if item == oldLabel {
+			if item != newLabel {
+				m.labels[issueNumber][i] = newLabel
+				m.stateTransitions[issueNumber]++
+			}
+			hook := m.replaceLabelHook
+			m.mu.Unlock()
+			if hook != nil {
+				hook(issueNumber)
+			}
+			return true, nil
+		}
+	}
+	m.mu.Unlock()
+	return false, nil
+}
+
+func (m *controlFlowGitHubMock) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.blockedBy[issueNumber]
+	result := make([]int, 0, len(set))
+	for dep := range set {
+		result = append(result, dep)
+	}
+	return result, nil
+}
+
+func (m *controlFlowGitHubMock) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.blockedBy[issueNumber]; !ok {
+		m.blockedBy[issueNumber] = make(map[int]struct{})
+	}
+	m.blockedBy[issueNumber][blockedByIssueNumber] = struct{}{}
+	return nil
+}
+
+func (m *controlFlowGitHubMock) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if set, ok := m.blockedBy[issueNumber]; ok {
+		delete(set, blockedByIssueNumber)
 	}
 	return nil
 }
