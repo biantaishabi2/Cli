@@ -1,11 +1,13 @@
 package scripts
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,11 +94,31 @@ func TestGHWrapper_AllowsNonBotLabelEdit(t *testing.T) {
 	assert.Contains(t, string(output), "REAL_GH_OK issue edit 325 --add-label bug")
 }
 
+func TestGHWrapper_DoesNotRecurseWhenPathIncludesDot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash wrapper test is not supported on windows")
+	}
+
+	realBinDir := t.TempDir()
+	realGH := filepath.Join(realBinDir, "gh")
+	err := os.WriteFile(realGH, []byte("#!/usr/bin/env bash\necho REAL_GH_VERSION\n"), 0o755)
+	require.NoError(t, err)
+
+	output, runErr := runGHWrapper(t, []string{"--version"}, map[string]string{
+		"PATH": "." + string(os.PathListSeparator) + realBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	require.NoError(t, runErr)
+	assert.Contains(t, string(output), "REAL_GH_VERSION")
+}
+
 func runGHWrapper(t *testing.T, args []string, extraEnv map[string]string) ([]byte, error) {
 	t.Helper()
 
 	scriptPath := filepath.Join(".", "gh")
-	cmd := exec.Command("bash", append([]string{scriptPath}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", append([]string{scriptPath}, args...)...)
 	cmd.Env = filteredEnv("CI", "GH_REAL_BIN")
 	for key, value := range extraEnv {
 		cmd.Env = append(cmd.Env, key+"="+value)
