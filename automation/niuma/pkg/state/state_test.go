@@ -3,9 +3,12 @@
 package state
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsValidTransition_HappyPath(t *testing.T) {
@@ -98,11 +101,85 @@ func TestParseState_Invalid(t *testing.T) {
 }
 
 func TestAllStates_Count(t *testing.T) {
-	assert.Len(t, AllStates, 11)
+	assert.Len(t, AllStates, 13)
 }
 
 func TestAllBotLabels(t *testing.T) {
 	labels := AllBotLabels()
-	assert.Len(t, labels, 11)
-	assert.Equal(t, "bot:fix", labels[0])
+	assert.Len(t, labels, 13)
+	assert.Equal(t, "bot:orchestrate", labels[0])
+}
+
+type transitionLabelOpsMock struct {
+	labels map[int][]string
+}
+
+func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLabelOpsMock {
+	return &transitionLabelOpsMock{
+		labels: map[int][]string{
+			issueNumber: labels,
+		},
+	}
+}
+
+func (m *transitionLabelOpsMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	current := m.labels[issueNumber]
+	dup := make([]string, len(current))
+	copy(dup, current)
+	return dup, nil
+}
+
+func (m *transitionLabelOpsMock) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	labels := m.labels[issueNumber]
+	for i, label := range labels {
+		if label == oldLabel {
+			labels[i] = newLabel
+			m.labels[issueNumber] = labels
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *transitionLabelOpsMock) AddLabel(_ context.Context, issueNumber int, label string) error {
+	m.labels[issueNumber] = append(m.labels[issueNumber], label)
+	return nil
+}
+
+func TestTransitionBotState_FromMismatchRejected(t *testing.T) {
+	mock := newTransitionLabelOpsMock(1, string(StateImplementing))
+
+	err := TransitionBotState(context.Background(), mock, 1, StateQueued, StateFixRequested)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrFromStateMismatch))
+	assert.Equal(t, []string{string(StateImplementing)}, mock.labels[1])
+}
+
+func TestTransitionBotState_InvalidEdgeRejected(t *testing.T) {
+	mock := newTransitionLabelOpsMock(1, string(StateFixRequested))
+
+	err := TransitionBotState(context.Background(), mock, 1, StateFixRequested, StatePRCreated)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidTransition))
+	assert.Equal(t, []string{string(StateFixRequested)}, mock.labels[1])
+}
+
+func TestTransitionBotState_DirtyMultipleStatesRejected(t *testing.T) {
+	mock := newTransitionLabelOpsMock(1, string(StateFixRequested), string(StateImplementing))
+
+	err := TransitionBotState(context.Background(), mock, 1, StateFixRequested, StatePlanDraft)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMultipleBotStates))
+	assert.Equal(t, []string{string(StateFixRequested), string(StateImplementing)}, mock.labels[1])
+}
+
+func TestTransitionBotState_BootstrapOnlyQueued(t *testing.T) {
+	mock := newTransitionLabelOpsMock(1)
+	err := TransitionBotState(context.Background(), mock, 1, "", StateFixRequested)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBootstrapTarget))
+
+	err = TransitionBotState(context.Background(), mock, 1, "", StateQueued)
+	require.NoError(t, err)
+	assert.Equal(t, []string{string(StateQueued)}, mock.labels[1])
 }

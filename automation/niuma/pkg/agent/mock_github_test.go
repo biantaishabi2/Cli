@@ -195,6 +195,24 @@ func (m *MockGitHub) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, 
 	return nil
 }
 
+func (m *MockGitHub) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return false, m.Error
+	}
+
+	labels := m.Labels[issueNumber]
+	for i, l := range labels {
+		if l == oldLabel {
+			m.Labels[issueNumber][i] = newLabel
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *MockGitHub) EnsureLabelsExist(_ context.Context, _ []string) error {
 	return m.Error
 }

@@ -255,6 +255,8 @@ type gitHubControlOps struct {
 type githubControlClient interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]*ghapi.Issue, error)
 	ListIssuesByState(ctx context.Context, state string) ([]*ghapi.Issue, error)
+	ListLabels(ctx context.Context, issueNumber int) ([]string, error)
+	AddLabel(ctx context.Context, issueNumber int, label string) error
 	GetIssue(ctx context.Context, number int) (*ghapi.Issue, error)
 	UpdateIssueBody(ctx context.Context, number int, body string) error
 	ListComments(ctx context.Context, issueNumber int) ([]*ghapi.IssueComment, error)
@@ -262,6 +264,7 @@ type githubControlClient interface {
 	CloseIssue(ctx context.Context, number int) error
 	MergePR(ctx context.Context, number int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
 	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
 	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
@@ -315,6 +318,14 @@ func (g *gitHubControlOps) ListIssuesByState(ctx context.Context, state string) 
 	return result, nil
 }
 
+func (g *gitHubControlOps) ListLabels(ctx context.Context, issueNumber int) ([]string, error) {
+	return g.client.ListLabels(ctx, issueNumber)
+}
+
+func (g *gitHubControlOps) AddLabel(ctx context.Context, issueNumber int, label string) error {
+	return g.client.AddLabel(ctx, issueNumber, label)
+}
+
 func (g *gitHubControlOps) GetIssue(ctx context.Context, issueNumber int) (control.IssueInfo, error) {
 	issue, err := g.client.GetIssue(ctx, issueNumber)
 	if err != nil {
@@ -360,6 +371,10 @@ func (g *gitHubControlOps) MergePR(ctx context.Context, prNum int, method string
 
 func (g *gitHubControlOps) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error {
 	return g.client.ReplaceLabel(ctx, issueNumber, oldLabel, newLabel)
+}
+
+func (g *gitHubControlOps) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	return g.client.ReplaceLabelIfPresent(ctx, issueNumber, oldLabel, newLabel)
 }
 
 func (g *gitHubControlOps) ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error) {
