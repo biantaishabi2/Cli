@@ -36,6 +36,7 @@ type GitHubOps interface {
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
+	ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error
 	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
 	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
@@ -179,12 +180,12 @@ type Controller struct {
 
 // ControlConfig 控制层配置
 type ControlConfig struct {
-	TaskCtlBin                 string           `yaml:"taskctl_bin"`
-	MergeStrategy              string           `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix    string           `yaml:"integration_branch_prefix"` // 默认 integration/
-	MaxOldBranches             int              `yaml:"max_old_branches"`          // 默认 3
-	MinPRsForIntegration       int              `yaml:"min_prs_for_integration"`   // 默认 2
-	IntegrationGateMaxRetries  int              `yaml:"integration_gate_max_retries"`
+	TaskCtlBin                 string `yaml:"taskctl_bin"`
+	MergeStrategy              string `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix    string `yaml:"integration_branch_prefix"` // 默认 integration/
+	MaxOldBranches             int    `yaml:"max_old_branches"`          // 默认 3
+	MinPRsForIntegration       int    `yaml:"min_prs_for_integration"`   // 默认 2
+	IntegrationGateMaxRetries  int    `yaml:"integration_gate_max_retries"`
 	DagSync                    DagSyncConfig
 	PRConflictRetryThreshold   int
 	PRConflictUnknownBackoffs  []time.Duration
@@ -199,11 +200,11 @@ type ControlConfig struct {
 // DefaultControlConfig 返回默认配置
 func DefaultControlConfig() *ControlConfig {
 	return &ControlConfig{
-		MergeStrategy:              "merge",
-		IntegrationBranchPrefix:    "integration/",
-		MaxOldBranches:             3,
-		MinPRsForIntegration:       2,
-		IntegrationGateMaxRetries:  integrationGateDefaultMaxRetries,
+		MergeStrategy:             "merge",
+		IntegrationBranchPrefix:   "integration/",
+		MaxOldBranches:            3,
+		MinPRsForIntegration:      2,
+		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
 		DagSync: DagSyncConfig{
 			PollInterval:         5 * time.Minute,
 			MaxRetry:             3,
@@ -630,8 +631,8 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 		}
 
 		// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
-		if err := c.github.ReplaceLabel(runCtx, issueNum, "bot:queued", "bot:fix"); err != nil {
-			fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
+		if err := c.transitionWithSelfHeal(runCtx, issueNum, "", state.StateFixRequested); err != nil {
+			fmt.Printf("[control] 迁移状态失败 (issue #%d): %v\n", issueNum, err)
 			return nil
 		}
 
@@ -662,6 +663,7 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 		return nil
 	})
 }
+
 // getIntegrationBranchName 获取当前任务的 integration 分支名
 // 从 task metadata 读取 meta_issue_slug，没有则使用 "main"
 func (c *Controller) getIntegrationBranchName(task *Task) string {
@@ -733,12 +735,12 @@ func (c *Controller) Run(ctx context.Context) error {
 			fmt.Printf("[control] 创建任务 %s (issue #%d)\n", task.ID, issue.Number)
 		}
 
-		if err := state.TransitionBotState(ctx, c.github, issue.Number, state.StateOrchestrate, state.StateQueued); err != nil {
-			if errors.Is(err, state.ErrMultipleBotStates) {
+		if err := c.transitionWithSelfHeal(ctx, issue.Number, state.StateOrchestrate, state.StateQueued); err != nil {
+			if errors.Is(err, state.ErrInvariantViolation) || errors.Is(err, state.ErrMultipleBotStates) {
 				fmt.Printf("[control] action=intake_blocked issue_num=%d reason=dirty_multi_state err=%v\n", issue.Number, err)
 				continue
 			}
-			fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issue.Number, err)
+			fmt.Printf("[control] 迁移状态失败 (issue #%d): %v\n", issue.Number, err)
 		} else {
 			fmt.Printf("[control] 已将 issue #%d 标签 bot:orchestrate → bot:queued\n", issue.Number)
 		}
@@ -761,16 +763,16 @@ func (c *Controller) Run(ctx context.Context) error {
 		if err != nil {
 			fmt.Printf("[control] 获取 ready tasks 失败: %v\n", err)
 		} else {
-				for _, task := range readyTasks {
-					issueNum := task.IssueNum()
-					fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
-					if err := c.ProcessIssue(ctx, task); err != nil {
-						fmt.Printf("[control] 推进 ready task 失败 (task %s): %v\n", task.ID, err)
-						continue
-					}
+			for _, task := range readyTasks {
+				issueNum := task.IssueNum()
+				fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
+				if err := c.ProcessIssue(ctx, task); err != nil {
+					fmt.Printf("[control] 推进 ready task 失败 (task %s): %v\n", task.ID, err)
+					continue
 				}
 			}
 		}
+	}
 
 	// ⑦ 增量 integration：将刚完成的 PR 合入对应 integration 分支
 	if c.builder != nil {
@@ -1715,6 +1717,74 @@ func hasLabel(labels []string, target string) bool {
 	return false
 }
 
+func (c *Controller) transitionWithSelfHeal(ctx context.Context, issueNum int, from, to state.State) error {
+	err := state.TransitionWithRetry(ctx, c.github, issueNum, from, to, nil)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, state.ErrInvariantViolation) && !errors.Is(err, state.ErrMultipleBotStates) {
+		return err
+	}
+
+	target, changed, healErr := c.normalizeIssueState(ctx, issueNum)
+	if healErr != nil {
+		return healErr
+	}
+	if changed {
+		fmt.Printf("[control] issue #%d 状态自愈完成，收敛到 %s\n", issueNum, target)
+	}
+	return state.TransitionWithRetry(ctx, c.github, issueNum, from, to, nil)
+}
+
+func (c *Controller) normalizeIssueState(ctx context.Context, issueNum int) (state.State, bool, error) {
+	labels, err := c.github.ListLabels(ctx, issueNum)
+	if err != nil {
+		return "", false, err
+	}
+	states, invalid := state.CollectBotStatesWithInvalid(labels)
+	if len(invalid) > 0 {
+		return "", false, fmt.Errorf("issue #%d 存在非法 bot 标签: %v", issueNum, invalid)
+	}
+	if len(states) <= 1 {
+		if len(states) == 1 {
+			return states[0], false, nil
+		}
+		return "", false, nil
+	}
+
+	priority, err := state.ParseStatePriority(os.Getenv("NIUMA_STATE_PRIORITY"))
+	if err != nil {
+		priority = append([]state.State(nil), state.DefaultStatePriority...)
+	}
+	target, changed, err := state.Normalize(ctx, c.github, issueNum, priority)
+	if err != nil {
+		return "", false, err
+	}
+	if changed {
+		c.emitStateHealComment(ctx, issueNum, states, target)
+	}
+	return target, changed, nil
+}
+
+func (c *Controller) emitStateHealComment(ctx context.Context, issueNum int, states []state.State, target state.State) {
+	marker := fmt.Sprintf("<!-- NIUMA_STATE_HEAL issue=%d target=%s -->", issueNum, target)
+	bodies, err := c.github.ListCommentBodies(ctx, issueNum)
+	if err == nil {
+		for _, body := range bodies {
+			if strings.Contains(body, marker) {
+				return
+			}
+		}
+	}
+
+	_ = c.github.AddIssueComment(ctx, issueNum, fmt.Sprintf(
+		"## ⚠️ 状态自愈\n\n检测到多个 `bot:*` 状态标签（%v），已自动收敛为 `%s` 并继续推进。\n\n%s",
+		states,
+		target,
+		marker,
+	))
+}
+
 var integrationAutomationLabels = []string{
 	"bot:orchestrate",
 	"bot:queued",
@@ -2029,7 +2099,7 @@ func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, ta
 
 func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targetLabel string) error {
 	if targetState, err := state.ParseState(targetLabel); err == nil {
-		return state.TransitionBotState(ctx, c.github, issueNum, "", targetState, false)
+		return c.transitionWithSelfHeal(ctx, issueNum, "", targetState)
 	}
 
 	var firstErr error

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
@@ -815,9 +816,33 @@ func (o *Orchestrator) currentState(ctx context.Context) (state.State, error) {
 
 	current, found, err := state.CurrentBotState(labels)
 	if err != nil {
-		if errors.Is(err, state.ErrMultipleBotStates) {
-			_, _ = o.github.AddComment(ctx, o.issueNumber,
-				"## ⚠️ 检测到脏状态\n\n同一 issue 存在多个 `bot:*` 状态标签，已停止自动推进，请人工清理后重试。")
+		if errors.Is(err, state.ErrInvariantViolation) || errors.Is(err, state.ErrMultipleBotStates) {
+			priority, perr := state.ParseStatePriority(os.Getenv("NIUMA_STATE_PRIORITY"))
+			if perr != nil {
+				priority = append([]state.State(nil), state.DefaultStatePriority...)
+			}
+			target, changed, nerr := state.Normalize(ctx, o.github, o.issueNumber, priority)
+			if nerr != nil {
+				_, _ = o.github.AddComment(ctx, o.issueNumber,
+					"## ⚠️ 状态自愈失败\n\n检测到多个 `bot:*` 状态标签，自动收敛失败，请人工处理后重试。")
+				return "", nerr
+			}
+			if changed {
+				marker := fmt.Sprintf("<!-- NIUMA_STATE_HEAL issue=%d target=%s -->", o.issueNumber, target)
+				comments, _ := o.github.ListComments(ctx, o.issueNumber)
+				duplicated := false
+				for _, c := range comments {
+					if strings.Contains(c.GetBody(), marker) {
+						duplicated = true
+						break
+					}
+				}
+				if !duplicated {
+					_, _ = o.github.AddComment(ctx, o.issueNumber,
+						fmt.Sprintf("## ⚠️ 状态自愈\n\n检测到多个 `bot:*` 状态标签，已自动收敛为 `%s` 并继续流程。\n\n%s", target, marker))
+				}
+			}
+			return target, nil
 		}
 		return "", err
 	}
@@ -838,7 +863,14 @@ func (o *Orchestrator) transition(ctx context.Context, to state.State) error {
 }
 
 func (o *Orchestrator) transitionFrom(ctx context.Context, from, to state.State, strict ...bool) error {
-	return state.TransitionBotState(ctx, o.github, o.issueNumber, from, to, strict...)
+	enforce := true
+	if len(strict) > 0 {
+		enforce = strict[0]
+	}
+	if !enforce {
+		return state.TransitionWithRetry(ctx, o.github, o.issueNumber, "", to, nil)
+	}
+	return state.TransitionWithRetry(ctx, o.github, o.issueNumber, from, to, nil)
 }
 
 // buildPromptInput 从 GitHub 读取 issue 和评论构建 PromptInput

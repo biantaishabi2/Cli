@@ -717,17 +717,19 @@ func TestTransition_ImplementingWillNotDowngradeToFix(t *testing.T) {
 	assert.Equal(t, []string{string(state.StateImplementing)}, labels)
 }
 
-func TestCurrentState_DirtyStateWarnsAndFailsFast(t *testing.T) {
+func TestCurrentState_DirtyStateAutoHeals(t *testing.T) {
 	mockAI := ai.NewMockProvider("unused")
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
 	mockGH.SetLabel(1, string(state.StateFixRequested), string(state.StateImplementing))
 
 	orch := NewOrchestrator(mockGH, mockAI, 1)
-	_, err := orch.currentState(context.Background())
-	require.Error(t, err)
+	current, err := orch.currentState(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, state.StateImplementing, current)
 
 	comments := mockGH.Comments[1]
 	require.NotEmpty(t, comments)
-	assert.Contains(t, comments[len(comments)-1].GetBody(), "检测到脏状态")
+	assert.Contains(t, comments[len(comments)-1].GetBody(), "状态自愈")
+	assert.Equal(t, []string{string(state.StateImplementing)}, mockGH.Labels[1])
 }

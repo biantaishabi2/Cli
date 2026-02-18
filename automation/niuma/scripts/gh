@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+find_real_gh() {
+  if [[ -n "${GH_REAL_BIN:-}" ]]; then
+    echo "$GH_REAL_BIN"
+    return
+  fi
+
+  IFS=':' read -r -a PATH_PARTS <<<"$PATH"
+  for dir in "${PATH_PARTS[@]}"; do
+    if [[ -z "$dir" || "$dir" == "$SCRIPT_DIR" ]]; then
+      continue
+    fi
+    if [[ -x "$dir/gh" ]]; then
+      echo "$dir/gh"
+      return
+    fi
+  done
+
+  echo "gh"
+}
+
+contains_bot_label() {
+  local raw="$1"
+  IFS=',' read -r -a labels <<<"$raw"
+  for label in "${labels[@]}"; do
+    label="$(echo "$label" | xargs)"
+    if [[ "$label" == bot:* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_blocked_command=false
+if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
+  for ((i=1; i<=$#; i++)); do
+    arg="${!i}"
+    case "$arg" in
+      --add-label|--remove-label)
+        next_idx=$((i + 1))
+        next_val="${!next_idx:-}"
+        if contains_bot_label "$next_val"; then
+          is_blocked_command=true
+          break
+        fi
+        ;;
+      --add-label=*|--remove-label=*)
+        value="${arg#*=}"
+        if contains_bot_label "$value"; then
+          is_blocked_command=true
+          break
+        fi
+        ;;
+    esac
+  done
+fi
+
+if [[ "$is_blocked_command" == "true" ]]; then
+  echo "禁止直接通过 gh 修改 bot:* 状态标签，请改用: niuma state-label set --repo <owner/repo> --issue <num> --to <bot:state>" >&2
+  if [[ "${CI:-}" == "true" ]]; then
+    exit 2
+  fi
+  exit 1
+fi
+
+REAL_GH="$(find_real_gh)"
+exec "$REAL_GH" "$@"

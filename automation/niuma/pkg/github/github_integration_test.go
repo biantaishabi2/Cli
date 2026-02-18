@@ -116,8 +116,17 @@ func TestIntegration_Labels(t *testing.T) {
 	assert.Contains(t, labels, "bot:plan-draft")
 	assert.NotContains(t, labels, "bot:fix")
 
+	// 原子替换整组 labels（保留单一 bot 状态）
+	err = client.ReplaceLabels(ctx, number, []string{"bug", "bot:needs-discussion"})
+	require.NoError(t, err)
+	labels, err = client.ListLabels(ctx, number)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bug")
+	assert.Contains(t, labels, "bot:needs-discussion")
+	assert.NotContains(t, labels, "bot:plan-draft")
+
 	// 移除 label
-	err = client.RemoveLabel(ctx, number, "bot:plan-draft")
+	err = client.RemoveLabel(ctx, number, "bot:needs-discussion")
 	require.NoError(t, err)
 }
 

@@ -153,6 +153,27 @@ control:
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
 
+### 状态标签管控（受控单值）
+
+- `bot:*` 必须通过受控入口迁移，禁止在脚本中散落 `gh issue edit --add-label/--remove-label bot:*`。
+- 推荐命令：
+
+```bash
+# CAS 迁移（from 可选）
+niuma state-label set --repo owner/repo --issue 325 --from bot:plan-draft --to bot:needs-discussion
+
+# 多状态自愈收敛
+niuma state-label normalize --repo owner/repo --issue 325
+
+# 清理所有 bot 状态（升级人工时使用）
+niuma state-label clear --repo owner/repo --issue 325
+```
+
+- 本地门禁：`automation/niuma/scripts/gh` 会拦截直接改 `bot:*` 并提示改用 `niuma state-label`。
+- 启用方式：`export PATH="$(pwd)/automation/niuma/scripts:$PATH"`（将包装器置于 PATH 前缀）。
+- 服务端门禁：`.github/workflows/niuma-label-guard.yml` 会在非 allowlist actor 直改 `bot:*` 时评论（dry-run）或自动回滚（enforce）。
+- 自愈优先级可由 `NIUMA_STATE_PRIORITY` 覆盖；默认优先级见 `automation/niuma/docs/state-machine-spec.md`。
+
 ### `pr-reviewable` 冲突自动回退
 
 - control 循环会持续检查 `bot:pr-reviewable` 对应 PR 的 `mergeable / mergeStateStatus / headSha`

@@ -213,6 +213,27 @@ func (m *MockGitHub) ReplaceLabelIfPresent(_ context.Context, issueNumber int, o
 	return false, nil
 }
 
+func (m *MockGitHub) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return m.Error
+	}
+
+	next := make([]string, 0, len(labels))
+	seen := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		next = append(next, label)
+	}
+	m.Labels[issueNumber] = next
+	return nil
+}
+
 func (m *MockGitHub) EnsureLabelsExist(_ context.Context, _ []string) error {
 	return m.Error
 }

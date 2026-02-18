@@ -111,7 +111,8 @@ func TestAllBotLabels(t *testing.T) {
 }
 
 type transitionLabelOpsMock struct {
-	labels map[int][]string
+	labels            map[int][]string
+	replaceLabelsCall int
 }
 
 func newTransitionLabelOpsMock(issueNumber int, labels ...string) *transitionLabelOpsMock {
@@ -143,6 +144,14 @@ func (m *transitionLabelOpsMock) ReplaceLabelIfPresent(_ context.Context, issueN
 
 func (m *transitionLabelOpsMock) AddLabel(_ context.Context, issueNumber int, label string) error {
 	m.labels[issueNumber] = append(m.labels[issueNumber], label)
+	return nil
+}
+
+func (m *transitionLabelOpsMock) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.replaceLabelsCall++
+	next := make([]string, len(labels))
+	copy(next, labels)
+	m.labels[issueNumber] = next
 	return nil
 }
 
@@ -182,4 +191,38 @@ func TestTransitionBotState_BootstrapOnlyQueued(t *testing.T) {
 	err = TransitionBotState(context.Background(), mock, 1, "", StateQueued)
 	require.NoError(t, err)
 	assert.Equal(t, []string{string(StateQueued)}, mock.labels[1])
+}
+
+func TestTransition_AtomicReplaceKeepsNonBotLabels(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, "bug", string(StatePlanDraft), "priority:high")
+
+	err := Transition(context.Background(), mock, 325, "", StateNeedsDiscussion)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "priority:high", string(StateNeedsDiscussion)}, mock.labels[325])
+}
+
+func TestTransition_IdempotentNoWrite(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, "bug", string(StateNeedsDiscussion))
+
+	err := Transition(context.Background(), mock, 325, "", StateNeedsDiscussion)
+	require.NoError(t, err)
+	assert.Equal(t, 0, mock.replaceLabelsCall)
+}
+
+func TestTransition_WithFromMismatchReturnsConflict(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, string(StatePlanDraft))
+
+	err := Transition(context.Background(), mock, 325, StateFixRequested, StatePlanDraft)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrConflict))
+}
+
+func TestNormalize_PicksPriorityState(t *testing.T) {
+	mock := newTransitionLabelOpsMock(325, string(StateFixRequested), string(StateNeedsDiscussion))
+
+	target, changed, err := Normalize(context.Background(), mock, 325, DefaultStatePriority)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, StateNeedsDiscussion, target)
+	assert.Equal(t, []string{string(StateNeedsDiscussion)}, mock.labels[325])
 }

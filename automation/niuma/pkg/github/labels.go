@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/go-github/v68/github"
 )
@@ -68,6 +69,17 @@ func (c *Client) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, ne
 	return c.AddLabel(ctx, issueNumber, newLabel)
 }
 
+// ReplaceLabels 使用一次 issue edit 原子替换整组 labels。
+func (c *Client) ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error {
+	normalized := normalizeLabels(labels)
+	req := &github.IssueRequest{Labels: &normalized}
+	_, _, err := c.gh.Issues.Edit(ctx, c.owner, c.repo, issueNumber, req)
+	if err != nil {
+		return fmt.Errorf("替换 issue #%d labels 失败: %w", issueNumber, err)
+	}
+	return nil
+}
+
 // ReplaceLabelIfPresent 替换 label：仅当 old 存在时才会写入 new。
 // 返回 replaced=false 表示 old 不存在，未做任何写入。
 func (c *Client) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
@@ -108,4 +120,21 @@ func (c *Client) EnsureLabelsExist(ctx context.Context, labels []string) error {
 		}
 	}
 	return nil
+}
+
+func normalizeLabels(labels []string) []string {
+	seen := make(map[string]struct{}, len(labels))
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	return out
 }

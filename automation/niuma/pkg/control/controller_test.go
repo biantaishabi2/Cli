@@ -297,6 +297,56 @@ func (m *mockGitHubOps) ReplaceLabelIfPresent(_ context.Context, issueNumber int
 	return m.replaceLabelCore(issueNumber, oldLabel, newLabel, false)
 }
 
+func (m *mockGitHubOps) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		issue = IssueInfo{Number: issueNumber}
+	}
+	oldBot := ""
+	for _, label := range issue.Labels {
+		if strings.HasPrefix(label, "bot:") {
+			oldBot = label
+			break
+		}
+	}
+	next := make([]string, 0, len(labels))
+	seen := make(map[string]struct{}, len(labels))
+	newBot := ""
+	for _, label := range labels {
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		next = append(next, label)
+		if newBot == "" && strings.HasPrefix(label, "bot:") {
+			newBot = label
+		}
+	}
+
+	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
+		issueNumber: issueNumber,
+		oldLabel:    oldBot,
+		newLabel:    newBot,
+	})
+	if err, ok := m.replaceLabelPairError[fmt.Sprintf("%s=>%s", oldBot, newBot)]; ok {
+		return err
+	}
+	if remaining := m.replaceLabelFails[newBot]; remaining > 0 {
+		m.replaceLabelFails[newBot] = remaining - 1
+		return fmt.Errorf("replace label %q temporary failed", newBot)
+	}
+	if err, ok := m.replaceLabelError[newBot]; ok {
+		return err
+	}
+
+	issue.Labels = next
+	m.issuesByNumber[issueNumber] = issue
+	if m.replaceLabelHook != nil {
+		m.replaceLabelHook()
+	}
+	return nil
+}
+
 func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
 	m.listBlockedByCalls++
 	if err, ok := m.listBlockedByErr[issueNumber]; ok {
@@ -1059,7 +1109,7 @@ func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *t
 	err = ctrl.ProcessIssue(context.Background(), task)
 	require.NoError(t, err)
 
-	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
 	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(
 		t,
@@ -2422,6 +2472,28 @@ func TestSyncIssueStateLabel_SkipsSelfReplacement(t *testing.T) {
 	for _, call := range mockGH.replaceLabelCalls {
 		assert.NotEqual(t, call.oldLabel, call.newLabel)
 	}
+}
+
+func TestSyncIssueStateLabel_AutoHealMultiStateAndDedupComment(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 41,
+			Labels: []string{string(state.StateFixRequested), string(state.StateNeedsDiscussion)},
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.syncIssueStateLabel(context.Background(), 41, string(state.StateNeedsDiscussion))
+	require.NoError(t, err)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Equal(t, []string{string(state.StateNeedsDiscussion)}, labels)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "状态自愈")
+
+	err = ctrl.syncIssueStateLabel(context.Background(), 41, string(state.StateNeedsDiscussion))
+	require.NoError(t, err)
+	assert.Len(t, mockGH.addIssueCommentCalls, 1)
 }
 
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
