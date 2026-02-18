@@ -206,6 +206,7 @@ type controlFlowGitHubMock struct {
 	mu                sync.Mutex
 	issues            map[int]control.IssueInfo
 	labels            map[int][]string
+	commentBodies     map[int][]string
 	stateTransitions  map[int]int
 	replaceLabelCalls map[int]int
 	replaceLabelHook  func(issueNumber int)
@@ -223,6 +224,7 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 		labels: map[int][]string{
 			issueNumber: {"bot:queued"},
 		},
+		commentBodies:     map[int][]string{},
 		stateTransitions:  map[int]int{},
 		replaceLabelCalls: map[int]int{},
 	}
@@ -276,6 +278,37 @@ func (m *controlFlowGitHubMock) GetIssue(_ context.Context, issueNumber int) (co
 	return issue, nil
 }
 
+func (m *controlFlowGitHubMock) UpdateIssueBody(_ context.Context, issueNumber int, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	issue, ok := m.issues[issueNumber]
+	if !ok {
+		return fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	issue.Body = body
+	m.issues[issueNumber] = issue
+	return nil
+}
+
+func (m *controlFlowGitHubMock) ListCommentBodies(_ context.Context, issueNumber int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]string(nil), m.commentBodies[issueNumber]...), nil
+}
+
+func (m *controlFlowGitHubMock) AddIssueComment(_ context.Context, issueNumber int, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.issues[issueNumber]; !ok {
+		return fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	m.commentBodies[issueNumber] = append(m.commentBodies[issueNumber], body)
+	return nil
+}
+
 func (m *controlFlowGitHubMock) CloseIssue(_ context.Context, issueNumber int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -322,6 +355,10 @@ func (m *controlFlowGitHubMock) ReplaceLabel(_ context.Context, issueNumber int,
 
 func (m *controlFlowGitHubMock) ResolvePRMetadata(_ context.Context, issueNumber int) (control.PRMetadata, error) {
 	return control.PRMetadata{}, fmt.Errorf("issue #%d: %w", issueNumber, control.ErrPRMarkerNotFound)
+}
+
+func (m *controlFlowGitHubMock) ResolvePRReviewStatus(_ context.Context, issueNumber int) (control.PRReviewStatus, error) {
+	return control.PRReviewStatus{}, fmt.Errorf("issue #%d: %w", issueNumber, control.ErrPRMarkerNotFound)
 }
 
 func (m *controlFlowGitHubMock) stateTransitionCount(issueNumber int) int {
