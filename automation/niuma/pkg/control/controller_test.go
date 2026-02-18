@@ -218,6 +218,49 @@ type inMemController struct {
 	mockAI      *ai.MockProvider
 }
 
+type heartbeatFailIssueLockStore struct {
+	base              IssueLockStore
+	mu                sync.Mutex
+	refreshCount      int
+	lastReleaseResult IssueLockResult
+}
+
+func newHeartbeatFailIssueLockStore() *heartbeatFailIssueLockStore {
+	return &heartbeatFailIssueLockStore{
+		base: newInMemoryIssueLockStore(),
+	}
+}
+
+func (s *heartbeatFailIssueLockStore) TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error) {
+	return s.base.TryAcquire(issueNumber, owner, now, ttl)
+}
+
+func (s *heartbeatFailIssueLockStore) Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error) {
+	s.mu.Lock()
+	s.refreshCount++
+	s.mu.Unlock()
+	return IssueLockRecord{}, fmt.Errorf("inject refresh failure")
+}
+
+func (s *heartbeatFailIssueLockStore) Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error {
+	s.mu.Lock()
+	s.lastReleaseResult = lastResult
+	s.mu.Unlock()
+	return s.base.Release(issueNumber, owner, now, lastResult)
+}
+
+func (s *heartbeatFailIssueLockStore) RefreshCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshCount
+}
+
+func (s *heartbeatFailIssueLockStore) LastReleaseResult() IssueLockResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastReleaseResult
+}
+
 func newInMemController(issues []IssueInfo, aiResp string) *inMemController {
 	mockTC := newMockTaskCtlClient()
 	mockGH := newMockGitHubOps(issues...)
@@ -445,6 +488,71 @@ func TestController_IssueLock_TTLExpiryRecovery(t *testing.T) {
 	acquired, _, err = ctrlB.tryAcquireIssueLock(issue)
 	require.NoError(t, err)
 	assert.True(t, acquired)
+}
+
+func TestController_WithIssueLock_HeartbeatRefreshFailureReturnsError(t *testing.T) {
+	store := newHeartbeatFailIssueLockStore()
+	ctrl := newIssueLockTestController("owner-a", store, 5*time.Minute, 10*time.Millisecond, time.Now)
+	issue := IssueInfo{Number: 315}
+
+	err := ctrl.withIssueLock(context.Background(), issue, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "锁心跳刷新失败")
+	assert.GreaterOrEqual(t, store.RefreshCount(), 1)
+	assert.Equal(t, IssueLockResultFailed, store.LastReleaseResult())
+}
+
+func TestInMemoryIssueLockStore_ValidationAndOwnerMismatch(t *testing.T) {
+	now := time.Date(2026, 2, 18, 0, 0, 0, 0, time.UTC)
+	store := newInMemoryIssueLockStore()
+
+	_, _, err := store.TryAcquire(0, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "issue 编号无效")
+
+	_, _, err = store.TryAcquire(1, "", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	_, _, err = store.TryAcquire(1, "owner-a", now, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "ttl 必须大于 0")
+
+	_, err = store.Refresh(0, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "issue 编号无效")
+
+	_, err = store.Refresh(1, "", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	_, err = store.Refresh(1, "owner-a", now, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "ttl 必须大于 0")
+
+	_, err = store.Refresh(1, "owner-a", now, time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "未持锁")
+
+	_, acquired, err := store.TryAcquire(1, "owner-a", now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	_, err = store.Refresh(1, "owner-b", now.Add(10*time.Second), time.Minute)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不匹配")
+
+	err = store.Release(1, "", now, IssueLockResultFailed)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不能为空")
+
+	err = store.Release(1, "owner-b", now, IssueLockResultFailed)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "owner 不匹配")
 }
 
 func TestController_NewIssueDiscovery(t *testing.T) {
