@@ -189,3 +189,33 @@ func TestRoundTrip_WithFinish(t *testing.T) {
 	assert.Equal(t, original.Revision, parsed.Revision)
 	assert.Equal(t, original.Finish, parsed.Finish)
 }
+
+func TestParse_DiscussionSummaryExtendedFields(t *testing.T) {
+	m := Parse("<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=3 finish=1 decision=merge human=1 risk=high dcount=2 mode=debate_ab -->")
+	require.NotNil(t, m)
+	assert.Equal(t, "merge", m.Decision)
+	assert.True(t, m.Human)
+	assert.Equal(t, "high", m.Risk)
+	assert.Equal(t, 2, m.DisagreeCount)
+	assert.Equal(t, "debate_ab", m.Mode)
+}
+
+func TestRender_DiscussionSummaryExtendedFields(t *testing.T) {
+	m := &Marker{
+		Type:          TypeDiscussionSummary,
+		Issue:         1,
+		Revision:      3,
+		Finish:        true,
+		Decision:      "merge",
+		Human:         true,
+		Risk:          "high",
+		DisagreeCount: 2,
+		Mode:          "debate_ab",
+	}
+	rendered := Render(m)
+	assert.Contains(t, rendered, "decision=merge")
+	assert.Contains(t, rendered, "human=1")
+	assert.Contains(t, rendered, "risk=high")
+	assert.Contains(t, rendered, "dcount=2")
+	assert.Contains(t, rendered, "mode=debate_ab")
+}

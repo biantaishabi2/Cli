@@ -42,7 +42,13 @@ func TestPlanEngine_Draft_AIError(t *testing.T) {
 }
 
 func TestPlanEngine_Consolidate_HappyPath(t *testing.T) {
-	mock := ai.NewMockProvider(`{"consensus": "用JWT", "open_items": ["TTL"], "should_finish": false}`)
+	mock := ai.NewMockProvider(`{
+  "agreements":["用JWT"],
+  "disagreements":[{"topic":"TTL","options":["15m","30m"],"recommendation":"15m","risk":"low"}],
+  "decision":"merge",
+  "requires_human_decision":false,
+  "should_finish":false
+}`)
 	engine := NewPlanEngine(mock)
 
 	input := &PromptInput{
@@ -53,8 +59,9 @@ func TestPlanEngine_Consolidate_HappyPath(t *testing.T) {
 
 	summary, err := engine.Consolidate(context.Background(), input)
 	require.NoError(t, err)
-	assert.Equal(t, "用JWT", summary.Consensus)
-	assert.Equal(t, []string{"TTL"}, summary.OpenItems)
+	assert.Equal(t, []string{"用JWT"}, summary.Agreements)
+	assert.Equal(t, DecisionMerge, summary.Decision)
+	assert.Len(t, summary.Disagreements, 1)
 
 	// 验证 prompt 包含评论
 	calls := mock.Calls()

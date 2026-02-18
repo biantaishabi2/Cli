@@ -33,11 +33,16 @@ var AllTypes = []Type{
 
 // Marker 表示一个嵌入在 GitHub 评论中的幂等标记
 type Marker struct {
-	Type     Type
-	Issue    int
-	Revision int
-	PR       int  // 仅 PR_CREATED 使用
-	Finish   bool // 仅 DISCUSSION_SUMMARY 使用：AI 建议结束讨论
+	Type          Type
+	Issue         int
+	Revision      int
+	PR            int    // 仅 PR_CREATED 使用
+	Finish        bool   // 仅 DISCUSSION_SUMMARY 使用：AI 建议结束讨论
+	Decision      string // 仅 DISCUSSION_SUMMARY 使用：决策（adopt_A|adopt_B|merge|defer）
+	Human         bool   // 仅 DISCUSSION_SUMMARY 使用：是否需要人工决策
+	Risk          string // 仅 DISCUSSION_SUMMARY 使用：最高风险（low|medium|high）
+	DisagreeCount int    // 仅 DISCUSSION_SUMMARY 使用：分歧数量
+	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（consolidate|debate_ab）
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->
@@ -81,6 +86,20 @@ func Parse(line string) *Marker {
 			if val == "1" || val == "true" {
 				m.Finish = true
 			}
+		case "decision":
+			m.Decision = val
+		case "human":
+			if val == "1" || val == "true" {
+				m.Human = true
+			}
+		case "risk":
+			m.Risk = val
+		case "dcount":
+			if n, err := strconv.Atoi(val); err == nil {
+				m.DisagreeCount = n
+			}
+		case "mode":
+			m.Mode = val
 		}
 	}
 
@@ -137,6 +156,21 @@ func Render(m *Marker) string {
 	}
 	if m.Finish {
 		parts = append(parts, "finish=1")
+	}
+	if m.Decision != "" {
+		parts = append(parts, fmt.Sprintf("decision=%s", m.Decision))
+	}
+	if m.Human {
+		parts = append(parts, "human=1")
+	}
+	if m.Risk != "" {
+		parts = append(parts, fmt.Sprintf("risk=%s", m.Risk))
+	}
+	if m.DisagreeCount > 0 {
+		parts = append(parts, fmt.Sprintf("dcount=%d", m.DisagreeCount))
+	}
+	if m.Mode != "" {
+		parts = append(parts, fmt.Sprintf("mode=%s", m.Mode))
 	}
 
 	return strings.Join(parts, " ") + " -->"

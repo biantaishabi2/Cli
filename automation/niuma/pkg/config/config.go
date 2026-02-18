@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +35,9 @@ type WorkflowConfig struct {
 	MaxIterateRounds      int      `yaml:"max_iterate_rounds"`      // 最大自动迭代轮数（0=默认3）
 	MaxDiscussionRounds   int      `yaml:"max_discussion_rounds"`   // discuss 单次 run 的最大讨论轮数（默认 5）
 	DiscussTimeoutMinutes int      `yaml:"discuss_timeout_minutes"` // discuss 命令超时（分钟，默认 20）
+	DiscussionMode        string   `yaml:"discussion_mode"`         // 讨论模式：consolidate|debate_ab（默认 consolidate）
+	VisibleRoundInterval  int      `yaml:"visible_round_interval"`  // 可见评论节流：每 N 轮可见一次（默认 1）
+	VisibleOnlyOnDiff     *bool    `yaml:"visible_only_on_diff"`    // 可见评论节流：仅差异变化时评论（默认 true）
 	AllowedPrefixes       []string `yaml:"allowed_prefixes"`        // 允许修改的路径前缀
 }
 
@@ -60,6 +65,36 @@ func (w *WorkflowConfig) GetDiscussTimeoutMinutes() int {
 		return 20
 	}
 	return w.DiscussTimeoutMinutes
+}
+
+// GetDiscussionMode 获取讨论模式。
+// 仅支持 consolidate|debate_ab，非法值回退到 consolidate。
+func (w *WorkflowConfig) GetDiscussionMode() string {
+	mode := strings.TrimSpace(strings.ToLower(w.DiscussionMode))
+	switch mode {
+	case "", "consolidate":
+		return "consolidate"
+	case "debate_ab":
+		return "debate_ab"
+	default:
+		return "consolidate"
+	}
+}
+
+// GetVisibleRoundInterval 获取可见评论轮次间隔（默认 1）。
+func (w *WorkflowConfig) GetVisibleRoundInterval() int {
+	if w.VisibleRoundInterval <= 0 {
+		return 1
+	}
+	return w.VisibleRoundInterval
+}
+
+// GetVisibleOnlyOnDiff 获取是否仅在差异变化时输出可见评论（默认 true）。
+func (w *WorkflowConfig) GetVisibleOnlyOnDiff() bool {
+	if w.VisibleOnlyOnDiff == nil {
+		return true
+	}
+	return *w.VisibleOnlyOnDiff
 }
 
 // AIConfig AI 相关配置
@@ -243,6 +278,9 @@ func defaultConfig() *Config {
 			MaxIterateRounds:      3,
 			MaxDiscussionRounds:   5,
 			DiscussTimeoutMinutes: 20,
+			DiscussionMode:        "consolidate",
+			VisibleRoundInterval:  1,
+			VisibleOnlyOnDiff:     boolPtr(true),
 		},
 	}
 }
@@ -256,4 +294,21 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("NIUMA_IMPLEMENTATION_PROVIDER"); v != "" {
 		cfg.AI.Implementation.Provider = v
 	}
+	if v := os.Getenv("NIUMA_DISCUSSION_MODE"); v != "" {
+		cfg.Workflow.DiscussionMode = v
+	}
+	if v := os.Getenv("NIUMA_VISIBLE_ROUND_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Workflow.VisibleRoundInterval = n
+		}
+	}
+	if v := os.Getenv("NIUMA_VISIBLE_ONLY_ON_DIFF"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Workflow.VisibleOnlyOnDiff = boolPtr(b)
+		}
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

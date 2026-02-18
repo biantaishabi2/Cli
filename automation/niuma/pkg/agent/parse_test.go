@@ -44,21 +44,97 @@ func TestParseDraftResponse_Empty(t *testing.T) {
 }
 
 func TestParseConsolidateResponse_ValidJSON(t *testing.T) {
-	raw := `{"consensus": "使用 Redis", "open_items": ["TTL 策略"], "should_finish": true}`
+	raw := `{
+  "agreements": ["使用 Redis"],
+  "disagreements": [
+    {"topic":"TTL 策略","options":["30m","60m"],"recommendation":"优先 30m","risk":"low"}
+  ],
+  "decision": "merge",
+  "requires_human_decision": false,
+  "should_finish": true
+}`
 
 	summary, err := ParseConsolidateResponse(raw)
 	require.NoError(t, err)
-	assert.Equal(t, "使用 Redis", summary.Consensus)
-	assert.Equal(t, []string{"TTL 策略"}, summary.OpenItems)
+	assert.Equal(t, []string{"使用 Redis"}, summary.Agreements)
+	assert.Equal(t, DecisionMerge, summary.Decision)
+	require.Len(t, summary.Disagreements, 1)
+	assert.Equal(t, "TTL 策略", summary.Disagreements[0].Topic)
+	assert.Equal(t, RiskLow, summary.Disagreements[0].Risk)
 	assert.True(t, summary.ShouldFinish)
 }
 
-func TestParseConsolidateResponse_Fallback(t *testing.T) {
-	raw := "大家基本同意使用 Redis 作为缓存方案。"
+func TestParseConsolidateResponse_MissingRequiredFields(t *testing.T) {
+	raw := `{
+  "agreements": ["a"],
+  "disagreements": [],
+  "requires_human_decision": false
+}`
+	_, err := ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "缺少必填字段")
+	assert.Contains(t, err.Error(), "decision")
+	assert.Contains(t, err.Error(), "should_finish")
+}
 
-	summary, err := ParseConsolidateResponse(raw)
+func TestParseConsolidateResponse_InvalidDecision(t *testing.T) {
+	raw := `{
+  "agreements": [],
+  "disagreements": [],
+  "decision": "accept",
+  "requires_human_decision": false,
+  "should_finish": false
+}`
+	_, err := ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decision 非法")
+}
+
+func TestParseConsolidateResponse_InvalidRisk(t *testing.T) {
+	raw := `{
+  "agreements": [],
+  "disagreements": [{"topic":"t","options":["a"],"recommendation":"x","risk":"critical"}],
+  "decision": "merge",
+  "requires_human_decision": false,
+  "should_finish": false
+}`
+	_, err := ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "risk 非法")
+}
+
+func TestParseConsolidateResponse_TypeError(t *testing.T) {
+	raw := `{
+  "agreements": "bad",
+  "disagreements": [],
+  "decision": "merge",
+  "requires_human_decision": false,
+  "should_finish": false
+}`
+	_, err := ParseConsolidateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agreements 类型错误")
+}
+
+func TestParseDebateResponse_ValidJSON(t *testing.T) {
+	raw := `{
+  "agreements": ["同意使用 Redis"],
+  "disagreements": [{"topic":"TTL","options":["30m","60m"],"recommendation":"30m","risk":"medium"}],
+  "suggestion": "先压测再定默认值"
+}`
+	comment, err := ParseDebateResponse(raw)
 	require.NoError(t, err)
-	assert.Equal(t, raw, summary.Consensus)
+	assert.Equal(t, "先压测再定默认值", comment.Suggestion)
+	require.Len(t, comment.Disagreements, 1)
+	assert.Equal(t, RiskMedium, comment.Disagreements[0].Risk)
+}
+
+func TestParseDebateResponse_MissingFields(t *testing.T) {
+	raw := `{"agreements":[],"disagreements":[]}`
+	_, err := ParseDebateResponse(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "缺少必填字段")
+	assert.Contains(t, err.Error(), "suggestion")
 }
 
 func TestParseFinalPlanResponse_ValidJSON(t *testing.T) {

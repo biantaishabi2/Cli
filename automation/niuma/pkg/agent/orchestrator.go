@@ -18,8 +18,11 @@ import (
 // OrchestratorConfig 编排器配置
 type OrchestratorConfig struct {
 	// 讨论阶段：多 provider 参与讨论
-	DiscussionProviders []ai.Provider // 参与"左右互搏"的 provider 列表
-	Consolidator        ai.Provider   // 汇总讨论用的 provider
+	DiscussionProviders  []ai.Provider // 参与"左右互搏"的 provider 列表
+	Consolidator         ai.Provider   // 汇总讨论用的 provider
+	DiscussionMode       string        // consolidate|debate_ab
+	VisibleRoundInterval int           // 可见评论每 N 轮输出（默认 1）
+	VisibleOnlyOnDiff    bool          // 仅在分歧/决策变化时输出可见评论
 
 	// 实现阶段：单 provider 执行
 	ImplementProvider ai.Provider // 实现/迭代用的 provider
@@ -47,6 +50,37 @@ func (c *OrchestratorConfig) getMaxDiscussionRounds() int {
 		return 5
 	}
 	return c.MaxDiscussionRounds
+}
+
+// getDiscussionMode 获取讨论模式，默认 consolidate。
+func (c *OrchestratorConfig) getDiscussionMode() string {
+	if c == nil {
+		return "consolidate"
+	}
+	switch strings.ToLower(strings.TrimSpace(c.DiscussionMode)) {
+	case "", "consolidate":
+		return "consolidate"
+	case "debate_ab":
+		return "debate_ab"
+	default:
+		return "consolidate"
+	}
+}
+
+// getVisibleRoundInterval 获取可见评论轮次节流，默认 1。
+func (c *OrchestratorConfig) getVisibleRoundInterval() int {
+	if c == nil || c.VisibleRoundInterval <= 0 {
+		return 1
+	}
+	return c.VisibleRoundInterval
+}
+
+// getVisibleOnlyOnDiff 获取可见评论是否仅差异变化时输出，默认 true。
+func (c *OrchestratorConfig) getVisibleOnlyOnDiff() bool {
+	if c == nil {
+		return true
+	}
+	return c.VisibleOnlyOnDiff
 }
 
 // Orchestrator 核心编排器
@@ -208,31 +242,36 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 		return nil, fmt.Errorf("当前状态 %s 不是讨论中（需要 %s）", currentState, state.StateNeedsDiscussion)
 	}
 
-	// 每轮都先更新 DISCUSSION_SUMMARY（同一条 marker upsert）
+	// 读取上一轮摘要，用于计算 diff 与修订号。
 	summaryMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionSummary)
 	if err != nil {
 		return nil, fmt.Errorf("查找汇总 marker 失败: %w", err)
 	}
+	previousCount := -1
+	if summaryMC != nil {
+		previousCount = summaryMC.Marker.DisagreeCount
+	}
 
-	if o.hasMultipleDiscussionProviders() {
-		if err := o.doMultiProviderDiscussion(ctx, summaryMC); err != nil {
-			return nil, err
+	// 生成本轮讨论摘要。
+	var summary *DiscussionSummary
+	switch o.getDiscussionMode() {
+	case "debate_ab":
+		summary, err = o.doDebateABDiscussion(ctx, round, maxRounds)
+	default:
+		if o.hasMultipleDiscussionProviders() {
+			summary, err = o.doMultiProviderDiscussion(ctx, round, maxRounds)
+		} else {
+			summary, err = o.updateDiscussionSummary(ctx)
 		}
-	} else {
-		if err := o.updateDiscussionSummary(ctx, summaryMC); err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// 读取最新上下文，进行收敛判定
 	comments, err := o.github.ListComments(ctx, o.issueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("获取评论失败: %w", err)
-	}
-
-	summaryMC, err = o.github.FindMarker(ctx, o.issueNumber, marker.TypeDiscussionSummary)
-	if err != nil {
-		return nil, fmt.Errorf("刷新汇总 marker 失败: %w", err)
 	}
 
 	warningMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypeConvergeWarning)
@@ -243,13 +282,17 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	// 构建收敛检查输入
 	checker := state.DefaultChecker()
 	input := &state.ConvergenceInput{
-		Comments: comments,
-		Round:    round,
-		MaxRound: maxRounds,
-	}
-	if summaryMC != nil {
-		input.DiscussionSummary = summaryMC.Marker
-		input.AIShouldFinish = summaryMC.Marker.Finish
+		Comments:                  comments,
+		Round:                     round,
+		MaxRound:                  maxRounds,
+		AIShouldFinish:            summary.ShouldFinish,
+		RequiresHumanDecision:     summary.RequiresHumanDecision,
+		Decision:                  string(summary.Decision),
+		DisagreementCount:         len(summary.Disagreements),
+		PreviousDisagreementCount: nonNegative(previousCount),
+		HasHighRisk:               hasHighRiskDisagreement(summary.Disagreements),
+		AllLowRiskAutoResolvable:  allLowRiskAutoResolvable(summary.Disagreements),
+		DiscussionMode:            o.getDiscussionMode(),
 	}
 	if warningMC != nil {
 		input.ConvergeWarning = warningMC.Marker
@@ -257,6 +300,27 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	}
 
 	decision := checker.CheckWithDecision(input)
+	summary.ShouldFinish = decision.ShouldFinish
+	if decision.RequiresHumanDecision {
+		summary.RequiresHumanDecision = true
+	}
+
+	// 每轮 upsert 机器可读汇总 marker。
+	rev := 1
+	if summaryMC != nil {
+		rev = summaryMC.Marker.Revision + 1
+	}
+	m := buildDiscussionMarker(o.issueNumber, rev, o.getDiscussionMode(), summary)
+	body := FormatDiscussionSummary(summary, m)
+	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body); err != nil {
+		return nil, fmt.Errorf("更新讨论汇总失败: %w", err)
+	}
+
+	if o.shouldPublishDiscussionSummary(round, summaryMC, summary) {
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			FormatDiscussionRoundSummary(round, maxRounds, o.getDiscussionMode(), summary, previousCount))
+	}
+
 	if decision.Result == state.ShouldWarn {
 		if err := o.upsertConvergeWarning(ctx, warningMC, FormatConvergeWarning); err != nil {
 			return nil, err
@@ -843,31 +907,67 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 	}, nil
 }
 
-// updateDiscussionSummary 更新讨论汇总（单 provider 模式）
-func (o *Orchestrator) updateDiscussionSummary(ctx context.Context, existing *gh.MarkerComment) error {
+// updateDiscussionSummary 生成讨论汇总（单 provider 模式）
+func (o *Orchestrator) updateDiscussionSummary(ctx context.Context) (*DiscussionSummary, error) {
 	input, err := o.buildPromptInput(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	summary, err := o.plan.Consolidate(ctx, input)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	return summary, nil
+}
+
+// doDebateABDiscussion 执行 AB 轮流评论模式。
+func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
+	if len(o.config.DiscussionProviders) < 2 {
+		return nil, fmt.Errorf("debate_ab 模式至少需要 2 个 discussion providers")
 	}
 
-	rev := 1
-	if existing != nil {
-		rev = existing.Marker.Revision + 1
+	speakerIdx := (round - 1) % 2
+	speaker := "A"
+	if speakerIdx == 1 {
+		speaker = "B"
 	}
 
-	m := &marker.Marker{
-		Type:     marker.TypeDiscussionSummary,
-		Issue:    o.issueNumber,
-		Revision: rev,
-		Finish:   summary.ShouldFinish,
+	input, err := o.buildPromptInput(ctx)
+	if err != nil {
+		return nil, err
 	}
-	body := FormatDiscussionSummary(summary, m)
-	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+	input.Round = round
+	input.MaxRounds = maxRounds
+	input.DiscussionRole = speaker
+	input.Counterpart = map[string]string{"A": "B", "B": "A"}[speaker]
+
+	prompt, err := BuildDebatePrompt(input)
+	if err != nil {
+		return nil, fmt.Errorf("构建 debate_ab prompt 失败: %w", err)
+	}
+
+	raw, err := o.config.DiscussionProviders[speakerIdx].Complete(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("debate_%s 生成评论失败: %w", strings.ToLower(speaker), err)
+	}
+	comment, err := ParseDebateResponse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("解析 debate_%s 评论失败: %w", strings.ToLower(speaker), err)
+	}
+
+	// debate_ab 下每轮直接对 issue 可见。
+	if _, err := o.github.AddComment(ctx, o.issueNumber, FormatDebateRoundComment(round, maxRounds, speaker, comment)); err != nil {
+		return nil, fmt.Errorf("写入 debate_%s 可见评论失败: %w", strings.ToLower(speaker), err)
+	}
+
+	return &DiscussionSummary{
+		Agreements:            comment.Agreements,
+		Disagreements:         comment.Disagreements,
+		Decision:              DecisionMerge,
+		RequiresHumanDecision: false,
+		ShouldFinish:          false,
+	}, nil
 }
 
 // hasMultipleDiscussionProviders 检查是否配置了多个讨论 provider
@@ -877,15 +977,23 @@ func (o *Orchestrator) hasMultipleDiscussionProviders() bool {
 
 // doMultiProviderDiscussion 多 provider "左右互搏"讨论
 // 每个 provider 独立给出方案，然后 consolidator 汇总
-func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *gh.MarkerComment) error {
+func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
 	input, err := o.buildPromptInput(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	prompt, err := BuildDraftPrompt(input)
+	prompt, err := BuildDebatePrompt(&PromptInput{
+		IssueTitle:     input.IssueTitle,
+		IssueBody:      input.IssueBody,
+		Comments:       input.Comments,
+		Round:          round,
+		MaxRounds:      maxRounds,
+		DiscussionRole: "A/B",
+		Counterpart:    "-",
+	})
 	if err != nil {
-		return fmt.Errorf("构建讨论 prompt 失败: %w", err)
+		return nil, fmt.Errorf("构建讨论 prompt 失败: %w", err)
 	}
 
 	// 收集各 provider 的方案
@@ -910,22 +1018,99 @@ func (o *Orchestrator) doMultiProviderDiscussion(ctx context.Context, existing *
 	}
 	summary, err := o.plan.Consolidate(ctx, consolidateInput)
 	if err != nil {
-		return fmt.Errorf("汇总讨论失败: %w", err)
+		return nil, fmt.Errorf("汇总讨论失败: %w", err)
+	}
+	return summary, nil
+}
+
+func (o *Orchestrator) getDiscussionMode() string {
+	if o.config == nil {
+		return "consolidate"
+	}
+	return o.config.getDiscussionMode()
+}
+
+func (o *Orchestrator) shouldPublishDiscussionSummary(round int, previous *gh.MarkerComment, summary *DiscussionSummary) bool {
+	if o.config == nil {
+		return false
+	}
+	intervalHit := true
+	if interval := o.getVisibleRoundInterval(); interval > 1 {
+		intervalHit = round%interval == 0
 	}
 
-	rev := 1
-	if existing != nil {
-		rev = existing.Marker.Revision + 1
+	if !o.getVisibleOnlyOnDiff() {
+		return intervalHit
+	}
+	if previous == nil {
+		return true
 	}
 
-	m := &marker.Marker{
-		Type:     marker.TypeDiscussionSummary,
-		Issue:    o.issueNumber,
-		Revision: rev,
-		Finish:   summary.ShouldFinish,
+	prev := previous.Marker
+	changed := prev.DisagreeCount != len(summary.Disagreements) ||
+		prev.Decision != string(summary.Decision) ||
+		prev.Human != summary.RequiresHumanDecision ||
+		prev.Risk != string(maxRisk(summary.Disagreements))
+	return intervalHit || changed
+}
+
+func (o *Orchestrator) getVisibleRoundInterval() int {
+	if o.config == nil {
+		return 1
 	}
-	body := FormatDiscussionSummary(summary, m)
-	return o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, body)
+	return o.config.getVisibleRoundInterval()
+}
+
+func (o *Orchestrator) getVisibleOnlyOnDiff() bool {
+	if o.config == nil {
+		return true
+	}
+	return o.config.getVisibleOnlyOnDiff()
+}
+
+func nonNegative(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func buildDiscussionMarker(issue, rev int, mode string, summary *DiscussionSummary) *marker.Marker {
+	return &marker.Marker{
+		Type:          marker.TypeDiscussionSummary,
+		Issue:         issue,
+		Revision:      rev,
+		Finish:        summary.ShouldFinish,
+		Decision:      string(summary.Decision),
+		Human:         summary.RequiresHumanDecision,
+		Risk:          string(maxRisk(summary.Disagreements)),
+		DisagreeCount: len(summary.Disagreements),
+		Mode:          mode,
+	}
+}
+
+func hasHighRiskDisagreement(items []DisagreementItem) bool {
+	for _, item := range items {
+		if item.Risk == RiskHigh {
+			return true
+		}
+	}
+	return false
+}
+
+func allLowRiskAutoResolvable(items []DisagreementItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item.Risk != RiskLow {
+			return false
+		}
+		if strings.TrimSpace(item.Recommendation) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // buildPRHistory 读取 PR 上的全部 reviews 和 comments，构建完整历史上下文

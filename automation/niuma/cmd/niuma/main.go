@@ -379,10 +379,13 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 
 	// 构建完整配置
 	orchCfg := &agent.OrchestratorConfig{
-		RepoDir:             flagRepoDir,
-		RequirePlanApproval: cfg.Workflow.RequirePlanApproval,
-		MaxIterateRounds:    cfg.Workflow.GetMaxIterateRounds(),
-		MaxDiscussionRounds: cfg.Workflow.GetMaxDiscussionRounds(),
+		RepoDir:              flagRepoDir,
+		RequirePlanApproval:  cfg.Workflow.RequirePlanApproval,
+		MaxIterateRounds:     cfg.Workflow.GetMaxIterateRounds(),
+		MaxDiscussionRounds:  cfg.Workflow.GetMaxDiscussionRounds(),
+		DiscussionMode:       cfg.Workflow.GetDiscussionMode(),
+		VisibleRoundInterval: cfg.Workflow.GetVisibleRoundInterval(),
+		VisibleOnlyOnDiff:    cfg.Workflow.GetVisibleOnlyOnDiff(),
 	}
 
 	// 讨论 provider

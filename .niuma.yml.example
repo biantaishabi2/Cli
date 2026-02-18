@@ -53,9 +53,15 @@ ai:
     provider: codex  # ← 切换这里即可
 
 workflow:
+  # 讨论模式：consolidate（默认）| debate_ab
+  discussion_mode: consolidate
   # discuss 单次 run 内最大轮次（1-20，默认 5）
   max_discussion_rounds: 5
   # discuss 命令超时（分钟，1-120，默认 20）
   discuss_timeout_minutes: 20
+  # 可见评论节流：每 N 轮输出一次（默认 1）
+  visible_round_interval: 1
+  # 可见评论节流：仅在分歧/决策变化时输出（默认 true）
+  visible_only_on_diff: true
   allowed_prefixes:
     - "automation/"

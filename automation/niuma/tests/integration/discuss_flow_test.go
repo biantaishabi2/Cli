@@ -171,8 +171,8 @@ func TestDiscussFlow_SingleRunMultipleRoundsToPlanFinal(t *testing.T) {
 	mockGH.nextID = 1
 
 	mockAI := ai.NewMockProvider(
-		`{"consensus":"第一轮：补充限制","open_items":["补充边界"],"should_finish":false}`,
-		`{"consensus":"第二轮：已收敛","open_items":[],"should_finish":true}`,
+		`{"agreements":["第一轮：补充限制"],"disagreements":[{"topic":"补充边界","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		`{"agreements":["第二轮：已收敛"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`,
 		`{"title":"最终方案","approach":"按共识执行","file_changes":[{"path":"automation/niuma/pkg/agent/orchestrator.go","action":"modify","description":"增加 discuss 多轮循环"}],"test_scenarios":[{"name":"自动收敛","input":"bot:needs-discussion","expected":"进入 bot:plan-final"}]}`,
 	)
 

@@ -295,3 +295,51 @@ func TestReachedDiscussionRoundLimit(t *testing.T) {
 	assert.False(t, ReachedDiscussionRoundLimit(0, 5))
 	assert.False(t, ReachedDiscussionRoundLimit(1, 0))
 }
+
+func TestConvergence_NoDisagreements_ShouldFinalize(t *testing.T) {
+	checker := fixedChecker(time.Now())
+	decision := checker.CheckWithDecision(&ConvergenceInput{
+		Comments:          []*github.IssueComment{},
+		Decision:          "merge",
+		DisagreementCount: 0,
+	})
+	assert.Equal(t, ShouldFinalize, decision.Result)
+	assert.Equal(t, "no_disagreements", decision.Reason)
+}
+
+func TestConvergence_LowRiskAutoResolvable_ShouldFinalize(t *testing.T) {
+	checker := fixedChecker(time.Now())
+	decision := checker.CheckWithDecision(&ConvergenceInput{
+		Comments:                 []*github.IssueComment{},
+		Decision:                 "merge",
+		DisagreementCount:        2,
+		AllLowRiskAutoResolvable: true,
+	})
+	assert.Equal(t, ShouldFinalize, decision.Result)
+	assert.Equal(t, "low_risk_auto_resolved", decision.Reason)
+}
+
+func TestConvergence_HighRisk_RequiresHumanDecision(t *testing.T) {
+	checker := fixedChecker(time.Now())
+	decision := checker.CheckWithDecision(&ConvergenceInput{
+		Comments:          []*github.IssueComment{},
+		Decision:          "merge",
+		DisagreementCount: 1,
+		HasHighRisk:       true,
+	})
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.Equal(t, "requires_human_decision", decision.Reason)
+	assert.True(t, decision.RequiresHumanDecision)
+}
+
+func TestConvergence_Defer_RequiresHumanDecision(t *testing.T) {
+	checker := fixedChecker(time.Now())
+	decision := checker.CheckWithDecision(&ConvergenceInput{
+		Comments:          []*github.IssueComment{},
+		Decision:          "defer",
+		DisagreementCount: 1,
+	})
+	assert.Equal(t, NotConverged, decision.Result)
+	assert.Equal(t, "requires_human_decision", decision.Reason)
+	assert.True(t, decision.RequiresHumanDecision)
+}
