@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/stretchr/testify/assert"
@@ -17,23 +18,35 @@ import (
 
 // mockGitHubOps 用于 controller 测试的 GitHub mock
 type mockGitHubOps struct {
-	issues            []IssueInfo
-	issuesByLabel     map[string][]IssueInfo
-	issuesByNumber    map[int]IssueInfo
-	mergedPRs         []int
-	mergeError        map[int]error
-	replaceLabelCalls []replaceLabelCall
-	replaceLabelError map[string]error
+	issues                []IssueInfo
+	issuesByLabel         map[string][]IssueInfo
+	issuesByNumber        map[int]IssueInfo
+	mergedPRs             []int
+	mergeError            map[int]error
+	replaceLabelCalls     []replaceLabelCall
+	replaceLabelError     map[string]error
 	replaceLabelPairError map[string]error
-	replaceLabelFails map[string]int
-	closeIssueCalls   []int
-	closeIssueError   map[int]error
+	replaceLabelFails     map[string]int
+	closeIssueCalls       []int
+	closeIssueError       map[int]error
+	blockedBy             map[int]map[int]struct{}
+	listBlockedByErr      map[int]error
+	addBlockedByErr       map[string]error
+	removeBlockedByErr    map[string]error
+	addBlockedByCalls     []blockedByCall
+	removeBlockedByCalls  []blockedByCall
+	listBlockedByCalls    int
 }
 
 type replaceLabelCall struct {
 	issueNumber int
 	oldLabel    string
 	newLabel    string
+}
+
+type blockedByCall struct {
+	issueNumber          int
+	blockedByIssueNumber int
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
@@ -43,14 +56,18 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 	}
 
 	return &mockGitHubOps{
-		issues:            issues,
-		issuesByLabel:     make(map[string][]IssueInfo),
-		issuesByNumber:    issuesByNumber,
-		mergeError:        make(map[int]error),
-		replaceLabelError: make(map[string]error),
+		issues:                issues,
+		issuesByLabel:         make(map[string][]IssueInfo),
+		issuesByNumber:        issuesByNumber,
+		mergeError:            make(map[int]error),
+		replaceLabelError:     make(map[string]error),
 		replaceLabelPairError: make(map[string]error),
-		replaceLabelFails: make(map[string]int),
-		closeIssueError:   make(map[int]error),
+		replaceLabelFails:     make(map[string]int),
+		closeIssueError:       make(map[int]error),
+		blockedBy:             make(map[int]map[int]struct{}),
+		listBlockedByErr:      make(map[int]error),
+		addBlockedByErr:       make(map[string]error),
+		removeBlockedByErr:    make(map[string]error),
 	}
 }
 
@@ -124,6 +141,50 @@ func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabe
 	}
 	if err, ok := m.replaceLabelError[newLabel]; ok {
 		return err
+	}
+	return nil
+}
+
+func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	m.listBlockedByCalls++
+	if err, ok := m.listBlockedByErr[issueNumber]; ok {
+		return nil, err
+	}
+	blockedSet := m.blockedBy[issueNumber]
+	result := make([]int, 0, len(blockedSet))
+	for dep := range blockedSet {
+		result = append(result, dep)
+	}
+	return result, nil
+}
+
+func (m *mockGitHubOps) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.addBlockedByCalls = append(m.addBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.addBlockedByErr[key]; ok {
+		return err
+	}
+	if _, ok := m.blockedBy[issueNumber]; !ok {
+		m.blockedBy[issueNumber] = make(map[int]struct{})
+	}
+	m.blockedBy[issueNumber][blockedByIssueNumber] = struct{}{}
+	return nil
+}
+
+func (m *mockGitHubOps) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.removeBlockedByCalls = append(m.removeBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.removeBlockedByErr[key]; ok {
+		return err
+	}
+	if set, ok := m.blockedBy[issueNumber]; ok {
+		delete(set, blockedByIssueNumber)
 	}
 	return nil
 }
@@ -206,6 +267,47 @@ func (m *mockTaskCtlClient) ready() ([]Task, error) {
 		}
 	}
 	return ready, nil
+}
+
+func newScriptTaskCtlClient(t *testing.T, listJSON, dagJSON string) *TaskCtlClient {
+	t.Helper()
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -e
+cmd="$1"
+case "$cmd" in
+  list)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  dag)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  ready)
+    echo '[]'
+    ;;
+  create)
+    cat <<'JSON'
+{"id":"task-created","subject":"created","description":"created","status":"pending","metadata":{"issue_num":"999"}}
+JSON
+    ;;
+  update|get)
+    echo '{}'
+    ;;
+  *)
+    echo '[]'
+    ;;
+esac
+`, listJSON, dagJSON)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	return &TaskCtlClient{
+		BinPath:   bin,
+		StorePath: filepath.Join(tmp, "tasks.json"),
+	}
 }
 
 // inMemController 使用内存 mock 创建 Controller（绕过真实 taskctl 二进制）
@@ -534,6 +636,71 @@ func TestController_AdvanceExistingTasksWithoutNewOrchestrateIssues(t *testing.T
 
 	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
 	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[0].Status)
+}
+
+func TestController_Run_DagSyncFailureDoesNotBlockMainFlow(t *testing.T) {
+	listJSON := `[{"id":"task-1","subject":"demo","description":"demo","status":"pending","metadata":{"issue_num":"41"}}]`
+	dagJSON := `{"nodes":[{"id":"task-1","deps":[],"status":"pending"}]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	mockGH.listBlockedByErr[41] = errors.New("list blocked_by failed")
+
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		PollInterval: 24 * time.Hour,
+		MaxRetry:     0,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      50 * time.Millisecond,
+	}, cfg.RepoDir)
+	store := newDagSyncStateStore(cfg.DagSync.StateFile)
+	require.NoError(t, store.Save(DagSyncState{LastReconcileAt: time.Now().UTC().Format(time.RFC3339)}))
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	err := ctrl.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, mockGH.listBlockedByCalls)
+}
+
+func TestController_Run_EventDagSyncTriggered(t *testing.T) {
+	listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+	dagJSON := `{"nodes":[
+{"id":"task-40","deps":[],"status":"pending"},
+{"id":"task-41","deps":["task-40"],"status":"pending"}
+]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	mockGH.blockedBy[41] = make(map[int]struct{})
+
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		PollInterval: 24 * time.Hour,
+		MaxRetry:     0,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      50 * time.Millisecond,
+	}, cfg.RepoDir)
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	err := ctrl.Run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, mockGH.addBlockedByCalls, 1)
+	assert.Equal(t, 41, mockGH.addBlockedByCalls[0].issueNumber)
+	assert.Equal(t, 40, mockGH.addBlockedByCalls[0].blockedByIssueNumber)
+	assert.GreaterOrEqual(t, mockGH.listBlockedByCalls, 2)
 }
 
 func TestFormatStatus(t *testing.T) {

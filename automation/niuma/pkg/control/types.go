@@ -2,7 +2,10 @@
 // 控制层核心类型定义
 package control
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
 // TaskStatus 任务状态
 type TaskStatus string
@@ -79,6 +82,66 @@ type DagNode struct {
 // DagGraph DAG 图（节点 + 边）
 type DagGraph struct {
 	Nodes []DagNode `json:"nodes"`
+}
+
+// DagEdge DAG 依赖边：FromIssue -> ToIssue（ToIssue 被 FromIssue 阻塞）
+type DagEdge struct {
+	FromIssue int `json:"from_issue"`
+	ToIssue   int `json:"to_issue"`
+}
+
+// DagSyncMode DAG 同步触发模式
+type DagSyncMode string
+
+const (
+	DagSyncModeEvent     DagSyncMode = "event"
+	DagSyncModeReconcile DagSyncMode = "reconcile"
+	DagSyncModeManual    DagSyncMode = "manual"
+)
+
+// DagSyncStatus DAG 同步结果状态
+type DagSyncStatus string
+
+const (
+	DagSyncStatusSuccess DagSyncStatus = "success"
+	DagSyncStatusFailed  DagSyncStatus = "failed"
+	DagSyncStatusSkipped DagSyncStatus = "skipped"
+)
+
+// DagSyncResult DAG 同步执行结果
+type DagSyncResult struct {
+	Mode          DagSyncMode   `json:"mode"`
+	Status        DagSyncStatus `json:"status"`
+	DagHash       string        `json:"dag_hash"`
+	TotalEdges    int           `json:"total_edges"`
+	AppliedAdd    int           `json:"applied_add"`
+	AppliedRemove int           `json:"applied_remove"`
+	SkippedEdges  int           `json:"skipped_edges"`
+	ErrorType     string        `json:"error_type,omitempty"`
+	Error         string        `json:"error,omitempty"`
+}
+
+// DagSyncState DAG 同步持久化状态
+type DagSyncState struct {
+	LastHash        string `json:"last_hash,omitempty"`
+	LastSuccessAt   string `json:"last_success_at,omitempty"`
+	SuccessCount    int    `json:"success_count,omitempty"`
+	FailCount       int    `json:"fail_count,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+	LastErrorAt     string `json:"last_error_at,omitempty"`
+	SkippedEdges    int    `json:"skipped_edges,omitempty"`
+	LastReconcileAt string `json:"last_reconcile_at,omitempty"`
+}
+
+// DagSyncConfig DAG 展示层同步配置
+type DagSyncConfig struct {
+	PollInterval         time.Duration   `json:"poll_interval"`
+	MaxRetry             int             `json:"max_retry"`
+	RetryBackoff         []time.Duration `json:"retry_backoff"`
+	RateLimitRPS         int             `json:"rate_limit_rps"`
+	Timeout              time.Duration   `json:"timeout"`
+	SkippedEdgeThreshold float64         `json:"skipped_edge_threshold"`
+	StateFile            string          `json:"state_file"`
 }
 
 // BranchInfo 分支信息（用于 integration 构建）

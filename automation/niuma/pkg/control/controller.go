@@ -22,6 +22,9 @@ type GitHubOps interface {
 	CloseIssue(ctx context.Context, issueNumber int) error
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
+	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 }
 
 const (
@@ -61,11 +64,12 @@ const (
 
 // Controller 多 Issue 协调控制器
 type Controller struct {
-	taskctl  *TaskCtlClient
-	analyzer *DependencyAnalyzer
-	github   GitHubOps
-	builder  *IntegrationBuilder
-	cfg      *ControlConfig
+	taskctl      *TaskCtlClient
+	analyzer     *DependencyAnalyzer
+	github       GitHubOps
+	builder      *IntegrationBuilder
+	cfg          *ControlConfig
+	dagSyncStore *dagSyncStateStore
 }
 
 // ControlConfig 控制层配置
@@ -76,6 +80,7 @@ type ControlConfig struct {
 	MaxOldBranches            int    `yaml:"max_old_branches"`          // 默认 3
 	MinPRsForIntegration      int    `yaml:"min_prs_for_integration"`   // 默认 2
 	IntegrationGateMaxRetries int    `yaml:"integration_gate_max_retries"`
+	DagSync                   DagSyncConfig
 	RepoDir                   string `yaml:"-"`
 }
 
@@ -87,7 +92,15 @@ func DefaultControlConfig() *ControlConfig {
 		MaxOldBranches:            3,
 		MinPRsForIntegration:      2,
 		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
-		RepoDir:                   ".",
+		DagSync: DagSyncConfig{
+			PollInterval:         5 * time.Minute,
+			MaxRetry:             3,
+			RetryBackoff:         []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second},
+			RateLimitRPS:         10,
+			Timeout:              30 * time.Second,
+			SkippedEdgeThreshold: 0.2,
+		},
+		RepoDir: ".",
 	}
 }
 
@@ -108,12 +121,14 @@ func NewController(
 	if cfg.IntegrationGateMaxRetries < 0 {
 		cfg.IntegrationGateMaxRetries = integrationGateDefaultMaxRetries
 	}
+	cfg.DagSync = normalizeDagSyncConfig(cfg.DagSync, cfg.RepoDir)
 	return &Controller{
-		taskctl:  taskctl,
-		analyzer: analyzer,
-		github:   github,
-		builder:  builder,
-		cfg:      cfg,
+		taskctl:      taskctl,
+		analyzer:     analyzer,
+		github:       github,
+		builder:      builder,
+		cfg:          cfg,
+		dagSyncStore: newDagSyncStateStore(cfg.DagSync.StateFile),
 	}
 }
 
@@ -199,7 +214,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	// ⑤ 先落盘 blocked_by，再判定 ready（流程不变量门禁）。
+	// DAG 是依赖调度的唯一真相（SSOT），ready/blocking 只读 taskctl DAG + metadata。
 	blockedByPersisted := c.persistBlockedByDependencies(issueToTask, analysis.Dependencies)
+
+	// ⑤.1 DAG -> GitHub 依赖展示镜像（单向）；失败降级为日志，不阻塞主流程。
+	if err := c.runDagSyncEvent(ctx); err != nil {
+		fmt.Printf("[control][dag-sync] event 同步失败（已降级，不阻塞主流程）: %v\n", err)
+	}
 
 	// ⑥ 获取 ready tasks 并推进
 	if !blockedByPersisted {
@@ -341,6 +362,11 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	// ⑧ 检查父 issue 进度（Sub-Issue 模式）
 	c.checkParentProgress(ctx, issues)
+
+	// ⑨ 定时巡检纠偏：即使 hash 未变化也会做轻量对账，失败不阻塞主流程。
+	if err := c.maybeRunDagReconcile(ctx); err != nil {
+		fmt.Printf("[control][dag-sync] reconcile 失败（已降级，不阻塞主流程）: %v\n", err)
+	}
 
 	return nil
 }

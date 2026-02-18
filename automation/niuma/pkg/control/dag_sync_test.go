@@ -1,0 +1,187 @@
+package control
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	ghpkg "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBuildDagSyncPlan_HashIdempotent(t *testing.T) {
+	tasks := []Task{
+		{ID: "task-40", Metadata: map[string]string{"issue_num": "40"}},
+		{ID: "task-41", Metadata: map[string]string{"issue_num": "41"}},
+		{ID: "task-42", Metadata: map[string]string{"issue_num": "42"}},
+	}
+	dagA := &DagGraph{
+		Nodes: []DagNode{
+			{ID: "task-41", Deps: []string{"task-40"}, Status: "pending"},
+			{ID: "task-42", Deps: []string{"task-40", "task-41"}, Status: "pending"},
+		},
+	}
+	dagB := &DagGraph{
+		Nodes: []DagNode{
+			{ID: "task-42", Deps: []string{"task-41", "task-40"}, Status: "pending"},
+			{ID: "task-41", Deps: []string{"task-40"}, Status: "pending"},
+		},
+	}
+
+	planA := buildDagSyncPlan(tasks, dagA)
+	planB := buildDagSyncPlan(tasks, dagB)
+	require.Equal(t, planA.edges, planB.edges)
+	assert.Equal(t, planA.hash, planB.hash)
+}
+
+func TestBuildDagSyncPlan_SkippedEdgeForMissingIssueNum(t *testing.T) {
+	tasks := []Task{
+		{ID: "task-40", Metadata: map[string]string{"issue_num": "40"}},
+		{ID: "task-41", Metadata: map[string]string{"issue_num": "41"}},
+		{ID: "task-x", Metadata: map[string]string{}},
+	}
+	dag := &DagGraph{
+		Nodes: []DagNode{
+			{ID: "task-41", Deps: []string{"task-40", "task-x"}, Status: "pending"},
+			{ID: "task-x", Deps: []string{"task-40"}, Status: "pending"},
+		},
+	}
+
+	plan := buildDagSyncPlan(tasks, dag)
+	assert.Equal(t, 3, plan.totalEdges)
+	assert.Equal(t, 2, plan.skippedEdges)
+	assert.Equal(t, []DagEdge{{FromIssue: 40, ToIssue: 41}}, plan.edges)
+}
+
+func TestDagSync_SameHashSecondRunSkippedWithoutGitHubCalls(t *testing.T) {
+	listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+	dagJSON := `{"nodes":[
+{"id":"task-40","deps":[],"status":"pending"},
+{"id":"task-41","deps":["task-40"],"status":"pending"}
+]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		MaxRetry:     0,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      100 * time.Millisecond,
+	}, cfg.RepoDir)
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	first, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+	require.NoError(t, err)
+	assert.Equal(t, DagSyncStatusSuccess, first.Status)
+
+	mockGH.listBlockedByCalls = 0
+	mockGH.addBlockedByCalls = nil
+	mockGH.removeBlockedByCalls = nil
+
+	second, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+	require.NoError(t, err)
+	assert.Equal(t, DagSyncStatusSkipped, second.Status)
+	assert.Equal(t, 0, mockGH.listBlockedByCalls)
+	assert.Empty(t, mockGH.addBlockedByCalls)
+	assert.Empty(t, mockGH.removeBlockedByCalls)
+}
+
+func TestDagSync_RateLimitRetryAndFail(t *testing.T) {
+	listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+	dagJSON := `{"nodes":[
+{"id":"task-40","deps":[],"status":"pending"},
+{"id":"task-41","deps":["task-40"],"status":"pending"}
+]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	mockGH.addBlockedByErr["40->41"] = &ghpkg.DependencyError{
+		Operation: "add blocked_by",
+		Type:      ghpkg.DependencyErrorTypeRateLimit,
+		Err:       errors.New("429"),
+	}
+
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		MaxRetry:     2,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      100 * time.Millisecond,
+	}, cfg.RepoDir)
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	result, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+	require.Error(t, err)
+	assert.Equal(t, DagSyncStatusFailed, result.Status)
+	assert.Equal(t, ghpkg.DependencyErrorTypeRateLimit, result.ErrorType)
+	assert.Len(t, mockGH.addBlockedByCalls, 3)
+}
+
+func TestDagSync_ReconcileDetectsDriftAndCorrects(t *testing.T) {
+	listJSON := `[
+{"id":"task-40","subject":"dep","description":"dep","status":"pending","metadata":{"issue_num":"40"}},
+{"id":"task-41","subject":"target","description":"target","status":"pending","metadata":{"issue_num":"41"}}
+]`
+	dagJSON := `{"nodes":[
+{"id":"task-40","deps":[],"status":"pending"},
+{"id":"task-41","deps":["task-40"],"status":"pending"}
+]}`
+	taskctl := newScriptTaskCtlClient(t, listJSON, dagJSON)
+	mockGH := newMockGitHubOps()
+	cfg := DefaultControlConfig()
+	cfg.RepoDir = t.TempDir()
+	cfg.DagSync = normalizeDagSyncConfig(DagSyncConfig{
+		MaxRetry:     0,
+		RetryBackoff: []time.Duration{time.Millisecond},
+		Timeout:      100 * time.Millisecond,
+	}, cfg.RepoDir)
+
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+		cfg:     cfg,
+	}
+
+	first, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeEvent, false, false)
+	require.NoError(t, err)
+	assert.Equal(t, DagSyncStatusSuccess, first.Status)
+
+	mockGH.blockedBy[41] = map[int]struct{}{42: {}}
+	mockGH.addBlockedByCalls = nil
+	mockGH.removeBlockedByCalls = nil
+
+	second, err := ctrl.syncDagToGitHub(context.Background(), DagSyncModeReconcile, false, false)
+	require.NoError(t, err)
+	assert.Equal(t, DagSyncStatusSuccess, second.Status)
+	assert.Equal(t, 1, second.AppliedAdd)
+	assert.Equal(t, 1, second.AppliedRemove)
+	assert.Equal(t, map[int]struct{}{40: {}}, mockGH.blockedBy[41])
+}
+
+func TestShouldRunDagReconcile(t *testing.T) {
+	assert.True(t, shouldRunDagReconcile(DagSyncState{}, 5*time.Minute))
+
+	now := time.Now().UTC()
+	state := DagSyncState{LastReconcileAt: now.Format(time.RFC3339)}
+	assert.False(t, shouldRunDagReconcile(state, 5*time.Minute))
+
+	state = DagSyncState{LastReconcileAt: now.Add(-10 * time.Minute).Format(time.RFC3339)}
+	assert.True(t, shouldRunDagReconcile(state, 5*time.Minute))
+}
