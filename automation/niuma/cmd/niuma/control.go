@@ -55,8 +55,21 @@ var controlCloseMergedCmd = &cobra.Command{
 	RunE:  runControlCloseMerged,
 }
 
+var controlDagSyncCmd = &cobra.Command{
+	Use:   "dag-sync",
+	Short: "手动触发 DAG -> GitHub 展示依赖同步",
+	RunE:  runControlDagSync,
+}
+
+var controlDagReconcileCmd = &cobra.Command{
+	Use:   "dag-reconcile",
+	Short: "手动触发 DAG/GitHub 展示依赖对账纠偏",
+	RunE:  runControlDagReconcile,
+}
+
 var flagControlIssues string // --issues "40,41,42"
 var flagIntegrationGateMaxRetries int
+var flagControlDagDryRun bool
 var flagPRConflictRetryThreshold int
 var flagPRConflictUnknownBackoffs string
 
@@ -66,10 +79,14 @@ func init() {
 	controlCmd.AddCommand(controlMergeCmd)
 	controlCmd.AddCommand(controlCheckCmd)
 	controlCmd.AddCommand(controlCloseMergedCmd)
+	controlCmd.AddCommand(controlDagSyncCmd)
+	controlCmd.AddCommand(controlDagReconcileCmd)
 
 	controlMergeCmd.Flags().StringVar(&flagControlIssues, "issues", "", "要合并的 issue 编号列表（逗号分隔）")
 	controlMergeCmd.MarkFlagRequired("issues")
 	controlRunCmd.Flags().IntVar(&flagIntegrationGateMaxRetries, "integration-gate-max-retries", -1, "integration gate 最大重试次数（flag > env > default=2）")
+	controlDagSyncCmd.Flags().BoolVar(&flagControlDagDryRun, "dry-run", false, "仅计算 diff，不写入 GitHub")
+	controlDagReconcileCmd.Flags().BoolVar(&flagControlDagDryRun, "dry-run", false, "仅计算 diff，不写入 GitHub")
 	controlRunCmd.Flags().IntVar(&flagPRConflictRetryThreshold, "pr-conflict-retry-threshold", -1, "pr-reviewable 冲突自动回退阈值（flag > env > default=3）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictUnknownBackoffs, "pr-conflict-unknown-backoffs", "", "pr-reviewable merge 状态 UNKNOWN 时重试退避列表，逗号分隔（flag > env > default=5s,15s,30s）")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
@@ -138,6 +155,14 @@ func buildController() (*control.Controller, error) {
 		MaxOldBranches:            cfg.Control.MaxOldBranches,
 		MinPRsForIntegration:      cfg.Control.MinPRsForIntegration,
 		IntegrationGateMaxRetries: integrationGateMaxRetries,
+		DagSync: control.DagSyncConfig{
+			PollInterval:         cfg.Control.DagSync.GetPollInterval(),
+			MaxRetry:             cfg.Control.DagSync.GetMaxRetry(),
+			RetryBackoff:         cfg.Control.DagSync.GetRetryBackoff(),
+			RateLimitRPS:         cfg.Control.DagSync.GetRateLimitRPS(),
+			Timeout:              cfg.Control.DagSync.GetTimeout(),
+			SkippedEdgeThreshold: cfg.Control.DagSync.GetSkippedEdgeThresholdRatio(),
+		},
 		PRConflictRetryThreshold:  prConflictRetryThreshold,
 		PRConflictUnknownBackoffs: prConflictUnknownBackoffs,
 		RepoDir:                   repoDir,
@@ -237,6 +262,9 @@ type githubControlClient interface {
 	CloseIssue(ctx context.Context, number int) error
 	MergePR(ctx context.Context, number int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
+	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	FindMarker(ctx context.Context, issueNumber int, t marker.Type) (*gh.MarkerComment, error)
 	GetPR(ctx context.Context, number int) (*ghapi.PullRequest, error)
 }
@@ -332,6 +360,18 @@ func (g *gitHubControlOps) MergePR(ctx context.Context, prNum int, method string
 
 func (g *gitHubControlOps) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error {
 	return g.client.ReplaceLabel(ctx, issueNumber, oldLabel, newLabel)
+}
+
+func (g *gitHubControlOps) ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error) {
+	return g.client.ListIssueBlockedBy(ctx, issueNumber)
+}
+
+func (g *gitHubControlOps) AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error {
+	return g.client.AddIssueBlockedBy(ctx, issueNumber, blockedByIssueNumber)
+}
+
+func (g *gitHubControlOps) RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error {
+	return g.client.RemoveIssueBlockedBy(ctx, issueNumber, blockedByIssueNumber)
 }
 
 func (g *gitHubControlOps) ResolvePRMetadata(ctx context.Context, issueNumber int) (control.PRMetadata, error) {
@@ -568,6 +608,60 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("PR #%d 收口完成，目标 issues: %v\n", flagPR, issueNums)
 	return nil
+}
+
+func runControlDagSync(cmd *cobra.Command, args []string) error {
+	ctrl, err := buildController()
+	if err != nil {
+		return err
+	}
+
+	result, err := ctrl.DagSync(context.Background(), flagControlDagDryRun)
+	printDagSyncResult("dag-sync", result, flagControlDagDryRun)
+	if err != nil {
+		return fmt.Errorf("dag-sync 失败: %w", err)
+	}
+	return nil
+}
+
+func runControlDagReconcile(cmd *cobra.Command, args []string) error {
+	ctrl, err := buildController()
+	if err != nil {
+		return err
+	}
+
+	result, err := ctrl.DagReconcile(context.Background(), flagControlDagDryRun)
+	printDagSyncResult("dag-reconcile", result, flagControlDagDryRun)
+	if err != nil {
+		return fmt.Errorf("dag-reconcile 失败: %w", err)
+	}
+	return nil
+}
+
+func printDagSyncResult(cmdName string, result control.DagSyncResult, dryRun bool) {
+	for _, line := range formatDagSyncResult(cmdName, result, dryRun) {
+		fmt.Println(line)
+	}
+}
+
+func formatDagSyncResult(cmdName string, result control.DagSyncResult, dryRun bool) []string {
+	lines := []string{fmt.Sprintf(
+		"%s 完成: status=%s mode=%s dry_run=%t hash=%s total_edges=%d add=%d remove=%d skipped_edges=%d error_type=%s",
+		cmdName,
+		result.Status,
+		result.Mode,
+		dryRun,
+		result.DagHash,
+		result.TotalEdges,
+		result.AppliedAdd,
+		result.AppliedRemove,
+		result.SkippedEdges,
+		result.ErrorType,
+	)}
+	if result.Error != "" {
+		lines = append(lines, fmt.Sprintf("%s 错误详情: %s", cmdName, result.Error))
+	}
+	return lines
 }
 
 var integrationIssuePattern = regexp.MustCompile(`(?i)issue\s*#([0-9]+)`)

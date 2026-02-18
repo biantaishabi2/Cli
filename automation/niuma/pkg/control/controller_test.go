@@ -43,6 +43,13 @@ type mockGitHubOps struct {
 	addIssueCommentCalls      []addIssueCommentCall
 	closeIssueCalls           []int
 	closeIssueError           map[int]error
+	blockedBy                 map[int]map[int]struct{}
+	listBlockedByErr          map[int]error
+	addBlockedByErr           map[string]error
+	removeBlockedByErr        map[string]error
+	addBlockedByCalls         []blockedByCall
+	removeBlockedByCalls      []blockedByCall
+	listBlockedByCalls        int
 	replaceLabelHook          func()
 }
 
@@ -60,6 +67,11 @@ type updateIssueBodyCall struct {
 type addIssueCommentCall struct {
 	issueNumber int
 	body        string
+}
+
+type blockedByCall struct {
+	issueNumber          int
+	blockedByIssueNumber int
 }
 
 func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
@@ -85,6 +97,10 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		replaceLabelFails:        make(map[string]int),
 		listCommentBodies:        make(map[int][]string),
 		closeIssueError:          make(map[int]error),
+		blockedBy:                make(map[int]map[int]struct{}),
+		listBlockedByErr:         make(map[int]error),
+		addBlockedByErr:          make(map[string]error),
+		removeBlockedByErr:       make(map[string]error),
 	}
 }
 
@@ -249,6 +265,50 @@ func replaceIssueLabel(labels []string, oldLabel, newLabel string) []string {
 	return filtered
 }
 
+func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	m.listBlockedByCalls++
+	if err, ok := m.listBlockedByErr[issueNumber]; ok {
+		return nil, err
+	}
+	blockedSet := m.blockedBy[issueNumber]
+	result := make([]int, 0, len(blockedSet))
+	for dep := range blockedSet {
+		result = append(result, dep)
+	}
+	return result, nil
+}
+
+func (m *mockGitHubOps) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.addBlockedByCalls = append(m.addBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.addBlockedByErr[key]; ok {
+		return err
+	}
+	if _, ok := m.blockedBy[issueNumber]; !ok {
+		m.blockedBy[issueNumber] = make(map[int]struct{})
+	}
+	m.blockedBy[issueNumber][blockedByIssueNumber] = struct{}{}
+	return nil
+}
+
+func (m *mockGitHubOps) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	m.removeBlockedByCalls = append(m.removeBlockedByCalls, blockedByCall{
+		issueNumber:          issueNumber,
+		blockedByIssueNumber: blockedByIssueNumber,
+	})
+	key := fmt.Sprintf("%d->%d", blockedByIssueNumber, issueNumber)
+	if err, ok := m.removeBlockedByErr[key]; ok {
+		return err
+	}
+	if set, ok := m.blockedBy[issueNumber]; ok {
+		delete(set, blockedByIssueNumber)
+	}
+	return nil
+}
+
 // mockTaskCtlClient 用于 controller 测试的 taskctl mock
 type mockTaskCtlClient struct {
 	tasks                  []Task
@@ -327,6 +387,47 @@ func (m *mockTaskCtlClient) ready() ([]Task, error) {
 		}
 	}
 	return ready, nil
+}
+
+func newScriptTaskCtlClient(t *testing.T, listJSON, dagJSON string) *TaskCtlClient {
+	t.Helper()
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "taskctl")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -e
+cmd="$1"
+case "$cmd" in
+  list)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  dag)
+    cat <<'JSON'
+%s
+JSON
+    ;;
+  ready)
+    echo '[]'
+    ;;
+  create)
+    cat <<'JSON'
+{"id":"task-created","subject":"created","description":"created","status":"pending","metadata":{"issue_num":"999"}}
+JSON
+    ;;
+  update|get)
+    echo '{}'
+    ;;
+  *)
+    echo '[]'
+    ;;
+esac
+`, listJSON, dagJSON)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	return &TaskCtlClient{
+		BinPath:   bin,
+		StorePath: filepath.Join(tmp, "tasks.json"),
+	}
 }
 
 // inMemController 使用内存 mock 创建 Controller（绕过真实 taskctl 二进制）

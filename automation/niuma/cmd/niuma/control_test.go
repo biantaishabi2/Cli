@@ -351,6 +351,18 @@ func (s *stubGitHubControlClient) ReplaceLabel(_ context.Context, _ int, _, _ st
 	return nil
 }
 
+func (s *stubGitHubControlClient) ListIssueBlockedBy(_ context.Context, _ int) ([]int, error) {
+	return nil, nil
+}
+
+func (s *stubGitHubControlClient) AddIssueBlockedBy(_ context.Context, _, _ int) error {
+	return nil
+}
+
+func (s *stubGitHubControlClient) RemoveIssueBlockedBy(_ context.Context, _, _ int) error {
+	return nil
+}
+
 func (s *stubGitHubControlClient) FindMarker(_ context.Context, _ int, _ marker.Type) (*gh.MarkerComment, error) {
 	if s.findMarkerErr != nil {
 		return nil, s.findMarkerErr

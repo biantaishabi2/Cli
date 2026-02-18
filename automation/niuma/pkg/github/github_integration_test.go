@@ -139,3 +139,35 @@ func TestIntegration_ToCommentBodies(t *testing.T) {
 	assert.Equal(t, "Comment 1", bodies[0])
 	assert.Equal(t, "Comment 2", bodies[1])
 }
+
+func TestIntegration_IssueDependenciesMirror(t *testing.T) {
+	client := newTestClient(t)
+	ctx := context.Background()
+	depIssue := createTestIssue(t, client)
+	targetIssue := createTestIssue(t, client)
+
+	err := client.AddIssueBlockedBy(ctx, targetIssue, depIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
+
+	blockedBy, err := client.ListIssueBlockedBy(ctx, targetIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
+	assert.Contains(t, blockedBy, depIssue)
+
+	err = client.RemoveIssueBlockedBy(ctx, targetIssue, depIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
+}

@@ -83,6 +83,10 @@ Merged
     ↓
 写入 taskctl blocked_by（先落盘）
     ↓
+单向同步 DAG -> GitHub 依赖展示
+    ↓
+定时巡检对账（漂移自动纠偏）
+    ↓
 计算并推进 ready tasks（后放行）
     ↓
 收集 PRs → 构建 Integration 分支
@@ -99,12 +103,34 @@ CI 联合验证（检测冲突）
 - `parent` 仅表示结构归属与收口关系，不隐式作为执行依赖边
 - `ready` 判定前必须完成 `blocked_by` 写入；写入失败时本轮跳过放行，等待下轮重试
 
+### DAG SSOT 边界
+
+- 调度判定（ready/blocking）只读 `taskctl DAG + task metadata`，不读取 GitHub 展示依赖
+- 同步方向严格为 `DAG -> GitHub`，禁止 `GitHub -> DAG` 自动回写
+- 展示层同步失败仅记录日志与状态，不阻塞 control 主流程
+- 同步状态文件：`automation/niuma/.state/dag_sync.json`
+
 ### Control 命令
 
 ```bash
 niuma control run      # 执行一次完整协调循环
 niuma control status   # 查看全局状态（DAG + 各 task 进度）
+niuma control dag-sync --dry-run      # 手动触发 DAG 同步（仅预览）
+niuma control dag-reconcile --dry-run # 手动触发巡检纠偏（仅预览）
 niuma control merge --issues 40,41,42  # 人批准后批量合并
+```
+
+`control.dag_sync` 默认配置：
+
+```yaml
+control:
+  dag_sync:
+    poll_interval: 5m
+    max_retry: 3
+    retry_backoff: [10s, 30s, 60s]
+    rate_limit_rps: 10
+    timeout: 30s
+    skipped_edge_threshold: 20
 ```
 
 `niuma control run` 关键参数：
