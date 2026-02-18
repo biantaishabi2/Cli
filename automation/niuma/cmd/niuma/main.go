@@ -383,7 +383,6 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		RequirePlanApproval:  cfg.Workflow.RequirePlanApproval,
 		MaxIterateRounds:     cfg.Workflow.GetMaxIterateRounds(),
 		MaxDiscussionRounds:  cfg.Workflow.GetMaxDiscussionRounds(),
-		DiscussionMode:       cfg.Workflow.GetDiscussionMode(),
 		VisibleRoundInterval: cfg.Workflow.GetVisibleRoundInterval(),
 		VisibleOnlyOnDiff:    cfg.Workflow.GetVisibleOnlyOnDiff(),
 	}
@@ -395,15 +394,6 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 			return nil, fmt.Errorf("讨论 provider %q 未配置", name)
 		}
 		orchCfg.DiscussionProviders = append(orchCfg.DiscussionProviders, p)
-	}
-
-	// Consolidator
-	if cfg.AI.Discussion.Consolidator != "" {
-		p, ok := providers[cfg.AI.Discussion.Consolidator]
-		if !ok {
-			return nil, fmt.Errorf("汇总 provider %q 未配置", cfg.AI.Discussion.Consolidator)
-		}
-		orchCfg.Consolidator = p
 	}
 
 	// 实现 provider

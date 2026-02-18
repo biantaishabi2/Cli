@@ -18,8 +18,8 @@ import (
 
 func TestDoDiscuss_ConvergesAndFinalize(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["第一轮讨论"],"disagreements":[{"topic":"补充边界","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["已达成一致"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`,
+		"第一轮讨论：补充边界。\n```json\n{\"should_finish\":false}\n```",
+		"第二轮讨论：已达成一致。\n```json\n{\"should_finish\":true}\n```",
 		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
 	)
 	mockGH := NewMockGitHub()
@@ -43,9 +43,9 @@ func TestDoDiscuss_ConvergesAndFinalize(t *testing.T) {
 
 func TestDoDiscuss_StopsAtRoundLimit(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["r1"],"disagreements":[{"topic":"a","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["r2"],"disagreements":[{"topic":"b","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["r3"],"disagreements":[{"topic":"c","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"r1 继续讨论。\n```json\n{\"should_finish\":false}\n```",
+		"r2 继续讨论。\n```json\n{\"should_finish\":false}\n```",
+		"r3 继续讨论。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
@@ -65,7 +65,7 @@ func TestDoDiscuss_StopsAtRoundLimit(t *testing.T) {
 	assert.Contains(t, warnMC.Comment.GetBody(), "讨论已达自动轮次上限")
 	assert.Contains(t, warnMC.Comment.GetBody(), "未收敛原因")
 	assert.Contains(t, warnMC.Comment.GetBody(), "下一步人工决策项")
-	assert.Contains(t, warnMC.Comment.GetBody(), "仍有 1 个未决分歧")
+	assert.Contains(t, warnMC.Comment.GetBody(), "达到轮次上限后仍未满足自动定稿条件")
 	assert.Nil(t, mockGH.GetMarker(1, marker.TypeConvergeWarning))
 
 	// 每轮都更新 summary，revision 应等于 max rounds
@@ -76,8 +76,8 @@ func TestDoDiscuss_StopsAtRoundLimit(t *testing.T) {
 
 func TestDoDiscuss_RoundLimitNoticeDoesNotAutoFinalize(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["r1"],"disagreements":[{"topic":"a","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["继续讨论"],"disagreements":[{"topic":"b","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"r1 继续讨论。\n```json\n{\"should_finish\":false}\n```",
+		"继续讨论。\n```json\n{\"should_finish\":false}\n```",
 		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
 	)
 	mockGH := NewMockGitHub()
@@ -105,7 +105,7 @@ func TestDoDiscuss_RoundLimitNoticeDoesNotAutoFinalize(t *testing.T) {
 
 func TestDoDiscussionCheck_StaleConvergeWarningDoesNotAutoFinalize(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["继续讨论"],"disagreements":[{"topic":"补充约束","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"继续讨论，补充约束。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
@@ -140,8 +140,8 @@ func TestDoDiscuss_ConcurrentDuplicateTriggers_StateRemainsStable(t *testing.T) 
 	// 模拟同一 issue 被重复触发 discuss（并发两次），验证不会出现状态损坏或 marker 异常。
 	// 该场景固定为“不收敛”，避免并发下汇总/定稿响应串线导致测试抖动。
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["继续讨论"],"disagreements":[{"topic":"a","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["继续讨论"],"disagreements":[{"topic":"b","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"继续讨论 a。\n```json\n{\"should_finish\":false}\n```",
+		"继续讨论 b。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
@@ -174,7 +174,7 @@ func TestDoDiscuss_ConcurrentDuplicateTriggers_StateRemainsStable(t *testing.T) 
 
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["r1"],"disagreements":[{"topic":"a","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"r1 继续讨论。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")

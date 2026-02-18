@@ -42,7 +42,7 @@ type Marker struct {
 	Human         bool   // 仅 DISCUSSION_SUMMARY 使用：是否需要人工决策
 	Risk          string // 仅 DISCUSSION_SUMMARY 使用：最高风险（low|medium|high）
 	DisagreeCount int    // 仅 DISCUSSION_SUMMARY 使用：分歧数量
-	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（consolidate|debate_ab）
+	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（当前固定 debate_ab）
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->
@@ -156,18 +156,6 @@ func Render(m *Marker) string {
 	}
 	if m.Finish {
 		parts = append(parts, "finish=1")
-	}
-	if m.Decision != "" {
-		parts = append(parts, fmt.Sprintf("decision=%s", m.Decision))
-	}
-	if m.Human {
-		parts = append(parts, "human=1")
-	}
-	if m.Risk != "" {
-		parts = append(parts, fmt.Sprintf("risk=%s", m.Risk))
-	}
-	if m.DisagreeCount > 0 {
-		parts = append(parts, fmt.Sprintf("dcount=%d", m.DisagreeCount))
 	}
 	if m.Mode != "" {
 		parts = append(parts, fmt.Sprintf("mode=%s", m.Mode))

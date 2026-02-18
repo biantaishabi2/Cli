@@ -28,11 +28,6 @@ func BuildDraftPrompt(input *PromptInput) (string, error) {
 	return renderTemplate("draft", draftTmpl, input)
 }
 
-// BuildConsolidatePrompt 生成讨论汇总的 prompt
-func BuildConsolidatePrompt(input *PromptInput) (string, error) {
-	return renderTemplate("consolidate", consolidateTmpl, input)
-}
-
 // BuildDebatePrompt 生成 debate_ab 轮流评论的 prompt
 func BuildDebatePrompt(input *PromptInput) (string, error) {
 	return renderTemplate("debate_ab", debateABTmpl, input)
@@ -101,39 +96,6 @@ const draftTmpl = `你是一个高级软件工程师。请分析以下 GitHub Is
 }
 ` + "```"
 
-const consolidateTmpl = `你是一个项目经理。请汇总以下 GitHub Issue 的讨论进展。
-
-## Issue: {{.IssueTitle}}
-
-{{.IssueBody}}
-
-## 讨论内容
-
-{{range .Comments}}
----
-{{.}}
-{{end}}
-
-## 要求
-
-请以 JSON 格式返回讨论汇总：
-` + "```json" + `
-{
-  "agreements": ["已达成一致1", "已达成一致2"],
-  "disagreements": [
-    {
-      "topic": "分歧主题",
-      "options": ["方案A", "方案B"],
-      "recommendation": "建议采用方案A（给出理由）",
-      "risk": "low"
-    }
-  ],
-  "decision": "merge",
-  "requires_human_decision": false,
-  "should_finish": false
-}
-` + "```"
-
 const debateABTmpl = `你是讨论方 {{.DiscussionRole}}，正在参与 GitHub Issue 的辩论收敛。
 
 ## Issue: {{.IssueTitle}}
@@ -149,22 +111,17 @@ const debateABTmpl = `你是讨论方 {{.DiscussionRole}}，正在参与 GitHub 
 
 ## 要求
 
-1. 仅输出 JSON，不要附加解释
-2. 必须给出：同意点、分歧点、建议
-3. 分歧项必须包含 topic/options/recommendation/risk（risk 仅能为 low|medium|high）
+1. 先输出自然语言正文，简明说明：
+   - 你认为本轮达成了什么共识
+   - 仍待讨论的分歧点
+   - 你建议的下一步
+2. 在回复最末尾输出一个 JSON 代码块，且只能包含 ` + "`should_finish`" + ` 字段
+3. ` + "`should_finish=true`" + ` 表示你判断讨论已可收敛进入定稿；否则为 false
+4. JSON 后不要再写任何文字
 
 ` + "```json" + `
 {
-  "agreements": ["你同意的点"],
-  "disagreements": [
-    {
-      "topic": "分歧主题",
-      "options": ["方案A", "方案B"],
-      "recommendation": "建议和理由",
-      "risk": "medium"
-    }
-  ],
-  "suggestion": "本轮给项目维护者的下一步建议"
+  "should_finish": false
 }
 ` + "```"
 

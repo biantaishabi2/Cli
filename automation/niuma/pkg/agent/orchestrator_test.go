@@ -232,10 +232,10 @@ func TestDoIterate_HappyPath(t *testing.T) {
 }
 
 func TestDoDiscussionCheck_NotConverged(t *testing.T) {
-	// Mock AI 返回讨论汇总
+	// Mock AI 返回 debate 评论
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["进展中"],"disagreements":[{"topic":"待定","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["进展中"],"disagreements":[{"topic":"待定","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`, // buildPromptInput 也可能触发
+		"进展中。\n```json\n{\"should_finish\":false}\n```",
+		"进展中。\n```json\n{\"should_finish\":false}\n```", // buildPromptInput 也可能触发
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -251,10 +251,10 @@ func TestDoDiscussionCheck_NotConverged(t *testing.T) {
 }
 
 func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
-	// 两轮讨论都未收敛，summary 应该更新同一条 marker 评论，而不是新增评论
+	// 两轮讨论都未收敛，summary 应该更新同一条 marker 评论。
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["第一轮"],"disagreements":[{"topic":"待定A","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-		`{"agreements":["第二轮"],"disagreements":[{"topic":"待定B","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
+		"第一轮。\n```json\n{\"should_finish\":false}\n```",
+		"第二轮。\n```json\n{\"should_finish\":false}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -264,19 +264,16 @@ func TestDoDiscussionCheck_NotConverged_UpsertSummaryMarker(t *testing.T) {
 	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
 	require.NoError(t, orch.DoDiscussionCheck(context.Background()))
 
-	comments := mockGH.Comments[1]
-	require.Len(t, comments, 1)
-	assert.Contains(t, comments[0].GetBody(), "BOT:DISCUSSION_SUMMARY issue=1 rev=2")
-	assert.Contains(t, comments[0].GetBody(), "第二轮")
-
 	mc := mockGH.GetMarker(1, marker.TypeDiscussionSummary)
 	require.NotNil(t, mc)
 	assert.Equal(t, 2, mc.Marker.Revision)
+	assert.Contains(t, mc.Comment.GetBody(), "BOT:DISCUSSION_SUMMARY issue=1 rev=2")
+	assert.Contains(t, mc.Comment.GetBody(), "第二轮")
 }
 
 func TestDoDiscussionCheck_Converged_Finalizes(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["已达成一致"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`,
+		"已达成一致，可定稿。\n```json\n{\"should_finish\":true}\n```",
 		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
 	)
 	mockGH := NewMockGitHub()
@@ -294,7 +291,7 @@ func TestDoDiscussionCheck_Converged_Finalizes(t *testing.T) {
 
 func TestDoDiscussionCheck_Converged_FinalizeFailed(t *testing.T) {
 	mockAI := ai.NewMockProvider(
-		`{"agreements":["已达成一致"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`,
+		"已达成一致，可定稿。\n```json\n{\"should_finish\":true}\n```",
 	)
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
@@ -330,11 +327,9 @@ func TestNewOrchestratorWithConfig(t *testing.T) {
 	implProvider := ai.NewMockProvider("impl result")
 	discProvider1 := ai.NewMockProvider("opinion 1")
 	discProvider2 := ai.NewMockProvider("opinion 2")
-	consolidator := ai.NewMockProvider(`{"agreements":["汇总"],"disagreements":[],"decision":"merge","requires_human_decision":false,"should_finish":true}`)
 
 	cfg := &OrchestratorConfig{
 		DiscussionProviders: []ai.Provider{discProvider1, discProvider2},
-		Consolidator:        consolidator,
 		ImplementProvider:   implProvider,
 		RepoDir:             "/tmp/repo",
 	}
@@ -353,38 +348,30 @@ func TestNewOrchestratorWithConfig_PanicsWithNoProvider(t *testing.T) {
 	})
 }
 
-func TestDoDiscussionCheck_MultiProvider(t *testing.T) {
+func TestDoDiscuss_DebateAlternatesProviders(t *testing.T) {
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Test", "Body")
 	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
 
-	// 两个讨论 provider + 一个 consolidator
-	discProvider1 := ai.NewMockProvider(`{"summary": "方案A"}`)
-	discProvider2 := ai.NewMockProvider(`{"summary": "方案B"}`)
-	consolidator := ai.NewMockProvider(
-		`{"agreements":["综合方案A和B"],"disagreements":[{"topic":"待定","options":["A","B"],"recommendation":"A","risk":"medium"}],"decision":"merge","requires_human_decision":false,"should_finish":false}`,
-	)
+	discProvider1 := ai.NewMockProvider("A 观点。\n```json\n{\"should_finish\":false}\n```")
+	discProvider2 := ai.NewMockProvider("B 观点。\n```json\n{\"should_finish\":false}\n```")
 
 	cfg := &OrchestratorConfig{
 		DiscussionProviders: []ai.Provider{discProvider1, discProvider2},
-		Consolidator:        consolidator,
 		ImplementProvider:   ai.NewMockProvider("unused"),
 	}
 
 	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
-	err := orch.DoDiscussionCheck(context.Background())
+	err := orch.DoDiscuss(context.Background(), 2)
 	require.NoError(t, err)
 
 	// 验证讨论汇总 marker 已创建
 	mc := mockGH.GetMarker(1, marker.TypeDiscussionSummary)
 	require.NotNil(t, mc)
 
-	// 验证两个讨论 provider 都被调用
+	// 验证两个讨论 provider 都至少被调用一次
 	assert.Equal(t, 1, discProvider1.CallCount())
 	assert.Equal(t, 1, discProvider2.CallCount())
-
-	// 验证 consolidator 被调用
-	assert.Equal(t, 1, consolidator.CallCount())
 }
 
 func TestSlugFromTitle(t *testing.T) {
