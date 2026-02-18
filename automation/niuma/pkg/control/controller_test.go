@@ -1243,3 +1243,12 @@ func newFailingTaskCtlClient(t *testing.T) *TaskCtlClient {
 		StorePath: filepath.Join(binDir, "tasks.json"),
 	}
 }
+
+func findLineIndexContaining(lines []string, target string) int {
+	for idx, line := range lines {
+		if strings.Contains(line, target) {
+			return idx
+		}
+	}
+	return -1
+}

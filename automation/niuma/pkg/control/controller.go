@@ -75,6 +75,9 @@ const (
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
 
+	issueLockDefaultTTL              = 5 * time.Minute
+	issueLockDefaultHeartbeat        = 100 * time.Second
+
 	metadataSyncSkipMarkerNotFound    = "marker_not_found"
 	metadataSyncSkipPRClosed          = "pr_closed"
 	metadataSyncSkipBranchUnavailable = "branch_unavailable"
