@@ -168,25 +168,17 @@ func (o *Orchestrator) DoDiscuss(ctx context.Context, maxRounds int) error {
 		}
 	}
 
-	for round := 1; round <= maxRounds; round++ {
-		decision, err := o.runDiscussionRound(ctx, round, maxRounds)
-		if err != nil {
-			return fmt.Errorf("讨论轮次失败 (issue=%d round=%d max=%d): %w", o.issueNumber, round, maxRounds, err)
-		}
-
-		fmt.Printf("[discuss] issue=%d round=%d max=%d converged=%t result=%s reason=%s\n",
-			o.issueNumber, round, maxRounds, decision.Converged(), decision.Result.String(), decision.Reason)
-
-		if decision.Converged() {
-			if err := o.DoPlanFinal(ctx); err != nil {
-				return fmt.Errorf("讨论已收敛但定稿失败: %w", err)
-			}
-			return nil
-		}
+	loopResult, err := o.runLoopCore(ctx, "discuss", "讨论", maxRounds, o.runDiscussionRound)
+	if err != nil {
+		return err
 	}
 
-	fmt.Printf("[discuss] issue=%d round=%d max=%d converged=false reason=max_rounds_reached\n",
-		o.issueNumber, maxRounds, maxRounds)
+	if loopResult.Converged {
+		if err := o.DoPlanFinal(ctx); err != nil {
+			return fmt.Errorf("讨论已收敛但定稿失败: %w", err)
+		}
+		return nil
+	}
 
 	if err := o.notifyMaxDiscussionRoundsReached(ctx, maxRounds); err != nil {
 		return fmt.Errorf("写入讨论轮次上限提醒失败: %w", err)
