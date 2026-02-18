@@ -49,6 +49,7 @@ if [[ "$RUN_GO" -eq 1 ]]; then
   (
     cd automation/niuma
     go build ./pkg/control/...
+    go test -c ./pkg/control -o /dev/null
     go test -c ./tests/integration -o /dev/null
   )
 

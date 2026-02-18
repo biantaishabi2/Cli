@@ -32,6 +32,7 @@ jobs:
       - name: Contract Compile Check (fail-fast)
         run: |
           go build ./pkg/control/...
+          go test -c ./pkg/control -o /dev/null
           go test -c ./tests/integration -o /dev/null
 
       - name: Unit Tests
