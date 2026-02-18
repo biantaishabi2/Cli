@@ -45,6 +45,13 @@ if [[ "$RUN_GO" -eq 0 && "$RUN_RUST" -eq 0 ]]; then
 fi
 
 if [[ "$RUN_GO" -eq 1 ]]; then
+  echo "[gate] running Go contract compile checks for automation/niuma"
+  (
+    cd automation/niuma
+    go build ./pkg/control/...
+    go test -c ./tests/integration -o /dev/null
+  )
+
   echo "[gate] running Go tests for automation/niuma"
   (
     cd automation/niuma

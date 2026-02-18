@@ -29,6 +29,11 @@ jobs:
       - name: Tidy modules
         run: go mod tidy
 
+      - name: Contract Compile Check (fail-fast)
+        run: |
+          go build ./pkg/control/...
+          go test -c ./tests/integration -o /dev/null
+
       - name: Unit Tests
         run: go test ./...
 

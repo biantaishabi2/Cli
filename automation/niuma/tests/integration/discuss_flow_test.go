@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,8 @@ const (
 	discussFlowDefaultRepo        = "biantaishabi2/Cli-niuma-test"
 	discussFlowDefaultPhase       = "fix"
 )
+
+var errMockMethodNotImplemented = errors.New("mock method not implemented")
 
 // flowGitHubMock 为 discuss 集成流程提供最小 GitHub 行为模拟。
 type flowGitHubMock struct {
@@ -351,6 +354,18 @@ func (m *controlFlowGitHubMock) ReplaceLabel(_ context.Context, issueNumber int,
 		hook(issueNumber)
 	}
 	return nil
+}
+
+func (m *controlFlowGitHubMock) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
+	return nil, fmt.Errorf("issue #%d: %w", issueNumber, errMockMethodNotImplemented)
+}
+
+func (m *controlFlowGitHubMock) AddIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	return fmt.Errorf("issue #%d blocked by #%d: %w", issueNumber, blockedByIssueNumber, errMockMethodNotImplemented)
+}
+
+func (m *controlFlowGitHubMock) RemoveIssueBlockedBy(_ context.Context, issueNumber int, blockedByIssueNumber int) error {
+	return fmt.Errorf("issue #%d blocked by #%d: %w", issueNumber, blockedByIssueNumber, errMockMethodNotImplemented)
 }
 
 func (m *controlFlowGitHubMock) ResolvePRMetadata(_ context.Context, issueNumber int) (control.PRMetadata, error) {
