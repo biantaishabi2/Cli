@@ -60,7 +60,7 @@ Issue 创建
 Draft Plan（草案方案）
     ↓ (信息不足则进入讨论态)
 Discussion（收敛讨论）
-    ↓ (轮次 ≥ 5 直接定稿 / 静默预警 + 确认窗口 / /finalize 命令)
+    ↓ (由 orchestration-loop-core 多轮推进；/finalize > /hold > should_finish > 静默预警；达到轮次上限仅提醒不自动定稿)
 Final Plan（最终方案 + 测试场景）
     ↓
 Implement（改代码 + 测试）
@@ -122,6 +122,13 @@ niuma control merge --issues 40,41,42  # 人批准后批量合并
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
 
+## Discussion 协议（当前）
+
+- 讨论模式：仅 `debate_ab`
+- 每轮模型输出：自然语言正文 + 末尾最小 JSON `{"should_finish": true|false}`
+- 收敛优先级：`/finalize` > `/hold` > `should_finish` > 静默预警/超时
+- 达到 discuss 最大轮次：写入轮次上限提醒，保持 `bot:needs-discussion`，不自动进入 `bot:plan-final`
+
 ## 快速开始
 
 ### 1. 安装
@@ -144,6 +151,17 @@ export NIUMA_AI_PROVIDER="kimi"
 
 # 设置 GitHub Token（需有 repo 权限）
 export GITHUB_TOKEN="ghp_xxx"
+```
+
+集成测试仓配置（用于 `go test -tags integration`）：
+
+- 默认测试仓：`biantaishabi2/Cli-niuma-test`
+- 可通过 `NIUMA_TEST_REPO` 覆盖测试目标仓库
+- Token 优先级：`NIUMA_TEST_TOKEN` > `GITHUB_TOKEN`
+
+```bash
+export NIUMA_TEST_REPO="biantaishabi2/Cli-niuma-test"
+export NIUMA_TEST_TOKEN="ghp_xxx"
 ```
 
 ### 3. 手动触发（调试）

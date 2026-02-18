@@ -4,24 +4,35 @@ package testutil
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
 const (
-	// TestOwner 测试仓库所有者
-	TestOwner = "biantaishabi2"
-	// TestRepo 测试仓库名
-	TestRepo = "Cli"
-	// TestRepoFull 完整仓库路径
-	TestRepoFull = TestOwner + "/" + TestRepo
+	// DefaultTestRepoFull 默认测试仓库
+	DefaultTestRepoFull = "biantaishabi2/Cli-niuma-test"
 )
 
-// SkipIfNoToken 如果 GITHUB_TOKEN 未设置则跳过测试
+// ResolveTestRepoFull 返回集成测试目标仓库
+// 优先读取 NIUMA_TEST_REPO，未设置则回退默认测试仓。
+func ResolveTestRepoFull() string {
+	repo := strings.TrimSpace(os.Getenv("NIUMA_TEST_REPO"))
+	if repo != "" {
+		return repo
+	}
+	return DefaultTestRepoFull
+}
+
+// SkipIfNoToken 如果测试 token 未设置则跳过测试。
+// 优先读取 NIUMA_TEST_TOKEN，未设置则回退 GITHUB_TOKEN。
 func SkipIfNoToken(t *testing.T) string {
 	t.Helper()
-	token := os.Getenv("GITHUB_TOKEN")
+	token := strings.TrimSpace(os.Getenv("NIUMA_TEST_TOKEN"))
 	if token == "" {
-		t.Skip("GITHUB_TOKEN not set, skipping integration test")
+		token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	}
+	if token == "" {
+		t.Skip("NIUMA_TEST_TOKEN/GITHUB_TOKEN not set, skipping integration test")
 	}
 	return token
 }

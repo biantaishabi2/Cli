@@ -61,5 +61,7 @@ jobs:
 
       - name: Integration Tests
         env:
+          NIUMA_TEST_REPO: biantaishabi2/Cli-niuma-test
+          NIUMA_TEST_TOKEN: ${{ secrets.NIUMA_TEST_TOKEN || secrets.NIUMA_PAT || secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: go test -tags integration -v ./...

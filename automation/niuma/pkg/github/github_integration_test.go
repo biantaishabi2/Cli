@@ -16,7 +16,7 @@ import (
 
 func newTestClient(t *testing.T) *Client {
 	token := testutil.SkipIfNoToken(t)
-	client, err := NewClient(token, testutil.TestRepoFull)
+	client, err := NewClient(token, testutil.ResolveTestRepoFull())
 	require.NoError(t, err)
 	return client
 }
