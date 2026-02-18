@@ -16,7 +16,7 @@ import (
 
 func TestIntegration_StateLifecycle(t *testing.T) {
 	token := testutil.SkipIfNoToken(t)
-	client, err := gh.NewClient(token, testutil.TestRepoFull)
+	client, err := gh.NewClient(token, testutil.ResolveTestRepoFull())
 	require.NoError(t, err)
 
 	ctx := context.Background()
