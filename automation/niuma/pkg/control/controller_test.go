@@ -958,6 +958,55 @@ func TestIntegrationGate(t *testing.T) {}
 	assert.Less(t, completedIdx, integratedIdx)
 }
 
+func TestRunIntegrationGateAndDecide_CompletedTaskOnlyBackfillsIntegrated(t *testing.T) {
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "taskctl.log")
+	binPath := filepath.Join(binDir, "taskctl")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$*\" >> %q\nexit 0\n", logPath)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	ctrl := &Controller{
+		taskctl: &TaskCtlClient{
+			BinPath:   binPath,
+			StorePath: filepath.Join(binDir, "tasks.json"),
+		},
+	}
+
+	task := Task{
+		ID:     "task-1",
+		Status: TaskStatusCompleted,
+		Metadata: map[string]string{
+			"issue_num": "41",
+		},
+	}
+
+	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), task, MergeOutcome{})
+	require.NoError(t, err)
+	assert.True(t, integrated)
+
+	logContent, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logText := string(logContent)
+	assert.Contains(t, strings.ToLower(logText), `"integrated":"true"`)
+	assert.NotContains(t, logText, "--status completed")
+	assert.NotContains(t, strings.ToLower(logText), "integration_gate_status")
+}
+
+func TestShouldBackfillIntegratedMetadata(t *testing.T) {
+	assert.True(t, shouldBackfillIntegratedMetadata(Task{
+		Status:   TaskStatusCompleted,
+		Metadata: map[string]string{"issue_num": "41"},
+	}))
+	assert.False(t, shouldBackfillIntegratedMetadata(Task{
+		Status:   TaskStatusCompleted,
+		Metadata: map[string]string{"issue_num": "41", metaKeyIntegrated: "true"},
+	}))
+	assert.False(t, shouldBackfillIntegratedMetadata(Task{
+		Status:   TaskStatusInProgress,
+		Metadata: map[string]string{"issue_num": "41"},
+	}))
+}
+
 func TestRunIntegrationGateAndDecide_EscalatedDoesNotMarkCompleted(t *testing.T) {
 	dir := setupGitRepo(t)
 

@@ -239,12 +239,13 @@ func (c *Controller) Run(ctx context.Context) error {
 		gateEscalationRetryTasks := make(map[string][]Task) // integrationBranch → gate 升级待补打标签 tasks
 		for _, t := range allTasks {
 			if t.PRNum() > 0 && t.Branch() != "" {
-				// 检查是否已合入 integration（从 metadata 读）
-				integrated := false
-				if t.Metadata != nil && t.Metadata[metaKeyIntegrated] == "true" {
-					integrated = true
+				if shouldBackfillIntegratedMetadata(t) {
+					if err := c.markTaskIntegratedAudit(t); err != nil {
+						fmt.Printf("[control] task %s 已 completed，补写 integrated 失败: %v\n", t.ID, err)
+					}
+					continue
 				}
-				if integrated {
+				if isTaskIntegrated(t.Metadata) {
 					continue
 				}
 
@@ -746,6 +747,13 @@ var integrationAutomationLabels = []string{
 }
 
 func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task, outcome MergeOutcome) (bool, error) {
+	if shouldBackfillIntegratedMetadata(task) {
+		if err := c.markTaskIntegratedAudit(task); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
 	attemptKey, err := c.buildIntegrationGateAttemptKey(outcome)
 	if err != nil {
 		return false, err
@@ -917,6 +925,14 @@ func shouldSkipProcessedIntegrationGateAttempt(meta map[string]string, attemptKe
 	}
 	status := valueOrEmpty(meta, metaKeyIntegrationGateStatus)
 	return status == integrationGateStatusRetrying || status == integrationGateStatusEscalated
+}
+
+func isTaskIntegrated(meta map[string]string) bool {
+	return valueOrEmpty(meta, metaKeyIntegrated) == "true"
+}
+
+func shouldBackfillIntegratedMetadata(task Task) bool {
+	return normalizeTaskStatus(task.Status) == TaskStatusCompleted && !isTaskIntegrated(task.Metadata)
 }
 
 func (c *Controller) handleIntegrationGateFailure(ctx context.Context, task Task, attemptKey string, gateErr error) error {
@@ -1148,6 +1164,16 @@ func (c *Controller) markTaskIntegrated(task Task, outcome MergeOutcome) error {
 		files := append([]string(nil), outcome.AutoResolvedFiles...)
 		sort.Strings(files)
 		metaUpdate[metaKeyIntegrationAutoResolvedFiles] = strings.Join(files, ",")
+	}
+	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
+}
+
+func (c *Controller) markTaskIntegratedAudit(task Task) error {
+	if isTaskIntegrated(task.Metadata) {
+		return nil
+	}
+	metaUpdate := map[string]string{
+		metaKeyIntegrated: "true",
 	}
 	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate})
 }
