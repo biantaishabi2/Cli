@@ -370,6 +370,8 @@ func (g *gitHubControlOps) ResolvePRReviewStatus(ctx context.Context, issueNumbe
 		if pr.Mergeable != nil {
 			if pr.GetMergeable() {
 				mergeable = control.PRMergeableMergeable
+			} else {
+				mergeable = control.PRMergeableConflicting
 			}
 		}
 	}

@@ -377,6 +377,9 @@ func (c *Controller) Run(ctx context.Context) error {
 					continue
 				}
 
+				if !c.shouldEnqueueIntegrationMergeTask(ctx, t, issueByNumber) {
+					continue
+				}
 				branchTasks[branchName] = append(branchTasks[branchName], t)
 			}
 		}
@@ -691,6 +694,21 @@ func classifyPRMetadataSkipReason(err error) (string, bool) {
 	}
 }
 
+func (c *Controller) shouldEnqueueIntegrationMergeTask(ctx context.Context, task Task, issueByNumber map[int]IssueInfo) bool {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		return false
+	}
+
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		fmt.Printf("[control] 读取 issue #%d 最新标签失败，跳过本轮 integration 合入 (task %s): %v\n", issueNum, task.ID, err)
+		return false
+	}
+	issueByNumber[issueNum] = issue
+	return hasLabel(issue.Labels, "bot:pr-reviewable")
+}
+
 // reconcilePRReviewableConflicts 协调 bot:pr-reviewable 的冲突回退逻辑。
 func (c *Controller) reconcilePRReviewableConflicts(ctx context.Context, tasks []Task, issueByNumber map[int]IssueInfo) error {
 	for i := range tasks {
@@ -775,9 +793,6 @@ func (c *Controller) handlePRReviewableConflict(ctx context.Context, issueNum in
 
 	threshold := c.prConflictRetryThreshold()
 	retryCount := parsePRConflictRetryCount(issue.Body) + 1
-	if err := c.persistPRConflictRetryCount(ctx, issue, retryCount); err != nil {
-		return err
-	}
 
 	headSHA := normalizedHeadSHA(reviewStatus.HeadSHA)
 	oldLabel := "bot:pr-reviewable"
@@ -800,6 +815,9 @@ func (c *Controller) handlePRReviewableConflict(ctx context.Context, issueNum in
 
 	if err := c.syncIssueStateLabel(ctx, issueNum, newLabel); err != nil {
 		return fmt.Errorf("issue #%d 状态回退失败: %w", issueNum, err)
+	}
+	if err := c.persistPRConflictRetryCount(ctx, issue, retryCount); err != nil {
+		return err
 	}
 	c.logPRReviewableDecision(issueNum, reviewStatus, oldLabel, newLabel, retryCount, threshold, decision)
 	return nil

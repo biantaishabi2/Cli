@@ -1433,6 +1433,66 @@ func TestReconcilePRReviewableConflicts_LabelChangedSkipsTransition(t *testing.T
 	assert.Empty(t, mockGH.addIssueCommentCalls)
 }
 
+func TestReconcilePRReviewableConflicts_LabelSyncFailedDoesNotPersistRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "label-fail body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-label-fail",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+	mockGH.replaceLabelError["bot:pr-needs-fix"] = errors.New("replace failed")
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg: &ControlConfig{
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{
+		{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}},
+	}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "状态回退失败")
+	assert.Equal(t, 1, parsePRConflictRetryCount(mockGH.issuesByNumber[321].Body))
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.getIssueOverride[321] = IssueInfo{
+		Number: 321,
+		Labels: []string{"bot:pr-needs-fix"},
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+	task := Task{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+	assert.Equal(t, []string{"bot:pr-needs-fix"}, issueByNumber[321].Labels)
+}
+
 func TestEnsureIssueCommentWithMarker_DedupByMarker(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.listCommentBodies[321] = []string{

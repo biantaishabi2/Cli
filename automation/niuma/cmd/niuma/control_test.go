@@ -174,6 +174,35 @@ func TestGitHubControlOps_ResolvePRReviewStatus_Conflicting(t *testing.T) {
 	assert.Equal(t, "abc123", status.HeadSHA)
 }
 
+func TestGitHubControlOps_ResolvePRReviewStatus_MergeableFalseIsConflicting(t *testing.T) {
+	client := &stubGitHubControlClient{
+		findMarkerResp: &gh.MarkerComment{
+			Marker: &marker.Marker{
+				Type:  marker.TypePRCreated,
+				Issue: 321,
+				PR:    123,
+			},
+		},
+		prs: map[int]*ghapi.PullRequest{
+			123: {
+				State:          ghapi.Ptr("open"),
+				Mergeable:      ghapi.Ptr(false),
+				MergeableState: ghapi.Ptr("clean"),
+				Head: &ghapi.PullRequestBranch{
+					Ref: ghapi.Ptr("feat/321-fix"),
+					SHA: ghapi.Ptr("abc123"),
+				},
+			},
+		},
+	}
+	ops := &gitHubControlOps{client: client}
+
+	status, err := ops.ResolvePRReviewStatus(context.Background(), 321)
+	require.NoError(t, err)
+	assert.Equal(t, control.PRMergeableConflicting, status.Mergeable)
+	assert.Equal(t, "CLEAN", status.MergeStateStatus)
+}
+
 func TestResolveIntegrationGateMaxRetries(t *testing.T) {
 	value, err := resolveIntegrationGateMaxRetries(-1, "")
 	require.NoError(t, err)
