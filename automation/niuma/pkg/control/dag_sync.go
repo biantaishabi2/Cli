@@ -115,31 +115,35 @@ func (c *Controller) syncDagToGitHub(ctx context.Context, mode DagSyncMode, forc
 		result.Status = DagSyncStatusFailed
 		result.ErrorType = ghpkg.ClassifyDependencyError(err)
 		result.Error = err.Error()
-		state.FailCount++
-		state.LastError = result.Error
-		state.LastErrorAt = time.Now().UTC().Format(time.RFC3339)
-		state.SkippedEdges = result.SkippedEdges
-		if mode == DagSyncModeReconcile {
-			state.LastReconcileAt = state.LastErrorAt
-		}
-		if saveErr := store.Save(state); saveErr != nil {
-			fmt.Printf("[control][dag-sync] 持久化失败状态失败: %v\n", saveErr)
+		if !dryRun {
+			state.FailCount++
+			state.LastError = result.Error
+			state.LastErrorAt = time.Now().UTC().Format(time.RFC3339)
+			state.SkippedEdges = result.SkippedEdges
+			if mode == DagSyncModeReconcile {
+				state.LastReconcileAt = state.LastErrorAt
+			}
+			if saveErr := store.Save(state); saveErr != nil {
+				fmt.Printf("[control][dag-sync] 持久化失败状态失败: %v\n", saveErr)
+			}
 		}
 		c.logDagSyncResult(result)
 		return result, err
 	}
 
 	if addCount == 0 && removeCount == 0 {
-		now := time.Now().UTC().Format(time.RFC3339)
-		if mode == DagSyncModeReconcile {
-			state.LastReconcileAt = now
-			state.LastSuccessAt = now
-		}
-		state.LastHash = plan.hash
-		state.SkippedEdges = result.SkippedEdges
-		state.LastError = ""
-		if saveErr := store.Save(state); saveErr != nil {
-			fmt.Printf("[control][dag-sync] 持久化状态失败: %v\n", saveErr)
+		if !dryRun {
+			now := time.Now().UTC().Format(time.RFC3339)
+			if mode == DagSyncModeReconcile {
+				state.LastReconcileAt = now
+				state.LastSuccessAt = now
+			}
+			state.LastHash = plan.hash
+			state.SkippedEdges = result.SkippedEdges
+			state.LastError = ""
+			if saveErr := store.Save(state); saveErr != nil {
+				fmt.Printf("[control][dag-sync] 持久化状态失败: %v\n", saveErr)
+			}
 		}
 		result.Status = DagSyncStatusSkipped
 		c.logDagSyncResult(result)
@@ -170,17 +174,20 @@ func (c *Controller) syncDagToGitHub(ctx context.Context, mode DagSyncMode, forc
 	result.AppliedAdd = addCount
 	result.AppliedRemove = removeCount
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	state.LastHash = plan.hash
-	state.LastSuccessAt = now
-	state.SuccessCount++
-	state.LastError = ""
-	state.SkippedEdges = result.SkippedEdges
-	if mode == DagSyncModeReconcile {
-		state.LastReconcileAt = now
-	}
-	if saveErr := store.Save(state); saveErr != nil {
-		fmt.Printf("[control][dag-sync] 持久化成功状态失败: %v\n", saveErr)
+	// dry-run 只做演练，不写入持久化状态，避免污染真实同步判定。
+	if !dryRun {
+		now := time.Now().UTC().Format(time.RFC3339)
+		state.LastHash = plan.hash
+		state.LastSuccessAt = now
+		state.SuccessCount++
+		state.LastError = ""
+		state.SkippedEdges = result.SkippedEdges
+		if mode == DagSyncModeReconcile {
+			state.LastReconcileAt = now
+		}
+		if saveErr := store.Save(state); saveErr != nil {
+			fmt.Printf("[control][dag-sync] 持久化成功状态失败: %v\n", saveErr)
+		}
 	}
 
 	c.logDagSyncResult(result)
@@ -391,7 +398,7 @@ func (c *Controller) withDagSyncRetry(ctx context.Context, op string, fn func(co
 		lastErr = err
 
 		errType := ghpkg.ClassifyDependencyError(err)
-		retryable := errType == ghpkg.DependencyErrorTypeRateLimit || errType == ghpkg.DependencyErrorTypeNetworkTimeout
+		retryable := shouldRetryDagSyncErrorType(errType)
 		if !retryable || attempt == maxRetries {
 			break
 		}
@@ -438,6 +445,19 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func shouldRetryDagSyncErrorType(errType string) bool {
+	switch errType {
+	case ghpkg.DependencyErrorTypeAuth,
+		ghpkg.DependencyErrorTypePermission,
+		ghpkg.DependencyErrorTypeRateLimit,
+		ghpkg.DependencyErrorTypeNetworkTimeout,
+		ghpkg.DependencyErrorTypeUnsupported:
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldRunDagReconcile(state DagSyncState, pollInterval time.Duration) bool {
