@@ -386,6 +386,134 @@ func buildConflictSideLines(lines int) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+func TestIsRustUseConflictOnly_PureUseConflict(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::HashMap;",
+				Theirs: "use std::collections::HashSet;",
+			},
+		},
+	}
+	assert.True(t, isRustUseConflictOnly(fileSummary))
+}
+
+func TestIsRustUseConflictOnly_BracedExpansion(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::{HashMap, HashSet};",
+				Theirs: "use std::io::{Read, Write};",
+			},
+		},
+	}
+	assert.True(t, isRustUseConflictOnly(fileSummary))
+}
+
+func TestIsRustUseConflictOnly_WithTraitRejectsFalse(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "trait Serializable { fn serialize(&self) -> Vec<u8>; }",
+				Theirs: "trait Serializable { fn serialize(&self) -> String; }",
+			},
+		},
+	}
+	assert.False(t, isRustUseConflictOnly(fileSummary))
+}
+
+func TestIsRustUseConflictOnly_GlobImportRejected(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::*;",
+				Theirs: "use std::collections::HashMap;",
+			},
+		},
+	}
+	assert.False(t, isRustUseConflictOnly(fileSummary))
+}
+
+func TestIsRustUseConflictOnly_RenameAsRejected(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::HashMap as Map;",
+				Theirs: "use std::collections::HashMap;",
+			},
+		},
+	}
+	assert.False(t, isRustUseConflictOnly(fileSummary))
+}
+
+func TestContainsRustCoreSignal_DetectsTraitImplUnsafeMacro(t *testing.T) {
+	cases := map[string]bool{
+		"trait Foo {}":                          true,
+		"pub trait Bar { fn bar(); }":           true,
+		"impl Foo for Bar {}":                   true,
+		"impl<T> Foo for Vec<T> {}":             true,
+		"unsafe fn do_thing() {}":               true,
+		"macro_rules! my_macro {}":              true,
+		"use std::collections::HashMap;":        false,
+		"fn normal_function() {}":               false,
+		"let x = 42;":                           false,
+	}
+
+	for input, expected := range cases {
+		result := containsRustCoreSignal(input)
+		assert.Equal(t, expected, result, "input: %s", input)
+	}
+}
+
+func TestIsAIConflictWhitelisted_RustUseOnly(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::HashMap;",
+				Theirs: "use std::collections::HashSet;",
+			},
+		},
+	}
+	allowed, reason := isAIConflictWhitelisted("src/lib.rs", fileSummary)
+	assert.True(t, allowed)
+	assert.Equal(t, "rust-use-only", reason)
+}
+
+func TestHasHighRiskConflict_RustTraitChange(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "trait Serializable {\n    fn serialize(&self) -> Vec<u8>;\n}",
+				Theirs: "trait Serializable {\n    fn serialize(&self) -> String;\n}",
+			},
+		},
+	}
+	risky, reason := hasHighRiskConflict("src/lib.rs", fileSummary)
+	assert.True(t, risky)
+	assert.Contains(t, reason, "Rust 核心 trait/impl")
+}
+
+func TestHasHighRiskConflict_RustUseNotHighRisk(t *testing.T) {
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{
+				Ours:   "use std::collections::HashMap;",
+				Theirs: "use std::collections::HashSet;",
+			},
+		},
+	}
+	risky, _ := hasHighRiskConflict("src/lib.rs", fileSummary)
+	assert.False(t, risky)
+}
+
 func splitNonEmpty(s string) []string {
 	var result []string
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
