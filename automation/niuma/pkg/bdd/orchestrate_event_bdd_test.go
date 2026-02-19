@@ -118,6 +118,26 @@ func (m *bddEventGitHubMock) MergePR(_ context.Context, _ int, _ string) error {
 	return nil
 }
 
+func (m *bddEventGitHubMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if issueNumber != m.issue.Number {
+		return nil, fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	return append([]string(nil), m.labels[issueNumber]...), nil
+}
+
+func (m *bddEventGitHubMock) AddLabel(_ context.Context, issueNumber int, label string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if issueNumber != m.issue.Number {
+		return fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	m.labels[issueNumber] = append(m.labels[issueNumber], label)
+	m.issue.Labels = append([]string(nil), m.labels[issueNumber]...)
+	return nil
+}
+
 func (m *bddEventGitHubMock) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -142,6 +162,46 @@ func (m *bddEventGitHubMock) ReplaceLabel(_ context.Context, issueNumber int, ol
 
 	m.labels[issueNumber] = append(labels, newLabel)
 	m.issue.Labels = append([]string(nil), m.labels[issueNumber]...)
+	return nil
+}
+
+func (m *bddEventGitHubMock) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if issueNumber != m.issue.Number {
+		return false, fmt.Errorf("issue #%d not found", issueNumber)
+	}
+
+	m.replaceCalls++
+	labels := m.labels[issueNumber]
+	for i, item := range labels {
+		if item != oldLabel {
+			continue
+		}
+		if item != newLabel {
+			labels[i] = newLabel
+			m.transitions++
+		}
+		m.labels[issueNumber] = labels
+		m.issue.Labels = append([]string(nil), labels...)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *bddEventGitHubMock) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if issueNumber != m.issue.Number {
+		return fmt.Errorf("issue #%d not found", issueNumber)
+	}
+	m.replaceCalls++
+	next := append([]string(nil), labels...)
+	if !equalLabels(next, m.labels[issueNumber]) {
+		m.transitions++
+	}
+	m.labels[issueNumber] = next
+	m.issue.Labels = append([]string(nil), next...)
 	return nil
 }
 
@@ -193,6 +253,18 @@ func (m *bddEventGitHubMock) replaceCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.replaceCalls
+}
+
+func equalLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Given 上游任务完成且存在下游 queued 任务，When completed 事件触发一次 orchestrate，Then 应立即重评估并推进 ready。
