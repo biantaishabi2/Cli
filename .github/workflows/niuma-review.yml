@@ -4,64 +4,15 @@ on:
   issues:
     types: [labeled]
 
-concurrency:
-  group: niuma-review-${{ github.event.issue.number }}
-  cancel-in-progress: false
+permissions:
+  issues: write
+  pull-requests: write
 
 jobs:
   review:
-    runs-on: self-hosted
     if: github.event.label.name == 'bot:pr-created'
-    permissions:
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build niuma from current commit
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.tmp"
-          (
-            cd automation/niuma
-            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
-          )
-          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-
-      - name: Find PR Number
-        id: find_pr
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          # 分页解析 BOT:PR_CREATED marker，取最新 open PR 号
-          if PR_NUMBER=$("$NIUMA_BIN" resolve-pr --repo "$REPO" --issue "$ISSUE_NUMBER"); then
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          else
-            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到可用 PR 号"
-            echo "pr_number=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run PR Gate
-        if: steps.find_pr.outputs.pr_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
-
-      - name: AI Self-Review
-        if: steps.find_pr.outputs.pr_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          NIUMA_IMPLEMENTATION_PROVIDER: codex
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          "$NIUMA_BIN" review \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER"
+    uses: ./.github/workflows/niuma-review-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+    secrets: inherit

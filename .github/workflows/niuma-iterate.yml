@@ -6,140 +6,38 @@ on:
   pull_request_review:
     types: [submitted]
 
-concurrency:
-  group: niuma-iterate-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
 
 jobs:
   # AI 自审不通过 → 自动迭代
-  iterate-from-review:
-    runs-on: self-hosted
+  call-iterate-from-review:
     if: >
       github.event_name == 'issues' &&
       github.event.label.name == 'bot:pr-needs-fix' &&
       github.event.issue.state == 'open'
-    permissions:
-      issues: write
-      pull-requests: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.NIUMA_PAT }}
-          fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
+    uses: ./.github/workflows/niuma-iterate-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+      trigger_source: review
+      gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+    secrets: inherit
 
-      - name: Build niuma from current commit
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.tmp"
-          (
-            cd automation/niuma
-            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
-          )
-          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-
-      - name: Find PR Number
-        id: find_pr
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          # 分页解析 BOT:PR_CREATED marker，取最新 open PR 号
-          if PR_NUMBER=$("$NIUMA_BIN" resolve-pr --repo "$REPO" --issue "$ISSUE_NUMBER"); then
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          else
-            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到可用 PR 号"
-            echo "pr_number=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Check PR State
-        id: pr_state
-        if: steps.find_pr.outputs.pr_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          PR_STATE=$(gh pr view "$PR_NUMBER" --json state -q '.state')
-          echo "pr_state=$PR_STATE" >> $GITHUB_OUTPUT
-
-      - name: Escalate Human When PR Not Open
-        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state != 'OPEN'
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          "$NIUMA_BIN" state-label clear --repo "$REPO" --issue "$ISSUE_NUMBER" || true
-          gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
-          gh issue comment "$ISSUE_NUMBER" --body "## ⚠️ 自动迭代已停止\n\n检测到 PR #$PR_NUMBER 当前状态不是 OPEN，已转人工处理（`needs-human`）。"
-          exit 1
-
-      - name: Iterate on Review
-        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-          WORKSPACE: ${{ github.workspace }}
-        run: |
-          "$NIUMA_BIN" iterate \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE"
-
-      - name: Run PR Gate
-        if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-          WORKSPACE: ${{ github.workspace }}
-          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
-        run: |
-          GATE_MAX_RETRIES=2
-          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
-          else
-            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
-          fi
-
-          "$NIUMA_BIN" gate run \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE" \
-            --max-retries "$GATE_MAX_RETRIES"
-
-  # 人工 PR review changes_requested → 迭代
-  iterate-from-human:
+  # 人工 PR review changes_requested → 提取 issue 号
+  extract-issue-from-pr:
     runs-on: self-hosted
     if: >
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'changes_requested' &&
       github.event.pull_request.state == 'open'
+    outputs:
+      issue_number: ${{ steps.extract.outputs.issue_number }}
     permissions:
-      issues: write
-      pull-requests: write
-      contents: write
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.NIUMA_PAT }}
-          fetch-depth: 0  # 获取完整历史，确保可以 fetch 远程分支重建 worktree
-
-      - name: Build niuma from current commit
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.tmp"
-          (
-            cd automation/niuma
-            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
-          )
-          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-
       - name: Extract Issue Number from PR
         id: extract
         env:
@@ -149,43 +47,16 @@ jobs:
           BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
           ISSUE_NUMBER=$(echo "$BODY" | grep -Eo 'Closes #[0-9]+' | sed 's/Closes #//' | head -1)
           echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
-      - name: Iterate on Review
-        if: steps.extract.outputs.issue_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
-          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
-          WORKSPACE: ${{ github.workspace }}
-        run: |
-          "$NIUMA_BIN" iterate \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE"
-
-      - name: Run PR Gate
-        if: steps.extract.outputs.issue_number != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
-          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
-          WORKSPACE: ${{ github.workspace }}
-          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
-        run: |
-          GATE_MAX_RETRIES=2
-          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
-          else
-            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
-          fi
-
-          "$NIUMA_BIN" gate run \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE" \
-            --max-retries "$GATE_MAX_RETRIES"
+  # 人工 PR review changes_requested → 调用 reusable 迭代
+  call-iterate-from-human:
+    needs: extract-issue-from-pr
+    if: needs.extract-issue-from-pr.outputs.issue_number != ''
+    uses: ./.github/workflows/niuma-iterate-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ needs.extract-issue-from-pr.outputs.issue_number }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
+      trigger_source: human
+      gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+    secrets: inherit
