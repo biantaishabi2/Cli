@@ -59,6 +59,7 @@ niuma state-label clear --repo owner/repo --issue 325
 - `automation/niuma/scripts/gh`：拦截 `gh issue edit` 直接改 `bot:*`。
 - 本地环境：拒绝并提示改用 `niuma state-label`。
 - `CI=true`：硬失败（exit 非 0）。
+- 推荐安装：`bash automation/niuma/scripts/install-gh-wrapper.sh`（安装到 `~/.local/bin/gh`）。
 
 ### 服务端 Guard
 

@@ -170,7 +170,7 @@ niuma state-label clear --repo owner/repo --issue 325
 ```
 
 - 本地门禁：`automation/niuma/scripts/gh` 会拦截直接改 `bot:*` 并提示改用 `niuma state-label`。
-- 启用方式：`export PATH="$(pwd)/automation/niuma/scripts:$PATH"`（将包装器置于 PATH 前缀）。
+- 推荐安装（全局默认接管 `gh`）：`bash automation/niuma/scripts/install-gh-wrapper.sh`（默认安装到 `~/.local/bin/gh`）。
 - 服务端门禁：`.github/workflows/niuma-label-guard.yml` 会在非 allowlist actor 直改 `bot:*` 时评论（dry-run）或自动回滚（enforce）。
 - 自愈优先级可由 `NIUMA_STATE_PRIORITY` 覆盖；默认优先级见 `automation/niuma/docs/state-machine-spec.md`。
 
