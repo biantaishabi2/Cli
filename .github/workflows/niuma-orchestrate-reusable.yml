@@ -346,11 +346,39 @@ jobs:
           token: ${{ secrets.NIUMA_PAT || github.token }}
           fetch-depth: 0
 
+      - name: Resolve Reusable Workflow Source
+        id: workflow_source
+        run: |
+          workflow_ref="${{ github.workflow_ref }}"
+          source_repo="${workflow_ref%%/.github/workflows/*}"
+          source_ref="${workflow_ref##*@}"
+
+          if [ -z "$source_repo" ] || [ "$source_repo" = "$workflow_ref" ]; then
+            echo "::error::无法从 github.workflow_ref 解析 reusable 仓库: $workflow_ref"
+            exit 1
+          fi
+          if [ -z "$source_ref" ] || [ "$source_ref" = "$workflow_ref" ]; then
+            source_ref="${{ github.ref }}"
+          fi
+
+          echo "source_repo=$source_repo" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Reusable Workflow Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.workflow_source.outputs.source_repo }}
+          ref: ${{ steps.workflow_source.outputs.source_ref }}
+          path: .niuma-workflow-source
+          token: ${{ secrets.NIUMA_PAT || github.token }}
+          fetch-depth: 1
+
       - name: Run Local Worktree Cleanup
         id: cleanup
         env:
           REPO_DIR: ${{ inputs.repo_dir }}
           WORKSPACE: ${{ github.workspace }}
+          WORKFLOW_SOURCE_DIR: ${{ github.workspace }}/.niuma-workflow-source
         run: |
           resolved_repo_dir="$REPO_DIR"
           if [ -z "$resolved_repo_dir" ]; then
@@ -360,7 +388,7 @@ jobs:
             resolved_repo_dir="$WORKSPACE/$resolved_repo_dir"
           fi
 
-          script_path="$GITHUB_WORKSPACE/automation/niuma/scripts/cleanup_worktrees.sh"
+          script_path="$WORKFLOW_SOURCE_DIR/automation/niuma/scripts/cleanup_worktrees.sh"
           if [ ! -x "$script_path" ]; then
             echo "::error::cleanup 脚本不存在或不可执行: $script_path"
             exit 1

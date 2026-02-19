@@ -158,3 +158,72 @@ extract_summary_json() {
   [ "$(jq -r '.deleted | length' <<<"$summary_json")" -eq 0 ]
   [ "$(jq -r '.errors | length' <<<"$summary_json")" -eq 0 ]
 }
+
+@test "fetch 失败: 记录 fetch_prune_failed 并返回失败" {
+  git -C "$REPO_DIR" remote set-url origin "$TEST_ROOT/missing-remote.git"
+
+  run "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR"
+
+  [ "$status" -eq 1 ]
+  summary_json="$(extract_summary_json "$output")"
+  [ "$(jq -r '.errors | map(select(.reason == "fetch_prune_failed")) | length' <<<"$summary_json")" -eq 1 ]
+}
+
+@test "base ref 不存在: 记录 base_ref_not_found 并返回失败" {
+  run "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR" --base-ref origin/not-exists
+
+  [ "$status" -eq 1 ]
+  summary_json="$(extract_summary_json "$output")"
+  [ "$(jq -r '.errors | map(select(.reason == "base_ref_not_found")) | length' <<<"$summary_json")" -eq 1 ]
+}
+
+@test "worktree 路径缺失: 记录 warning 并跳过" {
+  local branch="fix/F"
+  create_feature_worktree "$branch" "f.txt"
+  local worktree_path="$LAST_WORKTREE_PATH"
+
+  merge_branch_into_master "$branch"
+  delete_remote_branch "$branch"
+  rm -rf "$worktree_path"
+
+  run "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR"
+
+  [ "$status" -eq 0 ]
+  summary_json="$(extract_summary_json "$output")"
+  [ "$(jq -r '.warned | map(select(.reason == "worktree_path_missing")) | length' <<<"$summary_json")" -eq 1 ]
+}
+
+@test "参数错误: 缺失值与未知参数返回 exit 2" {
+  run "$SCRIPT_UNDER_TEST" --repo-dir
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"missing value for --repo-dir"* ]]
+
+  run "$SCRIPT_UNDER_TEST" --unknown-arg
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown argument: --unknown-arg"* ]]
+}
+
+@test "并发执行: 重叠触发时至少一次成功且仓库可用" {
+  local branch="fix/G"
+  create_feature_worktree "$branch" "g.txt"
+
+  merge_branch_into_master "$branch"
+  delete_remote_branch "$branch"
+
+  local out1="$TEST_ROOT/run-1.log"
+  local out2="$TEST_ROOT/run-2.log"
+  "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR" >"$out1" 2>&1 &
+  local pid1="$!"
+  "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR" >"$out2" 2>&1 &
+  local pid2="$!"
+
+  local status1=0
+  local status2=0
+  wait "$pid1" || status1="$?"
+  wait "$pid2" || status2="$?"
+
+  [[ "$status1" -eq 0 || "$status2" -eq 0 ]]
+  [[ "$status1" -le 1 ]]
+  [[ "$status2" -le 1 ]]
+  git -C "$REPO_DIR" rev-parse --verify --quiet master
+}
