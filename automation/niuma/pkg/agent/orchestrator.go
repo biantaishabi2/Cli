@@ -826,11 +826,11 @@ func (o *Orchestrator) currentState(ctx context.Context) (state.State, error) {
 				_, _ = o.github.AddComment(ctx, o.issueNumber,
 					"## ⚠️ 状态自愈失败\n\n检测到多个 `bot:*` 状态标签，自动收敛失败，请人工处理后重试。")
 				return "", nerr
-			}
-			if changed {
-				marker := fmt.Sprintf("<!-- NIUMA_STATE_HEAL issue=%d target=%s -->", o.issueNumber, target)
-				comments, _ := o.github.ListComments(ctx, o.issueNumber)
-				duplicated := false
+				}
+				if changed {
+					marker := fmt.Sprintf("<!-- BOT:STATE_CONVERGED issue=%d target=%s -->", o.issueNumber, target)
+					comments, _ := o.github.ListComments(ctx, o.issueNumber)
+					duplicated := false
 				for _, c := range comments {
 					if strings.Contains(c.GetBody(), marker) {
 						duplicated = true

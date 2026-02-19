@@ -73,7 +73,7 @@ niuma state-label clear --repo owner/repo --issue 325
 ## discuss/control 自愈
 
 - `orchestrator.currentState` 与 `control` 状态写入口均支持多状态自愈。
-- 自愈动作会写入审计评论（去重 marker）。
+- 自愈动作会写入审计评论（去重 marker：`<!-- BOT:STATE_CONVERGED ... -->`）。
 
 ## 测试映射
 

@@ -21,4 +21,9 @@ func TestLabelGuardWorkflow_EnforceRollbackAndAllowlist(t *testing.T) {
 	assert.Contains(t, text, "--remove-label \"$LABEL\"")
 	assert.Contains(t, text, "elif [ \"$ACTION\" = \"unlabeled\" ]; then")
 	assert.Contains(t, text, "--add-label \"$LABEL\"")
+	assert.Contains(t, text, "BOT:LABEL_GUARD mode=dry-run")
+	assert.Contains(t, text, "BOT:LABEL_GUARD mode=enforce")
+	assert.Contains(t, text, "EXISTING_COUNT=$(gh api")
+	assert.Contains(t, text, "发现重复 dry-run guard 评论，跳过。")
+	assert.Contains(t, text, "发现重复 enforce guard 评论，跳过。")
 }

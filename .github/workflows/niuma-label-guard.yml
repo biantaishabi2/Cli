@@ -50,8 +50,16 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ACTION: ${{ github.event.action }}
           LABEL: ${{ github.event.label.name }}
+          ACTOR: ${{ github.actor }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "## ⚠️ Label Guard（dry-run）\n\n检测到非授权账号 \\`${{ github.actor }}\\` 修改了状态标签 \\`$LABEL\\`（action=\\`$ACTION\\`）。\n\n当前为 dry-run 模式，仅记录不回滚。"
+          MARKER="<!-- BOT:LABEL_GUARD mode=dry-run issue=${ISSUE_NUMBER} action=${ACTION} label=${LABEL} actor=${ACTOR} -->"
+          EXISTING_COUNT=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | length")
+          if [ "$EXISTING_COUNT" -gt 0 ]; then
+            echo "发现重复 dry-run guard 评论，跳过。"
+            exit 0
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "## ⚠️ Label Guard（dry-run）\n\n检测到非授权账号 \\`${ACTOR}\\` 修改了状态标签 \\`$LABEL\\`（action=\\`$ACTION\\`）。\n\n当前为 dry-run 模式，仅记录不回滚。\n\n$MARKER"
 
       - name: Enforce rollback
         if: steps.allow.outputs.matched != 'true' && (vars.NIUMA_LABEL_GUARD_DRY_RUN || 'true') != 'true'
@@ -61,11 +69,20 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ACTION: ${{ github.event.action }}
           LABEL: ${{ github.event.label.name }}
+          ACTOR: ${{ github.actor }}
         run: |
+          MARKER="<!-- BOT:LABEL_GUARD mode=enforce issue=${ISSUE_NUMBER} action=${ACTION} label=${LABEL} actor=${ACTOR} -->"
+          EXISTING_COUNT=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | length")
+          if [ "$EXISTING_COUNT" -gt 0 ]; then
+            echo "发现重复 enforce guard 评论，跳过。"
+            exit 0
+          fi
+
           if [ "$ACTION" = "labeled" ]; then
             gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$LABEL"
           elif [ "$ACTION" = "unlabeled" ]; then
             gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$LABEL"
           fi
 
-          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "## 🚫 Label Guard\n\n非授权账号 \\`${{ github.actor }}\\` 修改了状态标签 \\`$LABEL\\`（action=\\`$ACTION\\`），已自动回滚。\n\n请使用受控命令：\\`niuma state-label\\`。"
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "## 🚫 Label Guard\n\n非授权账号 \\`${ACTOR}\\` 修改了状态标签 \\`$LABEL\\`（action=\\`$ACTION\\`），已自动回滚。\n\n请使用受控命令：\\`niuma state-label\\`。\n\n$MARKER"

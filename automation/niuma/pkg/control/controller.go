@@ -1783,7 +1783,7 @@ func (c *Controller) normalizeIssueState(ctx context.Context, issueNum int) (sta
 }
 
 func (c *Controller) emitStateHealComment(ctx context.Context, issueNum int, states []state.State, target state.State) {
-	marker := fmt.Sprintf("<!-- NIUMA_STATE_HEAL issue=%d target=%s -->", issueNum, target)
+	marker := fmt.Sprintf("<!-- BOT:STATE_CONVERGED issue=%d target=%s -->", issueNum, target)
 	bodies, err := c.github.ListCommentBodies(ctx, issueNum)
 	if err == nil {
 		for _, body := range bodies {
