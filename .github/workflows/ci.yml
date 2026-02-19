@@ -7,7 +7,7 @@ on:
 
 jobs:
   bot-label-guard:
-    name: bot label guard (workflow/scripts)
+    name: bot label guard + niuma gate tests (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -15,6 +15,15 @@ jobs:
 
       - name: Enforce managed bot label operations
         run: .github/scripts/check-bot-label-ops.sh
+
+      - name: Run niuma gate unit tests
+        run: .github/scripts/tests/niuma-test-gate.unit.sh
+
+      - name: Run niuma gate integration tests
+        run: .github/scripts/tests/niuma-test-gate.integration.sh
+
+      - name: Run niuma gate bdd tests
+        run: .github/scripts/tests/niuma-test-gate.bdd.sh
 
   taskctl:
     name: taskctl test (ubuntu)

@@ -19,6 +19,11 @@ Thumbs.db
 
 # 运行时数据（taskctl store 等）
 .niuma/
+.state/
 
 # 配置文件（含敏感信息）
 .niuma.yml
+
+# Python cache
+__pycache__/
+*.pyc

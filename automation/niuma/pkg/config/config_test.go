@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,12 +51,18 @@ func TestLoad_FileNotFound(t *testing.T) {
 
 func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	cfg := LoadWithDefaults(t.TempDir())
-	assert.Equal(t, "codex", cfg.AI.Default)
+	assert.Equal(t, "claude", cfg.AI.Default)
 	assert.NotNil(t, cfg.AI.Providers)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
 	assert.Equal(t, 1, cfg.Workflow.GetVisibleRoundInterval())
 	assert.True(t, cfg.Workflow.GetVisibleOnlyOnDiff())
+	assert.Equal(t, 5*time.Minute, cfg.Control.DagSync.GetPollInterval())
+	assert.Equal(t, 3, cfg.Control.DagSync.GetMaxRetry())
+	assert.Equal(t, []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}, cfg.Control.DagSync.GetRetryBackoff())
+	assert.Equal(t, 10, cfg.Control.DagSync.GetRateLimitRPS())
+	assert.Equal(t, 30*time.Second, cfg.Control.DagSync.GetTimeout())
+	assert.Equal(t, 0.20, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
 }
 
 func TestLoad_WorkflowConfig(t *testing.T) {
@@ -137,4 +144,135 @@ func TestLoad_EnvOverride(t *testing.T) {
 	assert.Equal(t, "opencode", cfg.AI.Default)
 	assert.Equal(t, 4, cfg.Workflow.GetVisibleRoundInterval())
 	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
+}
+
+func TestResolveDefaultPlaceholder(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Default: "claude"}}
+
+	// "default" 占位符替换为 ai.default
+	assert.Equal(t, "claude", cfg.ResolveDefaultPlaceholder("default"))
+	// 空字符串也 fallback 到 ai.default
+	assert.Equal(t, "claude", cfg.ResolveDefaultPlaceholder(""))
+	// 具体 provider 名不受影响
+	assert.Equal(t, "kimi", cfg.ResolveDefaultPlaceholder("kimi"))
+}
+
+func TestGetDiscussionProviderNames_DefaultPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Discussion: DiscussionConfig{
+				Providers: []string{"default", "kimi"},
+			},
+		},
+	}
+
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"claude", "kimi"}, names)
+}
+
+func TestGetDiscussionProviderNames_NoPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Discussion: DiscussionConfig{
+				Providers: []string{"codex", "kimi"},
+			},
+		},
+	}
+
+	// 直接写 provider 名字仍然有效
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"codex", "kimi"}, names)
+}
+
+func TestGetImplementationProvider_DefaultPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Providers: map[string]ProviderConfig{
+				"claude": {Cmd: "claude -p {prompt_file}"},
+			},
+			Implementation: ImplementationConfig{Provider: "default"},
+		},
+	}
+
+	rp, err := cfg.GetImplementationProvider()
+	require.NoError(t, err)
+	assert.Equal(t, "claude -p {prompt_file}", rp.Cmd)
+}
+
+func TestEnvOverride_AffectsDefaultPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "claude -p {prompt_file}"
+    opencode:
+      cmd: "opencode {prompt_file}"
+  discussion:
+    providers: [default]
+  implementation:
+    provider: default
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	t.Setenv("NIUMA_AI_DEFAULT", "opencode")
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+
+	// 环境变量覆盖后，default 占位符跟随变化
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"opencode"}, names)
+
+	rp, err := cfg.GetImplementationProvider()
+	require.NoError(t, err)
+	assert.Equal(t, "opencode {prompt_file}", rp.Cmd)
+}
+
+func TestLoad_ControlDagSyncConfig(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: codex
+  providers: {}
+control:
+  dag_sync:
+    poll_interval: 7m
+    max_retry: 2
+    retry_backoff: [5s, 15s]
+    rate_limit_rps: 6
+    timeout: 45s
+    skipped_edge_threshold: 35
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 7*time.Minute, cfg.Control.DagSync.GetPollInterval())
+	assert.Equal(t, 2, cfg.Control.DagSync.GetMaxRetry())
+	assert.Equal(t, []time.Duration{5 * time.Second, 15 * time.Second}, cfg.Control.DagSync.GetRetryBackoff())
+	assert.Equal(t, 6, cfg.Control.DagSync.GetRateLimitRPS())
+	assert.Equal(t, 45*time.Second, cfg.Control.DagSync.GetTimeout())
+	assert.Equal(t, 0.35, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
+}
+
+func TestDagSyncConfig_InvalidValueFallback(t *testing.T) {
+	cfg := DagSyncConfig{
+		PollInterval:         "bad",
+		MaxRetry:             -1,
+		RetryBackoff:         []string{"-1s"},
+		RateLimitRPS:         0,
+		Timeout:              "0s",
+		SkippedEdgeThreshold: 101,
+	}
+
+	assert.Equal(t, 5*time.Minute, cfg.GetPollInterval())
+	assert.Equal(t, 3, cfg.GetMaxRetry())
+	assert.Equal(t, []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}, cfg.GetRetryBackoff())
+	assert.Equal(t, 10, cfg.GetRateLimitRPS())
+	assert.Equal(t, 30*time.Second, cfg.GetTimeout())
+	assert.Equal(t, 0.20, cfg.GetSkippedEdgeThresholdRatio())
 }

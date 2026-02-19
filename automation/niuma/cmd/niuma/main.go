@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -28,9 +29,49 @@ var (
 )
 
 func main() {
+	os.Exit(execute())
+}
+
+func execute() int {
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		return exitCodeFromError(err)
 	}
+	return 0
+}
+
+type exitCodeError struct {
+	code int
+	err  error
+}
+
+func (e *exitCodeError) Error() string {
+	return e.err.Error()
+}
+
+func (e *exitCodeError) Unwrap() error {
+	return e.err
+}
+
+func (e *exitCodeError) ExitCode() int {
+	return e.code
+}
+
+func withExitCode(code int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &exitCodeError{code: code, err: err}
+}
+
+func exitCodeFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ec interface{ ExitCode() int }
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return 1
 }
 
 var rootCmd = &cobra.Command{
@@ -56,6 +97,7 @@ func init() {
 	rootCmd.AddCommand(iterateCmd)
 	rootCmd.AddCommand(reviewCmd)
 	rootCmd.AddCommand(controlCmd)
+	rootCmd.AddCommand(stateLabelCmd)
 
 	// discuss 特有 flags
 	discussCmd.Flags().IntVar(&flagMaxDiscussionRounds, "max-discussion-rounds", 0, "讨论最大轮次（1-20，0 表示使用配置）")
@@ -387,8 +429,8 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		VisibleOnlyOnDiff:    cfg.Workflow.GetVisibleOnlyOnDiff(),
 	}
 
-	// 讨论 provider
-	for _, name := range cfg.AI.Discussion.Providers {
+	// 讨论 provider（支持 "default" 占位符）
+	for _, name := range cfg.GetDiscussionProviderNames() {
 		p, ok := providers[name]
 		if !ok {
 			return nil, fmt.Errorf("讨论 provider %q 未配置", name)
@@ -396,15 +438,16 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		orchCfg.DiscussionProviders = append(orchCfg.DiscussionProviders, p)
 	}
 
-	// 实现 provider
-	if cfg.AI.Implementation.Provider != "" {
-		p, ok := providers[cfg.AI.Implementation.Provider]
+	// 实现 provider（仅空值或 "default" 允许回退；显式配置错误需 fail-fast）
+	implName := cfg.AI.Implementation.Provider
+	if implName == "" || implName == "default" {
+		orchCfg.ImplementProvider = defaultProvider
+	} else {
+		p, ok := providers[implName]
 		if !ok {
-			return nil, fmt.Errorf("实现 provider %q 未配置", cfg.AI.Implementation.Provider)
+			return nil, fmt.Errorf("实现 provider %q 未配置", implName)
 		}
 		orchCfg.ImplementProvider = p
-	} else {
-		orchCfg.ImplementProvider = defaultProvider
 	}
 
 	return agent.NewOrchestratorWithConfig(client, issueNumber, orchCfg), nil

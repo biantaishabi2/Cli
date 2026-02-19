@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+resolve_path() {
+  local target="$1"
+
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$target" 2>/dev/null || true
+    return
+  fi
+
+  if readlink -f / >/dev/null 2>&1; then
+    readlink -f "$target" 2>/dev/null || true
+    return
+  fi
+
+  (
+    cd "$(dirname "$target")" 2>/dev/null || exit 1
+    printf '%s/%s\n' "$(pwd -P)" "$(basename "$target")"
+  ) 2>/dev/null || true
+}
+
+find_real_gh() {
+  local self_path forced_path
+  self_path="$(resolve_path "$SELF_BIN")"
+
+  if [[ -n "${GH_REAL_BIN:-}" ]]; then
+    forced_path="$(resolve_path "$GH_REAL_BIN")"
+    if [[ -n "$forced_path" && "$forced_path" != "$self_path" ]]; then
+      echo "$GH_REAL_BIN"
+      return
+    fi
+  fi
+
+  local dir candidate candidate_path
+  IFS=':' read -r -a PATH_PARTS <<<"$PATH"
+  for dir in "${PATH_PARTS[@]}"; do
+    if [[ -z "$dir" ]]; then
+      dir="."
+    fi
+    candidate="$dir/gh"
+    if [[ -x "$candidate" ]]; then
+      candidate_path="$(resolve_path "$candidate")"
+      if [[ -n "$candidate_path" && "$candidate_path" == "$self_path" ]]; then
+        continue
+      fi
+      echo "$candidate"
+      return
+    fi
+  done
+
+  return 1
+}
+
+contains_bot_label() {
+  local raw="$1"
+  IFS=',' read -r -a labels <<<"$raw"
+  for label in "${labels[@]}"; do
+    label="$(echo "$label" | xargs)"
+    if [[ "$label" == bot:* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_issue_edit_command() {
+  local cmd_parts=()
+  local args=("$@")
+
+  for ((i=0; i<${#args[@]}; i++)); do
+    arg="${args[$i]}"
+    case "$arg" in
+      --repo|--hostname|-R)
+        i=$((i + 1))
+        continue
+        ;;
+      --repo=*|--hostname=*|-R*)
+        continue
+        ;;
+      -h|--help|--version)
+        continue
+        ;;
+    esac
+
+    if [[ "$arg" == -* ]]; then
+      continue
+    fi
+
+    cmd_parts+=("$arg")
+    if [[ ${#cmd_parts[@]} -ge 2 ]]; then
+      break
+    fi
+  done
+
+  [[ "${cmd_parts[0]:-}" == "issue" && "${cmd_parts[1]:-}" == "edit" ]]
+}
+
+is_blocked_command=false
+if is_issue_edit_command "$@"; then
+  args=("$@")
+  for ((i=0; i<${#args[@]}; i++)); do
+    arg="${args[$i]}"
+    case "$arg" in
+      --add-label|--remove-label)
+        next_idx=$((i + 1))
+        next_val="${args[$next_idx]:-}"
+        if contains_bot_label "$next_val"; then
+          is_blocked_command=true
+          break
+        fi
+        ;;
+      --add-label=*|--remove-label=*)
+        value="${arg#*=}"
+        if contains_bot_label "$value"; then
+          is_blocked_command=true
+          break
+        fi
+        ;;
+    esac
+  done
+fi
+
+if [[ "$is_blocked_command" == "true" ]]; then
+  echo "禁止直接通过 gh 修改 bot:* 状态标签，请改用: niuma state-label set --repo <owner/repo> --issue <num> --to <bot:state>" >&2
+  if [[ "${CI:-}" == "true" ]]; then
+    exit 2
+  fi
+  exit 1
+fi
+
+if ! REAL_GH="$(find_real_gh)"; then
+  echo "未找到真实 gh 可执行文件，请安装 gh 或设置 GH_REAL_BIN" >&2
+  exit 127
+fi
+exec "$REAL_GH" "$@"

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,11 +22,82 @@ type Config struct {
 
 // ControlConfig 多 Issue 协调配置
 type ControlConfig struct {
-	TaskCtlBin              string `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
-	MergeStrategy           string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix string `yaml:"integration_branch_prefix"` // 默认 integration/batch-
-	MaxOldBranches          int    `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
-	MinPRsForIntegration    int    `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
+	TaskCtlBin              string        `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
+	MergeStrategy           string        `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix string        `yaml:"integration_branch_prefix"` // 默认 integration/batch-
+	MaxOldBranches          int           `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
+	MinPRsForIntegration    int           `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
+	DagSync                 DagSyncConfig `yaml:"dag_sync"`                  // DAG -> GitHub 展示层单向同步
+}
+
+// DagSyncConfig DAG 展示层同步配置
+type DagSyncConfig struct {
+	PollInterval         string   `yaml:"poll_interval"`          // 默认 5m
+	MaxRetry             int      `yaml:"max_retry"`              // 默认 3
+	RetryBackoff         []string `yaml:"retry_backoff"`          // 默认 [10s,30s,60s]
+	RateLimitRPS         int      `yaml:"rate_limit_rps"`         // 默认 10
+	Timeout              string   `yaml:"timeout"`                // 默认 30s
+	SkippedEdgeThreshold int      `yaml:"skipped_edge_threshold"` // 默认 20（百分比）
+}
+
+var defaultDagSyncRetryBackoff = []string{"10s", "30s", "60s"}
+
+// GetPollInterval 返回 DAG 同步巡检间隔，越界回退默认值。
+func (c *DagSyncConfig) GetPollInterval() time.Duration {
+	d, err := time.ParseDuration(c.PollInterval)
+	if err != nil || d <= 0 {
+		return 5 * time.Minute
+	}
+	return d
+}
+
+// GetMaxRetry 返回 DAG 同步最大重试次数，越界回退默认值。
+func (c *DagSyncConfig) GetMaxRetry() int {
+	if c.MaxRetry < 0 || c.MaxRetry > 10 {
+		return 3
+	}
+	return c.MaxRetry
+}
+
+// GetRetryBackoff 返回 DAG 同步重试退避时长列表，越界回退默认值。
+func (c *DagSyncConfig) GetRetryBackoff() []time.Duration {
+	if len(c.RetryBackoff) == 0 {
+		return []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
+	}
+	result := make([]time.Duration, 0, len(c.RetryBackoff))
+	for _, item := range c.RetryBackoff {
+		d, err := time.ParseDuration(item)
+		if err != nil || d <= 0 {
+			return []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
+		}
+		result = append(result, d)
+	}
+	return result
+}
+
+// GetRateLimitRPS 返回 DAG 同步 API 限速，越界回退默认值。
+func (c *DagSyncConfig) GetRateLimitRPS() int {
+	if c.RateLimitRPS <= 0 || c.RateLimitRPS > 100 {
+		return 10
+	}
+	return c.RateLimitRPS
+}
+
+// GetTimeout 返回 DAG 同步单次请求超时，越界回退默认值。
+func (c *DagSyncConfig) GetTimeout() time.Duration {
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil || d <= 0 {
+		return 30 * time.Second
+	}
+	return d
+}
+
+// GetSkippedEdgeThresholdRatio 返回跳边告警阈值（0-1 浮点），越界回退默认值。
+func (c *DagSyncConfig) GetSkippedEdgeThresholdRatio() float64 {
+	if c.SkippedEdgeThreshold <= 0 || c.SkippedEdgeThreshold > 100 {
+		return 0.20
+	}
+	return float64(c.SkippedEdgeThreshold) / 100
 }
 
 // WorkflowConfig 工作流配置
@@ -172,13 +244,27 @@ func (c *Config) GetProvider(name string) (*ResolvedProvider, error) {
 	return rp, nil
 }
 
+// ResolveDefaultPlaceholder 将 "default" 占位符或空字符串替换为 ai.default 的实际值
+func (c *Config) ResolveDefaultPlaceholder(name string) string {
+	if name == "" || name == "default" {
+		return c.AI.Default
+	}
+	return name
+}
+
 // GetImplementationProvider 获取实现阶段的 provider
 func (c *Config) GetImplementationProvider() (*ResolvedProvider, error) {
-	name := c.AI.Implementation.Provider
-	if name == "" {
-		name = c.AI.Default
-	}
+	name := c.ResolveDefaultPlaceholder(c.AI.Implementation.Provider)
 	return c.GetProvider(name)
+}
+
+// GetDiscussionProviderNames 获取讨论阶段的 provider 名称列表，自动解析 "default" 占位符
+func (c *Config) GetDiscussionProviderNames() []string {
+	resolved := make([]string, len(c.AI.Discussion.Providers))
+	for i, name := range c.AI.Discussion.Providers {
+		resolved[i] = c.ResolveDefaultPlaceholder(name)
+	}
+	return resolved
 }
 
 // firstNonEmpty 返回第一个非空字符串
@@ -237,6 +323,7 @@ func Load(dir string) (*Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	applyConfigDefaults(&cfg)
 	return &cfg, nil
 }
 
@@ -247,13 +334,14 @@ func LoadWithDefaults(dir string) *Config {
 		return defaultConfig()
 	}
 	applyEnvOverrides(cfg)
+	applyConfigDefaults(cfg)
 	return cfg
 }
 
 func defaultConfig() *Config {
 	return &Config{
 		AI: AIConfig{
-			Default:   "codex",
+			Default:   "claude",
 			Providers: map[string]ProviderConfig{},
 			Templates: map[string]TemplateConfig{},
 		},
@@ -264,6 +352,69 @@ func defaultConfig() *Config {
 			VisibleRoundInterval:  1,
 			VisibleOnlyOnDiff:     boolPtr(true),
 		},
+		Control: ControlConfig{
+			DagSync: DagSyncConfig{
+				PollInterval:         "5m",
+				MaxRetry:             3,
+				RetryBackoff:         append([]string(nil), defaultDagSyncRetryBackoff...),
+				RateLimitRPS:         10,
+				Timeout:              "30s",
+				SkippedEdgeThreshold: 20,
+			},
+		},
+	}
+}
+
+func applyConfigDefaults(cfg *Config) {
+	if cfg.Control.DagSync.PollInterval == "" {
+		cfg.Control.DagSync.PollInterval = "5m"
+	}
+	if cfg.Control.DagSync.MaxRetry == 0 {
+		cfg.Control.DagSync.MaxRetry = 3
+	}
+	if len(cfg.Control.DagSync.RetryBackoff) == 0 {
+		cfg.Control.DagSync.RetryBackoff = append([]string(nil), defaultDagSyncRetryBackoff...)
+	}
+	if cfg.Control.DagSync.RateLimitRPS == 0 {
+		cfg.Control.DagSync.RateLimitRPS = 10
+	}
+	if cfg.Control.DagSync.Timeout == "" {
+		cfg.Control.DagSync.Timeout = "30s"
+	}
+	if cfg.Control.DagSync.SkippedEdgeThreshold == 0 {
+		cfg.Control.DagSync.SkippedEdgeThreshold = 20
+	}
+
+	// 越界值统一回退，避免配置写错导致运行时异常。
+	if d, err := time.ParseDuration(cfg.Control.DagSync.PollInterval); err != nil || d <= 0 {
+		cfg.Control.DagSync.PollInterval = "5m"
+	}
+	if cfg.Control.DagSync.MaxRetry < 0 || cfg.Control.DagSync.MaxRetry > 10 {
+		cfg.Control.DagSync.MaxRetry = 3
+	}
+	if cfg.Control.DagSync.RateLimitRPS <= 0 || cfg.Control.DagSync.RateLimitRPS > 100 {
+		cfg.Control.DagSync.RateLimitRPS = 10
+	}
+	if d, err := time.ParseDuration(cfg.Control.DagSync.Timeout); err != nil || d <= 0 {
+		cfg.Control.DagSync.Timeout = "30s"
+	}
+	if cfg.Control.DagSync.SkippedEdgeThreshold <= 0 || cfg.Control.DagSync.SkippedEdgeThreshold > 100 {
+		cfg.Control.DagSync.SkippedEdgeThreshold = 20
+	}
+	if len(cfg.Control.DagSync.RetryBackoff) == 0 {
+		cfg.Control.DagSync.RetryBackoff = append([]string(nil), defaultDagSyncRetryBackoff...)
+	} else {
+		valid := true
+		for _, item := range cfg.Control.DagSync.RetryBackoff {
+			d, err := time.ParseDuration(item)
+			if err != nil || d <= 0 {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			cfg.Control.DagSync.RetryBackoff = append([]string(nil), defaultDagSyncRetryBackoff...)
+		}
 	}
 }
 

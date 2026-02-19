@@ -109,6 +109,11 @@ jobs:
           "$NIUMA_BIN" state-label set \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
+            --from bot:pr-created \
+            --to bot:pr-needs-fix || \
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
             --to bot:pr-needs-fix
           gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n迭代后自动测试门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
           exit 1
@@ -182,6 +187,11 @@ jobs:
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --from bot:pr-created \
+            --to bot:pr-needs-fix || \
           "$NIUMA_BIN" state-label set \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
