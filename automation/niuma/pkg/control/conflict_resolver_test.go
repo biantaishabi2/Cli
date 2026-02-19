@@ -456,6 +456,7 @@ func TestGateConflictElixirTests_SkipWhenNoElixirFiles(t *testing.T) {
 
 func TestGateConflictElixirTests_SkipWhenCmdEmpty(t *testing.T) {
 	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib", "app.ex"), []byte("defmodule App do\nend\n"), 0o644))
 
 	ctrl := &Controller{
