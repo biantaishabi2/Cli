@@ -860,3 +860,68 @@ func TestDoDebateABDiscussion_ParseFailure_StructuredLog(t *testing.T) {
 	}
 	assert.True(t, abortFound, "应有 abort 评论")
 }
+
+func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
+	// 验证 120+ 评论场景下 debate 路径评论裁剪生效，prompt 中评论数 <= maxHuman+1
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Large comment test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	var comments []*github.IssueComment
+	// 117 条 BOT 评论（其中 1 条含 DISCUSSION_SUMMARY marker）
+	for i := 0; i < 117; i++ {
+		body := fmt.Sprintf("BOT 评论 %d", i)
+		if i == 100 {
+			body = "<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=1 -->汇总内容"
+		}
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(body),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("Bot"), Login: github.Ptr("niuma[bot]")},
+		})
+	}
+	// 15 条人类评论
+	for i := 0; i < 15; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("人类评论 %d", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(117+i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")},
+		})
+	}
+	mockGH.Comments[1] = comments
+
+	// provider 返回合法的 debate JSON 响应（should_finish=true 使第 1 轮即结束）
+	validResponse := "我认为方案A更优。\n\n```json\n{\"should_finish\": true}\n```"
+	mockAI := ai.NewMockProvider(validResponse)
+
+	maxHuman := 10
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{mockAI},
+		ImplementProvider:   mockAI,
+		MaxHumanComments:    maxHuman,
+	})
+
+	summary, err := orch.doDebateABDiscussion(context.Background(), 1, 5)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.True(t, summary.ShouldFinish)
+
+	// 验证传给 AI 的 prompt 中评论数受限：
+	// buildPromptInputWithFilter(ctx, 10) 应只保留 10 条人类 + 1 条 summary BOT = 11 条
+	calls := mockAI.Calls()
+	require.GreaterOrEqual(t, len(calls), 1)
+	prompt := calls[0].Prompt
+	// 统计 prompt 中出现的人类评论数量，早期人类评论（0-4）不应出现
+	for i := 0; i < 5; i++ {
+		assert.NotContains(t, prompt, fmt.Sprintf("人类评论 %d", i),
+			"早期人类评论 %d 不应出现在裁剪后的 prompt 中", i)
+	}
+	// 最近 10 条人类评论（5-14）应出现
+	for i := 5; i < 15; i++ {
+		assert.Contains(t, prompt, fmt.Sprintf("人类评论 %d", i),
+			"最近的人类评论 %d 应出现在 prompt 中", i)
+	}
+	// summary BOT 评论应保留
+	assert.Contains(t, prompt, "汇总内容", "DISCUSSION_SUMMARY BOT 评论应保留在 prompt 中")
+}
