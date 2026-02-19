@@ -6,7 +6,7 @@ on:
   repository_dispatch:
     types: [niuma.task.completed]
   schedule:
-    - cron: "*/5 * * * *" # 每5分钟检查一次
+    - cron: "*/5 * * * *"
 
 permissions:
   issues: write
@@ -18,12 +18,12 @@ jobs:
       (github.event_name == 'issues' && (github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable')) ||
       (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
       github.event_name == 'schedule'
-    uses: ./.github/workflows/niuma-orchestrate-reusable.yml
+    uses: biantaishabi2/Cli/.github/workflows/niuma-orchestrate-reusable.yml@7ae78fc91b6121d834753e43f963a9d12c640717
     secrets: inherit
     with:
-      repo: ${{ github.repository }}
+      repo: biantaishabi2/gong
       repo_dir: "."
-      build_niuma: true
+      build_niuma: false
       label_whitelist: "bot:queued,bot:pr-reviewable"
       enable_dispatch_wakeup: true
       event_id: ${{ github.event.client_payload.event_id || '' }}

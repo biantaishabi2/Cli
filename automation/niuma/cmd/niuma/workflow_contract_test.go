@@ -3,99 +3,94 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
-type orchestrateWorkflowContract struct {
-	On struct {
-		RepositoryDispatch struct {
-			Types []string `yaml:"types"`
-		} `yaml:"repository_dispatch"`
-	} `yaml:"on"`
-	Jobs struct {
-		Orchestrate struct {
-			If string `yaml:"if"`
-		} `yaml:"orchestrate"`
-		CloseAfterIntegrationMerge struct {
-			If    string `yaml:"if"`
-			Steps []struct {
-				Name            string `yaml:"name"`
-				If              string `yaml:"if"`
-				ContinueOnError bool   `yaml:"continue-on-error"`
-				Run             string `yaml:"run"`
-			} `yaml:"steps"`
-		} `yaml:"close-after-integration-merge"`
-	} `yaml:"jobs"`
-}
+func TestWorkflowContract_EntrypointUsesReusableAndKeepsTriggers(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-orchestrate.yml")
 
-func TestWorkflowContract_OrchestrateAllowsQueuedLabel(t *testing.T) {
-	content, wf := loadOrchestrateWorkflowContract(t)
-
+	assert.Contains(t, content, "issues:")
+	assert.Contains(t, content, "types: [labeled]")
+	assert.Contains(t, content, "repository_dispatch:")
+	assert.Contains(t, content, "types: [niuma.task.completed]")
+	assert.Contains(t, content, "schedule:")
 	assert.Contains(t, content, "github.event.label.name == 'bot:queued'")
-	assert.Contains(t, wf.Jobs.Orchestrate.If, "github.event.label.name == 'bot:queued'")
+	assert.Contains(t, content, "github.event.label.name == 'bot:pr-reviewable'")
+	assert.Contains(t, content, "github.event.client_payload.event_source == 'close-after-integration-merge'")
+	assert.Contains(t, content, "uses: ./.github/workflows/niuma-orchestrate-reusable.yml")
 }
 
-func TestWorkflowContract_RegistersRepositoryDispatchEvent(t *testing.T) {
-	_, wf := loadOrchestrateWorkflowContract(t)
+func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-orchestrate-reusable.yml")
 
-	assert.Contains(t, wf.On.RepositoryDispatch.Types, "niuma.task.completed")
-	assert.Contains(t, wf.Jobs.Orchestrate.If, "github.event_name == 'repository_dispatch'")
-	assert.Contains(t, wf.Jobs.Orchestrate.If, "github.event.action == 'niuma.task.completed'")
-	assert.Contains(t, wf.Jobs.Orchestrate.If, "github.event.client_payload.event_source == 'close-after-integration-merge'")
+	assert.Contains(t, content, "workflow_call:")
+	assert.Contains(t, content, "repo:")
+	assert.Contains(t, content, "required: true")
+	assert.Contains(t, content, "repo_dir:")
+	assert.Contains(t, content, "default: \".\"")
+	assert.Contains(t, content, "build_niuma:")
+	assert.Contains(t, content, "default: true")
+	assert.Contains(t, content, "label_whitelist:")
+	assert.Contains(t, content, "default: \"bot:queued,bot:pr-reviewable\"")
+	assert.Contains(t, content, "enable_dispatch_wakeup:")
+	assert.Contains(t, content, "event_id:")
+	assert.Contains(t, content, "default: \"\"")
+	assert.Contains(t, content, "dedup_window_hours:")
+	assert.Contains(t, content, "default: 24")
+	assert.Contains(t, content, "concurrency_key:")
+	assert.Contains(t, content, "default: \"niuma-orchestrate-${repo}\"")
 }
 
-func TestWorkflowContract_DispatchStepHasLoopGuardAndPayloadFields(t *testing.T) {
-	content, wf := loadOrchestrateWorkflowContract(t)
+func TestWorkflowContract_ReusableHasIdempotencyLoopGuardAndConcurrency(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-orchestrate-reusable.yml")
 
-	assert.Contains(t, wf.Jobs.CloseAfterIntegrationMerge.If, "github.event_name == 'pull_request'")
-	assert.Contains(t, wf.Jobs.CloseAfterIntegrationMerge.If, "github.event.pull_request.merged == true")
-	assert.Contains(t, wf.Jobs.CloseAfterIntegrationMerge.If, "startsWith(github.event.pull_request.head.ref, 'integration/')")
-
-	dispatchStepCount := 0
-	for _, step := range wf.Jobs.CloseAfterIntegrationMerge.Steps {
-		if step.Name != "Dispatch orchestrate wakeup" {
-			continue
-		}
-		dispatchStepCount++
-		assert.Contains(t, step.If, "success()")
-		assert.True(t, step.ContinueOnError)
-		assert.Contains(t, step.Run, "event_type: \"niuma.task.completed\"")
-		assert.Contains(t, step.Run, "source_issue")
-		assert.Contains(t, step.Run, "source_issues")
-		assert.Contains(t, step.Run, "trigger_pr")
-		assert.Contains(t, step.Run, "completed_at")
-		assert.Contains(t, step.Run, "event_source: \"close-after-integration-merge\"")
-		assert.Contains(t, step.Run, "event_id")
-	}
-	assert.Equal(t, 1, dispatchStepCount, "应仅允许 close-after-integration-merge 路径发起一次 dispatch")
-	assert.Equal(t, 1, strings.Count(content, "Dispatch orchestrate wakeup"))
+	assert.Contains(t, content, "concurrency:")
+	assert.Contains(t, content, "cancel-in-progress: false")
+	assert.Contains(t, content, "Idempotency Guard")
+	assert.Contains(t, content, "/tmp/niuma-orchestrate-dedup")
+	assert.Contains(t, content, "duplicate_event")
+	assert.Contains(t, content, "Loop Guard")
+	assert.Contains(t, content, "github-actions[bot]")
+	assert.Contains(t, content, "event_id=\"run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}\"")
 }
 
-func loadOrchestrateWorkflowContract(t *testing.T) (string, orchestrateWorkflowContract) {
+func TestWorkflowContract_DispatchCompletedHasPayloadAndDegradePolicy(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-dispatch-completed.yml")
+
+	assert.Contains(t, content, "pull_request:")
+	assert.Contains(t, content, "types: [closed]")
+	assert.Contains(t, content, "github.event.pull_request.merged == true")
+	assert.Contains(t, content, "startsWith(github.event.pull_request.head.ref, 'integration/')")
+	assert.Contains(t, content, "continue-on-error: true")
+	assert.Contains(t, content, "event_type: \"niuma.task.completed\"")
+	assert.Contains(t, content, "source_issue")
+	assert.Contains(t, content, "source_issues")
+	assert.Contains(t, content, "trigger_pr")
+	assert.Contains(t, content, "event_source: \"close-after-integration-merge\"")
+	assert.Contains(t, content, "event_id")
+	assert.Contains(t, content, "Warn Dispatch Failure")
+}
+
+func loadWorkflowFile(t *testing.T, workflowName string) string {
 	t.Helper()
 
-	workflowPath := findOrchestrateWorkflowPath(t)
+	workflowPath := findWorkflowPath(t, workflowName)
 	raw, err := os.ReadFile(workflowPath)
 	require.NoError(t, err)
-
-	var wf orchestrateWorkflowContract
-	require.NoError(t, yaml.Unmarshal(raw, &wf))
-	return string(raw), wf
+	return string(raw)
 }
 
-func findOrchestrateWorkflowPath(t *testing.T) string {
+func findWorkflowPath(t *testing.T, workflowName string) string {
 	t.Helper()
 
 	dir, err := os.Getwd()
 	require.NoError(t, err)
 
 	for i := 0; i < 10; i++ {
-		candidate := filepath.Join(dir, ".github", "workflows", "niuma-orchestrate.yml")
+		candidate := filepath.Join(dir, ".github", "workflows", workflowName)
 		if _, statErr := os.Stat(candidate); statErr == nil {
 			return candidate
 		}
@@ -106,6 +101,6 @@ func findOrchestrateWorkflowPath(t *testing.T) string {
 		dir = parent
 	}
 
-	t.Fatalf("未找到 .github/workflows/niuma-orchestrate.yml")
+	t.Fatalf("未找到 .github/workflows/%s", workflowName)
 	return ""
 }

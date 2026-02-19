@@ -23,3 +23,7 @@ Thumbs.db
 
 # 配置文件（含敏感信息）
 .niuma.yml
+
+# Python cache
+__pycache__/
+*.pyc
