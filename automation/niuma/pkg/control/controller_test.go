@@ -2692,6 +2692,77 @@ func TestReconcilePRReviewableConflicts_AIExhaustedEscalatesHuman(t *testing.T) 
 	assert.Contains(t, logText, metaKeyConflictResolutionLastFailedAt)
 }
 
+func TestReconcilePRReviewableConflicts_AIDisabledEscalatesHuman(t *testing.T) {
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ai disabled body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-ai-disabled",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        false,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+
+	rawLog, logErr := os.ReadFile(logPath)
+	require.NoError(t, logErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+	assert.Contains(t, logText, conflictResolutionLayerHuman)
+	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
+	assert.Contains(t, logText, "0")
+	assert.Contains(t, logText, "AI 层已禁用")
+}
+
+func TestNewController_PRConflictAIMaxAttemptsDefaultsWhenNonPositive(t *testing.T) {
+	cfgZero := &ControlConfig{
+		RepoDir:                 ".",
+		PRConflictEnableAI:      true,
+		PRConflictAIMaxAttempts: 0,
+	}
+	ctrlZero := NewController(nil, nil, nil, nil, cfgZero)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, cfgZero.PRConflictAIMaxAttempts)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, ctrlZero.prConflictAIMaxAttempts())
+
+	cfgNegative := &ControlConfig{
+		RepoDir:                 ".",
+		PRConflictEnableAI:      true,
+		PRConflictAIMaxAttempts: -3,
+	}
+	ctrlNegative := NewController(nil, nil, nil, nil, cfgNegative)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, cfgNegative.PRConflictAIMaxAttempts)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, ctrlNegative.prConflictAIMaxAttempts())
+}
+
 func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
 	mockGH := newMockGitHubOps(
 		IssueInfo{

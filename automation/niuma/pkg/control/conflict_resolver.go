@@ -34,6 +34,7 @@ type prConflictAIResponse struct {
 
 type fileSnapshot struct {
 	exists  bool
+	mode    os.FileMode
 	content []byte
 }
 
@@ -181,7 +182,8 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 }
 
 func resolveGoImportConflictFile(repoDir, relPath string) error {
-	raw, err := os.ReadFile(filepath.Join(repoDir, relPath))
+	absPath := filepath.Join(repoDir, relPath)
+	raw, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("读取冲突文件失败 %s: %w", relPath, err)
 	}
@@ -193,8 +195,12 @@ func resolveGoImportConflictFile(repoDir, relPath string) error {
 	if !changed {
 		return fmt.Errorf("Rule 层未匹配 import 冲突: %s", relPath)
 	}
-	if err := os.WriteFile(filepath.Join(repoDir, relPath), []byte(resolved), 0o644); err != nil {
+	mode := fileModeOrDefault(absPath, 0o644)
+	if err := os.WriteFile(absPath, []byte(resolved), mode); err != nil {
 		return fmt.Errorf("写回 Rule 结果失败 %s: %w", relPath, err)
+	}
+	if err := os.Chmod(absPath, mode); err != nil {
+		return fmt.Errorf("恢复 Rule 结果权限失败 %s: %w", relPath, err)
 	}
 	return nil
 }
@@ -410,7 +416,7 @@ func captureFileSnapshots(repoDir string, files []string) (map[string]fileSnapsh
 	snapshots := make(map[string]fileSnapshot, len(files))
 	for _, file := range files {
 		abs := filepath.Join(repoDir, file)
-		data, err := os.ReadFile(abs)
+		info, err := os.Stat(abs)
 		if err != nil {
 			if os.IsNotExist(err) {
 				snapshots[file] = fileSnapshot{exists: false}
@@ -418,7 +424,15 @@ func captureFileSnapshots(repoDir string, files []string) (map[string]fileSnapsh
 			}
 			return nil, fmt.Errorf("读取快照文件失败 %s: %w", file, err)
 		}
-		snapshots[file] = fileSnapshot{exists: true, content: data}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return nil, fmt.Errorf("读取快照文件失败 %s: %w", file, err)
+		}
+		mode := info.Mode().Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		snapshots[file] = fileSnapshot{exists: true, mode: mode, content: data}
 	}
 	return snapshots, nil
 }
@@ -431,7 +445,12 @@ func restoreFileSnapshots(repoDir string, snapshots map[string]fileSnapshot) {
 			continue
 		}
 		_ = os.MkdirAll(filepath.Dir(abs), 0o755)
-		_ = os.WriteFile(abs, snapshot.content, 0o644)
+		mode := snapshot.mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		_ = os.WriteFile(abs, snapshot.content, mode)
+		_ = os.Chmod(abs, mode)
 	}
 }
 
@@ -441,8 +460,12 @@ func applyPRConflictAIEdits(repoDir string, edits []prConflictAIEdit) error {
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return fmt.Errorf("创建 AI 编辑目录失败 %s: %w", edit.Path, err)
 		}
-		if err := os.WriteFile(abs, []byte(edit.Content), 0o644); err != nil {
+		mode := fileModeOrDefault(abs, 0o644)
+		if err := os.WriteFile(abs, []byte(edit.Content), mode); err != nil {
 			return fmt.Errorf("写入 AI 编辑结果失败 %s: %w", edit.Path, err)
+		}
+		if err := os.Chmod(abs, mode); err != nil {
+			return fmt.Errorf("恢复 AI 编辑结果权限失败 %s: %w", edit.Path, err)
 		}
 	}
 	return nil
@@ -581,11 +604,18 @@ func (c *Controller) restorePathFromHeadOrRemove(ctx context.Context, repoDir, f
 	if err != nil {
 		return err
 	}
+	mode, err := readPathModeFromHead(ctx, repoDir, file)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return fmt.Errorf("创建回滚目录失败: %w", err)
 	}
-	if err := os.WriteFile(abs, content, 0o644); err != nil {
+	if err := os.WriteFile(abs, content, mode); err != nil {
 		return fmt.Errorf("恢复 tracked 文件失败: %w", err)
+	}
+	if err := os.Chmod(abs, mode); err != nil {
+		return fmt.Errorf("恢复 tracked 文件权限失败: %w", err)
 	}
 	return nil
 }
@@ -610,6 +640,43 @@ func readPathContentFromHead(ctx context.Context, repoDir, file string) ([]byte,
 		return nil, fmt.Errorf("读取 HEAD 文件失败 %s: %w\noutput: %s", file, err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+func readPathModeFromHead(ctx context.Context, repoDir, file string) (os.FileMode, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-tree", "HEAD", "--", file)
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("读取 HEAD 文件权限失败 %s: %w\noutput: %s", file, err, strings.TrimSpace(string(out)))
+	}
+
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("读取 HEAD 文件权限失败 %s: 空输出", file)
+	}
+
+	modeBits, parseErr := strconv.ParseUint(fields[0], 8, 32)
+	if parseErr != nil {
+		return 0, fmt.Errorf("解析 HEAD 文件权限失败 %s: %w", file, parseErr)
+	}
+
+	mode := os.FileMode(modeBits & 0o777)
+	if mode == 0 {
+		mode = 0o644
+	}
+	return mode, nil
+}
+
+func fileModeOrDefault(path string, defaultMode os.FileMode) os.FileMode {
+	info, err := os.Stat(path)
+	if err != nil {
+		return defaultMode
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 {
+		return defaultMode
+	}
+	return mode
 }
 
 func gateConflictMarkers(repoDir string, conflictFiles []string) error {

@@ -42,10 +42,36 @@ func Env() string {
 	assert.Contains(t, resolved, "\t_ \"strings\"")
 }
 
+func TestResolveGoImportConflictFile_PreservesMode(t *testing.T) {
+	dir := t.TempDir()
+	relPath := "pkg.go"
+	content := `package main
+
+import (
+<<<<<<< HEAD
+	"fmt"
+=======
+	"os"
+>>>>>>> feature
+)
+`
+	absPath := filepath.Join(dir, relPath)
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+	require.NoError(t, os.Chmod(absPath, 0o755))
+
+	err := resolveGoImportConflictFile(dir, relPath)
+	require.NoError(t, err)
+
+	info, statErr := os.Stat(absPath)
+	require.NoError(t, statErr)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+}
+
 func TestTryResolveConflictByAIOnce_RollbackOnOutOfScopeChange(t *testing.T) {
 	dir := setupGitRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package main\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644))
+	require.NoError(t, os.Chmod(filepath.Join(dir, "README.md"), 0o755))
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "add files")
 
@@ -83,6 +109,9 @@ func Value() int { return 2 }
 	readme, readErr := os.ReadFile(filepath.Join(dir, "README.md"))
 	require.NoError(t, readErr)
 	assert.Equal(t, "# test\n", string(readme))
+	readmeInfo, modeErr := os.Stat(filepath.Join(dir, "README.md"))
+	require.NoError(t, modeErr)
+	assert.Equal(t, os.FileMode(0o755), readmeInfo.Mode().Perm())
 
 	current, currentErr := os.ReadFile(filepath.Join(dir, "pkg.go"))
 	require.NoError(t, currentErr)
@@ -129,6 +158,7 @@ func TestRunPRConflictGates_SmokeSideEffectsBlockedByScopeGate(t *testing.T) {
 
 func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 	dir, conflictFile := setupPRConflictRepoWithFailingGoTestSideEffects(t)
+	require.NoError(t, os.Chmod(filepath.Join(dir, conflictFile), 0o755))
 	originalConflict, readErr := os.ReadFile(filepath.Join(dir, conflictFile))
 	require.NoError(t, readErr)
 
@@ -162,6 +192,9 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 	currentConflict, currentErr := os.ReadFile(filepath.Join(dir, conflictFile))
 	require.NoError(t, currentErr)
 	assert.Equal(t, string(originalConflict), string(currentConflict))
+	conflictInfo, modeErr := os.Stat(filepath.Join(dir, conflictFile))
+	require.NoError(t, modeErr)
+	assert.Equal(t, os.FileMode(0o755), conflictInfo.Mode().Perm())
 }
 
 func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
