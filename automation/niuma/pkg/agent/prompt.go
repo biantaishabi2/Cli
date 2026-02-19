@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/google/go-github/v68/github"
 )
 
@@ -102,7 +103,7 @@ func FilterCommentsForPrompt(comments []*github.IssueComment, maxHuman int) []st
 	for _, c := range sorted {
 		if isBot(c) {
 			// 记录含 BOT:DISCUSSION_SUMMARY marker 的最新 BOT 评论
-			if strings.Contains(c.GetBody(), "BOT:DISCUSSION_SUMMARY") {
+			if strings.Contains(c.GetBody(), string(marker.TypeDiscussionSummary)) {
 				summaryBOT = c
 			}
 			continue
