@@ -193,6 +193,7 @@ type ControlConfig struct {
 	PRConflictEnableAI         bool
 	PRConflictAIMaxAttempts    int
 	PRConflictSmokeTestCmd     string
+	PRConflictElixirTestCmd    string `yaml:"pr_conflict_elixir_test_cmd"`
 	RepoDir                    string           `yaml:"-"`
 	IssueLockTTL               time.Duration    `yaml:"-"`
 	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
@@ -221,6 +222,7 @@ func DefaultControlConfig() *ControlConfig {
 		PRConflictUnknownBackoffs:  append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...),
 		PRConflictEnableAI:         true,
 		PRConflictAIMaxAttempts:    prConflictAIDefaultMaxAttempts,
+		PRConflictElixirTestCmd:    "mix test",
 		RepoDir:                    ".",
 		IssueLockTTL:               issueLockDefaultTTL,
 		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
@@ -1488,6 +1490,13 @@ func (c *Controller) prConflictSmokeTestCmd() string {
 		return ""
 	}
 	return strings.TrimSpace(c.cfg.PRConflictSmokeTestCmd)
+}
+
+func (c *Controller) prConflictElixirTestCmd() string {
+	if c.cfg == nil {
+		return "mix test"
+	}
+	return c.cfg.PRConflictElixirTestCmd
 }
 
 func (c *Controller) logPRReviewableDecision(
