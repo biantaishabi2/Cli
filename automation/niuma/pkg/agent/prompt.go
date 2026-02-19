@@ -101,8 +101,8 @@ func FilterCommentsForPrompt(comments []*github.IssueComment, maxHuman int) []st
 	var summaryBOT *github.IssueComment
 	for _, c := range sorted {
 		if isBot(c) {
-			// 记录含 BOT:DISCUSS_SUMMARY marker 的最新 BOT 评论
-			if strings.Contains(c.GetBody(), "BOT:DISCUSS_SUMMARY") {
+			// 记录含 BOT:DISCUSSION_SUMMARY marker 的最新 BOT 评论
+			if strings.Contains(c.GetBody(), "BOT:DISCUSSION_SUMMARY") {
 				summaryBOT = c
 			}
 			continue

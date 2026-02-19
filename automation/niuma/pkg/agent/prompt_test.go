@@ -138,7 +138,7 @@ func TestFilterCommentsForPrompt_LargeInput(t *testing.T) {
 	for i := 0; i < 117; i++ {
 		body := fmt.Sprintf("BOT 评论 %d", i)
 		if i == 100 {
-			body = "<!-- BOT:DISCUSS_SUMMARY -->汇总内容"
+			body = "<!-- BOT:DISCUSSION_SUMMARY -->汇总内容"
 		}
 		comments = append(comments, makeComment(body, base.Add(time.Duration(i)*time.Minute), "Bot", "niuma[bot]"))
 	}
@@ -171,7 +171,7 @@ func TestFilterCommentsForPrompt_LargeInput(t *testing.T) {
 	// 包含 summary BOT
 	hasSummary := false
 	for _, r := range result {
-		if r == "<!-- BOT:DISCUSS_SUMMARY -->汇总内容" {
+		if r == "<!-- BOT:DISCUSSION_SUMMARY -->汇总内容" {
 			hasSummary = true
 		}
 	}

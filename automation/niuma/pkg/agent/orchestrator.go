@@ -1002,6 +1002,7 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 	}
 
 	primaryProvider := providers[speakerIdx%len(providers)]
+	lastProvider := primaryProvider // 跟踪最终失败的 provider
 
 	// 第1次尝试：主 provider
 	raw, comment, parseErr := tryDebateRound(primaryProvider)
@@ -1031,6 +1032,7 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 降级到备选 provider | from=%s | to=%s | round=%d/%d | kind=%s\n",
 			strings.ToLower(speaker), primaryProvider.Name(), fallbackProvider.Name(), round, maxRounds, errKind)
 		raw, comment, parseErr = tryDebateRound(fallbackProvider)
+		lastProvider = fallbackProvider
 	}
 
 	// 第3级：中止上报
@@ -1040,7 +1042,7 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 			"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
 			"**错误**: %s\n\n**provider**: %s\n\n**raw_prefix**: %.500s\n\n请人工检查后重新触发讨论。",
 			o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
-			parseErr.Error(), primaryProvider.Name(), rawPrefix)
+			parseErr.Error(), lastProvider.Name(), rawPrefix)
 		_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
 		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), parseErr)
 	}
