@@ -175,11 +175,18 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 	}
 
 	for _, file := range conflictFiles {
-		if strings.ToLower(filepath.Ext(file)) != ".go" {
-			return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import 冲突，发现非 Go 文件: %s", file))
-		}
-		if err := resolveGoImportConflictFile(repoDir, file); err != nil {
-			return rollbackWithCause(err)
+		ext := strings.ToLower(filepath.Ext(file))
+		switch ext {
+		case ".go":
+			if err := resolveGoImportConflictFile(repoDir, file); err != nil {
+				return rollbackWithCause(err)
+			}
+		case ".rs":
+			if err := resolveRustUseConflictFile(repoDir, file); err != nil {
+				return rollbackWithCause(err)
+			}
+		default:
+			return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import / Rust use 冲突，发现不支持的文件: %s", file))
 		}
 	}
 
@@ -306,6 +313,291 @@ func leadingWhitespace(line string) string {
 				return ""
 			}
 			return line[:i]
+		}
+	}
+	return ""
+}
+
+// resolveRustUseConflictFile 读取含冲突标记的 .rs 文件，合并 use 语句后写回。
+func resolveRustUseConflictFile(repoDir, relPath string) error {
+	absPath := filepath.Join(repoDir, relPath)
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("读取冲突文件失败 %s: %w", relPath, err)
+	}
+
+	resolved, changed, err := resolveRustUseConflictsInContent(string(raw))
+	if err != nil {
+		return fmt.Errorf("Rule 层处理文件 %s 失败: %w", relPath, err)
+	}
+	if !changed {
+		return fmt.Errorf("Rule 层未匹配 use 冲突: %s", relPath)
+	}
+	mode := fileModeOrDefault(absPath, 0o644)
+	if err := os.WriteFile(absPath, []byte(resolved), mode); err != nil {
+		return fmt.Errorf("写回 Rule 结果失败 %s: %w", relPath, err)
+	}
+	if err := os.Chmod(absPath, mode); err != nil {
+		return fmt.Errorf("恢复 Rule 结果权限失败 %s: %w", relPath, err)
+	}
+	return nil
+}
+
+// resolveRustUseConflictsInContent 解析冲突块，合并 use 语句（并集去重排序）。
+func resolveRustUseConflictsInContent(content string) (string, bool, error) {
+	lines := strings.Split(content, "\n")
+	result := make([]string, 0, len(lines))
+	changed := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if !strings.HasPrefix(line, "<<<<<<<") {
+			result = append(result, line)
+			continue
+		}
+
+		i++
+		var ours []string
+		for i < len(lines) && !strings.HasPrefix(lines[i], "=======") {
+			ours = append(ours, lines[i])
+			i++
+		}
+		if i >= len(lines) {
+			return "", false, fmt.Errorf("冲突块缺少 =======")
+		}
+
+		i++
+		var theirs []string
+		for i < len(lines) && !strings.HasPrefix(lines[i], ">>>>>>>") {
+			theirs = append(theirs, lines[i])
+			i++
+		}
+		if i >= len(lines) {
+			return "", false, fmt.Errorf("冲突块缺少 >>>>>>>")
+		}
+
+		merged, err := mergeRustUseSides(ours, theirs)
+		if err != nil {
+			return "", false, err
+		}
+		result = append(result, merged...)
+		changed = true
+	}
+
+	return strings.Join(result, "\n"), changed, nil
+}
+
+func mergeRustUseSides(ours, theirs []string) ([]string, error) {
+	entries := make(map[string]struct{})
+
+	collect := func(lines []string) error {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			if !rustUseLineRe.MatchString(trimmed) {
+				return fmt.Errorf("Rule 层仅支持 use 项冲突，发现非 use 行: %q", trimmed)
+			}
+			entries[trimmed] = struct{}{}
+		}
+		return nil
+	}
+
+	if err := collect(ours); err != nil {
+		return nil, err
+	}
+	if err := collect(theirs); err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("Rule 层未解析到有效 use 项")
+	}
+
+	items := make([]string, 0, len(entries))
+	for item := range entries {
+		items = append(items, item)
+	}
+	sort.Strings(items)
+	return items, nil
+}
+
+// rustTestTarget 表示一个 Rust cargo test 目标。
+type rustTestTarget struct {
+	manifestPath string
+	packageName  string
+	isWorkspace  bool
+}
+
+// gateConflictRustTests 对冲突文件执行 cargo test 门禁。
+func (c *Controller) gateConflictRustTests(ctx context.Context, repoDir string, conflictFiles []string) error {
+	targets := collectRustTestTargets(repoDir, conflictFiles)
+	for _, target := range targets {
+		dir := filepath.Dir(target.manifestPath)
+		if target.isWorkspace && target.packageName != "" {
+			if _, err := c.runCommand(ctx, dir, "cargo", "test", "-p", target.packageName); err != nil {
+				return fmt.Errorf("质量门禁失败 (cargo test -p %s): %w", target.packageName, err)
+			}
+		} else {
+			if _, err := c.runCommand(ctx, dir, "cargo", "test", "--manifest-path", target.manifestPath); err != nil {
+				return fmt.Errorf("质量门禁失败 (cargo test --manifest-path %s): %w", target.manifestPath, err)
+			}
+		}
+	}
+	return nil
+}
+
+// collectRustTestTargets 从冲突文件列表中过滤 .rs 文件并收集 cargo test 目标。
+func collectRustTestTargets(repoDir string, files []string) []rustTestTarget {
+	seen := make(map[string]struct{})
+	targets := make([]rustTestTarget, 0)
+
+	for _, file := range files {
+		if strings.ToLower(filepath.Ext(file)) != ".rs" {
+			continue
+		}
+		manifest, pkg, isWs := findCargoRoot(repoDir, file)
+		if manifest == "" {
+			continue
+		}
+		key := manifest + "::" + pkg
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, rustTestTarget{manifestPath: manifest, packageName: pkg, isWorkspace: isWs})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].manifestPath == targets[j].manifestPath {
+			return targets[i].packageName < targets[j].packageName
+		}
+		return targets[i].manifestPath < targets[j].manifestPath
+	})
+	return targets
+}
+
+// findCargoRoot 向上查找 Cargo.toml，区分 workspace 和单 crate。
+// 返回 (manifestPath, packageName, isWorkspace)。
+func findCargoRoot(repoDir, relFile string) (string, string, bool) {
+	dir := filepath.Join(repoDir, filepath.Dir(relFile))
+	var nearestManifest string
+
+	// 向上查找最近的 Cargo.toml
+	cur := dir
+	for {
+		if cur == "" || cur == "/" || cur == "." {
+			break
+		}
+		candidate := filepath.Join(cur, "Cargo.toml")
+		if _, err := os.Stat(candidate); err == nil {
+			nearestManifest = candidate
+			break
+		}
+		if samePath(cur, repoDir) {
+			break
+		}
+		next := filepath.Dir(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+	}
+
+	if nearestManifest == "" {
+		return "", "", false
+	}
+
+	// 读取 Cargo.toml 判断是否为 workspace
+	raw, err := os.ReadFile(nearestManifest)
+	if err != nil {
+		return nearestManifest, "", false
+	}
+	content := string(raw)
+
+	if strings.Contains(content, "[workspace]") {
+		// 这是 workspace 根，尝试提取 member package name
+		pkg := extractCargoPackageName(repoDir, dir, nearestManifest)
+		return nearestManifest, pkg, true
+	}
+
+	// 检查是否有 [package] name
+	pkgName := parseCargoPackageName(content)
+
+	// 继续向上找 workspace 根
+	wsDir := filepath.Dir(nearestManifest)
+	for {
+		next := filepath.Dir(wsDir)
+		if next == wsDir || next == "/" || next == "." {
+			break
+		}
+		wsDir = next
+		wsCandidate := filepath.Join(wsDir, "Cargo.toml")
+		if _, err := os.Stat(wsCandidate); err == nil {
+			wsRaw, readErr := os.ReadFile(wsCandidate)
+			if readErr == nil && strings.Contains(string(wsRaw), "[workspace]") {
+				return wsCandidate, pkgName, true
+			}
+		}
+		if samePath(wsDir, repoDir) {
+			break
+		}
+	}
+
+	// 单 crate
+	return nearestManifest, "", false
+}
+
+// extractCargoPackageName 从 workspace 中找到包含 relDir 的 member crate 的 package name。
+func extractCargoPackageName(repoDir, relDir, wsManifest string) string {
+	wsRoot := filepath.Dir(wsManifest)
+	// 从 relDir 向下到 wsRoot 之间找最近的 Cargo.toml（member crate）
+	cur := relDir
+	for {
+		if samePath(cur, wsRoot) {
+			break
+		}
+		candidate := filepath.Join(cur, "Cargo.toml")
+		if _, err := os.Stat(candidate); err == nil {
+			raw, readErr := os.ReadFile(candidate)
+			if readErr == nil {
+				if name := parseCargoPackageName(string(raw)); name != "" {
+					return name
+				}
+			}
+			// 无 [package] name 则用目录名
+			return filepath.Base(cur)
+		}
+		next := filepath.Dir(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+	}
+	return ""
+}
+
+// parseCargoPackageName 简单解析 Cargo.toml 中的 package name。
+func parseCargoPackageName(content string) string {
+	inPackage := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[package]" {
+			inPackage = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			inPackage = false
+			continue
+		}
+		if inPackage && strings.HasPrefix(trimmed, "name") {
+			parts := strings.SplitN(trimmed, "=", 2)
+			if len(parts) == 2 {
+				name := strings.TrimSpace(parts[1])
+				name = strings.Trim(name, "\"'")
+				if name != "" {
+					return name
+				}
+			}
 		}
 	}
 	return ""
@@ -500,6 +792,9 @@ func (c *Controller) runPRConflictGates(ctx context.Context, repoDir string, con
 		return err
 	}
 	if err := c.gateConflictGoTests(ctx, repoDir, conflictFiles); err != nil {
+		return err
+	}
+	if err := c.gateConflictRustTests(ctx, repoDir, conflictFiles); err != nil {
 		return err
 	}
 	if smoke := c.prConflictSmokeTestCmd(); smoke != "" {

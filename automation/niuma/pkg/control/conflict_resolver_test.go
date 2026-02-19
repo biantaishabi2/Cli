@@ -383,6 +383,150 @@ func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	assert.Contains(t, text, failedAt.Format(time.RFC3339))
 }
 
+func TestResolveRustUseConflictsInContent_MergeUnionAndSort(t *testing.T) {
+	content := `use std::io;
+
+<<<<<<< HEAD
+use std::collections::HashMap;
+use std::fmt;
+=======
+use std::collections::HashSet;
+use std::fmt;
+>>>>>>> feature
+
+fn main() {}
+`
+
+	resolved, changed, err := resolveRustUseConflictsInContent(content)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.NotContains(t, resolved, "<<<<<<<")
+	assert.NotContains(t, resolved, "=======")
+	assert.NotContains(t, resolved, ">>>>>>>")
+	assert.Contains(t, resolved, "use std::collections::HashMap;")
+	assert.Contains(t, resolved, "use std::collections::HashSet;")
+	assert.Contains(t, resolved, "use std::fmt;")
+	// fmt 应该只出现一次（去重）
+	assert.Equal(t, 1, strings.Count(resolved, "use std::fmt;"))
+}
+
+func TestResolveRustUseConflictsInContent_BracedExpansion(t *testing.T) {
+	content := `<<<<<<< HEAD
+use std::collections::{HashMap, HashSet};
+=======
+use std::io::{Read, Write};
+>>>>>>> feature
+`
+
+	resolved, changed, err := resolveRustUseConflictsInContent(content)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Contains(t, resolved, "use std::collections::{HashMap, HashSet};")
+	assert.Contains(t, resolved, "use std::io::{Read, Write};")
+}
+
+func TestResolveRustUseConflictsInContent_RejectsNonUse(t *testing.T) {
+	content := `<<<<<<< HEAD
+use std::collections::HashMap;
+fn foo() {}
+=======
+use std::collections::HashSet;
+>>>>>>> feature
+`
+
+	_, _, err := resolveRustUseConflictsInContent(content)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "非 use 行")
+}
+
+func TestResolveRustUseConflictFile_PreservesMode(t *testing.T) {
+	dir := t.TempDir()
+	relPath := "lib.rs"
+	content := `<<<<<<< HEAD
+use std::fmt;
+=======
+use std::io;
+>>>>>>> feature
+`
+	absPath := filepath.Join(dir, relPath)
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+	require.NoError(t, os.Chmod(absPath, 0o755))
+
+	err := resolveRustUseConflictFile(dir, relPath)
+	require.NoError(t, err)
+
+	info, statErr := os.Stat(absPath)
+	require.NoError(t, statErr)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+}
+
+func TestFindCargoRoot_SingleCrate(t *testing.T) {
+	dir := t.TempDir()
+	// 创建单 crate 结构
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte("fn main() {}\n"), 0o644))
+
+	manifest, pkg, isWs := findCargoRoot(dir, "src/main.rs")
+	assert.Equal(t, filepath.Join(dir, "Cargo.toml"), manifest)
+	assert.Equal(t, "", pkg)
+	assert.False(t, isWs)
+}
+
+func TestFindCargoRoot_Workspace(t *testing.T) {
+	dir := t.TempDir()
+	// 创建 workspace 结构
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "crates", "core", "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[workspace]\nmembers = [\"crates/*\"]\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "crates", "core", "Cargo.toml"), []byte("[package]\nname = \"core\"\nversion = \"0.1.0\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "crates", "core", "src", "lib.rs"), []byte("pub fn hello() {}\n"), 0o644))
+
+	manifest, pkg, isWs := findCargoRoot(dir, "crates/core/src/lib.rs")
+	assert.Equal(t, filepath.Join(dir, "Cargo.toml"), manifest)
+	assert.Equal(t, "core", pkg)
+	assert.True(t, isWs)
+}
+
+func TestFindCargoRoot_NoCargo(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte("fn main() {}\n"), 0o644))
+
+	manifest, pkg, isWs := findCargoRoot(dir, "src/main.rs")
+	assert.Equal(t, "", manifest)
+	assert.Equal(t, "", pkg)
+	assert.False(t, isWs)
+}
+
+func TestCollectRustTestTargets_FiltersNonRs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"test\"\nversion = \"0.1.0\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte("fn main() {}\n"), 0o644))
+
+	targets := collectRustTestTargets(dir, []string{"src/main.rs", "README.md", "pkg.go"})
+	assert.Len(t, targets, 1)
+	assert.Equal(t, filepath.Join(dir, "Cargo.toml"), targets[0].manifestPath)
+}
+
+func TestParseCargoPackageName(t *testing.T) {
+	content := `[package]
+name = "my-awesome-crate"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0"
+`
+	assert.Equal(t, "my-awesome-crate", parseCargoPackageName(content))
+}
+
+func TestParseCargoPackageName_NoPackage(t *testing.T) {
+	content := `[workspace]
+members = ["crates/*"]
+`
+	assert.Equal(t, "", parseCargoPackageName(content))
+}
+
 func setupPRConflictRepoWithFailingGoTestSideEffects(t *testing.T) (string, string) {
 	t.Helper()
 

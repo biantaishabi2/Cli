@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -317,6 +318,9 @@ func isAIConflictWhitelisted(file string, fileSummary ConflictFileSummary) (bool
 	if isGoImportConflictOnly(fileSummary) {
 		return true, "go import 冲突"
 	}
+	if strings.ToLower(filepath.Ext(file)) == ".rs" && isRustUseConflictOnly(fileSummary) {
+		return true, "rust-use-only"
+	}
 	if isLightweightGoTestConflict(file, fileSummary) {
 		return true, "测试辅助代码轻度并合"
 	}
@@ -335,12 +339,17 @@ func hasHighRiskConflict(file string, fileSummary ConflictFileSummary) (bool, st
 		return true, fmt.Sprintf("冲突块过多: %d", fileSummary.Hunks)
 	}
 
+	isRust := strings.ToLower(filepath.Ext(file)) == ".rs"
 	totalLines := 0
 	for _, block := range fileSummary.Blocks {
 		totalLines += countConflictSideLines(block.Ours)
 		totalLines += countConflictSideLines(block.Theirs)
 		merged := block.Ours + "\n" + block.Theirs
-		if containsCoreInterfaceSignal(merged) {
+		if isRust {
+			if containsRustCoreSignal(merged) {
+				return true, "检测到 Rust 核心 trait/impl 语义变更"
+			}
+		} else if containsCoreInterfaceSignal(merged) {
 			return true, "检测到核心接口语义变更信号"
 		}
 	}
@@ -386,6 +395,57 @@ func isImportSideText(side string) bool {
 		}
 	}
 	return seen > 0
+}
+
+// rustUseLineRe 匹配单行 use 语句（含花括号展开），排除 glob * 和 rename as。
+var rustUseLineRe = regexp.MustCompile(`^use\s+[\w:]+(::\{\s*[\w\s,]+\s*\})?\s*;\s*$`)
+
+// isRustUseConflictOnly 判断冲突块是否全部为低风险 use 语句。
+func isRustUseConflictOnly(fileSummary ConflictFileSummary) bool {
+	for _, block := range fileSummary.Blocks {
+		if !isRustUseSideText(block.Ours) || !isRustUseSideText(block.Theirs) {
+			return false
+		}
+	}
+	return true
+}
+
+// isRustUseSideText 逐行检查是否为 use 语句、空行或注释。
+func isRustUseSideText(side string) bool {
+	lines := strings.Split(side, "\n")
+	seen := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if !rustUseLineRe.MatchString(trimmed) {
+			return false
+		}
+		seen++
+	}
+	return seen > 0
+}
+
+// containsRustCoreSignal 检测 trait/impl/unsafe/macro_rules! 高风险关键字。
+func containsRustCoreSignal(s string) bool {
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "trait ") || strings.HasPrefix(trimmed, "pub trait ") {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "impl ") || strings.HasPrefix(trimmed, "impl<") {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "unsafe ") {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "macro_rules!") {
+			return true
+		}
+	}
+	return false
 }
 
 func isLightweightGoTestConflict(file string, fileSummary ConflictFileSummary) bool {
