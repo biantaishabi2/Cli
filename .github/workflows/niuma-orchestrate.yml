@@ -25,6 +25,8 @@ jobs:
     secrets: inherit
     with:
       repo: ${{ github.repository }}
+      workflow_source_repo: ${{ github.repository }}
+      workflow_source_ref: ${{ github.event.repository.default_branch }}
       repo_dir: "."
       build_niuma: true
       label_whitelist: "bot:queued,bot:pr-reviewable"

@@ -25,6 +25,8 @@ jobs:
     secrets: inherit
     with:
       repo: biantaishabi2/gong
+      workflow_source_repo: biantaishabi2/Cli
+      workflow_source_ref: master
       repo_dir: "."
       build_niuma: false
       label_whitelist: "bot:queued,bot:pr-reviewable"

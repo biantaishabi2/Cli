@@ -160,11 +160,19 @@ extract_summary_json() {
 }
 
 @test "fetch 失败: 记录 fetch_prune_failed 并返回失败" {
+  local branch="fix/H"
+  create_feature_worktree "$branch" "h.txt"
+  local worktree_path="$LAST_WORKTREE_PATH"
+  merge_branch_into_master "$branch"
+  git -C "$REPO_DIR" update-ref -d "refs/remotes/origin/$branch"
+
   git -C "$REPO_DIR" remote set-url origin "$TEST_ROOT/missing-remote.git"
 
   run "$SCRIPT_UNDER_TEST" --repo-dir "$REPO_DIR"
 
   [ "$status" -eq 1 ]
+  [ -d "$worktree_path" ]
+  git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch"
   summary_json="$(extract_summary_json "$output")"
   [ "$(jq -r '.errors | map(select(.reason == "fetch_prune_failed")) | length' <<<"$summary_json")" -eq 1 ]
 }

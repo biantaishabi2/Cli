@@ -7,6 +7,16 @@ on:
         description: "目标仓库（owner/repo）"
         required: true
         type: string
+      workflow_source_repo:
+        description: "reusable workflow 源仓库（owner/repo）"
+        required: false
+        default: ""
+        type: string
+      workflow_source_ref:
+        description: "reusable workflow 源 ref（分支、tag 或 SHA）"
+        required: false
+        default: ""
+        type: string
       repo_dir:
         description: "仓库目录（相对 GITHUB_WORKSPACE 或绝对路径）"
         required: false
@@ -348,17 +358,25 @@ jobs:
 
       - name: Resolve Reusable Workflow Source
         id: workflow_source
+        env:
+          INPUT_SOURCE_REPO: ${{ inputs.workflow_source_repo }}
+          INPUT_SOURCE_REF: ${{ inputs.workflow_source_ref }}
+          DEFAULT_SOURCE_REPO: ${{ github.repository }}
+          DEFAULT_SOURCE_REF: ${{ github.event.repository.default_branch }}
         run: |
-          workflow_ref="${{ github.workflow_ref }}"
-          source_repo="${workflow_ref%%/.github/workflows/*}"
-          source_ref="${workflow_ref##*@}"
+          source_repo="$INPUT_SOURCE_REPO"
+          source_ref="$INPUT_SOURCE_REF"
 
-          if [ -z "$source_repo" ] || [ "$source_repo" = "$workflow_ref" ]; then
-            echo "::error::无法从 github.workflow_ref 解析 reusable 仓库: $workflow_ref"
-            exit 1
+          if [ -z "$source_repo" ]; then
+            source_repo="$DEFAULT_SOURCE_REPO"
           fi
-          if [ -z "$source_ref" ] || [ "$source_ref" = "$workflow_ref" ]; then
-            source_ref="${{ github.ref }}"
+          if [ -z "$source_ref" ]; then
+            source_ref="$DEFAULT_SOURCE_REF"
+          fi
+
+          if [ -z "$source_repo" ] || [ -z "$source_ref" ]; then
+            echo "::error::无法解析 reusable workflow 源仓库/ref，请显式传入 workflow_source_repo 与 workflow_source_ref"
+            exit 1
           fi
 
           echo "source_repo=$source_repo" >> "$GITHUB_OUTPUT"

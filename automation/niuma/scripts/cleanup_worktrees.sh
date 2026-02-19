@@ -90,12 +90,16 @@ log "repo_dir=$REPO_DIR"
 log "main_worktree=$MAIN_WORKTREE_PATH"
 log "base_ref=$BASE_REF"
 
+should_run_cleanup=true
+
 if ! git -C "$REPO_DIR" fetch -p origin; then
   add_record error_records "" "$REPO_DIR" "fetch_prune_failed"
+  should_run_cleanup=false
 fi
 
 if ! git -C "$REPO_DIR" rev-parse --verify --quiet "$BASE_REF^{commit}" >/dev/null; then
   add_record error_records "" "$REPO_DIR" "base_ref_not_found"
+  should_run_cleanup=false
 fi
 
 process_worktree() {
@@ -172,30 +176,32 @@ current_worktree=""
 current_head=""
 current_branch_ref=""
 
-while IFS= read -r line || [[ -n "$line" ]]; do
-  if [[ -z "$line" ]]; then
-    process_worktree "$current_worktree" "$current_head" "$current_branch_ref"
-    current_worktree=""
-    current_head=""
-    current_branch_ref=""
-    continue
+if [[ "$should_run_cleanup" == "true" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -z "$line" ]]; then
+      process_worktree "$current_worktree" "$current_head" "$current_branch_ref"
+      current_worktree=""
+      current_head=""
+      current_branch_ref=""
+      continue
+    fi
+
+    case "$line" in
+      worktree\ *)
+        current_worktree="${line#worktree }"
+        ;;
+      HEAD\ *)
+        current_head="${line#HEAD }"
+        ;;
+      branch\ *)
+        current_branch_ref="${line#branch }"
+        ;;
+    esac
+  done < <(git -C "$REPO_DIR" worktree list --porcelain; echo)
+
+  if ! git -C "$REPO_DIR" worktree prune; then
+    add_record error_records "" "$REPO_DIR" "worktree_prune_failed"
   fi
-
-  case "$line" in
-    worktree\ *)
-      current_worktree="${line#worktree }"
-      ;;
-    HEAD\ *)
-      current_head="${line#HEAD }"
-      ;;
-    branch\ *)
-      current_branch_ref="${line#branch }"
-      ;;
-  esac
-done < <(git -C "$REPO_DIR" worktree list --porcelain; echo)
-
-if ! git -C "$REPO_DIR" worktree prune; then
-  add_record error_records "" "$REPO_DIR" "worktree_prune_failed"
 fi
 
 deleted_json="$(records_to_json deleted_records)"
