@@ -14,5 +14,5 @@ jobs:
     uses: ./.github/workflows/niuma-review-reusable.yml
     with:
       repo: ${{ github.repository }}
-      issue_number: ${{ github.event.issue.number }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
     secrets: inherit
