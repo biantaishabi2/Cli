@@ -74,7 +74,7 @@ func renderTemplate(name, tmplStr string, input *PromptInput) (string, error) {
 // FilterCommentsForPrompt 对评论列表进行裁剪，用于 debate 阶段上下文瘦身。
 // maxHuman <= 0 时全量返回（等价于 ToCommentBodies 行为）。
 // maxHuman > 0 时：按 CreatedAt 升序排序后，取最近 N 条人类评论，
-// 自动附加含 BOT:DISCUSS_SUMMARY marker 的最新一条 BOT 评论（如果存在），
+// 自动附加含 BOT:DISCUSSION_SUMMARY marker 的最新一条 BOT 评论（如果存在），
 // 最终按原始时间顺序合并输出。
 func FilterCommentsForPrompt(comments []*github.IssueComment, maxHuman int) []string {
 	if maxHuman <= 0 {
