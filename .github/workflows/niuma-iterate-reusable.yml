@@ -55,7 +55,7 @@ jobs:
   iterate:
     runs-on: self-hosted
     concurrency:
-      group: niuma-iterate-${{ inputs.issue_number }}
+      group: niuma-iterate-${{ inputs.issue_number || inputs.pr_number }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
