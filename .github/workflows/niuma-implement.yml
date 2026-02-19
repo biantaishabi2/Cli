@@ -57,113 +57,25 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       - name: Run PR Gate
-        id: gate
         if: steps.find_pr.outputs.pr_number != ''
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
-
-      - name: Resolve Gate Retry Policy
-        id: gate_policy
-        if: steps.gate.outcome == 'failure'
-        env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          WORKSPACE: ${{ github.workspace }}
-          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
-        run: |
-          STORE_PATH="$WORKSPACE/.niuma/tasks.json"
-          MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
-          if ! [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-            MAX_RETRIES=2
-          fi
-
-          RETRY_COUNT=0
-          GATE_STATUS=""
-          ATTEMPT_KEY=""
-          ESCALATION_LABELED="false"
-          if [ -f "$STORE_PATH" ]; then
-            RETRY_COUNT=$(jq -r --arg issue "$ISSUE_NUMBER" '
-              map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_retry_count // "0"
-            ' "$STORE_PATH")
-            GATE_STATUS=$(jq -r --arg issue "$ISSUE_NUMBER" '
-              map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_status // ""
-            ' "$STORE_PATH")
-            ATTEMPT_KEY=$(jq -r --arg issue "$ISSUE_NUMBER" '
-              map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_attempt_key // ""
-            ' "$STORE_PATH")
-            ESCALATION_LABELED=$(jq -r --arg issue "$ISSUE_NUMBER" '
-              map(select(.metadata.issue_num == $issue)) | first | .metadata.integration_gate_escalation_labeled // "false"
-            ' "$STORE_PATH")
-          fi
-
-          if ! [[ "$RETRY_COUNT" =~ ^[0-9]+$ ]]; then
-            RETRY_COUNT=0
-          fi
-          if [ "$ESCALATION_LABELED" != "true" ]; then
-            ESCALATION_LABELED="false"
-          fi
-
-          SHOULD_AUTO_FIX=true
-          if [ "$GATE_STATUS" = "escalated" ] || [ "$RETRY_COUNT" -gt "$MAX_RETRIES" ]; then
-            SHOULD_AUTO_FIX=false
-          fi
-
-          echo "max_retries=$MAX_RETRIES" >> "$GITHUB_OUTPUT"
-          echo "retry_count=$RETRY_COUNT" >> "$GITHUB_OUTPUT"
-          echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
-          echo "attempt_key=$ATTEMPT_KEY" >> "$GITHUB_OUTPUT"
-          echo "escalation_labeled=$ESCALATION_LABELED" >> "$GITHUB_OUTPUT"
-          echo "should_auto_fix=$SHOULD_AUTO_FIX" >> "$GITHUB_OUTPUT"
-
-      - name: Mark Needs Fix On Gate Failure
-        if: steps.gate.outcome == 'failure' && steps.gate_policy.outputs.should_auto_fix == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ github.workspace }}
+          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
         run: |
-          "$NIUMA_BIN" state-label set \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --from bot:pr-created \
-            --to bot:pr-needs-fix || \
-          "$NIUMA_BIN" state-label set \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --to bot:pr-needs-fix
-          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n实现后自动测试门禁失败，已回退为 \`bot:pr-needs-fix\`，请继续迭代修复。\n\n- retry_count=${{ steps.gate_policy.outputs.retry_count }}\n- max_retries=${{ steps.gate_policy.outputs.max_retries }}\n- attempt_key=\`${{ steps.gate_policy.outputs.attempt_key }}\`"
-          exit 1
-
-      - name: Escalate Human On Gate Failure
-        if: steps.gate.outcome == 'failure' && steps.gate_policy.outputs.should_auto_fix != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          ATTEMPT_KEY="${{ steps.gate_policy.outputs.attempt_key }}"
-          ESCALATION_LABELED="${{ steps.gate_policy.outputs.escalation_labeled }}"
-          if [ -n "$ATTEMPT_KEY" ]; then
-            MARKER="<!-- NIUMA_GATE_ESCALATED:${ATTEMPT_KEY} -->"
+          GATE_MAX_RETRIES=2
+          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
           else
-            MARKER="<!-- NIUMA_GATE_ESCALATED:no-attempt-key -->"
+            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
           fi
 
-          if [ "$ESCALATION_LABELED" = "true" ]; then
-            echo "controller 已完成 gate 升级标记，同轮次跳过重复升级动作。"
-            exit 1
-          fi
-
-          EXISTING_COUNT=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | \
-            jq -r --arg marker "$MARKER" '[.[] | select(.body | contains($marker))] | length')
-          if [ "$EXISTING_COUNT" -gt 0 ]; then
-            echo "发现同 attempt_key 升级记录，跳过重复升级动作。"
-            exit 1
-          fi
-
-          gh issue edit "$ISSUE_NUMBER" --add-label needs-human --add-label integration-gate-failed
-          gh issue comment "$ISSUE_NUMBER" --body "## 🚨 Gate 已超限，升级人工处理\n\nintegration gate 失败次数已超过上限，本轮不再触发自动修复。\n\n- retry_count=${{ steps.gate_policy.outputs.retry_count }}\n- max_retries=${{ steps.gate_policy.outputs.max_retries }}\n- attempt_key=\`${{ steps.gate_policy.outputs.attempt_key }}\`\n\n$MARKER"
-          exit 1
+          "$NIUMA_BIN" gate run \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER" \
+            --repo-dir "$WORKSPACE" \
+            --max-retries "$GATE_MAX_RETRIES"

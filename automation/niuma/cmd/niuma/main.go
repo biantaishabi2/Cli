@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(reviewCmd)
 	rootCmd.AddCommand(controlCmd)
 	rootCmd.AddCommand(stateLabelCmd)
+	rootCmd.AddCommand(gateCmd)
 
 	// discuss 特有 flags
 	discussCmd.Flags().IntVar(&flagMaxDiscussionRounds, "max-discussion-rounds", 0, "讨论最大轮次（1-20，0 表示使用配置）")
