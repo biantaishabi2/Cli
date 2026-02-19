@@ -1,5 +1,7 @@
 import json
+import os
 import pathlib
+import subprocess
 import unittest
 
 
@@ -9,46 +11,147 @@ REUSABLE_PATH = REPO_ROOT / ".github/workflows/niuma-orchestrate-reusable.yml"
 ENTRYPOINT_PATH = REPO_ROOT / ".github/workflows/niuma-orchestrate.yml"
 
 
-def evaluate_entrypoint_trigger(
+def extract_step_run_script(workflow_path: pathlib.Path, step_name: str) -> str:
+    lines = workflow_path.read_text(encoding="utf-8").splitlines()
+    step_index = None
+    step_indent = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == f"- name: {step_name}":
+            step_index = index
+            step_indent = len(line) - len(line.lstrip(" "))
+            break
+    if step_index is None:
+        raise AssertionError(f"未找到 step: {step_name}")
+
+    run_index = None
+    run_indent = 0
+    for index in range(step_index + 1, len(lines)):
+        line = lines[index]
+        indent = len(line) - len(line.lstrip(" "))
+        if line.lstrip().startswith("- name:") and indent <= step_indent:
+            break
+        if line.strip() == "run: |":
+            run_index = index
+            run_indent = indent
+            break
+    if run_index is None:
+        raise AssertionError(f"step {step_name} 缺少 run: |")
+
+    block_lines: list[str] = []
+    for index in range(run_index + 1, len(lines)):
+        line = lines[index]
+        if line.strip() == "":
+            block_lines.append("")
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= run_indent:
+            break
+        block_lines.append(line)
+
+    min_indent = min(
+        (len(line) - len(line.lstrip(" ")) for line in block_lines if line.strip()),
+        default=0,
+    )
+    return "\n".join(line[min_indent:] if line else "" for line in block_lines)
+
+
+def extract_job_if_expression(workflow_path: pathlib.Path, job_name: str) -> str:
+    lines = workflow_path.read_text(encoding="utf-8").splitlines()
+    job_index = None
+    job_indent = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == f"{job_name}:":
+            job_index = index
+            job_indent = len(line) - len(line.lstrip(" "))
+            break
+    if job_index is None:
+        raise AssertionError(f"未找到 job: {job_name}")
+
+    for index in range(job_index + 1, len(lines)):
+        line = lines[index]
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= job_indent and line.strip():
+            break
+        if line.strip().startswith("if: >"):
+            parts: list[str] = []
+            for sub_index in range(index + 1, len(lines)):
+                sub_line = lines[sub_index]
+                sub_indent = len(sub_line) - len(sub_line.lstrip(" "))
+                if sub_indent <= indent and sub_line.strip():
+                    break
+                text = sub_line.strip()
+                if text:
+                    parts.append(text)
+            return " ".join(parts)
+        if line.strip().startswith("if:"):
+            return line.split("if:", 1)[1].strip()
+    raise AssertionError(f"job {job_name} 缺少 if 条件")
+
+
+def evaluate_entrypoint_if(
+    expression: str,
+    *,
     event_name: str,
     label_name: str = "",
     action: str = "",
     event_source: str = "",
 ) -> bool:
-    if event_name == "issues":
-        return label_name in {"bot:queued", "bot:pr-reviewable"}
-    if event_name == "repository_dispatch":
-        return action == "niuma.task.completed" and event_source == "close-after-integration-merge"
-    if event_name == "schedule":
-        return True
-    return False
+    compiled = " ".join(expression.split())
+    compiled = compiled.replace("&&", " and ").replace("||", " or ")
+    replacements = {
+        "github.event.client_payload.event_source": repr(event_source),
+        "github.event.label.name": repr(label_name),
+        "github.event.action": repr(action),
+        "github.event_name": repr(event_name),
+    }
+    for key, value in replacements.items():
+        compiled = compiled.replace(key, value)
+    if "github." in compiled:
+        raise AssertionError(f"存在未替换上下文: {compiled}")
+    return bool(eval(compiled, {"__builtins__": {}}, {}))
 
 
-def evaluate_reusable_trigger_gate(
-    event_name: str,
-    label_whitelist: str = "bot:queued,bot:pr-reviewable",
-    label_name: str = "",
-    enable_dispatch_wakeup: bool = True,
-    action: str = "",
-    event_source: str = "",
-) -> tuple[bool, str]:
-    if event_name == "issues":
-        labels = [item.strip() for item in label_whitelist.split(",")]
-        if label_name in labels:
-            return True, "accepted"
-        return False, "label_not_whitelisted"
-    if event_name == "repository_dispatch":
-        if not enable_dispatch_wakeup:
-            return False, "dispatch_disabled"
-        if action != "niuma.task.completed":
-            return False, "dispatch_type_mismatch"
-        if event_source != "close-after-integration-merge":
-            return False, "dispatch_source_mismatch"
-        return True, "accepted"
-    return True, "accepted"
+def run_step_script(script: str, env: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    github_output = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / f"niuma-test-output-{os.getpid()}-{os.urandom(4).hex()}"
+    github_output.write_text("", encoding="utf-8")
+    run_env = os.environ.copy()
+    run_env.update(env)
+    run_env["GITHUB_OUTPUT"] = str(github_output)
+
+    completed = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{script}"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=run_env,
+    )
+
+    outputs: dict[str, str] = {}
+    if github_output.exists():
+        for line in github_output.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                outputs[key] = value
+        github_output.unlink(missing_ok=True)
+
+    return completed, outputs
 
 
 class TestOrchestrateContract(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        gate_script = extract_step_run_script(REUSABLE_PATH, "Enforce Trigger Gate")
+        cls.reusable_trigger_gate_script = (
+            gate_script.replace("${{ inputs.label_whitelist }}", "${INPUT_LABEL_WHITELIST}")
+            .replace("${{ github.event.label.name }}", "${EVENT_LABEL_NAME}")
+            .replace("${{ inputs.enable_dispatch_wakeup }}", "${INPUT_ENABLE_DISPATCH_WAKEUP}")
+            .replace("${{ github.event.action }}", "${EVENT_ACTION}")
+            .replace("${{ github.event.client_payload.event_source }}", "${EVENT_SOURCE}")
+        )
+        cls.entrypoint_if_expr = extract_job_if_expression(ENTRYPOINT_PATH, "orchestrate")
+
     def test_schema_defaults_and_required(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         self.assertEqual(schema["required"], ["repo"])
@@ -78,47 +181,133 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable\"", content)
         self.assertNotIn("control close-merged", content)
 
-    def test_trigger_matrix_for_issues_labels(self) -> None:
-        for label_name in ("bot:queued", "bot:pr-reviewable"):
-            self.assertTrue(evaluate_entrypoint_trigger(event_name="issues", label_name=label_name))
-            should_run, reason = evaluate_reusable_trigger_gate(event_name="issues", label_name=label_name)
-            self.assertTrue(should_run)
-            self.assertEqual(reason, "accepted")
+    def test_entrypoint_trigger_matrix_uses_real_if_expression(self) -> None:
+        cases = [
+            {
+                "name": "issues_queued",
+                "event_name": "issues",
+                "label_name": "bot:queued",
+                "expected": True,
+            },
+            {
+                "name": "issues_pr_reviewable",
+                "event_name": "issues",
+                "label_name": "bot:pr-reviewable",
+                "expected": True,
+            },
+            {
+                "name": "issues_other",
+                "event_name": "issues",
+                "label_name": "bot:other",
+                "expected": False,
+            },
+            {
+                "name": "dispatch_completed",
+                "event_name": "repository_dispatch",
+                "action": "niuma.task.completed",
+                "event_source": "close-after-integration-merge",
+                "expected": True,
+            },
+            {
+                "name": "dispatch_wrong_source",
+                "event_name": "repository_dispatch",
+                "action": "niuma.task.completed",
+                "event_source": "other-source",
+                "expected": False,
+            },
+            {
+                "name": "schedule",
+                "event_name": "schedule",
+                "expected": True,
+            },
+        ]
 
-        self.assertFalse(evaluate_entrypoint_trigger(event_name="issues", label_name="bot:unknown"))
-        should_run, reason = evaluate_reusable_trigger_gate(event_name="issues", label_name="bot:unknown")
-        self.assertFalse(should_run)
-        self.assertEqual(reason, "label_not_whitelisted")
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                actual = evaluate_entrypoint_if(
+                    self.entrypoint_if_expr,
+                    event_name=case["event_name"],
+                    label_name=case.get("label_name", ""),
+                    action=case.get("action", ""),
+                    event_source=case.get("event_source", ""),
+                )
+                self.assertEqual(actual, case["expected"])
 
-    def test_trigger_matrix_for_repository_dispatch_and_schedule(self) -> None:
-        self.assertTrue(
-            evaluate_entrypoint_trigger(
-                event_name="repository_dispatch",
-                action="niuma.task.completed",
-                event_source="close-after-integration-merge",
-            )
-        )
-        should_run, reason = evaluate_reusable_trigger_gate(
-            event_name="repository_dispatch",
-            action="niuma.task.completed",
-            event_source="close-after-integration-merge",
-        )
-        self.assertTrue(should_run)
-        self.assertEqual(reason, "accepted")
+    def test_reusable_trigger_gate_behavior_from_real_script(self) -> None:
+        cases = [
+            {
+                "name": "issues_queued",
+                "env": {
+                    "GITHUB_EVENT_NAME": "issues",
+                    "INPUT_LABEL_WHITELIST": "bot:queued,bot:pr-reviewable",
+                    "EVENT_LABEL_NAME": "bot:queued",
+                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
+                    "EVENT_ACTION": "",
+                    "EVENT_SOURCE": "",
+                },
+                "expected_should_run": "true",
+                "expected_reason": "accepted",
+            },
+            {
+                "name": "issues_not_whitelisted",
+                "env": {
+                    "GITHUB_EVENT_NAME": "issues",
+                    "INPUT_LABEL_WHITELIST": "bot:queued,bot:pr-reviewable",
+                    "EVENT_LABEL_NAME": "bot:blocked",
+                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
+                    "EVENT_ACTION": "",
+                    "EVENT_SOURCE": "",
+                },
+                "expected_should_run": "false",
+                "expected_reason": "label_not_whitelisted",
+            },
+            {
+                "name": "dispatch_accepted",
+                "env": {
+                    "GITHUB_EVENT_NAME": "repository_dispatch",
+                    "INPUT_LABEL_WHITELIST": "bot:queued,bot:pr-reviewable",
+                    "EVENT_LABEL_NAME": "",
+                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
+                    "EVENT_ACTION": "niuma.task.completed",
+                    "EVENT_SOURCE": "close-after-integration-merge",
+                },
+                "expected_should_run": "true",
+                "expected_reason": "accepted",
+            },
+            {
+                "name": "dispatch_disabled",
+                "env": {
+                    "GITHUB_EVENT_NAME": "repository_dispatch",
+                    "INPUT_LABEL_WHITELIST": "bot:queued,bot:pr-reviewable",
+                    "EVENT_LABEL_NAME": "",
+                    "INPUT_ENABLE_DISPATCH_WAKEUP": "false",
+                    "EVENT_ACTION": "niuma.task.completed",
+                    "EVENT_SOURCE": "close-after-integration-merge",
+                },
+                "expected_should_run": "false",
+                "expected_reason": "dispatch_disabled",
+            },
+            {
+                "name": "schedule_accepted",
+                "env": {
+                    "GITHUB_EVENT_NAME": "schedule",
+                    "INPUT_LABEL_WHITELIST": "bot:queued,bot:pr-reviewable",
+                    "EVENT_LABEL_NAME": "",
+                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
+                    "EVENT_ACTION": "",
+                    "EVENT_SOURCE": "",
+                },
+                "expected_should_run": "true",
+                "expected_reason": "accepted",
+            },
+        ]
 
-        should_run, reason = evaluate_reusable_trigger_gate(
-            event_name="repository_dispatch",
-            enable_dispatch_wakeup=False,
-            action="niuma.task.completed",
-            event_source="close-after-integration-merge",
-        )
-        self.assertFalse(should_run)
-        self.assertEqual(reason, "dispatch_disabled")
-
-        self.assertTrue(evaluate_entrypoint_trigger(event_name="schedule"))
-        should_run, reason = evaluate_reusable_trigger_gate(event_name="schedule")
-        self.assertTrue(should_run)
-        self.assertEqual(reason, "accepted")
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                completed, outputs = run_step_script(self.reusable_trigger_gate_script, case["env"])
+                self.assertEqual(completed.returncode, 0, msg=completed.stderr + completed.stdout)
+                self.assertEqual(outputs.get("should_run"), case["expected_should_run"])
+                self.assertEqual(outputs.get("reason"), case["expected_reason"])
 
 
 if __name__ == "__main__":
