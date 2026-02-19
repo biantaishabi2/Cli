@@ -34,6 +34,10 @@ type OrchestratorConfig struct {
 	RequirePlanApproval bool // 方案定稿后是否需要人工审批
 	MaxIterateRounds    int  // 最大自动迭代轮数（0=默认3）
 	MaxDiscussionRounds int  // discuss 单次 run 内最大轮数（0=默认5）
+
+	// plan-final 重试与降级
+	PlanFinalProviders []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
+	PlanFinalMaxRetries int          // 每个 provider 的重试次数（0=默认1）
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -269,8 +273,10 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	}
 
 	if o.shouldPublishDiscussionSummary(round, summaryMC, summary) {
-		_, _ = o.github.AddComment(ctx, o.issueNumber,
-			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousFinish))
+		if _, err := o.github.AddComment(ctx, o.issueNumber,
+			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousFinish)); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] 发布讨论摘要失败: %v\n", err)
+		}
 	}
 
 	if decision.Result == state.ShouldWarn {
@@ -349,9 +355,22 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 		return err
 	}
 
-	// AI 生成最终方案
-	finalPlan, err := o.plan.Final(ctx, input)
+	// AI 生成最终方案（带重试与 provider 降级）
+	providers := []ai.Provider{o.provider}
+	maxRetries := 1
+	if o.config != nil {
+		if len(o.config.PlanFinalProviders) > 0 {
+			providers = o.config.PlanFinalProviders
+		}
+		if o.config.PlanFinalMaxRetries > 0 {
+			maxRetries = o.config.PlanFinalMaxRetries
+		}
+	}
+
+	finalPlan, err := o.plan.FinalWithRetry(ctx, input, providers, maxRetries)
 	if err != nil {
+		// 全失败时发布结构化错误评论
+		o.postPlanFinalFailureComment(ctx, err)
 		return err
 	}
 
@@ -805,6 +824,31 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	return o.transition(ctx, state.StatePRNeedsFix)
 }
 
+// postPlanFinalFailureComment 全失败时在 issue 上发布结构化错误评论
+func (o *Orchestrator) postPlanFinalFailureComment(ctx context.Context, err error) {
+	var sb strings.Builder
+	sb.WriteString("## ❌ 定稿失败：所有 provider 均未返回有效 JSON\n\n")
+
+	var aggErr *AggregateRetryError
+	if errors.As(err, &aggErr) {
+		sb.WriteString("| Provider | Attempt | 错误分类 | 错误信息 |\n")
+		sb.WriteString("|----------|---------|----------|----------|\n")
+		for _, a := range aggErr.Attempts {
+			sb.WriteString(fmt.Sprintf("| %s | %d | %s | %s |\n", a.Provider, a.Attempt, a.Kind, a.Error))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("错误: %s\n", err.Error()))
+	}
+
+	sb.WriteString("\n### 建议操作\n\n")
+	sb.WriteString("- 检查 provider 配置和网络连接\n")
+	sb.WriteString("- 手动恢复: `niuma state-label set --repo <owner/repo> --issue ")
+	sb.WriteString(fmt.Sprintf("%d", o.issueNumber))
+	sb.WriteString(" --to bot:plan-final`\n")
+
+	_, _ = o.github.AddComment(ctx, o.issueNumber, sb.String())
+}
+
 // ===== 内部方法 =====
 
 // currentState 读取当前状态
@@ -893,6 +937,7 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 }
 
 // doDebateABDiscussion 执行 AB 轮流评论模式。
+// 3 级降级：格式修复重试 → fallback provider → 中止上报。
 func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
 	providers := o.discussionProviders()
 	if len(providers) == 0 {
@@ -919,13 +964,52 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		return nil, fmt.Errorf("构建 debate_ab prompt 失败: %w", err)
 	}
 
-	raw, err := providers[speakerIdx%len(providers)].Complete(ctx, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("debate_%s 生成评论失败: %w", strings.ToLower(speaker), err)
+	// tryDebateRound 使用指定 provider 完成一次 AI 调用 + parse
+	tryDebateRound := func(provider ai.Provider) (raw string, comment *DebateComment, err error) {
+		raw, err = provider.Complete(ctx, prompt)
+		if err != nil {
+			return "", nil, fmt.Errorf("debate_%s 生成评论失败 (provider=%s): %w", strings.ToLower(speaker), provider.Name(), err)
+		}
+		comment, err = ParseDebateResponse(raw)
+		return raw, comment, err
 	}
-	comment, err := ParseDebateResponse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("解析 debate_%s 评论失败: %w", strings.ToLower(speaker), err)
+
+	primaryProvider := providers[speakerIdx%len(providers)]
+
+	// 第1次尝试：主 provider
+	raw, comment, parseErr := tryDebateRound(primaryProvider)
+
+	// 第1级降级：格式修复重试（同 provider）
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s parse 失败 (provider=%s)，尝试格式修复重试: %v\n",
+			strings.ToLower(speaker), primaryProvider.Name(), parseErr)
+		repairPrompt := BuildFormatRepairPrompt(raw)
+		repairRaw, repairErr := primaryProvider.Complete(ctx, repairPrompt)
+		if repairErr == nil {
+			comment, parseErr = RepairAndParseDebate(raw, repairRaw)
+		} else {
+			fmt.Fprintf(os.Stderr, "[WARN] 格式修复重试 AI 调用失败: %v\n", repairErr)
+		}
+	}
+
+	// 第2级降级：fallback provider（如果存在且不同于主 provider）
+	if parseErr != nil && len(providers) > 1 {
+		fallbackIdx := (speakerIdx + 1) % len(providers)
+		fallbackProvider := providers[fallbackIdx]
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 主 provider 修复失败，切换 fallback provider=%s\n",
+			strings.ToLower(speaker), fallbackProvider.Name())
+		raw, comment, parseErr = tryDebateRound(fallbackProvider)
+	}
+
+	// 第3级：中止上报
+	if parseErr != nil {
+		abortBody := fmt.Sprintf("<!-- BOT:DISCUSS_ABORT issue=%d round=%d -->\n\n## ⛔ 讨论中止\n\n"+
+			"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
+			"**错误**: %s\n\n**provider**: %s\n\n请人工检查后重新触发讨论。",
+			o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
+			parseErr.Error(), primaryProvider.Name())
+		_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
+		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), parseErr)
 	}
 
 	// debate_ab 下每轮直接对 issue 可见。

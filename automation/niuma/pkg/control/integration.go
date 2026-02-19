@@ -321,6 +321,9 @@ func isAIConflictWhitelisted(file string, fileSummary ConflictFileSummary) (bool
 	if strings.ToLower(filepath.Ext(file)) == ".rs" && isRustUseConflictOnly(fileSummary) {
 		return true, "rust-use-only"
 	}
+	if isElixirLightweightConflict(file, fileSummary) {
+		return true, "elixir alias/import/use 轻度冲突"
+	}
 	if isLightweightGoTestConflict(file, fileSummary) {
 		return true, "测试辅助代码轻度并合"
 	}
@@ -410,6 +413,30 @@ func isRustUseConflictOnly(fileSummary ConflictFileSummary) bool {
 	return true
 }
 
+// isElixirLightweightConflict 判断 .ex/.exs 文件是否仅包含 alias/import/use 级别的轻度冲突。
+// 条件：hunks ≤ 3，每侧 ≤ 12 行非空行，且所有非空冲突行以 alias/import/use 开头。
+func isElixirLightweightConflict(file string, fileSummary ConflictFileSummary) bool {
+	ext := strings.ToLower(filepath.Ext(file))
+	if ext != ".ex" && ext != ".exs" {
+		return false
+	}
+	if fileSummary.Hunks > maxWhitelistConflictHunks {
+		return false
+	}
+	for _, block := range fileSummary.Blocks {
+		if countConflictSideLines(block.Ours) > maxAIMildConflictBlockLines {
+			return false
+		}
+		if countConflictSideLines(block.Theirs) > maxAIMildConflictBlockLines {
+			return false
+		}
+		if !isElixirLightweightSide(block.Ours) || !isElixirLightweightSide(block.Theirs) {
+			return false
+		}
+	}
+	return true
+}
+
 // isRustUseSideText 逐行检查是否为 use 语句、空行或注释。
 func isRustUseSideText(side string) bool {
 	lines := strings.Split(side, "\n")
@@ -420,6 +447,24 @@ func isRustUseSideText(side string) bool {
 			continue
 		}
 		if !rustUseLineRe.MatchString(trimmed) {
+			return false
+		}
+		seen++
+	}
+	return seen > 0
+}
+
+// isElixirLightweightSide 检查冲突块的一侧是否全部为 alias/import/use 语句。
+func isElixirLightweightSide(side string) bool {
+	seen := 0
+	for _, line := range strings.Split(side, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "alias ") &&
+			!strings.HasPrefix(trimmed, "import ") &&
+			!strings.HasPrefix(trimmed, "use ") {
 			return false
 		}
 		seen++

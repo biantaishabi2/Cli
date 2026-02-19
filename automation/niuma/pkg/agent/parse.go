@@ -10,6 +10,37 @@ import (
 	"strings"
 )
 
+// RecoverableErrorKind 可恢复错误的分类
+type RecoverableErrorKind string
+
+const (
+	// EmptyResponse AI 返回空响应
+	EmptyResponse RecoverableErrorKind = "EmptyResponse"
+	// MissingJSON AI 返回中缺少 JSON
+	MissingJSON RecoverableErrorKind = "MissingJSON"
+	// JSONParseError JSON 解析失败
+	JSONParseError RecoverableErrorKind = "JSONParseError"
+)
+
+// RecoverableError 可恢复的解析错误，供重试层判断是否值得重试
+type RecoverableError struct {
+	Kind    RecoverableErrorKind
+	Err     error
+	Message string
+}
+
+func (e *RecoverableError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %s (%v)", e.Kind, e.Message, e.Err)
+	}
+	return fmt.Sprintf("%s: %s", e.Kind, e.Message)
+}
+
+func (e *RecoverableError) Unwrap() error {
+	return e.Err
+}
+
+
 // jsonBlockRe 匹配 ```json ... ``` 代码块
 var jsonBlockRe = regexp.MustCompile("(?s)```json\\s*\n?(.*?)\n?```")
 
@@ -66,28 +97,31 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 }
 
 // ParseFinalPlanResponse 解析 AI 返回的最终方案
+// 对可恢复的格式错误返回 RecoverableError，供重试层判断是否值得重试。
+// 字段校验失败（title/approach 为空）返回普通 error，不触发重试。
 func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("空响应")
+		return nil, &RecoverableError{Kind: EmptyResponse, Message: "AI 返回空响应"}
 	}
 
 	jsonStr := extractJSON(raw)
-	if jsonStr != "" {
-		var plan FinalPlan
-		if err := json.Unmarshal([]byte(jsonStr), &plan); err == nil {
-			// 必填字段校验
-			if plan.Title == "" {
-				return nil, fmt.Errorf("最终方案缺少 title 字段")
-			}
-			if plan.Approach == "" {
-				return nil, fmt.Errorf("最终方案缺少 approach 字段")
-			}
-			return &plan, nil
-		}
+	if jsonStr == "" {
+		return nil, &RecoverableError{Kind: MissingJSON, Message: "无法解析最终方案，AI 返回非 JSON 格式"}
 	}
 
-	// FinalPlan 不做 fallback（结构化要求更高）
-	return nil, fmt.Errorf("无法解析最终方案，AI 返回非 JSON 格式")
+	var plan FinalPlan
+	if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
+		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "JSON 解析失败"}
+	}
+
+	// 必填字段校验——不可恢复，重试也不会修复
+	if plan.Title == "" {
+		return nil, fmt.Errorf("最终方案缺少 title 字段")
+	}
+	if plan.Approach == "" {
+		return nil, fmt.Errorf("最终方案缺少 approach 字段")
+	}
+	return &plan, nil
 }
 
 // ParseReviewResponse 解析 AI 返回的审查结果
@@ -193,4 +227,44 @@ func missingFields(rawMap map[string]json.RawMessage, required ...string) []stri
 
 func isJSONNull(raw json.RawMessage) bool {
 	return strings.TrimSpace(string(raw)) == "null"
+}
+
+// BuildFormatRepairPrompt 生成格式修复 prompt，要求 AI 仅输出缺失的 JSON 代码块。
+// 用于 debate parse 失败后的第1级降级重试。
+func BuildFormatRepairPrompt(rawText string) string {
+	return fmt.Sprintf("以下是你刚才生成的评论内容，但缺少结尾的 JSON 代码块，导致解析失败。\n\n"+
+		"请**仅**输出一个 JSON 代码块（使用 markdown ```json ... ``` 格式），包含以下字段：\n"+
+		"- should_finish: 布尔值，表示你是否认为讨论已经可以结束\n\n"+
+		"不要重复评论正文，不要添加任何其他内容，只输出 JSON 代码块。\n\n"+
+		"---\n\n"+
+		"原始评论内容：\n%s", rawText)
+}
+
+// RepairAndParseDebate 尝试用修复后的 JSON 拼接原始 body 构造 DebateComment。
+// repairRaw 是 AI 对 BuildFormatRepairPrompt 的回复（应仅含 JSON 代码块）。
+func RepairAndParseDebate(originalRaw, repairRaw string) (*DebateComment, error) {
+	// 先尝试从修复回复中提取 JSON
+	jsonStr := extractJSON(repairRaw)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("修复回复中未找到 JSON 代码块")
+	}
+
+	type debateJSON struct {
+		ShouldFinish *bool `json:"should_finish"`
+	}
+	var parsed debateJSON
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil, fmt.Errorf("修复回复 JSON 解析失败: %w", err)
+	}
+	if parsed.ShouldFinish == nil {
+		return nil, fmt.Errorf("修复回复缺少 should_finish 字段")
+	}
+
+	// 用原始文本作为 body（去掉可能残留的 JSON 片段）
+	body := strings.TrimSpace(originalRaw)
+
+	return &DebateComment{
+		Body:         body,
+		ShouldFinish: *parsed.ShouldFinish,
+	}, nil
 }

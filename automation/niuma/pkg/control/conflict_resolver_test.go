@@ -581,3 +581,128 @@ func helperValue() int {
 	runGitWithExpectedFailure(t, dir, "merge", "--no-ff", "feat/test-helper-conflict")
 	return dir, conflictFile
 }
+
+func TestGateConflictElixirTests_SkipWhenNoElixirFiles(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package main\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictElixirTestCmd: "mix test",
+		},
+	}
+
+	err := ctrl.gateConflictElixirTests(context.Background(), dir, []string{"pkg.go"})
+	require.NoError(t, err)
+}
+
+func TestGateConflictElixirTests_SkipWhenCmdEmpty(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib", "app.ex"), []byte("defmodule App do\nend\n"), 0o644))
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictElixirTestCmd: "",
+		},
+	}
+
+	err := ctrl.gateConflictElixirTests(context.Background(), dir, []string{"lib/app.ex"})
+	require.NoError(t, err)
+}
+
+func TestGateConflictElixirTests_PassOnSuccess(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib", "app.ex"), []byte("defmodule App do\nend\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictElixirTestCmd: "true",
+		},
+	}
+
+	err := ctrl.gateConflictElixirTests(context.Background(), dir, []string{"lib/app.ex"})
+	require.NoError(t, err)
+}
+
+func TestGateConflictElixirTests_FailOnTestFailure(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib", "app.ex"), []byte("defmodule App do\nend\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictElixirTestCmd: "false",
+		},
+	}
+
+	err := ctrl.gateConflictElixirTests(context.Background(), dir, []string{"lib/app.ex"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "elixir tests 失败")
+}
+
+func TestTryResolveConflictByAIOnce_RollbackOnElixirTestFailure(t *testing.T) {
+	dir := setupGitRepo(t)
+	conflictFile := "lib/app.ex"
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte("defmodule App do\nend\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	conflictContent := `defmodule App do
+<<<<<<< HEAD
+  alias MyApp.Repo
+=======
+  alias MyApp.Schema
+>>>>>>> feature
+end
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(conflictContent), 0o644))
+	require.NoError(t, os.Chmod(filepath.Join(dir, conflictFile), 0o755))
+
+	provider := ai.NewMockProvider(fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"defmodule App do\n  alias MyApp.Repo\n  alias MyApp.Schema\nend\n"}]}`,
+		conflictFile,
+	))
+	ctrl := &Controller{
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
+			PRConflictAIMaxAttempts: 2,
+			PRConflictElixirTestCmd: "exit 1",
+		},
+	}
+
+	summaries := map[string]ConflictFileSummary{
+		conflictFile: {
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "  alias MyApp.Repo", Theirs: "  alias MyApp.Schema"}},
+		},
+	}
+	profileGroups, groupErr := ResolveConflictProfileGroups([]string{conflictFile})
+	require.NoError(t, groupErr)
+
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "elixir tests 失败")
+
+	// 验证回滚：冲突文件内容和权限恢复
+	currentContent, readErr := os.ReadFile(filepath.Join(dir, conflictFile))
+	require.NoError(t, readErr)
+	assert.Equal(t, conflictContent, string(currentContent))
+	fileInfo, modeErr := os.Stat(filepath.Join(dir, conflictFile))
+	require.NoError(t, modeErr)
+	assert.Equal(t, os.FileMode(0o755), fileInfo.Mode().Perm())
+}

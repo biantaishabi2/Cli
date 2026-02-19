@@ -80,6 +80,70 @@ func TestPlanEngine_Final_ParseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "title")
 }
 
+// ===== FinalWithRetry 测试 =====
+
+func TestFinalWithRetry_RetrySuccess(t *testing.T) {
+	// 主 provider 第 1 次返回非 JSON，第 2 次返回有效 JSON
+	mock := ai.NewMockProvider(
+		"Here is the plan in natural language...",
+		`{"title":"JWT认证","approach":"使用JWT","file_changes":[],"test_scenarios":[]}`,
+	)
+	engine := NewPlanEngine(mock)
+
+	input := &PromptInput{
+		IssueTitle: "JWT migration",
+		IssueBody:  "Migrate auth",
+	}
+
+	plan, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{mock}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "JWT认证", plan.Title)
+	assert.Equal(t, 2, mock.CallCount())
+}
+
+func TestFinalWithRetry_FallbackSuccess(t *testing.T) {
+	// 主 provider 持续返回非 JSON，fallback provider 首次返回有效 JSON
+	primary := ai.NewMockProvider(
+		"not json 1",
+		"not json 2",
+	)
+	fallback := ai.NewMockProvider(
+		`{"title":"方案B","approach":"fallback方案","file_changes":[],"test_scenarios":[]}`,
+	)
+	engine := NewPlanEngine(primary)
+
+	input := &PromptInput{
+		IssueTitle: "Test",
+		IssueBody:  "Body",
+	}
+
+	plan, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{primary, fallback}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "方案B", plan.Title)
+	assert.Equal(t, 2, primary.CallCount())
+	assert.Equal(t, 1, fallback.CallCount())
+}
+
+func TestFinalWithRetry_AllFail(t *testing.T) {
+	// 两个 provider 均持续失败
+	p1 := ai.NewMockProvider("not json", "not json")
+	p2 := ai.NewMockProvider("still not json", "still not json")
+	engine := NewPlanEngine(p1)
+
+	input := &PromptInput{
+		IssueTitle: "Test",
+		IssueBody:  "Body",
+	}
+
+	_, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{p1, p2}, 1)
+	require.Error(t, err)
+
+	var aggErr *AggregateRetryError
+	require.ErrorAs(t, err, &aggErr)
+	assert.Len(t, aggErr.Attempts, 4) // 2 providers × 2 attempts
+	assert.Contains(t, err.Error(), "mock")
+}
+
 func TestPlanEngine_Draft_PromptContainsComments(t *testing.T) {
 	mock := ai.NewMockProvider(`{"summary": "s", "approach": "a"}`)
 	engine := NewPlanEngine(mock)
