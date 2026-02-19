@@ -175,7 +175,7 @@ func TestFilterCommentsForPrompt_LargeInput(t *testing.T) {
 			hasSummary = true
 		}
 	}
-	assert.True(t, hasSummary, "应包含 DISCUSS_SUMMARY BOT 评论")
+	assert.True(t, hasSummary, "应包含 DISCUSSION_SUMMARY BOT 评论")
 }
 
 func TestFilterCommentsForPrompt_FewHumanComments(t *testing.T) {
@@ -237,7 +237,7 @@ func TestFilterCommentsForPrompt_BotDetection(t *testing.T) {
 func TestFilterCommentsForPrompt_NoSummaryMarker(t *testing.T) {
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	var comments []*github.IssueComment
-	// 50 条 BOT 但无 DISCUSS_SUMMARY
+	// 50 条 BOT 但无 DISCUSSION_SUMMARY
 	for i := 0; i < 50; i++ {
 		comments = append(comments, makeComment(
 			fmt.Sprintf("BOT %d", i), base.Add(time.Duration(i)*time.Minute), "Bot", "bot[bot]"))

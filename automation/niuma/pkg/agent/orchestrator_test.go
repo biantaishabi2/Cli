@@ -924,4 +924,28 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 	}
 	// summary BOT 评论应保留
 	assert.Contains(t, prompt, "汇总内容", "DISCUSSION_SUMMARY BOT 评论应保留在 prompt 中")
+
+	// 显式验证 maxHuman+1 上限：统计 prompt 中各类评论出现次数
+	humanInPrompt := 0
+	for i := 0; i < 15; i++ {
+		if strings.Contains(prompt, fmt.Sprintf("人类评论 %d", i)) {
+			humanInPrompt++
+		}
+	}
+	botInPrompt := 0
+	for i := 0; i < 117; i++ {
+		if strings.Contains(prompt, fmt.Sprintf("BOT 评论 %d", i)) {
+			botInPrompt++
+		}
+	}
+	summaryInPrompt := 0
+	if strings.Contains(prompt, "汇总内容") {
+		summaryInPrompt = 1
+	}
+	totalComments := humanInPrompt + botInPrompt + summaryInPrompt
+	assert.LessOrEqual(t, totalComments, maxHuman+1,
+		"prompt 中评论总数 (%d) 应 <= maxHuman+1 (%d)", totalComments, maxHuman+1)
+	assert.Equal(t, maxHuman, humanInPrompt,
+		"应恰好包含 maxHuman (%d) 条人类评论", maxHuman)
+	assert.Equal(t, 0, botInPrompt, "普通 BOT 评论应全部被过滤")
 }
