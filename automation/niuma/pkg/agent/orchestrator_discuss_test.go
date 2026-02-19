@@ -172,6 +172,92 @@ func TestDoDiscuss_ConcurrentDuplicateTriggers_StateRemainsStable(t *testing.T) 
 	require.NotNil(t, mockGH.GetMarker(1, marker.TypeDiscussionRoundLimitNotice))
 }
 
+// ===== PlanFinal 重试与降级集成测试 =====
+
+func TestDoPlanFinal_RetryOnNonJSON(t *testing.T) {
+	// 主 provider 第 1 次返回纯文本，第 2 次返回有效 JSON
+	mockAI := ai.NewMockProvider(
+		"This is a plan in natural language, not JSON.",
+		`{"title":"最终方案","approach":"按共识实现","file_changes":[{"path":"src/login.go","action":"modify","description":"修复编码"}],"test_scenarios":[{"name":"特殊字符","input":"p@ss","expected":"success"}]}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	cfg := &OrchestratorConfig{
+		PlanFinalProviders:  []ai.Provider{mockAI},
+		PlanFinalMaxRetries: 1,
+		ImplementProvider:   mockAI,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+	err := orch.DoPlanFinal(context.Background())
+	require.NoError(t, err)
+
+	finalMC := mockGH.GetMarker(1, marker.TypePlanFinal)
+	require.NotNil(t, finalMC)
+	assert.Contains(t, mockGH.Labels[1], string(state.StatePlanFinal))
+	assert.Equal(t, 2, mockAI.CallCount())
+}
+
+func TestDoPlanFinal_FallbackProvider(t *testing.T) {
+	// 主 provider 全部失败，fallback provider 成功
+	primary := ai.NewMockProvider(
+		"not json 1",
+		"not json 2",
+	)
+	fallback := ai.NewMockProvider(
+		`{"title":"方案B","approach":"fallback方案","file_changes":[],"test_scenarios":[]}`,
+	)
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	cfg := &OrchestratorConfig{
+		PlanFinalProviders:  []ai.Provider{primary, fallback},
+		PlanFinalMaxRetries: 1,
+		ImplementProvider:   primary,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+	err := orch.DoPlanFinal(context.Background())
+	require.NoError(t, err)
+
+	finalMC := mockGH.GetMarker(1, marker.TypePlanFinal)
+	require.NotNil(t, finalMC)
+	assert.Contains(t, finalMC.Comment.GetBody(), "方案B")
+	assert.Equal(t, 2, primary.CallCount())
+	assert.Equal(t, 1, fallback.CallCount())
+}
+
+func TestDoPlanFinal_AllFail_PostsComment(t *testing.T) {
+	// 所有 provider 全部失败，验证发布结构化错误评论
+	p1 := ai.NewMockProvider("not json", "not json")
+	p2 := ai.NewMockProvider("still not json", "still not json")
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	cfg := &OrchestratorConfig{
+		PlanFinalProviders:  []ai.Provider{p1, p2},
+		PlanFinalMaxRetries: 1,
+		ImplementProvider:   p1,
+	}
+	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
+	err := orch.DoPlanFinal(context.Background())
+	require.Error(t, err)
+
+	// 验证错误评论已发布
+	comments := mockGH.Comments[1]
+	require.NotEmpty(t, comments)
+	lastComment := comments[len(comments)-1].GetBody()
+	assert.Contains(t, lastComment, "定稿失败")
+	assert.Contains(t, lastComment, "mock")
+	assert.Contains(t, lastComment, "niuma state-label set")
+
+	// 状态保持 needs-discussion（不做状态迁移）
+	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
+	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
+}
+
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {
 	mockAI := ai.NewMockProvider(
 		"r1 继续讨论。\n```json\n{\"should_finish\":false}\n```",
