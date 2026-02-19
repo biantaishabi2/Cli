@@ -75,6 +75,26 @@ func TestWorkflowContract_DispatchCompletedHasPayloadAndDegradePolicy(t *testing
 	assert.Contains(t, content, "Warn Dispatch Failure")
 }
 
+func TestWorkflowContract_ImplementGateHasMaxRetriesValidation(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-implement.yml")
+
+	// workflow 侧必须包含 ^[0-9]+$ 正则校验，确保非法值不会直接传给 CLI
+	assert.Contains(t, content, `[[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]`,
+		"niuma-implement.yml 必须包含 max-retries 数值正则校验")
+	assert.Contains(t, content, "GATE_MAX_RETRIES=2",
+		"niuma-implement.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
+}
+
+func TestWorkflowContract_IterateGateHasMaxRetriesValidation(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-iterate.yml")
+
+	// workflow 侧必须包含 ^[0-9]+$ 正则校验
+	assert.Contains(t, content, `[[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]`,
+		"niuma-iterate.yml 必须包含 max-retries 数值正则校验")
+	assert.Contains(t, content, "GATE_MAX_RETRIES=2",
+		"niuma-iterate.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
+}
+
 func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-implement.yml")
 
