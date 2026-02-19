@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,8 @@ const (
 	discussFlowDefaultRepo        = "biantaishabi2/Cli-niuma-test"
 	discussFlowDefaultPhase       = "fix"
 )
+
+var errMockMethodNotImplemented = errors.New("mock method not implemented")
 
 // flowGitHubMock 为 discuss 集成流程提供最小 GitHub 行为模拟。
 type flowGitHubMock struct {
