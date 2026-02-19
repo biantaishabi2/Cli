@@ -42,19 +42,25 @@ on:
         required: false
         default: "niuma-orchestrate-${repo}"
         type: string
+      enable_local_cleanup:
+        description: "是否启用 PR 合并后的本地 worktree/branch 清理"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   issues: write
   contents: read
 
-concurrency:
-  group: ${{ inputs.concurrency_key == 'niuma-orchestrate-${repo}' && format('niuma-orchestrate-{0}', inputs.repo) || inputs.concurrency_key }}
-  cancel-in-progress: false
-
 jobs:
   orchestrate:
     runs-on: self-hosted
-    if: ${{ github.event_name != 'repository_dispatch' || inputs.enable_dispatch_wakeup }}
+    if: >
+      (github.event_name == 'issues' || github.event_name == 'repository_dispatch' || github.event_name == 'schedule') &&
+      (github.event_name != 'repository_dispatch' || inputs.enable_dispatch_wakeup)
+    concurrency:
+      group: ${{ inputs.concurrency_key == 'niuma-orchestrate-${repo}' && format('niuma-orchestrate-{0}', inputs.repo) || inputs.concurrency_key }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -322,3 +328,57 @@ jobs:
             "${{ steps.trigger_context.outputs.event_id }}" \
             "${{ steps.trigger_context.outputs.triggered_at }}" \
             "$result"
+
+  cleanup_local_worktrees:
+    runs-on: self-hosted
+    if: >
+      inputs.enable_local_cleanup &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'master'
+    concurrency:
+      group: ${{ format('cleanup-{0}-{1}', github.repository, github.event.pull_request.number) }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.NIUMA_PAT || github.token }}
+          fetch-depth: 0
+
+      - name: Run Local Worktree Cleanup
+        id: cleanup
+        env:
+          REPO_DIR: ${{ inputs.repo_dir }}
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          resolved_repo_dir="$REPO_DIR"
+          if [ -z "$resolved_repo_dir" ]; then
+            resolved_repo_dir="."
+          fi
+          if [[ "$resolved_repo_dir" != /* ]]; then
+            resolved_repo_dir="$WORKSPACE/$resolved_repo_dir"
+          fi
+
+          script_path="$GITHUB_WORKSPACE/automation/niuma/scripts/cleanup_worktrees.sh"
+          if [ ! -x "$script_path" ]; then
+            echo "::error::cleanup 脚本不存在或不可执行: $script_path"
+            exit 1
+          fi
+
+          "$script_path" --repo-dir "$resolved_repo_dir"
+
+      - name: Write Cleanup Summary
+        if: always()
+        run: |
+          echo "## Local Cleanup Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deleted_count: ${{ steps.cleanup.outputs.deleted_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- skipped_count: ${{ steps.cleanup.outputs.skipped_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- warned_count: ${{ steps.cleanup.outputs.warned_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- error_count: ${{ steps.cleanup.outputs.error_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deleted: \`${{ steps.cleanup.outputs.deleted || '[]' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- skipped: \`${{ steps.cleanup.outputs.skipped || '[]' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- warned: \`${{ steps.cleanup.outputs.warned || '[]' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- errors: \`${{ steps.cleanup.outputs.errors || '[]' }}\`" >> "$GITHUB_STEP_SUMMARY"
