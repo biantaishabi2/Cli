@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(reviewCmd)
 	rootCmd.AddCommand(controlCmd)
 	rootCmd.AddCommand(stateLabelCmd)
+	rootCmd.AddCommand(resolvePRCmd)
 	rootCmd.AddCommand(gateCmd)
 
 	// discuss 特有 flags

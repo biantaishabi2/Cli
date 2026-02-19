@@ -44,12 +44,13 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
-          PR_NUMBER=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&sort=created&direction=desc" \
-            --jq '.[].body | select(contains("BOT:PR_CREATED"))' | grep -Eo 'pr=[0-9]+' | sed 's/pr=//' | head -1)
-          if [ -z "$PR_NUMBER" ]; then
-            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到 PR 号"
+          # 分页解析 BOT:PR_CREATED marker，取最新 open PR 号
+          if PR_NUMBER=$("$NIUMA_BIN" resolve-pr --repo "$REPO" --issue "$ISSUE_NUMBER"); then
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到可用 PR 号"
+            echo "pr_number=" >> $GITHUB_OUTPUT
           fi
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       - name: Check PR State
         id: pr_state
