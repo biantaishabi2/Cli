@@ -884,7 +884,7 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 	// 15 条人类评论
 	for i := 0; i < 15; i++ {
 		comments = append(comments, &github.IssueComment{
-			Body:      github.Ptr(fmt.Sprintf("人类评论 %d", i)),
+			Body:      github.Ptr(fmt.Sprintf("人类评论[%d]", i)),
 			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(117+i) * time.Minute)},
 			User:      &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")},
 		})
@@ -914,12 +914,12 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 	prompt := calls[0].Prompt
 	// 统计 prompt 中出现的人类评论数量，早期人类评论（0-4）不应出现
 	for i := 0; i < 5; i++ {
-		assert.NotContains(t, prompt, fmt.Sprintf("人类评论 %d", i),
+		assert.NotContains(t, prompt, fmt.Sprintf("人类评论[%d]", i),
 			"早期人类评论 %d 不应出现在裁剪后的 prompt 中", i)
 	}
 	// 最近 10 条人类评论（5-14）应出现
 	for i := 5; i < 15; i++ {
-		assert.Contains(t, prompt, fmt.Sprintf("人类评论 %d", i),
+		assert.Contains(t, prompt, fmt.Sprintf("人类评论[%d]", i),
 			"最近的人类评论 %d 应出现在 prompt 中", i)
 	}
 	// summary BOT 评论应保留
@@ -928,7 +928,7 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 	// 显式验证 maxHuman+1 上限：统计 prompt 中各类评论出现次数
 	humanInPrompt := 0
 	for i := 0; i < 15; i++ {
-		if strings.Contains(prompt, fmt.Sprintf("人类评论 %d", i)) {
+		if strings.Contains(prompt, fmt.Sprintf("人类评论[%d]", i)) {
 			humanInPrompt++
 		}
 	}
