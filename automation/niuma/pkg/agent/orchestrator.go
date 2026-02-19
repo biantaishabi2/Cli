@@ -269,8 +269,10 @@ func (o *Orchestrator) runDiscussionRound(ctx context.Context, round, maxRounds 
 	}
 
 	if o.shouldPublishDiscussionSummary(round, summaryMC, summary) {
-		_, _ = o.github.AddComment(ctx, o.issueNumber,
-			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousFinish))
+		if _, err := o.github.AddComment(ctx, o.issueNumber,
+			FormatDiscussionRoundSummary(round, maxRounds, "debate_ab", summary, previousFinish)); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] 发布讨论摘要失败: %v\n", err)
+		}
 	}
 
 	if decision.Result == state.ShouldWarn {
@@ -893,6 +895,7 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 }
 
 // doDebateABDiscussion 执行 AB 轮流评论模式。
+// 3 级降级：格式修复重试 → fallback provider → 中止上报。
 func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
 	providers := o.discussionProviders()
 	if len(providers) == 0 {
@@ -919,13 +922,52 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		return nil, fmt.Errorf("构建 debate_ab prompt 失败: %w", err)
 	}
 
-	raw, err := providers[speakerIdx%len(providers)].Complete(ctx, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("debate_%s 生成评论失败: %w", strings.ToLower(speaker), err)
+	// tryDebateRound 使用指定 provider 完成一次 AI 调用 + parse
+	tryDebateRound := func(provider ai.Provider) (raw string, comment *DebateComment, err error) {
+		raw, err = provider.Complete(ctx, prompt)
+		if err != nil {
+			return "", nil, fmt.Errorf("debate_%s 生成评论失败 (provider=%s): %w", strings.ToLower(speaker), provider.Name(), err)
+		}
+		comment, err = ParseDebateResponse(raw)
+		return raw, comment, err
 	}
-	comment, err := ParseDebateResponse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("解析 debate_%s 评论失败: %w", strings.ToLower(speaker), err)
+
+	primaryProvider := providers[speakerIdx%len(providers)]
+
+	// 第1次尝试：主 provider
+	raw, comment, parseErr := tryDebateRound(primaryProvider)
+
+	// 第1级降级：格式修复重试（同 provider）
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s parse 失败 (provider=%s)，尝试格式修复重试: %v\n",
+			strings.ToLower(speaker), primaryProvider.Name(), parseErr)
+		repairPrompt := BuildFormatRepairPrompt(raw)
+		repairRaw, repairErr := primaryProvider.Complete(ctx, repairPrompt)
+		if repairErr == nil {
+			comment, parseErr = RepairAndParseDebate(raw, repairRaw)
+		} else {
+			fmt.Fprintf(os.Stderr, "[WARN] 格式修复重试 AI 调用失败: %v\n", repairErr)
+		}
+	}
+
+	// 第2级降级：fallback provider（如果存在且不同于主 provider）
+	if parseErr != nil && len(providers) > 1 {
+		fallbackIdx := (speakerIdx + 1) % len(providers)
+		fallbackProvider := providers[fallbackIdx]
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 主 provider 修复失败，切换 fallback provider=%s\n",
+			strings.ToLower(speaker), fallbackProvider.Name())
+		raw, comment, parseErr = tryDebateRound(fallbackProvider)
+	}
+
+	// 第3级：中止上报
+	if parseErr != nil {
+		abortBody := fmt.Sprintf("<!-- BOT:DISCUSS_ABORT issue=%d round=%d -->\n\n## ⛔ 讨论中止\n\n"+
+			"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
+			"**错误**: %s\n\n**provider**: %s\n\n请人工检查后重新触发讨论。",
+			o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
+			parseErr.Error(), primaryProvider.Name())
+		_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
+		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), parseErr)
 	}
 
 	// debate_ab 下每轮直接对 issue 可见。
