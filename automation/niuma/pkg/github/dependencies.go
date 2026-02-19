@@ -182,7 +182,7 @@ func (c *Client) AddIssueBlockedBy(ctx context.Context, issueNumber int, blocked
 
 	path := fmt.Sprintf("repos/%s/%s/issues/%d/dependencies/blocked_by", c.owner, c.repo, issueNumber)
 	body := map[string]int64{
-		"blocked_by_issue_id": depIssueID,
+		"issue_id": depIssueID,
 	}
 	req, err := c.gh.NewRequest("POST", path, body)
 	if err != nil {
