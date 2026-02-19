@@ -72,6 +72,9 @@ var flagIntegrationGateMaxRetries int
 var flagControlDagDryRun bool
 var flagPRConflictRetryThreshold int
 var flagPRConflictUnknownBackoffs string
+var flagPRConflictEnableAI bool
+var flagPRConflictAIMaxAttempts int
+var flagPRConflictSmokeTestCmd string
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
@@ -89,6 +92,9 @@ func init() {
 	controlDagReconcileCmd.Flags().BoolVar(&flagControlDagDryRun, "dry-run", false, "仅计算 diff，不写入 GitHub")
 	controlRunCmd.Flags().IntVar(&flagPRConflictRetryThreshold, "pr-conflict-retry-threshold", -1, "pr-reviewable 冲突自动回退阈值（flag > env > default=3）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictUnknownBackoffs, "pr-conflict-unknown-backoffs", "", "pr-reviewable merge 状态 UNKNOWN 时重试退避列表，逗号分隔（flag > env > default=5s,15s,30s）")
+	controlRunCmd.Flags().BoolVar(&flagPRConflictEnableAI, "pr-conflict-enable-ai", true, "是否启用冲突 AI 修复层（Rule 失败后触发）")
+	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
+	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
 
@@ -165,6 +171,9 @@ func buildController() (*control.Controller, error) {
 		},
 		PRConflictRetryThreshold:  prConflictRetryThreshold,
 		PRConflictUnknownBackoffs: prConflictUnknownBackoffs,
+		PRConflictEnableAI:        flagPRConflictEnableAI,
+		PRConflictAIMaxAttempts:   flagPRConflictAIMaxAttempts,
+		PRConflictSmokeTestCmd:    flagPRConflictSmokeTestCmd,
 		RepoDir:                   repoDir,
 	}
 

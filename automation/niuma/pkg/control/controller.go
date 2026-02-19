@@ -142,6 +142,7 @@ const (
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
 	prConflictRetryDefaultThreshold  = 3
+	prConflictAIDefaultMaxAttempts   = 2
 
 	issueLockDefaultTTL       = 5 * time.Minute
 	issueLockDefaultHeartbeat = 100 * time.Second
@@ -189,6 +190,9 @@ type ControlConfig struct {
 	DagSync                    DagSyncConfig
 	PRConflictRetryThreshold   int
 	PRConflictUnknownBackoffs  []time.Duration
+	PRConflictEnableAI         bool
+	PRConflictAIMaxAttempts    int
+	PRConflictSmokeTestCmd     string
 	RepoDir                    string           `yaml:"-"`
 	IssueLockTTL               time.Duration    `yaml:"-"`
 	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
@@ -215,6 +219,8 @@ func DefaultControlConfig() *ControlConfig {
 		},
 		PRConflictRetryThreshold:   prConflictRetryDefaultThreshold,
 		PRConflictUnknownBackoffs:  append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...),
+		PRConflictEnableAI:         true,
+		PRConflictAIMaxAttempts:    prConflictAIDefaultMaxAttempts,
 		RepoDir:                    ".",
 		IssueLockTTL:               issueLockDefaultTTL,
 		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
@@ -253,6 +259,9 @@ func NewController(
 	}
 	if len(cfg.PRConflictUnknownBackoffs) == 0 {
 		cfg.PRConflictUnknownBackoffs = append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
+	}
+	if cfg.PRConflictAIMaxAttempts <= 0 {
+		cfg.PRConflictAIMaxAttempts = prConflictAIDefaultMaxAttempts
 	}
 	if cfg.IssueLockTTL <= 0 {
 		cfg.IssueLockTTL = issueLockDefaultTTL
@@ -1186,8 +1195,14 @@ func (c *Controller) reconcilePRReviewableConflicts(ctx context.Context, tasks [
 		}
 
 		if reviewStatus.IsConflicting() {
-			if err := c.handlePRReviewableConflict(ctx, issueNum, reviewStatus); err != nil {
+			handled, err := c.resolvePRConflictWithLayers(ctx, *task, reviewStatus)
+			if err != nil {
 				return err
+			}
+			if !handled {
+				if err := c.handlePRReviewableConflict(ctx, issueNum, reviewStatus); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -1452,6 +1467,27 @@ func (c *Controller) prConflictUnknownBackoffs() []time.Duration {
 		return append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
 	}
 	return append([]time.Duration(nil), c.cfg.PRConflictUnknownBackoffs...)
+}
+
+func (c *Controller) prConflictAIEnabled() bool {
+	if c.cfg == nil {
+		return true
+	}
+	return c.cfg.PRConflictEnableAI
+}
+
+func (c *Controller) prConflictAIMaxAttempts() int {
+	if c.cfg == nil || c.cfg.PRConflictAIMaxAttempts <= 0 {
+		return prConflictAIDefaultMaxAttempts
+	}
+	return c.cfg.PRConflictAIMaxAttempts
+}
+
+func (c *Controller) prConflictSmokeTestCmd() string {
+	if c.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.cfg.PRConflictSmokeTestCmd)
 }
 
 func (c *Controller) logPRReviewableDecision(
