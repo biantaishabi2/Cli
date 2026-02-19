@@ -228,8 +228,8 @@ func TestDoPlanFinal_FallbackProvider(t *testing.T) {
 	assert.Equal(t, 1, fallback.CallCount())
 }
 
-func TestDoPlanFinal_AllFail_PostsComment(t *testing.T) {
-	// 所有 provider 全部失败，验证发布结构化错误评论
+func TestDoPlanFinal_AllParseFail_FallbackRawText(t *testing.T) {
+	// 所有 provider 返回非 JSON，降级为原文定稿，流程继续
 	p1 := ai.NewMockProvider("not json", "not json")
 	p2 := ai.NewMockProvider("still not json", "still not json")
 	mockGH := NewMockGitHub()
@@ -243,19 +243,11 @@ func TestDoPlanFinal_AllFail_PostsComment(t *testing.T) {
 	}
 	orch := NewOrchestratorWithConfig(mockGH, 1, cfg)
 	err := orch.DoPlanFinal(context.Background())
-	require.Error(t, err)
+	require.NoError(t, err)
 
-	// 验证错误评论已发布
-	comments := mockGH.Comments[1]
-	require.NotEmpty(t, comments)
-	lastComment := comments[len(comments)-1].GetBody()
-	assert.Contains(t, lastComment, "定稿失败")
-	assert.Contains(t, lastComment, "mock")
-	assert.Contains(t, lastComment, "niuma state-label set")
-
-	// 状态保持 needs-discussion（不做状态迁移）
-	assert.Contains(t, mockGH.Labels[1], string(state.StateNeedsDiscussion))
-	assert.Nil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
+	// 降级后仍然创建 marker 并迁移状态
+	assert.NotNil(t, mockGH.GetMarker(1, marker.TypePlanFinal))
+	assert.Contains(t, mockGH.Labels[1], string(state.StatePlanFinal))
 }
 
 func TestDoDiscuss_ReturnsErrorWhenRoundFails(t *testing.T) {

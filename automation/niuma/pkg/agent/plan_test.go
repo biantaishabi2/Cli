@@ -124,10 +124,27 @@ func TestFinalWithRetry_FallbackSuccess(t *testing.T) {
 	assert.Equal(t, 1, fallback.CallCount())
 }
 
-func TestFinalWithRetry_AllFail(t *testing.T) {
-	// 两个 provider 均持续失败
+func TestFinalWithRetry_AllParseFail_FallbackRawText(t *testing.T) {
+	// 两个 provider 均返回非 JSON，降级为原文
 	p1 := ai.NewMockProvider("not json", "not json")
 	p2 := ai.NewMockProvider("still not json", "still not json")
+	engine := NewPlanEngine(p1)
+
+	input := &PromptInput{
+		IssueTitle: "Test",
+		IssueBody:  "Body",
+	}
+
+	plan, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{p1, p2}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "still not json", plan.Approach) // 最后一次的原文
+	assert.Equal(t, "", plan.Title)                   // title 为空，由调用方兜底
+}
+
+func TestFinalWithRetry_AllProviderError(t *testing.T) {
+	// 所有 provider 网络错误，无有效响应，仍返回错误
+	p1 := ai.NewMockProviderWithError(fmt.Errorf("rate limit"))
+	p2 := ai.NewMockProviderWithError(fmt.Errorf("timeout"))
 	engine := NewPlanEngine(p1)
 
 	input := &PromptInput{
@@ -140,8 +157,7 @@ func TestFinalWithRetry_AllFail(t *testing.T) {
 
 	var aggErr *AggregateRetryError
 	require.ErrorAs(t, err, &aggErr)
-	assert.Len(t, aggErr.Attempts, 4) // 2 providers × 2 attempts
-	assert.Contains(t, err.Error(), "mock")
+	assert.Len(t, aggErr.Attempts, 2) // 每个 provider 1 次（网络错误不重试）
 }
 
 func TestPlanEngine_Draft_PromptContainsComments(t *testing.T) {

@@ -71,6 +71,7 @@ func (e *PlanEngine) FinalWithRetry(ctx context.Context, input *PromptInput, pro
 	}
 
 	var attempts []retryAttempt
+	var lastRaw string
 
 	for _, p := range providers {
 		maxAttempts := maxRetries + 1
@@ -92,32 +93,36 @@ func (e *PlanEngine) FinalWithRetry(ctx context.Context, input *PromptInput, pro
 				return plan, nil
 			}
 
+			kind := "ParseError"
 			var re *RecoverableError
 			if errors.As(parseErr, &re) {
-				attempts = append(attempts, retryAttempt{
-					Provider: p.Name(),
-					Attempt:  attempt,
-					Error:    parseErr.Error(),
-					Kind:     string(re.Kind),
-				})
-				if attempt < maxAttempts {
-					// 格式错误：短随机抖动后重试
-					jitter := time.Duration(rand.Intn(500)) * time.Millisecond
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(jitter):
-					}
-				}
-				continue
+				kind = string(re.Kind)
 			}
-
-			// 不可恢复的解析错误（字段校验失败等），不重试也不降级
-			return nil, parseErr
+			attempts = append(attempts, retryAttempt{
+				Provider: p.Name(),
+				Attempt:  attempt,
+				Error:    parseErr.Error(),
+				Kind:     kind,
+			})
+			lastRaw = raw
+			if attempt < maxAttempts {
+				// 格式错误：短随机抖动后重试
+				jitter := time.Duration(rand.Intn(500)) * time.Millisecond
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(jitter):
+				}
+			}
 		}
 	}
 
-	// 全部 provider 耗尽
+	// 全部 provider 耗尽，降级：原文作为 approach，流程继续
+	if lastRaw != "" {
+		return &FinalPlan{Approach: lastRaw}, nil
+	}
+
+	// 连一次有效响应都没拿到
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("所有 provider 均失败（共 %d 次尝试）:\n", len(attempts)))
 	for _, a := range attempts {

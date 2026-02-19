@@ -20,6 +20,8 @@ const (
 	MissingJSON RecoverableErrorKind = "MissingJSON"
 	// JSONParseError JSON 解析失败
 	JSONParseError RecoverableErrorKind = "JSONParseError"
+	// MissingField JSON 解析成功但缺少必填字段
+	MissingField RecoverableErrorKind = "MissingField"
 )
 
 // RecoverableError 可恢复的解析错误，供重试层判断是否值得重试
@@ -97,8 +99,7 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 }
 
 // ParseFinalPlanResponse 解析 AI 返回的最终方案
-// 对可恢复的格式错误返回 RecoverableError，供重试层判断是否值得重试。
-// 字段校验失败（title/approach 为空）返回普通 error，不触发重试。
+// 所有解析错误均返回 RecoverableError，供重试层判断是否值得重试。
 func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 	if raw == "" {
 		return nil, &RecoverableError{Kind: EmptyResponse, Message: "AI 返回空响应"}
@@ -114,12 +115,12 @@ func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "JSON 解析失败"}
 	}
 
-	// 必填字段校验——不可恢复，重试也不会修复
+	// 必填字段校验——AI 偶发遗漏，重试可修复
 	if plan.Title == "" {
-		return nil, fmt.Errorf("最终方案缺少 title 字段")
+		return nil, &RecoverableError{Kind: MissingField, Message: "最终方案缺少 title 字段"}
 	}
 	if plan.Approach == "" {
-		return nil, fmt.Errorf("最终方案缺少 approach 字段")
+		return nil, &RecoverableError{Kind: MissingField, Message: "最终方案缺少 approach 字段"}
 	}
 	return &plan, nil
 }

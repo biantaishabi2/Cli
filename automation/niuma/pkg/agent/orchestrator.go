@@ -374,6 +374,11 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 		return err
 	}
 
+	// 降级时 title 为空，用 issue 编号兜底
+	if finalPlan.Title == "" {
+		finalPlan.Title = fmt.Sprintf("Issue #%d 定稿方案", o.issueNumber)
+	}
+
 	// 高风险路径警告（允许通过但提醒）
 	var highRiskPaths []string
 	for _, fc := range finalPlan.FileChanges {
