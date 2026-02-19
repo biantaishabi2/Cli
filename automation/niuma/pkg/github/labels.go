@@ -4,11 +4,15 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/go-github/v68/github"
 )
+
+var ErrManagedBotLabel = errors.New("bot label is managed by state transition")
 
 // ListLabels 列出 issue 的所有 label
 func (c *Client) ListLabels(ctx context.Context, issueNumber int) ([]string, error) {
@@ -34,6 +38,9 @@ func (c *Client) ListLabels(ctx context.Context, issueNumber int) ([]string, err
 
 // AddLabel 为 issue 添加 label
 func (c *Client) AddLabel(ctx context.Context, issueNumber int, label string) error {
+	if err := rejectManagedBotLabel("add", label); err != nil {
+		return err
+	}
 	_, _, err := c.gh.Issues.AddLabelsToIssue(ctx, c.owner, c.repo, issueNumber, []string{label})
 	if err != nil {
 		return fmt.Errorf("添加 label %q 失败: %w", label, err)
@@ -43,6 +50,9 @@ func (c *Client) AddLabel(ctx context.Context, issueNumber int, label string) er
 
 // RemoveLabel 移除 issue 的 label
 func (c *Client) RemoveLabel(ctx context.Context, issueNumber int, label string) error {
+	if err := rejectManagedBotLabel("remove", label); err != nil {
+		return err
+	}
 	_, err := c.removeLabelIfPresent(ctx, issueNumber, label)
 	return err
 }
@@ -62,15 +72,38 @@ func (c *Client) removeLabelIfPresent(ctx context.Context, issueNumber int, labe
 
 // ReplaceLabel 替换 label：移除 old，添加 new
 func (c *Client) ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error {
+	if err := rejectManagedBotLabel("replace-old", oldLabel); err != nil {
+		return err
+	}
+	if err := rejectManagedBotLabel("replace-new", newLabel); err != nil {
+		return err
+	}
 	if err := c.RemoveLabel(ctx, issueNumber, oldLabel); err != nil {
 		return err
 	}
 	return c.AddLabel(ctx, issueNumber, newLabel)
 }
 
+// ReplaceLabels 使用一次 issue edit 原子替换整组 labels。
+func (c *Client) ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error {
+	normalized := normalizeLabels(labels)
+	req := &github.IssueRequest{Labels: &normalized}
+	_, _, err := c.gh.Issues.Edit(ctx, c.owner, c.repo, issueNumber, req)
+	if err != nil {
+		return fmt.Errorf("替换 issue #%d labels 失败: %w", issueNumber, err)
+	}
+	return nil
+}
+
 // ReplaceLabelIfPresent 替换 label：仅当 old 存在时才会写入 new。
 // 返回 replaced=false 表示 old 不存在，未做任何写入。
 func (c *Client) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	if err := rejectManagedBotLabel("replace-old", oldLabel); err != nil {
+		return false, err
+	}
+	if err := rejectManagedBotLabel("replace-new", newLabel); err != nil {
+		return false, err
+	}
 	replaced, err := c.removeLabelIfPresent(ctx, issueNumber, oldLabel)
 	if err != nil {
 		return false, err
@@ -108,4 +141,33 @@ func (c *Client) EnsureLabelsExist(ctx context.Context, labels []string) error {
 		}
 	}
 	return nil
+}
+
+func normalizeLabels(labels []string) []string {
+	seen := make(map[string]struct{}, len(labels))
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	return out
+}
+
+func rejectManagedBotLabel(action, label string) error {
+	label = strings.TrimSpace(label)
+	if !isBotLabel(label) {
+		return nil
+	}
+	return fmt.Errorf("禁止直接%s bot 状态标签 %q: %w", action, label, ErrManagedBotLabel)
+}
+
+func isBotLabel(label string) bool {
+	return strings.HasPrefix(strings.TrimSpace(label), "bot:")
 }

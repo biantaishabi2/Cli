@@ -265,6 +265,7 @@ type githubControlClient interface {
 	MergePR(ctx context.Context, number int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
+	ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error
 	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
 	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
@@ -375,6 +376,10 @@ func (g *gitHubControlOps) ReplaceLabel(ctx context.Context, issueNumber int, ol
 
 func (g *gitHubControlOps) ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
 	return g.client.ReplaceLabelIfPresent(ctx, issueNumber, oldLabel, newLabel)
+}
+
+func (g *gitHubControlOps) ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error {
+	return g.client.ReplaceLabels(ctx, issueNumber, labels)
 }
 
 func (g *gitHubControlOps) ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error) {

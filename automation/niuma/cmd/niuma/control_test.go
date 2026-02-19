@@ -363,6 +363,10 @@ func (s *stubGitHubControlClient) ReplaceLabelIfPresent(_ context.Context, _ int
 	return false, nil
 }
 
+func (s *stubGitHubControlClient) ReplaceLabels(_ context.Context, _ int, _ []string) error {
+	return nil
+}
+
 func (s *stubGitHubControlClient) ListIssueBlockedBy(_ context.Context, _ int) ([]int, error) {
 	return nil, nil
 }

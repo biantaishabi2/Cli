@@ -30,6 +30,7 @@ type GitHubOps interface {
 	RemoveLabel(ctx context.Context, issueNumber int, label string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
 	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
+	ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error
 	EnsureLabelsExist(ctx context.Context, labels []string) error
 
 	// PR 操作

@@ -183,6 +183,13 @@ func (m *flowGitHubMock) ReplaceLabelIfPresent(_ context.Context, issueNumber in
 	return false, nil
 }
 
+func (m *flowGitHubMock) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.labels[issueNumber] = append([]string(nil), labels...)
+	return nil
+}
+
 func (m *flowGitHubMock) EnsureLabelsExist(_ context.Context, _ []string) error {
 	return nil
 }
@@ -233,14 +240,14 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 				State:  "open",
 			},
 		},
-			labels: map[int][]string{
-				issueNumber: {"bot:queued"},
-			},
-			blockedBy:         map[int]map[int]struct{}{},
-			commentBodies:     map[int][]string{},
-			stateTransitions:  map[int]int{},
-			replaceLabelCalls: map[int]int{},
-		}
+		labels: map[int][]string{
+			issueNumber: {"bot:queued"},
+		},
+		blockedBy:         map[int]map[int]struct{}{},
+		commentBodies:     map[int][]string{},
+		stateTransitions:  map[int]int{},
+		replaceLabelCalls: map[int]int{},
+	}
 }
 
 func (m *controlFlowGitHubMock) ListIssuesWithLabel(_ context.Context, label string) ([]control.IssueInfo, error) {
@@ -401,6 +408,25 @@ func (m *controlFlowGitHubMock) ReplaceLabelIfPresent(_ context.Context, issueNu
 	return false, nil
 }
 
+func (m *controlFlowGitHubMock) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	m.mu.Lock()
+	m.replaceLabelCalls[issueNumber]++
+	next := append([]string(nil), labels...)
+	if !equalLabels(next, m.labels[issueNumber]) {
+		m.stateTransitions[issueNumber]++
+	}
+	m.labels[issueNumber] = next
+	if _, ok := m.issues[issueNumber]; !ok {
+		m.issues[issueNumber] = control.IssueInfo{Number: issueNumber, State: "open"}
+	}
+	hook := m.replaceLabelHook
+	m.mu.Unlock()
+	if hook != nil {
+		hook(issueNumber)
+	}
+	return nil
+}
+
 func (m *controlFlowGitHubMock) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -449,6 +475,18 @@ func (m *controlFlowGitHubMock) replaceCallCount(issueNumber int) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.replaceLabelCalls[issueNumber]
+}
+
+func equalLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type flowIssueLockStore struct {
