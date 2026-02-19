@@ -2630,10 +2630,13 @@ func TestReconcilePRReviewableConflicts_AILayerSuccess(t *testing.T) {
 func TestReconcilePRReviewableConflicts_AIExhaustedEscalatesHuman(t *testing.T) {
 	dir, conflictFile := setupPRConflictTestHelperRepo(t)
 	taskctlClient, logPath := newRecordingTaskCtlClient(t)
-	provider := ai.NewMockProvider(
-		`{"edits":[{"path":"README.md","content":"attempt-1\n"},{"path":"`+conflictFile+`","content":"package pkg\n\nfunc helperValue() string {\n\treturn \"attempt-1\"\n}\n"}]}`,
-		`{"edits":[{"path":"README.md","content":"attempt-2\n"},{"path":"`+conflictFile+`","content":"package pkg\n\nfunc helperValue() string {\n\treturn \"attempt-2\"\n}\n"}]}`,
-	)
+	provider := ai.NewMockProvider(fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn missingSymbol1\n}\n"}]}`,
+		conflictFile,
+	), fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn missingSymbol2\n}\n"}]}`,
+		conflictFile,
+	))
 
 	mockGH := newMockGitHubOps(
 		IssueInfo{
@@ -2672,10 +2675,11 @@ func TestReconcilePRReviewableConflicts_AIExhaustedEscalatesHuman(t *testing.T) 
 	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
 	require.NoError(t, labelsErr)
 	assert.Contains(t, labels, needsHumanLabel)
+	assert.Equal(t, 2, provider.CallCount())
 
-	readme, readErr := os.ReadFile(filepath.Join(dir, "README.md"))
+	resolvedContent, readErr := os.ReadFile(filepath.Join(dir, conflictFile))
 	require.NoError(t, readErr)
-	assert.Equal(t, "# test\n", string(readme))
+	assert.Contains(t, string(resolvedContent), "<<<<<<<")
 
 	rawLog, logErr := os.ReadFile(logPath)
 	require.NoError(t, logErr)
@@ -2684,6 +2688,7 @@ func TestReconcilePRReviewableConflicts_AIExhaustedEscalatesHuman(t *testing.T) 
 	assert.Contains(t, logText, conflictResolutionLayerHuman)
 	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
 	assert.Contains(t, logText, "2")
+	assert.Contains(t, logText, "质量门禁失败")
 	assert.Contains(t, logText, metaKeyConflictResolutionLastFailedAt)
 }
 

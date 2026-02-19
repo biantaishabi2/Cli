@@ -88,6 +88,24 @@ func Value() int { return 2 }
 	assert.Equal(t, conflictContent, string(current))
 }
 
+func TestGateChangedFileScope_RejectsUntrackedFiles(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package main\n"), 0o644))
+	runGit(t, dir, "add", "pkg.go")
+	runGit(t, dir, "commit", "-m", "add pkg.go")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package main\n\nfunc Value() int { return 1 }\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "unexpected.txt"), []byte("oops\n"), 0o644))
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{RepoDir: dir},
+	}
+	err := ctrl.gateChangedFileScope(context.Background(), dir, []string{"pkg.go"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "changed files out of scope")
+	assert.Contains(t, err.Error(), "unexpected.txt")
+}
+
 func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	taskctlClient, logPath := newRecordingTaskCtlClient(t)
 	ctrl := &Controller{taskctl: taskctlClient}

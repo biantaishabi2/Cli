@@ -474,7 +474,7 @@ func gateConflictMarkers(repoDir string, conflictFiles []string) error {
 }
 
 func (c *Controller) gateChangedFileScope(ctx context.Context, repoDir string, conflictFiles []string) error {
-	changedRaw, err := c.runCommand(ctx, repoDir, "git", "diff", "--name-only")
+	changedFiles, err := c.listScopeGateChangedFiles(ctx, repoDir)
 	if err != nil {
 		return fmt.Errorf("范围门禁失败: %w", err)
 	}
@@ -482,12 +482,41 @@ func (c *Controller) gateChangedFileScope(ctx context.Context, repoDir string, c
 	for _, file := range conflictFiles {
 		allowed[file] = struct{}{}
 	}
-	for _, file := range splitNonEmptyLines(changedRaw) {
+	for _, file := range changedFiles {
 		if _, ok := allowed[file]; !ok {
 			return fmt.Errorf("changed files out of scope: %s", file)
 		}
 	}
 	return nil
+}
+
+func (c *Controller) listScopeGateChangedFiles(ctx context.Context, repoDir string) ([]string, error) {
+	unstagedRaw, err := c.runCommand(ctx, repoDir, "git", "diff", "--name-only")
+	if err != nil {
+		return nil, err
+	}
+	stagedRaw, err := c.runCommand(ctx, repoDir, "git", "diff", "--cached", "--name-only")
+	if err != nil {
+		return nil, err
+	}
+	untrackedRaw, err := c.runCommand(ctx, repoDir, "git", "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	files := make([]string, 0)
+	for _, raw := range []string{unstagedRaw, stagedRaw, untrackedRaw} {
+		for _, file := range splitNonEmptyLines(raw) {
+			if _, exists := seen[file]; exists {
+				continue
+			}
+			seen[file] = struct{}{}
+			files = append(files, file)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func (c *Controller) gateConflictGoTests(ctx context.Context, repoDir string, conflictFiles []string) error {
