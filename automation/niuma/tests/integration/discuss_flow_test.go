@@ -243,14 +243,14 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 				State:  "open",
 			},
 		},
-		labels: map[int][]string{
-			issueNumber: {"bot:queued"},
-		},
-		blockedBy:         map[int]map[int]struct{}{},
-		commentBodies:     map[int][]string{},
-		stateTransitions:  map[int]int{},
-		replaceLabelCalls: map[int]int{},
-	}
+			labels: map[int][]string{
+				issueNumber: {"bot:queued"},
+			},
+			blockedBy:         map[int]map[int]struct{}{},
+			commentBodies:     map[int][]string{},
+			stateTransitions:  map[int]int{},
+			replaceLabelCalls: map[int]int{},
+		}
 }
 
 func (m *controlFlowGitHubMock) ListIssuesWithLabel(_ context.Context, label string) ([]control.IssueInfo, error) {

@@ -98,6 +98,36 @@ CI 联合验证（检测冲突）
 全部 Merged
 ```
 
+### 事件驱动主通道 + schedule 补偿
+
+为避免 `queued` 在 cron 延迟/失败时卡住，`orchestrate` 采用“双通道”触发：
+
+```text
+issues:labeled(bot:queued/bot:orchestrate/bot:pr-reviewable)
+                          \
+                           +--> niuma-orchestrate(control run)
+                          /
+integration PR merged -> close-after-integration-merge
+                       -> repository_dispatch(niuma.task.completed)
+                       -> niuma-orchestrate(control run)
+
+schedule(*/5 * * * *) ----------------------------------> niuma-orchestrate(control run) [补偿]
+```
+
+`repository_dispatch` 事件契约（`event_type=niuma.task.completed`）：
+
+- `client_payload.source_issue`：本次收口触发的主 issue（若可解析）
+- `client_payload.source_issues`：本次收口识别到的 issue 列表
+- `client_payload.trigger_pr`：触发收口的 integration PR 编号
+- `client_payload.completed_at`：RFC3339 UTC 时间
+- `client_payload.event_source`：固定 `close-after-integration-merge`
+- `client_payload.event_id`：`pr-<pr>-run-<run_id>-<run_attempt>`
+
+降级策略：
+
+- dispatch 失败只记 `::warning`，不阻断 close-after 收口流程
+- `schedule` 保留为补偿通道，确保最终一致推进
+
 依赖语义约束：
 - 执行依赖优先级：`depends-on` > AI 推断（AI 仅补全未声明项，不覆盖人工声明）
 - `parent` 仅表示结构归属与收口关系，不隐式作为执行依赖边
@@ -367,6 +397,9 @@ Final Plan 必须包含可执行的测试：
 
 - 锁竞争/释放：`[control][issue_lock] issue=<num> status=<succeeded|failed|skipped> reason=<locked|heartbeat_refresh_failed|release_failed|...> owner=<owner> lock_owner=<owner> expires_at=<rfc3339>`
 - 幂等决策：`[control][idempotency] repo=<owner/repo> issue=<num> phase=<phase> key=<sha256> action=<recorded|no-op>`
+- orchestrate 触发：`[orchestrate.trigger] {"trigger_source","issue","event_id","triggered_at"}`
+- orchestrate 结果：`[orchestrate.result] {"trigger_source","issue","event_id","triggered_at","result"}`
+- completed 唤醒：`[orchestrate.dispatch] {"trigger_source","issue","event_id","triggered_at","result"}`
 
 建议将日志与 taskctl 记录同时留档，以便确认“未持锁实例无副作用（无状态推进）”。
 
@@ -391,6 +424,22 @@ wait
 # （先人工中断一次执行，再等待 35s）
 sleep 35
 niuma control run --repo "$NIUMA_TEST_REPO"
+```
+
+### 事件链路排障命令
+
+```bash
+# 1) 检查 orchestrate 最近触发来源（issues/repository_dispatch/schedule）
+gh run list --repo "$NIUMA_TEST_REPO" --workflow niuma-orchestrate.yml --limit 20
+
+# 2) 手工发送一次 completed 事件（验证主通道）
+gh api repos/"$NIUMA_TEST_REPO"/dispatches \
+  --method POST \
+  -f event_type='niuma.task.completed' \
+  -f client_payload='{"source_issue":314,"source_issues":[314],"trigger_pr":999,"completed_at":"2026-02-18T12:00:00Z","event_source":"close-after-integration-merge","event_id":"manual-pr-999-run-1-1"}'
+
+# 3) 查看 workflow 日志中的结构化字段
+gh run view --repo "$NIUMA_TEST_REPO" <run-id> --log | rg "orchestrate\\.(trigger|result|dispatch)"
 ```
 
 ### 证据回填模板
