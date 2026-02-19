@@ -4,25 +4,109 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 )
 
 // GitHubOps 控制层需要的 GitHub 操作接口（独立于 agent 包的接口）
 type GitHubOps interface {
 	ListIssuesWithLabel(ctx context.Context, label string) ([]IssueInfo, error)
 	ListIssuesByState(ctx context.Context, state string) ([]IssueInfo, error)
+	ListLabels(ctx context.Context, issueNumber int) ([]string, error)
+	AddLabel(ctx context.Context, issueNumber int, label string) error
 	GetIssue(ctx context.Context, issueNumber int) (IssueInfo, error)
+	UpdateIssueBody(ctx context.Context, issueNumber int, body string) error
+	ListCommentBodies(ctx context.Context, issueNumber int) ([]string, error)
+	AddIssueComment(ctx context.Context, issueNumber int, body string) error
 	CloseIssue(ctx context.Context, issueNumber int) error
 	MergePR(ctx context.Context, prNum int, method string) error
 	ReplaceLabel(ctx context.Context, issueNumber int, oldLabel, newLabel string) error
+	ReplaceLabelIfPresent(ctx context.Context, issueNumber int, oldLabel, newLabel string) (bool, error)
+	ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error
+	ListIssueBlockedBy(ctx context.Context, issueNumber int) ([]int, error)
+	AddIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
+	ResolvePRMetadata(ctx context.Context, issueNumber int) (PRMetadata, error)
+	ResolvePRReviewStatus(ctx context.Context, issueNumber int) (PRReviewStatus, error)
 }
+
+// PRMetadata 表示用于 integration 候选筛选的最小 PR 元数据。
+type PRMetadata struct {
+	PRNum  int
+	Branch string
+}
+
+// PRMergeable 表示 PR mergeable 字段的归一化结果。
+type PRMergeable string
+
+const (
+	PRMergeableUnknown     PRMergeable = "UNKNOWN"
+	PRMergeableMergeable   PRMergeable = "MERGEABLE"
+	PRMergeableConflicting PRMergeable = "CONFLICTING"
+)
+
+// PRReviewStatus 表示 pr-reviewable 协调所需的 PR 状态快照。
+type PRReviewStatus struct {
+	PRNum            int
+	HeadSHA          string
+	Mergeable        PRMergeable
+	MergeStateStatus string
+}
+
+func (s PRReviewStatus) normalizedMergeStateStatus() string {
+	status := strings.ToUpper(strings.TrimSpace(s.MergeStateStatus))
+	if status == "" {
+		return "UNKNOWN"
+	}
+	return status
+}
+
+func (s PRReviewStatus) IsConflicting() bool {
+	status := s.normalizedMergeStateStatus()
+	return s.Mergeable == PRMergeableConflicting || status == "DIRTY" || status == "BLOCKED"
+}
+
+func (s PRReviewStatus) IsUnknown() bool {
+	if s.IsConflicting() {
+		return false
+	}
+	status := s.normalizedMergeStateStatus()
+	return s.Mergeable == PRMergeableUnknown && status == "UNKNOWN"
+}
+
+func (s PRReviewStatus) IsMergeable() bool {
+	if s.IsConflicting() || s.IsUnknown() {
+		return false
+	}
+	status := s.normalizedMergeStateStatus()
+	if status == "CLEAN" {
+		return true
+	}
+	return s.Mergeable == PRMergeableMergeable
+}
+
+var (
+	// ErrPRMarkerNotFound 表示 issue 上未找到 BOT:PR_CREATED marker。
+	ErrPRMarkerNotFound = errors.New("pr marker not found")
+	// ErrPRClosed 表示 marker 指向的 PR 已关闭（含已合并）。
+	ErrPRClosed = errors.New("pr is closed")
+	// ErrPRBranchUnavailable 表示 PR head branch 不可用。
+	ErrPRBranchUnavailable = errors.New("pr branch unavailable")
+)
 
 const (
 	integrationConflictLabel = "integration-conflict"
@@ -57,26 +141,64 @@ const (
 
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
+	prConflictRetryDefaultThreshold  = 3
+	prConflictAIDefaultMaxAttempts   = 2
+
+	issueLockDefaultTTL       = 5 * time.Minute
+	issueLockDefaultHeartbeat = 100 * time.Second
+
+	metaKeyTaskRepo      = "repo"
+	metaKeyTaskPhase     = "phase"
+	metaKeyTaskInputHash = "input_hash"
+
+	metadataSyncSkipMarkerNotFound    = "marker_not_found"
+	metadataSyncSkipPRClosed          = "pr_closed"
+	metadataSyncSkipBranchUnavailable = "branch_unavailable"
+	metadataSyncSkipAlreadyUpToDate   = "already_up_to_date"
+)
+
+var (
+	prConflictRetryMarkerRe             = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
+	defaultPRConflictUnknownBackoffs    = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+	prConflictDetectedCommentMarkerFmt  = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
+	prConflictEscalatedCommentMarkerFmt = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
 )
 
 // Controller 多 Issue 协调控制器
 type Controller struct {
-	taskctl  *TaskCtlClient
-	analyzer *DependencyAnalyzer
-	github   GitHubOps
-	builder  *IntegrationBuilder
-	cfg      *ControlConfig
+	taskctl            *TaskCtlClient
+	analyzer           *DependencyAnalyzer
+	github             GitHubOps
+	builder            *IntegrationBuilder
+	cfg                *ControlConfig
+	dagSyncStore       *dagSyncStateStore
+	issueLocks         IssueLockStore
+	issueLockTTL       time.Duration
+	issueLockHeartbeat time.Duration
+	nowFn              func() time.Time
+	ownerID            string
 }
 
 // ControlConfig 控制层配置
 type ControlConfig struct {
-	TaskCtlBin                string `yaml:"taskctl_bin"`
-	MergeStrategy             string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix   string `yaml:"integration_branch_prefix"` // 默认 integration/
-	MaxOldBranches            int    `yaml:"max_old_branches"`          // 默认 3
-	MinPRsForIntegration      int    `yaml:"min_prs_for_integration"`   // 默认 2
-	IntegrationGateMaxRetries int    `yaml:"integration_gate_max_retries"`
-	RepoDir                   string `yaml:"-"`
+	TaskCtlBin                 string `yaml:"taskctl_bin"`
+	MergeStrategy              string `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix    string `yaml:"integration_branch_prefix"` // 默认 integration/
+	MaxOldBranches             int    `yaml:"max_old_branches"`          // 默认 3
+	MinPRsForIntegration       int    `yaml:"min_prs_for_integration"`   // 默认 2
+	IntegrationGateMaxRetries  int    `yaml:"integration_gate_max_retries"`
+	DagSync                    DagSyncConfig
+	PRConflictRetryThreshold   int
+	PRConflictUnknownBackoffs  []time.Duration
+	PRConflictEnableAI         bool
+	PRConflictAIMaxAttempts    int
+	PRConflictSmokeTestCmd     string
+	RepoDir                    string           `yaml:"-"`
+	IssueLockTTL               time.Duration    `yaml:"-"`
+	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
+	IssueLockStore             IssueLockStore   `yaml:"-"`
+	NowFn                      func() time.Time `yaml:"-"`
+	OwnerID                    string           `yaml:"-"`
 }
 
 // DefaultControlConfig 返回默认配置
@@ -87,8 +209,31 @@ func DefaultControlConfig() *ControlConfig {
 		MaxOldBranches:            3,
 		MinPRsForIntegration:      2,
 		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
-		RepoDir:                   ".",
+		DagSync: DagSyncConfig{
+			PollInterval:         5 * time.Minute,
+			MaxRetry:             3,
+			RetryBackoff:         []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second},
+			RateLimitRPS:         10,
+			Timeout:              30 * time.Second,
+			SkippedEdgeThreshold: 0.2,
+		},
+		PRConflictRetryThreshold:   prConflictRetryDefaultThreshold,
+		PRConflictUnknownBackoffs:  append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...),
+		PRConflictEnableAI:         true,
+		PRConflictAIMaxAttempts:    prConflictAIDefaultMaxAttempts,
+		RepoDir:                    ".",
+		IssueLockTTL:               issueLockDefaultTTL,
+		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
+		OwnerID:                    defaultIssueLockOwnerID(),
 	}
+}
+
+func defaultIssueLockOwnerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "unknown-host"
+	}
+	return fmt.Sprintf("%s:%d", hostname, os.Getpid())
 }
 
 // NewController 创建 Controller
@@ -108,13 +253,424 @@ func NewController(
 	if cfg.IntegrationGateMaxRetries < 0 {
 		cfg.IntegrationGateMaxRetries = integrationGateDefaultMaxRetries
 	}
-	return &Controller{
-		taskctl:  taskctl,
-		analyzer: analyzer,
-		github:   github,
-		builder:  builder,
-		cfg:      cfg,
+	cfg.DagSync = normalizeDagSyncConfig(cfg.DagSync, cfg.RepoDir)
+	if cfg.PRConflictRetryThreshold < 0 {
+		cfg.PRConflictRetryThreshold = prConflictRetryDefaultThreshold
 	}
+	if len(cfg.PRConflictUnknownBackoffs) == 0 {
+		cfg.PRConflictUnknownBackoffs = append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
+	}
+	if cfg.PRConflictAIMaxAttempts <= 0 {
+		cfg.PRConflictAIMaxAttempts = prConflictAIDefaultMaxAttempts
+	}
+	if cfg.IssueLockTTL <= 0 {
+		cfg.IssueLockTTL = issueLockDefaultTTL
+	}
+	if cfg.IssueLockHeartbeatInterval <= 0 {
+		cfg.IssueLockHeartbeatInterval = issueLockDefaultHeartbeat
+	}
+	if cfg.IssueLockHeartbeatInterval >= cfg.IssueLockTTL {
+		cfg.IssueLockHeartbeatInterval = cfg.IssueLockTTL / 3
+		if cfg.IssueLockHeartbeatInterval <= 0 {
+			cfg.IssueLockHeartbeatInterval = time.Second
+		}
+	}
+	if strings.TrimSpace(cfg.OwnerID) == "" {
+		cfg.OwnerID = defaultIssueLockOwnerID()
+	}
+	if cfg.NowFn == nil {
+		cfg.NowFn = time.Now
+	}
+	if cfg.IssueLockStore == nil {
+		cfg.IssueLockStore = newInMemoryIssueLockStore()
+	}
+	return &Controller{
+		taskctl:            taskctl,
+		analyzer:           analyzer,
+		github:             github,
+		builder:            builder,
+		cfg:                cfg,
+		dagSyncStore:       newDagSyncStateStore(cfg.DagSync.StateFile),
+		issueLocks:         cfg.IssueLockStore,
+		issueLockTTL:       cfg.IssueLockTTL,
+		issueLockHeartbeat: cfg.IssueLockHeartbeatInterval,
+		nowFn:              cfg.NowFn,
+		ownerID:            cfg.OwnerID,
+	}
+}
+
+type inMemoryIssueLockStore struct {
+	mu    sync.Mutex
+	locks map[int]IssueLockRecord
+}
+
+func newInMemoryIssueLockStore() IssueLockStore {
+	return &inMemoryIssueLockStore{
+		locks: make(map[int]IssueLockRecord),
+	}
+}
+
+func (s *inMemoryIssueLockStore) TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error) {
+	if issueNumber <= 0 {
+		return IssueLockRecord{}, false, fmt.Errorf("issue 编号无效: %d", issueNumber)
+	}
+	if owner == "" {
+		return IssueLockRecord{}, false, fmt.Errorf("owner 不能为空")
+	}
+	if ttl <= 0 {
+		return IssueLockRecord{}, false, fmt.Errorf("ttl 必须大于 0")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if ok && record.Owner != "" && now.Before(record.ExpiresAt) {
+		return record, false, nil
+	}
+
+	lastResult := record.LastResult
+	record = IssueLockRecord{
+		IssueNumber: issueNumber,
+		Owner:       owner,
+		AcquiredAt:  now,
+		ExpiresAt:   now.Add(ttl),
+		HeartbeatAt: now,
+		LastResult:  lastResult,
+	}
+	s.locks[issueNumber] = record
+	return record, true, nil
+}
+
+func (s *inMemoryIssueLockStore) Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error) {
+	if issueNumber <= 0 {
+		return IssueLockRecord{}, fmt.Errorf("issue 编号无效: %d", issueNumber)
+	}
+	if owner == "" {
+		return IssueLockRecord{}, fmt.Errorf("owner 不能为空")
+	}
+	if ttl <= 0 {
+		return IssueLockRecord{}, fmt.Errorf("ttl 必须大于 0")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if !ok || record.Owner == "" {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 未持锁", issueNumber)
+	}
+	if record.Owner != owner {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 锁 owner 不匹配: current=%s expect=%s", issueNumber, record.Owner, owner)
+	}
+	if !now.Before(record.ExpiresAt) {
+		return IssueLockRecord{}, fmt.Errorf("issue #%d 锁已过期: expires_at=%s", issueNumber, record.ExpiresAt.Format(time.RFC3339))
+	}
+
+	record.HeartbeatAt = now
+	record.ExpiresAt = now.Add(ttl)
+	s.locks[issueNumber] = record
+	return record, nil
+}
+
+func (s *inMemoryIssueLockStore) Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error {
+	if issueNumber <= 0 {
+		return nil
+	}
+	if owner == "" {
+		return fmt.Errorf("owner 不能为空")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.locks[issueNumber]
+	if !ok {
+		return nil
+	}
+	if record.Owner != "" && record.Owner != owner {
+		return fmt.Errorf("issue #%d 锁 owner 不匹配: current=%s expect=%s", issueNumber, record.Owner, owner)
+	}
+
+	record.Owner = ""
+	record.HeartbeatAt = now
+	record.ExpiresAt = now
+	record.LastResult = lastResult
+	s.locks[issueNumber] = record
+	return nil
+}
+
+func (c *Controller) controllerNow() time.Time {
+	if c.nowFn == nil {
+		return time.Now().UTC()
+	}
+	return c.nowFn().UTC()
+}
+
+func (c *Controller) lockOwnerID() string {
+	if strings.TrimSpace(c.ownerID) == "" {
+		return defaultIssueLockOwnerID()
+	}
+	return c.ownerID
+}
+
+func (c *Controller) lockTTL() time.Duration {
+	if c.issueLockTTL <= 0 {
+		return issueLockDefaultTTL
+	}
+	return c.issueLockTTL
+}
+
+func (c *Controller) tryAcquireIssueLock(issue IssueInfo) (bool, IssueLockRecord, error) {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return true, IssueLockRecord{}, nil
+	}
+
+	record, acquired, err := c.issueLocks.TryAcquire(issue.Number, c.lockOwnerID(), c.controllerNow(), c.lockTTL())
+	if err != nil {
+		return false, IssueLockRecord{}, err
+	}
+	return acquired, record, nil
+}
+
+func (c *Controller) refreshIssueLock(issue IssueInfo) error {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return nil
+	}
+	_, err := c.issueLocks.Refresh(issue.Number, c.lockOwnerID(), c.controllerNow(), c.lockTTL())
+	return err
+}
+
+func (c *Controller) releaseIssueLock(issue IssueInfo, lastResult IssueLockResult) error {
+	if issue.Number <= 0 || c.issueLocks == nil {
+		return nil
+	}
+	return c.issueLocks.Release(issue.Number, c.lockOwnerID(), c.controllerNow(), lastResult)
+}
+
+func (c *Controller) withIssueLock(ctx context.Context, issue IssueInfo, fn func(context.Context) error) (retErr error) {
+	if fn == nil {
+		return nil
+	}
+
+	acquired, current, err := c.tryAcquireIssueLock(issue)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		fmt.Printf(
+			"[control][issue_lock] issue=%d status=%s reason=%s owner=%s lock_owner=%s expires_at=%s\n",
+			issue.Number,
+			IssueLockResultSkipped,
+			IssueLockResultLocked,
+			c.lockOwnerID(),
+			current.Owner,
+			current.ExpiresAt.Format(time.RFC3339),
+		)
+		return nil
+	}
+
+	lastResult := IssueLockResultSucceeded
+	defer func() {
+		if releaseErr := c.releaseIssueLock(issue, lastResult); releaseErr != nil {
+			fmt.Printf(
+				"[control][issue_lock] issue=%d status=%s reason=release_failed owner=%s err=%v\n",
+				issue.Number,
+				IssueLockResultFailed,
+				c.lockOwnerID(),
+				releaseErr,
+			)
+			if retErr == nil {
+				retErr = releaseErr
+			}
+		}
+	}()
+
+	lockCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	heartbeatErrCh := make(chan error, 1)
+	stopHeartbeat := make(chan struct{})
+	defer close(stopHeartbeat)
+	if c.issueLockHeartbeat > 0 {
+		go func() {
+			ticker := time.NewTicker(c.issueLockHeartbeat)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopHeartbeat:
+					return
+				case <-lockCtx.Done():
+					return
+				case <-ticker.C:
+					if refreshErr := c.refreshIssueLock(issue); refreshErr != nil {
+						select {
+						case heartbeatErrCh <- refreshErr:
+						default:
+						}
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	runErr := fn(lockCtx)
+	var heartbeatErr error
+	select {
+	case heartbeatErr = <-heartbeatErrCh:
+	default:
+	}
+	if heartbeatErr != nil {
+		lastResult = IssueLockResultFailed
+		fmt.Printf(
+			"[control][issue_lock] issue=%d status=%s reason=heartbeat_refresh_failed owner=%s err=%v\n",
+			issue.Number,
+			IssueLockResultFailed,
+			c.lockOwnerID(),
+			heartbeatErr,
+		)
+		if runErr == nil || runErr == context.Canceled {
+			runErr = fmt.Errorf("issue #%d 锁心跳刷新失败: %w", issue.Number, heartbeatErr)
+		}
+	}
+	if runErr != nil {
+		lastResult = IssueLockResultFailed
+		return runErr
+	}
+	return nil
+}
+
+type processIssueIdempotencyContext struct {
+	Repo      string
+	IssueNum  int
+	Phase     string
+	InputHash string
+	Key       string
+}
+
+func buildIssueIdempotencyKey(repo string, issueNum int, phase, inputHash string) string {
+	payload := strings.Join([]string{
+		strings.TrimSpace(repo),
+		strconv.Itoa(issueNum),
+		strings.TrimSpace(phase),
+		strings.TrimSpace(inputHash),
+	}, "\n")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildProcessIssueIdempotencyContext(task Task) (processIssueIdempotencyContext, bool) {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	phase := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskPhase))
+	inputHash := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskInputHash))
+	if phase == "" || inputHash == "" {
+		return processIssueIdempotencyContext{}, false
+	}
+
+	repo := strings.TrimSpace(valueOrEmpty(task.Metadata, metaKeyTaskRepo))
+	return processIssueIdempotencyContext{
+		Repo:      repo,
+		IssueNum:  issueNum,
+		Phase:     phase,
+		InputHash: inputHash,
+		Key:       buildIssueIdempotencyKey(repo, issueNum, phase, inputHash),
+	}, true
+}
+
+func (c *Controller) loadLatestTaskMetadata(task Task) (map[string]string, error) {
+	if c == nil || c.taskctl == nil || strings.TrimSpace(task.ID) == "" {
+		return task.Metadata, nil
+	}
+
+	latestTask, err := c.taskctl.Get(task.ID)
+	if err != nil {
+		return nil, err
+	}
+	if latestTask == nil {
+		return task.Metadata, nil
+	}
+	if strings.TrimSpace(latestTask.ID) == "" || latestTask.ID != task.ID {
+		return task.Metadata, nil
+	}
+	return latestTask.Metadata, nil
+}
+
+// ProcessIssue 推进单个 issue 的控制流程（主入口）。
+func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
+	issue := IssueInfo{
+		Number: task.IssueNum(),
+		Title:  task.Subject,
+	}
+
+	return c.withIssueLock(ctx, issue, func(runCtx context.Context) error {
+		idempotencyContext, enableIdempotency := buildProcessIssueIdempotencyContext(task)
+		idempotencyMetadata := task.Metadata
+		if enableIdempotency {
+			var err error
+			idempotencyMetadata, err = c.loadLatestTaskMetadata(task)
+			if err != nil {
+				return fmt.Errorf("读取任务最新 metadata 失败 (task %s): %w", task.ID, err)
+			}
+			if latestKey := readPhaseIdempotencyKey(idempotencyMetadata, idempotencyContext.Phase); latestKey == idempotencyContext.Key {
+				fmt.Printf(
+					"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=no-op\n",
+					idempotencyContext.Repo,
+					idempotencyContext.IssueNum,
+					idempotencyContext.Phase,
+					idempotencyContext.Key,
+				)
+				return nil
+			}
+		}
+
+		status := TaskStatusInProgress
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
+			return fmt.Errorf("更新任务状态失败 (task %s): %w", task.ID, err)
+		}
+
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			return nil
+		}
+
+		// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
+		if err := c.transitionWithSelfHeal(runCtx, issueNum, "", state.StateFixRequested); err != nil {
+			fmt.Printf("[control] 迁移状态失败 (issue #%d): %v\n", issueNum, err)
+			return nil
+		}
+
+		fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
+		if !enableIdempotency {
+			return nil
+		}
+
+		update, err := c.taskctl.recordPhaseIdempotency(
+			task.ID,
+			idempotencyMetadata,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+			idempotencyContext.InputHash,
+			c.controllerNow(),
+		)
+		if err != nil {
+			return fmt.Errorf("写入幂等 metadata 失败 (task %s): %w", task.ID, err)
+		}
+		task.Metadata = mergeMetadataPatch(task.Metadata, update)
+		fmt.Printf(
+			"[control][idempotency] repo=%s issue=%d phase=%s key=%s action=recorded\n",
+			idempotencyContext.Repo,
+			idempotencyContext.IssueNum,
+			idempotencyContext.Phase,
+			idempotencyContext.Key,
+		)
+		return nil
+	})
 }
 
 // getIntegrationBranchName 获取当前任务的 integration 分支名
@@ -129,8 +685,8 @@ func (c *Controller) getIntegrationBranchName(task *Task) string {
 
 // Run 执行一次完整协调循环
 func (c *Controller) Run(ctx context.Context) error {
-	// ① 扫描 GitHub：优先处理 bot:orchestrate，同时持续纳入自动化标签队列
-	issues, orchestrateCount, err := c.collectAutomationIssues(ctx)
+	// ① intake：仅扫描 bot:orchestrate 新入口。
+	intakeIssues, orchestrateCount, err := c.collectAutomationIssues(ctx)
 	if err != nil {
 		return fmt.Errorf("扫描自动化 issues 失败: %w", err)
 	}
@@ -141,7 +697,7 @@ func (c *Controller) Run(ctx context.Context) error {
 		fmt.Printf("[control] 发现 %d 个 issues (bot:orchestrate)\n", orchestrateCount)
 	}
 
-	// ② 对比 taskctl store：找出新 issue
+	// ② 读取 taskctl store，并建立 issue->task 索引。
 	existingTasks, err := c.taskctl.List("")
 	if err != nil {
 		// 区分 store 不存在（首次运行）和真实错误
@@ -152,54 +708,61 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
-	existingIssues := make(map[int]string) // issueNum → taskID
+	issueToTask := make(map[int]string)       // issueNum → taskID
+	activeIssueToTask := make(map[int]string) // issueNum(active) → taskID
 	for _, t := range existingTasks {
 		if n := t.IssueNum(); n > 0 {
-			existingIssues[n] = t.ID
-		}
-	}
-
-	var newIssues []IssueInfo
-	for _, issue := range issues {
-		if _, ok := existingIssues[issue.Number]; !ok {
-			newIssues = append(newIssues, issue)
+			issueToTask[n] = t.ID
+			if isTaskActiveStatus(t.Status) {
+				activeIssueToTask[n] = t.ID
+			}
 		}
 	}
 
 	// ③ 统一依赖分析：显式 depends-on 优先，AI 仅补全未声明项。
 	// 注意：parent 仅表示结构归属/收口关系，不隐式注入执行依赖边。
-	analysis := c.buildDependencyAnalysis(ctx, issues)
+	analysis := c.buildDependencyAnalysis(ctx, intakeIssues)
 
-	// ④ 为新 issue 创建 task + 设 blocked_by
-	issueToTask := make(map[int]string) // issueNum → taskID
-	for k, v := range existingIssues {
-		issueToTask[k] = v
-	}
-
-	for _, issue := range newIssues {
+	// ④ intake 入队：原子去重创建 active task，并将 orchestrate 迁移为 queued。
+	for _, issue := range intakeIssues {
+		if _, ok := activeIssueToTask[issue.Number]; ok {
+			fmt.Printf("[control] action=intake_reused issue_num=%d task_id=%s reason=active_task_exists\n", issue.Number, activeIssueToTask[issue.Number])
+		}
 		meta := map[string]string{
 			"issue_num": strconv.Itoa(issue.Number),
 		}
-		task, err := c.taskctl.Create(issue.Title, issue.Body, meta)
+		task, reused, err := c.taskctl.CreateOrReuseActiveIssueTask(issue.Title, issue.Body, meta)
 		if err != nil {
 			fmt.Printf("[control] 创建任务失败 (issue #%d): %v\n", issue.Number, err)
 			continue
 		}
 		issueToTask[issue.Number] = task.ID
-		fmt.Printf("[control] 创建任务 %s (issue #%d)\n", task.ID, issue.Number)
+		activeIssueToTask[issue.Number] = task.ID
+		if reused {
+			fmt.Printf("[control] action=intake_reused issue_num=%d task_id=%s reason=deduplicated\n", issue.Number, task.ID)
+		} else {
+			fmt.Printf("[control] 创建任务 %s (issue #%d)\n", task.ID, issue.Number)
+		}
 
-		// 如果 issue 有 bot:orchestrate 标签，替换为 bot:queued
-		if hasLabel(issue.Labels, "bot:orchestrate") {
-			if err := c.github.ReplaceLabel(ctx, issue.Number, "bot:orchestrate", "bot:queued"); err != nil {
-				fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issue.Number, err)
-			} else {
-				fmt.Printf("[control] 已将 issue #%d 标签 bot:orchestrate → bot:queued\n", issue.Number)
+		if err := c.transitionWithSelfHeal(ctx, issue.Number, state.StateOrchestrate, state.StateQueued); err != nil {
+			if errors.Is(err, state.ErrInvariantViolation) || errors.Is(err, state.ErrMultipleBotStates) {
+				fmt.Printf("[control] action=intake_blocked issue_num=%d reason=dirty_multi_state err=%v\n", issue.Number, err)
+				continue
 			}
+			fmt.Printf("[control] 迁移状态失败 (issue #%d): %v\n", issue.Number, err)
+		} else {
+			fmt.Printf("[control] 已将 issue #%d 标签 bot:orchestrate → bot:queued\n", issue.Number)
 		}
 	}
 
 	// ⑤ 先落盘 blocked_by，再判定 ready（流程不变量门禁）。
+	// DAG 是依赖调度的唯一真相（SSOT），ready/blocking 只读 taskctl DAG + metadata。
 	blockedByPersisted := c.persistBlockedByDependencies(issueToTask, analysis.Dependencies)
+
+	// ⑤.1 DAG -> GitHub 依赖展示镜像（单向）；失败降级为日志，不阻塞主流程。
+	if err := c.runDagSyncEvent(ctx); err != nil {
+		fmt.Printf("[control][dag-sync] event 同步失败（已降级，不阻塞主流程）: %v\n", err)
+	}
 
 	// ⑥ 获取 ready tasks 并推进
 	if !blockedByPersisted {
@@ -212,18 +775,9 @@ func (c *Controller) Run(ctx context.Context) error {
 			for _, task := range readyTasks {
 				issueNum := task.IssueNum()
 				fmt.Printf("[control] 推进 ready task %s (issue #%d)\n", task.ID, issueNum)
-				status := TaskStatusInProgress
-				if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
-					fmt.Printf("[control] 更新任务状态失败 (task %s): %v\n", task.ID, err)
+				if err := c.ProcessIssue(ctx, task); err != nil {
+					fmt.Printf("[control] 推进 ready task 失败 (task %s): %v\n", task.ID, err)
 					continue
-				}
-				// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
-				if issueNum > 0 {
-					if err := c.github.ReplaceLabel(ctx, issueNum, "bot:queued", "bot:fix"); err != nil {
-						fmt.Printf("[control] 替换标签失败 (issue #%d): %v\n", issueNum, err)
-					} else {
-						fmt.Printf("[control] 已将 issue #%d 标签 bot:queued → bot:fix\n", issueNum)
-					}
 				}
 			}
 		}
@@ -231,7 +785,25 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	// ⑦ 增量 integration：将刚完成的 PR 合入对应 integration 分支
 	if c.builder != nil {
-		allTasks, _ := c.taskctl.List("")
+		allTasks, err := c.taskctl.List("")
+		if err != nil {
+			return fmt.Errorf("列出现有任务失败: %w", err)
+		}
+		allIssues, err := c.github.ListIssuesByState(ctx, "all")
+		if err != nil {
+			return fmt.Errorf("扫描全量 issues 失败: %w", err)
+		}
+
+		issueByNumber := make(map[int]IssueInfo, len(allIssues))
+		for _, issue := range allIssues {
+			issueByNumber[issue.Number] = issue
+		}
+		if err := c.syncPRReviewableMetadata(ctx, allTasks, issueByNumber); err != nil {
+			return fmt.Errorf("同步 PR 元数据失败: %w", err)
+		}
+		if err := c.reconcilePRReviewableConflicts(ctx, allTasks, issueByNumber); err != nil {
+			return fmt.Errorf("协调 pr-reviewable 冲突失败: %w", err)
+		}
 
 		// 按 integration 分支分组 task
 		branchTasks := make(map[string][]Task)              // integrationBranch → 待合入 tasks
@@ -267,6 +839,9 @@ func (c *Controller) Run(ctx context.Context) error {
 					continue
 				}
 
+				if !c.shouldEnqueueIntegrationMergeTask(ctx, t, issueByNumber) {
+					continue
+				}
 				branchTasks[branchName] = append(branchTasks[branchName], t)
 			}
 		}
@@ -337,10 +912,22 @@ func (c *Controller) Run(ctx context.Context) error {
 				}
 			}
 		}
+
+		// ⑧ 检查父 issue 进度（Sub-Issue 模式）
+		c.checkParentProgress(ctx, allIssues)
+		return nil
 	}
 
-	// ⑧ 检查父 issue 进度（Sub-Issue 模式）
-	c.checkParentProgress(ctx, issues)
+	allIssues, err := c.github.ListIssuesByState(ctx, "all")
+	if err != nil {
+		return fmt.Errorf("扫描全量 issues 失败: %w", err)
+	}
+	c.checkParentProgress(ctx, allIssues)
+
+	// ⑨ 定时巡检纠偏：即使 hash 未变化也会做轻量对账，失败不阻塞主流程。
+	if err := c.maybeRunDagReconcile(ctx); err != nil {
+		fmt.Printf("[control][dag-sync] reconcile 失败（已降级，不阻塞主流程）: %v\n", err)
+	}
 
 	return nil
 }
@@ -454,38 +1041,477 @@ func (c *Controller) persistBlockedByDependencies(issueToTask map[int]string, de
 	return persisted
 }
 
-// collectAutomationIssues 扫描所有自动化标签，合并为统一 issue 集合。
-// 返回值中的 orchestrateCount 仅用于日志，表示本轮新触发数量。
+// collectAutomationIssues 仅扫描 orchestrate 入口 issue。
+// 返回值中的 orchestrateCount 表示本轮入口数量。
 func (c *Controller) collectAutomationIssues(ctx context.Context) ([]IssueInfo, int, error) {
-	issueMap := make(map[int]IssueInfo)
-	orchestrateCount := 0
-
-	for _, label := range integrationAutomationLabels {
-		issues, err := c.github.ListIssuesWithLabel(ctx, label)
-		if err != nil {
-			return nil, 0, fmt.Errorf("扫描 label=%s 失败: %w", label, err)
-		}
-		if label == "bot:orchestrate" {
-			orchestrateCount = len(issues)
-		}
-		for _, issue := range issues {
-			if issue.Number <= 0 {
-				continue
-			}
-			// 同一个 issue 可能匹配多个 label，保留最新结构即可。
-			issueMap[issue.Number] = issue
-		}
+	issues, err := c.github.ListIssuesWithLabel(ctx, string(state.StateOrchestrate))
+	if err != nil {
+		return nil, 0, fmt.Errorf("扫描 label=%s 失败: %w", state.StateOrchestrate, err)
 	}
 
-	result := make([]IssueInfo, 0, len(issueMap))
-	for _, issue := range issueMap {
+	result := make([]IssueInfo, 0, len(issues))
+	for _, issue := range issues {
+		if issue.Number <= 0 {
+			continue
+		}
 		result = append(result, issue)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Number < result[j].Number
 	})
 
-	return result, orchestrateCount, nil
+	return result, len(result), nil
+}
+
+// syncPRReviewableMetadata 在 integration 候选筛选前回填 PR 元数据。
+// 仅处理 GitHub 状态为 bot:pr-reviewable 的任务，支持幂等 no-op 与可跳过错误。
+func (c *Controller) syncPRReviewableMetadata(ctx context.Context, tasks []Task, issueByNumber map[int]IssueInfo) error {
+	for i := range tasks {
+		task := &tasks[i]
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+
+		issue, ok := issueByNumber[issueNum]
+		if !ok || !hasLabel(issue.Labels, "bot:pr-reviewable") {
+			continue
+		}
+
+		resolved, err := c.github.ResolvePRMetadata(ctx, issueNum)
+		if err != nil {
+			if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+				c.logMetadataSyncSkip(*task, skipReason)
+				continue
+			}
+			return fmt.Errorf("issue #%d 解析 PR 元数据失败: %w", issueNum, err)
+		}
+
+		metaUpdate := buildPRMetadataUpdate(task, resolved)
+		if len(metaUpdate) == 0 {
+			c.logMetadataSyncSkip(*task, metadataSyncSkipAlreadyUpToDate)
+			continue
+		}
+
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+			return fmt.Errorf("task %s 持久化 PR 元数据失败: %w", task.ID, err)
+		}
+
+		if task.Metadata == nil {
+			task.Metadata = make(map[string]string)
+		}
+		for key, value := range metaUpdate {
+			task.Metadata[key] = value
+		}
+
+		fmt.Printf("[control] action=metadata_synced task_key=%s issue_num=%d pr_num=%d branch=%s\n", task.ID, issueNum, resolved.PRNum, resolved.Branch)
+	}
+	return nil
+}
+
+func (c *Controller) logMetadataSyncSkip(task Task, reason string) {
+	fmt.Printf("[control] action=metadata_sync_skipped task_key=%s issue_num=%d skip_reason=%s\n", task.ID, task.IssueNum(), reason)
+}
+
+func buildPRMetadataUpdate(task *Task, resolved PRMetadata) map[string]string {
+	if task.Metadata == nil {
+		task.Metadata = make(map[string]string)
+	}
+
+	metaUpdate := make(map[string]string)
+	resolvedPRNum := strconv.Itoa(resolved.PRNum)
+	if task.Metadata["pr_num"] != resolvedPRNum {
+		metaUpdate["pr_num"] = resolvedPRNum
+	}
+	if task.Metadata["branch"] != resolved.Branch {
+		metaUpdate["branch"] = resolved.Branch
+	}
+
+	if strings.TrimSpace(task.Metadata["meta_issue_slug"]) == "" {
+		metaUpdate["meta_issue_slug"] = inferMetaIssueSlug(resolved.Branch)
+	}
+
+	return metaUpdate
+}
+
+func inferMetaIssueSlug(branch string) string {
+	if strings.HasPrefix(branch, "integration/") {
+		if slug := strings.TrimPrefix(branch, "integration/"); strings.TrimSpace(slug) != "" {
+			return slug
+		}
+	}
+	return "main"
+}
+
+func classifyPRMetadataSkipReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrPRMarkerNotFound):
+		return metadataSyncSkipMarkerNotFound, true
+	case errors.Is(err, ErrPRClosed):
+		return metadataSyncSkipPRClosed, true
+	case errors.Is(err, ErrPRBranchUnavailable):
+		return metadataSyncSkipBranchUnavailable, true
+	default:
+		return "", false
+	}
+}
+
+func (c *Controller) shouldEnqueueIntegrationMergeTask(ctx context.Context, task Task, issueByNumber map[int]IssueInfo) bool {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		return false
+	}
+
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		fmt.Printf("[control] 读取 issue #%d 最新标签失败，跳过本轮 integration 合入 (task %s): %v\n", issueNum, task.ID, err)
+		return false
+	}
+	issueByNumber[issueNum] = issue
+	return hasLabel(issue.Labels, "bot:pr-reviewable")
+}
+
+// reconcilePRReviewableConflicts 协调 bot:pr-reviewable 的冲突回退逻辑。
+func (c *Controller) reconcilePRReviewableConflicts(ctx context.Context, tasks []Task, issueByNumber map[int]IssueInfo) error {
+	for i := range tasks {
+		task := &tasks[i]
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+
+		issue, ok := issueByNumber[issueNum]
+		if !ok || !hasLabel(issue.Labels, "bot:pr-reviewable") {
+			continue
+		}
+
+		reviewStatus, unknownExhausted, err := c.resolvePRReviewStatusWithBackoff(ctx, issueNum)
+		if err != nil {
+			if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+				fmt.Printf("[control] action=pr_reviewable_conflict_skipped issue=%d skip_reason=%s\n", issueNum, skipReason)
+				continue
+			}
+			return fmt.Errorf("issue #%d 解析 PR review 状态失败: %w", issueNum, err)
+		}
+
+		if reviewStatus.IsConflicting() {
+			handled, err := c.resolvePRConflictWithLayers(ctx, *task, reviewStatus)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				if err := c.handlePRReviewableConflict(ctx, issueNum, reviewStatus); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		if reviewStatus.IsUnknown() || unknownExhausted {
+			c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "noop_unknown")
+			continue
+		}
+
+		if !reviewStatus.IsMergeable() {
+			c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "noop_non_conflicting")
+			continue
+		}
+
+		if err := c.handlePRReviewableMergeable(ctx, issueNum, reviewStatus); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Controller) handlePRReviewableMergeable(ctx context.Context, issueNum int, reviewStatus PRReviewStatus) error {
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取最新状态失败: %w", issueNum, err)
+	}
+	if !hasLabel(issue.Labels, "bot:pr-reviewable") {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", currentAutomationLabel(issue.Labels), parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "skip_race")
+		return nil
+	}
+
+	retryCount := parsePRConflictRetryCount(issue.Body)
+	if retryCount <= 0 {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", 0, c.prConflictRetryThreshold(), "noop_mergeable")
+		return nil
+	}
+
+	if err := c.persistPRConflictRetryCount(ctx, issue, 0); err != nil {
+		return err
+	}
+
+	c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", "bot:pr-reviewable", 0, c.prConflictRetryThreshold(), "reset_retry")
+	return nil
+}
+
+func (c *Controller) handlePRReviewableConflict(ctx context.Context, issueNum int, reviewStatus PRReviewStatus) error {
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取最新状态失败: %w", issueNum, err)
+	}
+	if !hasLabel(issue.Labels, "bot:pr-reviewable") {
+		c.logPRReviewableDecision(issueNum, reviewStatus, "bot:pr-reviewable", currentAutomationLabel(issue.Labels), parsePRConflictRetryCount(issue.Body), c.prConflictRetryThreshold(), "skip_race")
+		return nil
+	}
+
+	threshold := c.prConflictRetryThreshold()
+	retryCount := parsePRConflictRetryCount(issue.Body) + 1
+
+	headSHA := normalizedHeadSHA(reviewStatus.HeadSHA)
+	oldLabel := "bot:pr-reviewable"
+	newLabel := "bot:pr-needs-fix"
+	decision := "rollback_to_needs_fix"
+	if retryCount > threshold {
+		newLabel = needsHumanLabel
+		decision = "escalate_needs_human"
+	}
+
+	if err := c.ensurePRConflictDetectedComment(ctx, issueNum, reviewStatus, retryCount, threshold, headSHA, newLabel); err != nil {
+		return err
+	}
+
+	if retryCount > threshold {
+		if err := c.ensurePRConflictEscalationComment(ctx, issueNum, reviewStatus, retryCount, threshold, headSHA); err != nil {
+			return err
+		}
+	}
+
+	if err := c.syncIssueStateLabel(ctx, issueNum, newLabel); err != nil {
+		return fmt.Errorf("issue #%d 状态回退失败: %w", issueNum, err)
+	}
+	if err := c.persistPRConflictRetryCount(ctx, issue, retryCount); err != nil {
+		return err
+	}
+	c.logPRReviewableDecision(issueNum, reviewStatus, oldLabel, newLabel, retryCount, threshold, decision)
+	return nil
+}
+
+func (c *Controller) resolvePRReviewStatusWithBackoff(ctx context.Context, issueNum int) (PRReviewStatus, bool, error) {
+	backoffs := c.prConflictUnknownBackoffs()
+	for attempt := 0; ; attempt++ {
+		reviewStatus, err := c.github.ResolvePRReviewStatus(ctx, issueNum)
+		if err != nil {
+			return PRReviewStatus{}, false, err
+		}
+		reviewStatus.MergeStateStatus = strings.ToUpper(strings.TrimSpace(reviewStatus.MergeStateStatus))
+		if !reviewStatus.IsUnknown() {
+			return reviewStatus, false, nil
+		}
+		if attempt >= len(backoffs) {
+			return reviewStatus, true, nil
+		}
+
+		wait := backoffs[attempt]
+		fmt.Printf(
+			"[control] action=pr_reviewable_unknown_retry issue=%d pr=%d mergeable=%s merge_state_status=%s attempt=%d wait=%s\n",
+			issueNum,
+			reviewStatus.PRNum,
+			reviewStatus.Mergeable,
+			reviewStatus.normalizedMergeStateStatus(),
+			attempt+1,
+			wait,
+		)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return PRReviewStatus{}, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *Controller) ensurePRConflictDetectedComment(
+	ctx context.Context,
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	retryCount int,
+	threshold int,
+	headSHA string,
+	nextLabel string,
+) error {
+	marker := fmt.Sprintf(prConflictDetectedCommentMarkerFmt, headSHA)
+	followup := "已触发既有 iterate 链路继续自动修复。"
+	if nextLabel == needsHumanLabel {
+		followup = "已停止自动回退循环，等待人工介入处理。"
+	}
+	body := fmt.Sprintf(
+		"## ⚠️ 检测到 PR 冲突\n\n- PR: #%d\n- mergeable: `%s`\n- mergeStateStatus: `%s`\n- headSha: `%s`\n- conflict_retry: `%d/%d`\n- 状态变更: `bot:pr-reviewable -> %s`\n\n%s\n\n%s",
+		reviewStatus.PRNum,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		headSHA,
+		retryCount,
+		threshold,
+		nextLabel,
+		followup,
+		marker,
+	)
+	return c.ensureIssueCommentWithMarker(ctx, issueNum, marker, body)
+}
+
+func (c *Controller) ensurePRConflictEscalationComment(
+	ctx context.Context,
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	retryCount int,
+	threshold int,
+	headSHA string,
+) error {
+	marker := fmt.Sprintf(prConflictEscalatedCommentMarkerFmt, headSHA)
+	body := fmt.Sprintf(
+		"## ⚠️ 自动冲突修复已超限，转人工处理\n\n- PR: #%d\n- mergeable: `%s`\n- mergeStateStatus: `%s`\n- headSha: `%s`\n- conflict_retry: `%d`（threshold=%d）\n- 状态变更: `bot:pr-reviewable -> needs-human`\n\n请人工介入处理冲突后再继续流程。\n\n%s",
+		reviewStatus.PRNum,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		headSHA,
+		retryCount,
+		threshold,
+		marker,
+	)
+	return c.ensureIssueCommentWithMarker(ctx, issueNum, marker, body)
+}
+
+func (c *Controller) ensureIssueCommentWithMarker(ctx context.Context, issueNum int, markerLine string, body string) error {
+	commentBodies, err := c.github.ListCommentBodies(ctx, issueNum)
+	if err != nil {
+		return fmt.Errorf("issue #%d 读取评论失败: %w", issueNum, err)
+	}
+	for _, commentBody := range commentBodies {
+		if strings.Contains(commentBody, markerLine) {
+			return nil
+		}
+	}
+	if err := c.github.AddIssueComment(ctx, issueNum, body); err != nil {
+		return fmt.Errorf("issue #%d 写入评论失败: %w", issueNum, err)
+	}
+	return nil
+}
+
+func (c *Controller) persistPRConflictRetryCount(ctx context.Context, issue IssueInfo, retryCount int) error {
+	updatedBody, changed := upsertPRConflictRetryMarker(issue.Body, retryCount)
+	if !changed {
+		return nil
+	}
+	if err := c.github.UpdateIssueBody(ctx, issue.Number, updatedBody); err != nil {
+		return fmt.Errorf("issue #%d 更新 PR_CONFLICT_RETRY 失败: %w", issue.Number, err)
+	}
+	return nil
+}
+
+func parsePRConflictRetryCount(body string) int {
+	matches := prConflictRetryMarkerRe.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		return 0
+	}
+	count, err := strconv.Atoi(matches[1])
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
+}
+
+func upsertPRConflictRetryMarker(body string, retryCount int) (string, bool) {
+	markerLine := fmt.Sprintf("<!-- PR_CONFLICT_RETRY:%d -->", retryCount)
+	if loc := prConflictRetryMarkerRe.FindStringIndex(body); loc != nil {
+		current := body[loc[0]:loc[1]]
+		if current == markerLine {
+			return body, false
+		}
+		return body[:loc[0]] + markerLine + body[loc[1]:], true
+	}
+
+	trimmed := strings.TrimRight(body, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return markerLine, true
+	}
+	return trimmed + "\n\n" + markerLine, true
+}
+
+func normalizedHeadSHA(headSHA string) string {
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return "unknown"
+	}
+	return headSHA
+}
+
+func currentAutomationLabel(labels []string) string {
+	for _, candidate := range integrationAutomationLabels {
+		if hasLabel(labels, candidate) {
+			return candidate
+		}
+	}
+	return "-"
+}
+
+func (c *Controller) prConflictRetryThreshold() int {
+	if c.cfg == nil {
+		return prConflictRetryDefaultThreshold
+	}
+	if c.cfg.PRConflictRetryThreshold < 0 {
+		return prConflictRetryDefaultThreshold
+	}
+	return c.cfg.PRConflictRetryThreshold
+}
+
+func (c *Controller) prConflictUnknownBackoffs() []time.Duration {
+	if c.cfg == nil || len(c.cfg.PRConflictUnknownBackoffs) == 0 {
+		return append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...)
+	}
+	return append([]time.Duration(nil), c.cfg.PRConflictUnknownBackoffs...)
+}
+
+func (c *Controller) prConflictAIEnabled() bool {
+	if c.cfg == nil {
+		return true
+	}
+	return c.cfg.PRConflictEnableAI
+}
+
+func (c *Controller) prConflictAIMaxAttempts() int {
+	if c.cfg == nil || c.cfg.PRConflictAIMaxAttempts <= 0 {
+		return prConflictAIDefaultMaxAttempts
+	}
+	return c.cfg.PRConflictAIMaxAttempts
+}
+
+func (c *Controller) prConflictSmokeTestCmd() string {
+	if c.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.cfg.PRConflictSmokeTestCmd)
+}
+
+func (c *Controller) logPRReviewableDecision(
+	issueNum int,
+	reviewStatus PRReviewStatus,
+	oldLabel string,
+	newLabel string,
+	retryCount int,
+	threshold int,
+	decision string,
+) {
+	fmt.Printf(
+		"[control] action=pr_reviewable_reconcile issue=%d pr=%d head_sha=%s old_label=%s new_label=%s retry_count=%d threshold=%d mergeable=%s merge_state_status=%s decision=%s\n",
+		issueNum,
+		reviewStatus.PRNum,
+		normalizedHeadSHA(reviewStatus.HeadSHA),
+		oldLabel,
+		newLabel,
+		retryCount,
+		threshold,
+		reviewStatus.Mergeable,
+		reviewStatus.normalizedMergeStateStatus(),
+		decision,
+	)
 }
 
 // checkParentProgress 检查父 issue 的所有 sub-issues 是否完成
@@ -725,6 +1751,90 @@ func hasLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Controller) ensureIssueLabel(ctx context.Context, issueNum int, targetLabel string) error {
+	labels, err := c.github.ListLabels(ctx, issueNum)
+	if err != nil {
+		return err
+	}
+	if hasLabel(labels, targetLabel) {
+		return nil
+	}
+	return c.github.AddLabel(ctx, issueNum, targetLabel)
+}
+
+func (c *Controller) clearIssueBotStates(ctx context.Context, issueNum int) error {
+	_, err := state.Clear(ctx, c.github, issueNum)
+	return err
+}
+
+func (c *Controller) transitionWithSelfHeal(ctx context.Context, issueNum int, from, to state.State) error {
+	err := state.TransitionWithRetry(ctx, c.github, issueNum, from, to, nil)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, state.ErrInvariantViolation) && !errors.Is(err, state.ErrMultipleBotStates) {
+		return err
+	}
+
+	target, changed, healErr := c.normalizeIssueState(ctx, issueNum)
+	if healErr != nil {
+		return healErr
+	}
+	if changed {
+		fmt.Printf("[control] issue #%d 状态自愈完成，收敛到 %s\n", issueNum, target)
+	}
+	return state.TransitionWithRetry(ctx, c.github, issueNum, from, to, nil)
+}
+
+func (c *Controller) normalizeIssueState(ctx context.Context, issueNum int) (state.State, bool, error) {
+	labels, err := c.github.ListLabels(ctx, issueNum)
+	if err != nil {
+		return "", false, err
+	}
+	states, invalid := state.CollectBotStatesWithInvalid(labels)
+	if len(invalid) > 0 {
+		return "", false, fmt.Errorf("issue #%d 存在非法 bot 标签: %v", issueNum, invalid)
+	}
+	if len(states) <= 1 {
+		if len(states) == 1 {
+			return states[0], false, nil
+		}
+		return "", false, nil
+	}
+
+	priority, err := state.ParseStatePriority(os.Getenv("NIUMA_STATE_PRIORITY"))
+	if err != nil {
+		priority = append([]state.State(nil), state.DefaultStatePriority...)
+	}
+	target, changed, err := state.Normalize(ctx, c.github, issueNum, priority)
+	if err != nil {
+		return "", false, err
+	}
+	if changed {
+		c.emitStateHealComment(ctx, issueNum, states, target)
+	}
+	return target, changed, nil
+}
+
+func (c *Controller) emitStateHealComment(ctx context.Context, issueNum int, states []state.State, target state.State) {
+	marker := fmt.Sprintf("<!-- BOT:STATE_CONVERGED issue=%d target=%s -->", issueNum, target)
+	bodies, err := c.github.ListCommentBodies(ctx, issueNum)
+	if err == nil {
+		for _, body := range bodies {
+			if strings.Contains(body, marker) {
+				return
+			}
+		}
+	}
+
+	_ = c.github.AddIssueComment(ctx, issueNum, fmt.Sprintf(
+		"## ⚠️ 状态自愈\n\n检测到多个 `bot:*` 状态标签（%v），已自动收敛为 `%s` 并继续推进。\n\n%s",
+		states,
+		target,
+		marker,
+	))
 }
 
 var integrationAutomationLabels = []string{
@@ -1022,7 +2132,7 @@ func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, ta
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
 		return
 	}
-	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", integrationGateFailLabel); err != nil {
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), integrationGateFailLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationGateFailLabel, err)
 		return
 	}
@@ -1036,18 +2146,36 @@ func (c *Controller) syncIntegrationGateEscalationLabels(ctx context.Context, ta
 }
 
 func (c *Controller) syncIssueStateLabel(ctx context.Context, issueNum int, targetLabel string) error {
+	if targetState, err := state.ParseState(targetLabel); err == nil {
+		return c.transitionWithSelfHeal(ctx, issueNum, "", targetState)
+	}
+	if err := c.clearIssueBotStates(ctx, issueNum); err != nil {
+		return err
+	}
+
 	var firstErr error
+	replacedAny := false
 	for _, oldLabel := range integrationAutomationLabels {
+		if state.IsBotLabel(oldLabel) {
+			continue
+		}
 		// 避免 old==new 导致“先删后加”同一标签，触发无意义的 labeled/unlabeled 事件。
 		if oldLabel == targetLabel {
 			continue
 		}
-		if err := c.github.ReplaceLabel(ctx, issueNum, oldLabel, targetLabel); err != nil && firstErr == nil {
+		replaced, err := c.github.ReplaceLabelIfPresent(ctx, issueNum, oldLabel, targetLabel)
+		if err != nil && firstErr == nil {
 			firstErr = err
+		}
+		if replaced {
+			replacedAny = true
 		}
 	}
 	if firstErr != nil {
 		return firstErr
+	}
+	if !replacedAny {
+		return c.ensureIssueLabel(ctx, issueNum, targetLabel)
 	}
 	return nil
 }
@@ -1158,11 +2286,15 @@ func (c *Controller) escalateIntegrationConflict(ctx context.Context, task Task,
 		return
 	}
 
-	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", integrationConflictLabel); err != nil {
+	if err := c.clearIssueBotStates(ctx, task.IssueNum()); err != nil {
+		fmt.Printf("[control] issue #%d 清理 bot 状态失败: %v\n", task.IssueNum(), err)
+		return
+	}
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), integrationConflictLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), integrationConflictLabel, err)
 		return
 	}
-	if err := c.github.ReplaceLabel(ctx, task.IssueNum(), "bot:fix", needsHumanLabel); err != nil {
+	if err := c.ensureIssueLabel(ctx, task.IssueNum(), needsHumanLabel); err != nil {
 		fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", task.IssueNum(), needsHumanLabel, err)
 		return
 	}

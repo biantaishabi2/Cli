@@ -2,7 +2,25 @@
 // 控制层核心类型定义
 package control
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
+
+const (
+	// 冲突修复可观测性 metadata 键。
+	metaKeyConflictResolutionLayer        = "conflict_resolution_layer"
+	metaKeyConflictResolutionAttempts     = "conflict_resolution_attempts"
+	metaKeyConflictResolutionLastError    = "conflict_resolution_last_error"
+	metaKeyConflictResolutionLastFailedAt = "conflict_resolution_last_failed_at"
+)
+
+const (
+	// 分层冲突修复层级值。
+	conflictResolutionLayerRule  = "rule"
+	conflictResolutionLayerAI    = "ai"
+	conflictResolutionLayerHuman = "human"
+)
 
 // TaskStatus 任务状态
 type TaskStatus string
@@ -81,6 +99,66 @@ type DagGraph struct {
 	Nodes []DagNode `json:"nodes"`
 }
 
+// DagEdge DAG 依赖边：FromIssue -> ToIssue（ToIssue 被 FromIssue 阻塞）
+type DagEdge struct {
+	FromIssue int `json:"from_issue"`
+	ToIssue   int `json:"to_issue"`
+}
+
+// DagSyncMode DAG 同步触发模式
+type DagSyncMode string
+
+const (
+	DagSyncModeEvent     DagSyncMode = "event"
+	DagSyncModeReconcile DagSyncMode = "reconcile"
+	DagSyncModeManual    DagSyncMode = "manual"
+)
+
+// DagSyncStatus DAG 同步结果状态
+type DagSyncStatus string
+
+const (
+	DagSyncStatusSuccess DagSyncStatus = "success"
+	DagSyncStatusFailed  DagSyncStatus = "failed"
+	DagSyncStatusSkipped DagSyncStatus = "skipped"
+)
+
+// DagSyncResult DAG 同步执行结果
+type DagSyncResult struct {
+	Mode          DagSyncMode   `json:"mode"`
+	Status        DagSyncStatus `json:"status"`
+	DagHash       string        `json:"dag_hash"`
+	TotalEdges    int           `json:"total_edges"`
+	AppliedAdd    int           `json:"applied_add"`
+	AppliedRemove int           `json:"applied_remove"`
+	SkippedEdges  int           `json:"skipped_edges"`
+	ErrorType     string        `json:"error_type,omitempty"`
+	Error         string        `json:"error,omitempty"`
+}
+
+// DagSyncState DAG 同步持久化状态
+type DagSyncState struct {
+	LastHash        string `json:"last_hash,omitempty"`
+	LastSuccessAt   string `json:"last_success_at,omitempty"`
+	SuccessCount    int    `json:"success_count,omitempty"`
+	FailCount       int    `json:"fail_count,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+	LastErrorAt     string `json:"last_error_at,omitempty"`
+	SkippedEdges    int    `json:"skipped_edges,omitempty"`
+	LastReconcileAt string `json:"last_reconcile_at,omitempty"`
+}
+
+// DagSyncConfig DAG 展示层同步配置
+type DagSyncConfig struct {
+	PollInterval         time.Duration   `json:"poll_interval"`
+	MaxRetry             int             `json:"max_retry"`
+	RetryBackoff         []time.Duration `json:"retry_backoff"`
+	RateLimitRPS         int             `json:"rate_limit_rps"`
+	Timeout              time.Duration   `json:"timeout"`
+	SkippedEdgeThreshold float64         `json:"skipped_edge_threshold"`
+	StateFile            string          `json:"state_file"`
+}
+
 // BranchInfo 分支信息（用于 integration 构建）
 type BranchInfo struct {
 	Branch   string `json:"branch"`
@@ -143,6 +221,33 @@ type MergeOutcome struct {
 	Conflict          *ConflictSummary `json:"conflict,omitempty"`
 	ExecutorVersion   string           `json:"executor_version,omitempty"`
 	ExecutedAt        string           `json:"executed_at,omitempty"`
+}
+
+// IssueLockResult issue 锁执行结果
+type IssueLockResult string
+
+const (
+	IssueLockResultSucceeded IssueLockResult = "succeeded"
+	IssueLockResultFailed    IssueLockResult = "failed"
+	IssueLockResultSkipped   IssueLockResult = "skipped"
+	IssueLockResultLocked    IssueLockResult = "locked"
+)
+
+// IssueLockRecord issue 锁记录
+type IssueLockRecord struct {
+	IssueNumber int             `json:"issue_number"`
+	Owner       string          `json:"owner"`
+	AcquiredAt  time.Time       `json:"acquired_at"`
+	ExpiresAt   time.Time       `json:"expires_at"`
+	HeartbeatAt time.Time       `json:"heartbeat_at"`
+	LastResult  IssueLockResult `json:"last_result,omitempty"`
+}
+
+// IssueLockStore issue 锁存储接口
+type IssueLockStore interface {
+	TryAcquire(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, bool, error)
+	Refresh(issueNumber int, owner string, now time.Time, ttl time.Duration) (IssueLockRecord, error)
+	Release(issueNumber int, owner string, now time.Time, lastResult IssueLockResult) error
 }
 
 // ControlStatus 全局控制状态

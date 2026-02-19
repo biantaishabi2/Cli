@@ -1,0 +1,31 @@
+name: niuma - Orchestrate
+
+on:
+  issues:
+    types: [labeled]
+  repository_dispatch:
+    types: [niuma.task.completed]
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  orchestrate:
+    if: >
+      (github.event_name == 'issues' && (github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable')) ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
+      github.event_name == 'schedule'
+    uses: biantaishabi2/Cli/.github/workflows/niuma-orchestrate-reusable.yml@7ae78fc91b6121d834753e43f963a9d12c640717
+    secrets: inherit
+    with:
+      repo: biantaishabi2/gong
+      repo_dir: "."
+      build_niuma: false
+      label_whitelist: "bot:queued,bot:pr-reviewable"
+      enable_dispatch_wakeup: true
+      event_id: ${{ github.event.client_payload.event_id || '' }}
+      dedup_window_hours: 24
+      concurrency_key: "niuma-orchestrate-${repo}"

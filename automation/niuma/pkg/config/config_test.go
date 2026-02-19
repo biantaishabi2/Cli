@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,12 @@ func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
 	assert.Equal(t, 1, cfg.Workflow.GetVisibleRoundInterval())
 	assert.True(t, cfg.Workflow.GetVisibleOnlyOnDiff())
+	assert.Equal(t, 5*time.Minute, cfg.Control.DagSync.GetPollInterval())
+	assert.Equal(t, 3, cfg.Control.DagSync.GetMaxRetry())
+	assert.Equal(t, []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}, cfg.Control.DagSync.GetRetryBackoff())
+	assert.Equal(t, 10, cfg.Control.DagSync.GetRateLimitRPS())
+	assert.Equal(t, 30*time.Second, cfg.Control.DagSync.GetTimeout())
+	assert.Equal(t, 0.20, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
 }
 
 func TestLoad_WorkflowConfig(t *testing.T) {
@@ -223,4 +230,49 @@ func TestEnvOverride_AffectsDefaultPlaceholder(t *testing.T) {
 	rp, err := cfg.GetImplementationProvider()
 	require.NoError(t, err)
 	assert.Equal(t, "opencode {prompt_file}", rp.Cmd)
+}
+
+func TestLoad_ControlDagSyncConfig(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: codex
+  providers: {}
+control:
+  dag_sync:
+    poll_interval: 7m
+    max_retry: 2
+    retry_backoff: [5s, 15s]
+    rate_limit_rps: 6
+    timeout: 45s
+    skipped_edge_threshold: 35
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 7*time.Minute, cfg.Control.DagSync.GetPollInterval())
+	assert.Equal(t, 2, cfg.Control.DagSync.GetMaxRetry())
+	assert.Equal(t, []time.Duration{5 * time.Second, 15 * time.Second}, cfg.Control.DagSync.GetRetryBackoff())
+	assert.Equal(t, 6, cfg.Control.DagSync.GetRateLimitRPS())
+	assert.Equal(t, 45*time.Second, cfg.Control.DagSync.GetTimeout())
+	assert.Equal(t, 0.35, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
+}
+
+func TestDagSyncConfig_InvalidValueFallback(t *testing.T) {
+	cfg := DagSyncConfig{
+		PollInterval:         "bad",
+		MaxRetry:             -1,
+		RetryBackoff:         []string{"-1s"},
+		RateLimitRPS:         0,
+		Timeout:              "0s",
+		SkippedEdgeThreshold: 101,
+	}
+
+	assert.Equal(t, 5*time.Minute, cfg.GetPollInterval())
+	assert.Equal(t, 3, cfg.GetMaxRetry())
+	assert.Equal(t, []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}, cfg.GetRetryBackoff())
+	assert.Equal(t, 10, cfg.GetRateLimitRPS())
+	assert.Equal(t, 30*time.Second, cfg.GetTimeout())
+	assert.Equal(t, 0.20, cfg.GetSkippedEdgeThresholdRatio())
 }

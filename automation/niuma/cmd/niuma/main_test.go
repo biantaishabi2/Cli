@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +100,7 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 		flag     int
 		env      string
 		expected int
+		wantErr  bool
 	}{
 		{
 			name:     "flag 优先",
@@ -112,16 +115,16 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 			expected: 4,
 		},
 		{
-			name:     "env 非法时回退默认",
-			flag:     -1,
-			env:      "bad",
-			expected: 2,
+			name:    "env 非法时返回错误",
+			flag:    -1,
+			env:     "bad",
+			wantErr: true,
 		},
 		{
-			name:     "env 负数时回退默认",
-			flag:     -1,
-			env:      "-1",
-			expected: 2,
+			name:    "env 负数时返回错误",
+			flag:    -1,
+			env:     "-1",
+			wantErr: true,
 		},
 		{
 			name:     "全缺省回退默认",
@@ -133,7 +136,13 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, resolveIntegrationGateMaxRetries(tt.flag, tt.env))
+			got, err := resolveIntegrationGateMaxRetries(tt.flag, tt.env)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
@@ -164,4 +173,90 @@ func TestBuildOrchestrator_InvalidImplementationProvider_ReturnsError(t *testing
 	_, err = buildOrchestrator(nil, 123)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `实现 provider "claudee" 未配置`)
+}
+
+func TestExitCodeFromError_DefaultAndWrapped(t *testing.T) {
+	assert.Equal(t, 0, exitCodeFromError(nil))
+	assert.Equal(t, 1, exitCodeFromError(errors.New("boom")))
+	assert.Equal(t, 23, exitCodeFromError(withExitCode(23, errors.New("mapped"))))
+}
+
+func TestMapStateLabelError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected int
+	}{
+		{name: "conflict", err: state.ErrConflict, expected: exitCodeStateConflict},
+		{name: "invalid state", err: state.ErrInvalidState, expected: exitCodeStateInvalid},
+		{name: "invalid transition", err: state.ErrInvalidTransition, expected: exitCodeStateTransitionEdge},
+		{name: "invariant", err: state.ErrInvariantViolation, expected: exitCodeStateInvariant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped := mapStateLabelError(tt.err)
+			require.Error(t, mapped)
+			assert.Equal(t, tt.expected, exitCodeFromError(mapped))
+			assert.True(t, errors.Is(mapped, tt.err))
+		})
+	}
+}
+
+func TestRunStateLabelSet_InvalidInputMapsStateExitCode(t *testing.T) {
+	restore := snapshotCLIFlags()
+	defer restore()
+
+	flagRepo = "owner/repo"
+	flagIssue = 325
+
+	t.Run("invalid --to", func(t *testing.T) {
+		flagStateTo = "bot:unknown"
+		flagStateFrom = ""
+
+		err := runStateLabelSet(nil, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+		assert.True(t, errors.Is(err, state.ErrInvalidState))
+	})
+
+	t.Run("invalid --from", func(t *testing.T) {
+		flagStateTo = string(state.StateFixRequested)
+		flagStateFrom = "bot:unknown"
+
+		err := runStateLabelSet(nil, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+		assert.True(t, errors.Is(err, state.ErrInvalidState))
+	})
+}
+
+func TestRunStateLabelNormalize_InvalidPriorityMapsStateExitCode(t *testing.T) {
+	restore := snapshotCLIFlags()
+	defer restore()
+
+	flagRepo = "owner/repo"
+	flagIssue = 325
+	flagStatePriority = "bot:needs-discussion,bot:unknown"
+
+	err := runStateLabelNormalize(nil, nil)
+	require.Error(t, err)
+	assert.Equal(t, exitCodeStateInvalid, exitCodeFromError(err))
+	assert.True(t, errors.Is(err, state.ErrInvalidState))
+}
+
+func snapshotCLIFlags() func() {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevStateFrom := flagStateFrom
+	prevStateTo := flagStateTo
+	prevStatePriority := flagStatePriority
+
+	return func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagStateFrom = prevStateFrom
+		flagStateTo = prevStateTo
+		flagStatePriority = prevStatePriority
+	}
 }

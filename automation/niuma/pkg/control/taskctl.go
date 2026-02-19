@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // TaskCtlClient 封装 taskctl CLI 操作
@@ -16,6 +17,12 @@ type TaskCtlClient struct {
 	BinPath   string // taskctl 二进制路径
 	StorePath string // 任务存储路径（{repoDir}/.niuma/tasks.json）
 }
+
+const (
+	metadataKeyIdempotencyKeyPrefix       = "idempotency.key"
+	metadataKeyIdempotencyInputHashPrefix = "idempotency.input_hash"
+	metadataKeyIdempotencyTimestampPrefix = "idempotency.timestamp"
+)
 
 // NewTaskCtlClient 创建 TaskCtlClient，三级 fallback 发现二进制
 func NewTaskCtlClient(configBin, repoDir string) (*TaskCtlClient, error) {
@@ -61,6 +68,82 @@ func discoverBin(configBin, repoDir string) (string, error) {
 	}
 
 	return "", fmt.Errorf("未找到 taskctl 二进制：请设置 control.taskctl_bin 或将 taskctl 加入 $PATH 或执行 cargo build --release -p taskctl")
+}
+
+// readPhaseIdempotencyKey 读取某个 phase 最近一次记录的幂等 key。
+func readPhaseIdempotencyKey(meta map[string]string, phase string) string {
+	key := phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, phase)
+	if key == "" {
+		return ""
+	}
+	return valueOrEmpty(meta, key)
+}
+
+// buildPhaseIdempotencyMetadataPatch 生成 phase 级幂等 metadata 增量。
+func buildPhaseIdempotencyMetadataPatch(meta map[string]string, phase, key, inputHash string, recordedAt time.Time) map[string]string {
+	normalizedPhase := strings.TrimSpace(phase)
+	normalizedKey := strings.TrimSpace(key)
+	if normalizedPhase == "" || normalizedKey == "" {
+		return nil
+	}
+
+	update := make(map[string]string)
+	idempotencyKeyMeta := phaseScopedMetadataKey(metadataKeyIdempotencyKeyPrefix, normalizedPhase)
+	inputHashMeta := phaseScopedMetadataKey(metadataKeyIdempotencyInputHashPrefix, normalizedPhase)
+	timestampMeta := phaseScopedMetadataKey(metadataKeyIdempotencyTimestampPrefix, normalizedPhase)
+
+	if valueOrEmpty(meta, idempotencyKeyMeta) != normalizedKey {
+		update[idempotencyKeyMeta] = normalizedKey
+	}
+
+	normalizedInputHash := strings.TrimSpace(inputHash)
+	if normalizedInputHash != "" && valueOrEmpty(meta, inputHashMeta) != normalizedInputHash {
+		update[inputHashMeta] = normalizedInputHash
+	}
+
+	recordedAtStr := recordedAt.UTC().Format(time.RFC3339)
+	if recordedAtStr != "" && valueOrEmpty(meta, timestampMeta) != recordedAtStr {
+		update[timestampMeta] = recordedAtStr
+	}
+
+	if len(update) == 0 {
+		return nil
+	}
+	return update
+}
+
+// recordPhaseIdempotency 统一写入 phase 级幂等 metadata。
+func (c *TaskCtlClient) recordPhaseIdempotency(taskID string, meta map[string]string, phase, key, inputHash string, recordedAt time.Time) (map[string]string, error) {
+	update := buildPhaseIdempotencyMetadataPatch(meta, phase, key, inputHash, recordedAt)
+	if len(update) == 0 {
+		return nil, nil
+	}
+	if err := c.Update(taskID, UpdateOpts{Metadata: &update}); err != nil {
+		return nil, err
+	}
+	return update, nil
+}
+
+func phaseScopedMetadataKey(prefix, phase string) string {
+	prefix = strings.TrimSpace(prefix)
+	phase = strings.TrimSpace(phase)
+	if prefix == "" || phase == "" {
+		return ""
+	}
+	return prefix + "." + phase
+}
+
+func mergeMetadataPatch(meta map[string]string, patch map[string]string) map[string]string {
+	if len(patch) == 0 {
+		return meta
+	}
+	if meta == nil {
+		meta = make(map[string]string, len(patch))
+	}
+	for k, v := range patch {
+		meta[k] = v
+	}
+	return meta
 }
 
 // Create 创建新任务

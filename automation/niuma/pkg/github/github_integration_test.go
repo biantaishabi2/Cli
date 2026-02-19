@@ -95,29 +95,38 @@ func TestIntegration_Labels(t *testing.T) {
 	number := createTestIssue(t, client)
 
 	// 确保 label 存在
-	err := client.EnsureLabelsExist(ctx, []string{"bot:fix", "bot:plan-draft"})
+	err := client.EnsureLabelsExist(ctx, []string{"bug", "priority:high"})
 	require.NoError(t, err)
 
 	// 添加 label
-	err = client.AddLabel(ctx, number, "bot:fix")
+	err = client.AddLabel(ctx, number, "bug")
 	require.NoError(t, err)
 
 	// 列出 label
 	labels, err := client.ListLabels(ctx, number)
 	require.NoError(t, err)
-	assert.Contains(t, labels, "bot:fix")
+	assert.Contains(t, labels, "bug")
 
 	// 替换 label
-	err = client.ReplaceLabel(ctx, number, "bot:fix", "bot:plan-draft")
+	err = client.ReplaceLabel(ctx, number, "bug", "priority:high")
 	require.NoError(t, err)
 
 	labels, err = client.ListLabels(ctx, number)
 	require.NoError(t, err)
-	assert.Contains(t, labels, "bot:plan-draft")
-	assert.NotContains(t, labels, "bot:fix")
+	assert.Contains(t, labels, "priority:high")
+	assert.NotContains(t, labels, "bug")
+
+	// 原子替换整组 labels（保留单一 bot 状态）
+	err = client.ReplaceLabels(ctx, number, []string{"bug", "bot:needs-discussion"})
+	require.NoError(t, err)
+	labels, err = client.ListLabels(ctx, number)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bug")
+	assert.Contains(t, labels, "bot:needs-discussion")
+	assert.NotContains(t, labels, "priority:high")
 
 	// 移除 label
-	err = client.RemoveLabel(ctx, number, "bot:plan-draft")
+	err = client.RemoveLabel(ctx, number, "bug")
 	require.NoError(t, err)
 }
 
@@ -138,4 +147,36 @@ func TestIntegration_ToCommentBodies(t *testing.T) {
 	assert.Len(t, bodies, 2)
 	assert.Equal(t, "Comment 1", bodies[0])
 	assert.Equal(t, "Comment 2", bodies[1])
+}
+
+func TestIntegration_IssueDependenciesMirror(t *testing.T) {
+	client := newTestClient(t)
+	ctx := context.Background()
+	depIssue := createTestIssue(t, client)
+	targetIssue := createTestIssue(t, client)
+
+	err := client.AddIssueBlockedBy(ctx, targetIssue, depIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
+
+	blockedBy, err := client.ListIssueBlockedBy(ctx, targetIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
+	assert.Contains(t, blockedBy, depIssue)
+
+	err = client.RemoveIssueBlockedBy(ctx, targetIssue, depIssue)
+	if err != nil {
+		if ClassifyDependencyError(err) == DependencyErrorTypeUnsupported {
+			t.Skipf("issue dependency API unsupported: %v", err)
+		}
+		require.NoError(t, err)
+	}
 }
