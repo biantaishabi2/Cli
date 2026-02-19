@@ -316,6 +316,76 @@ func TestCanAutoResolveConflict_DoesNotDropCodeAfterLeadingBlockComment(t *testi
 	assert.Contains(t, reason, "语义差异")
 }
 
+func TestHasHighRiskConflict_HunkBoundary(t *testing.T) {
+	summaryAtLimit := conflictFileSummary{
+		hunks: 6,
+		blocks: []conflictBlock{
+			{ours: "valueA", theirs: "valueB"},
+		},
+	}
+	risky, reason := hasHighRiskConflict("pkg/service.go", summaryAtLimit)
+	assert.False(t, risky)
+	assert.Empty(t, reason)
+
+	summaryOverLimit := conflictFileSummary{
+		hunks: 7,
+		blocks: []conflictBlock{
+			{ours: "valueA", theirs: "valueB"},
+		},
+	}
+	risky, reason = hasHighRiskConflict("pkg/service.go", summaryOverLimit)
+	assert.True(t, risky)
+	assert.Contains(t, reason, "冲突块过多")
+}
+
+func TestIsAdjacentMildConflict_BlockLineBoundary(t *testing.T) {
+	summaryAtLimit := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{ours: buildConflictSideLines(12), theirs: buildConflictSideLines(12)},
+		},
+	}
+	assert.True(t, isAdjacentMildConflict(summaryAtLimit))
+
+	summaryOverLimit := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{ours: buildConflictSideLines(13), theirs: buildConflictSideLines(12)},
+		},
+	}
+	assert.False(t, isAdjacentMildConflict(summaryOverLimit))
+}
+
+func TestHasHighRiskConflict_TotalLineBoundary(t *testing.T) {
+	summaryAtLimit := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{ours: buildConflictSideLines(60), theirs: buildConflictSideLines(60)},
+		},
+	}
+	risky, reason := hasHighRiskConflict("pkg/service.go", summaryAtLimit)
+	assert.False(t, risky)
+	assert.Empty(t, reason)
+
+	summaryOverLimit := conflictFileSummary{
+		hunks: 1,
+		blocks: []conflictBlock{
+			{ours: buildConflictSideLines(61), theirs: buildConflictSideLines(60)},
+		},
+	}
+	risky, reason = hasHighRiskConflict("pkg/service.go", summaryOverLimit)
+	assert.True(t, risky)
+	assert.Contains(t, reason, "冲突行数过多")
+}
+
+func buildConflictSideLines(lines int) string {
+	var b strings.Builder
+	for i := 0; i < lines; i++ {
+		b.WriteString(fmt.Sprintf("line_%d\n", i))
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 func splitNonEmpty(s string) []string {
 	var result []string
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {

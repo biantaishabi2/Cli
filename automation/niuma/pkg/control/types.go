@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+const (
+	// 冲突修复可观测性 metadata 键。
+	metaKeyConflictResolutionLayer        = "conflict_resolution_layer"
+	metaKeyConflictResolutionAttempts     = "conflict_resolution_attempts"
+	metaKeyConflictResolutionLastError    = "conflict_resolution_last_error"
+	metaKeyConflictResolutionLastFailedAt = "conflict_resolution_last_failed_at"
+)
+
+const (
+	// 分层冲突修复层级值。
+	conflictResolutionLayerRule  = "rule"
+	conflictResolutionLayerAI    = "ai"
+	conflictResolutionLayerHuman = "human"
+)
+
 // TaskStatus 任务状态
 type TaskStatus string
 

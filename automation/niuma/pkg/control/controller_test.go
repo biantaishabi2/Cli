@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -2471,6 +2472,297 @@ func TestReconcilePRReviewableConflicts_LabelSyncFailedDoesNotPersistRetry(t *te
 	assert.Empty(t, mockGH.updateIssueBodyCalls)
 }
 
+func TestReconcilePRReviewableConflicts_NoConflictFilesNoop(t *testing.T) {
+	dir := setupGitRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "clean body\n\n<!-- PR_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-no-conflict",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+	assert.Empty(t, mockGH.updateIssueBodyCalls)
+
+	rawLog, readErr := os.ReadFile(logPath)
+	if os.IsNotExist(readErr) {
+		return
+	}
+	require.NoError(t, readErr)
+	assert.Empty(t, strings.TrimSpace(string(rawLog)))
+}
+
+func TestReconcilePRReviewableConflicts_RuleLayerSuccess(t *testing.T) {
+	dir := setupPRConflictImportRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "rule body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-rule-success",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	unmerged := runGitOutput(t, dir, "diff", "--name-only", "--diff-filter=U")
+	assert.Empty(t, unmerged)
+	assert.Empty(t, mockGH.replaceLabelCalls)
+
+	rawLog, readErr := os.ReadFile(logPath)
+	require.NoError(t, readErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+	assert.Contains(t, logText, conflictResolutionLayerRule)
+	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
+	assert.Contains(t, logText, "0")
+}
+
+func TestReconcilePRReviewableConflicts_AILayerSuccess(t *testing.T) {
+	dir, conflictFile := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	provider := ai.NewMockProvider(fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn \"merged\"\n}\n"}]}`,
+		conflictFile,
+	))
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ai body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-ai-success",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:   mockGH,
+		taskctl:  taskctlClient,
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	unmerged := runGitOutput(t, dir, "diff", "--name-only", "--diff-filter=U")
+	assert.Empty(t, unmerged)
+	assert.Empty(t, mockGH.replaceLabelCalls)
+	assert.GreaterOrEqual(t, len(mockGH.addIssueCommentCalls), 2)
+
+	rawLog, readErr := os.ReadFile(logPath)
+	require.NoError(t, readErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+	assert.Contains(t, logText, conflictResolutionLayerAI)
+	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
+	assert.Contains(t, logText, "1")
+}
+
+func TestReconcilePRReviewableConflicts_AIExhaustedEscalatesHuman(t *testing.T) {
+	dir, conflictFile := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+	provider := ai.NewMockProvider(fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn missingSymbol1\n}\n"}]}`,
+		conflictFile,
+	), fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn missingSymbol2\n}\n"}]}`,
+		conflictFile,
+	))
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ai exhausted body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-ai-exhausted",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:   mockGH,
+		taskctl:  taskctlClient,
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Equal(t, 2, provider.CallCount())
+
+	resolvedContent, readErr := os.ReadFile(filepath.Join(dir, conflictFile))
+	require.NoError(t, readErr)
+	assert.Contains(t, string(resolvedContent), "<<<<<<<")
+
+	rawLog, logErr := os.ReadFile(logPath)
+	require.NoError(t, logErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+	assert.Contains(t, logText, conflictResolutionLayerHuman)
+	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
+	assert.Contains(t, logText, "2")
+	assert.Contains(t, logText, "质量门禁失败")
+	assert.Contains(t, logText, metaKeyConflictResolutionLastFailedAt)
+}
+
+func TestReconcilePRReviewableConflicts_AIDisabledEscalatesHuman(t *testing.T) {
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "ai disabled body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-ai-disabled",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        false,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+
+	rawLog, logErr := os.ReadFile(logPath)
+	require.NoError(t, logErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+	assert.Contains(t, logText, conflictResolutionLayerHuman)
+	assert.Contains(t, logText, metaKeyConflictResolutionAttempts)
+	assert.Contains(t, logText, "0")
+	assert.Contains(t, logText, "AI 层已禁用")
+}
+
+func TestNewController_PRConflictAIMaxAttemptsDefaultsWhenNonPositive(t *testing.T) {
+	cfgZero := &ControlConfig{
+		RepoDir:                 ".",
+		PRConflictEnableAI:      true,
+		PRConflictAIMaxAttempts: 0,
+	}
+	ctrlZero := NewController(nil, nil, nil, nil, cfgZero)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, cfgZero.PRConflictAIMaxAttempts)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, ctrlZero.prConflictAIMaxAttempts())
+
+	cfgNegative := &ControlConfig{
+		RepoDir:                 ".",
+		PRConflictEnableAI:      true,
+		PRConflictAIMaxAttempts: -3,
+	}
+	ctrlNegative := NewController(nil, nil, nil, nil, cfgNegative)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, cfgNegative.PRConflictAIMaxAttempts)
+	assert.Equal(t, prConflictAIDefaultMaxAttempts, ctrlNegative.prConflictAIMaxAttempts())
+}
+
 func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
 	mockGH := newMockGitHubOps(
 		IssueInfo{
@@ -2593,6 +2885,122 @@ func TestSyncIssueStateLabel_AutoHealMultiStateAndDedupComment(t *testing.T) {
 	err = ctrl.syncIssueStateLabel(context.Background(), 41, string(state.StateNeedsDiscussion))
 	require.NoError(t, err)
 	assert.Len(t, mockGH.addIssueCommentCalls, 1)
+}
+
+func setupPRConflictImportRepo(t *testing.T) string {
+	t.Helper()
+
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/prconflict\n\ngo 1.22\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "env.go"), []byte(`package pkg
+
+import "os"
+
+func Env() string {
+	return os.Getenv("X")
+}
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "env_test.go"), []byte(`package pkg
+
+import "testing"
+
+func TestEnv(t *testing.T) {
+	_ = Env()
+}
+`), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add go module")
+
+	runGit(t, dir, "checkout", "-b", "feat/import-conflict")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "env.go"), []byte(`package pkg
+
+import (
+	_ "fmt"
+	"os"
+)
+
+func Env() string {
+	return os.Getenv("X")
+}
+`), 0o644))
+	runGit(t, dir, "add", "pkg/env.go")
+	runGit(t, dir, "commit", "-m", "feat adds fmt import")
+
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "env.go"), []byte(`package pkg
+
+import (
+	"os"
+	_ "strings"
+)
+
+func Env() string {
+	return os.Getenv("X")
+}
+`), 0o644))
+	runGit(t, dir, "add", "pkg/env.go")
+	runGit(t, dir, "commit", "-m", "master adds strings import")
+
+	runGitWithExpectedFailure(t, dir, "merge", "--no-ff", "feat/import-conflict")
+	return dir
+}
+
+func setupPRConflictTestHelperRepo(t *testing.T) (string, string) {
+	t.Helper()
+
+	dir := setupGitRepo(t)
+	conflictFile := filepath.ToSlash(filepath.Join("pkg", "helper_test.go"))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/prconflict\n\ngo 1.22\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "helper_test.go"), []byte(`package pkg
+
+func helperValue() string {
+	return "base"
+}
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "helper_value_test.go"), []byte(`package pkg
+
+import "testing"
+
+func TestHelperValue(t *testing.T) {
+	_ = helperValue()
+}
+`), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add helper test")
+
+	runGit(t, dir, "checkout", "-b", "feat/test-helper-conflict")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(`package pkg
+
+func helperValue() string {
+	return "feature"
+}
+`), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "feature helper change")
+
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(`package pkg
+
+func helperValue() int {
+	return 1
+}
+`), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "master helper change")
+
+	runGitWithExpectedFailure(t, dir, "merge", "--no-ff", "feat/test-helper-conflict")
+	return dir, conflictFile
+}
+
+func runGitWithExpectedFailure(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "git %v should fail", args)
+	require.Contains(t, string(out), "CONFLICT", "git %v output=%s", args, string(out))
 }
 
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {

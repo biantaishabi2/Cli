@@ -265,6 +265,20 @@ func TestResolvePRConflictUnknownBackoffs_InvalidInput(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestControlRunFlags_PRConflictLayeredOptionsExist(t *testing.T) {
+	enableAI := controlRunCmd.Flags().Lookup("pr-conflict-enable-ai")
+	require.NotNil(t, enableAI)
+	assert.Equal(t, "true", enableAI.DefValue)
+
+	maxAttempts := controlRunCmd.Flags().Lookup("pr-conflict-ai-max-attempts")
+	require.NotNil(t, maxAttempts)
+	assert.Equal(t, "2", maxAttempts.DefValue)
+
+	smoke := controlRunCmd.Flags().Lookup("pr-conflict-smoke-test-cmd")
+	require.NotNil(t, smoke)
+	assert.Equal(t, "", smoke.DefValue)
+}
+
 func TestWorkflowGateStatusJQ_ObjectTasksPending(t *testing.T) {
 	status := runWorkflowGateStatusJQ(t, `{"version":"1","tasks":{"a":{"metadata":{"integration_gate_status":"pending"}}}}`)
 	assert.Equal(t, "pending", status)

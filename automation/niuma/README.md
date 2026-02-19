@@ -167,6 +167,9 @@ control:
 - `--integration-gate-max-retries`（默认 2）
 - `--pr-conflict-retry-threshold`（默认 3）
 - `--pr-conflict-unknown-backoffs`（默认 `5s,15s,30s`）
+- `--pr-conflict-enable-ai`（默认 `true`）
+- `--pr-conflict-ai-max-attempts`（默认 `2`）
+- `--pr-conflict-smoke-test-cmd`（默认关闭）
 
 ## 状态机（Labels）
 
@@ -204,14 +207,26 @@ niuma state-label clear --repo owner/repo --issue 325
 - 服务端门禁：`.github/workflows/niuma-label-guard.yml` 会在非 allowlist actor 直改 `bot:*` 时评论（dry-run）或自动回滚（enforce）。
 - 自愈优先级可由 `NIUMA_STATE_PRIORITY` 覆盖；默认优先级见 `automation/niuma/docs/state-machine-spec.md`。
 
-### `pr-reviewable` 冲突自动回退
+### `pr-reviewable` 冲突分层修复（Rule -> AI -> Human）
 
 - control 循环会持续检查 `bot:pr-reviewable` 对应 PR 的 `mergeable / mergeStateStatus / headSha`
-- 命中冲突条件（`mergeable=CONFLICTING` 或 `mergeStateStatus in {DIRTY,BLOCKED}`）时，自动回退到 `bot:pr-needs-fix` 并触发 iterate
-- `UNKNOWN` 状态会按指数退避短重试（默认 `5s,15s,30s`），仍为 UNKNOWN 则保守 no-op
-- issue body 维护 `<!-- PR_CONFLICT_RETRY:N -->` 计数；PR 恢复可合并时自动重置为 `0`
-- 超过阈值（默认 `N=3`）自动升级 `needs-human`，停止自动冲突回退循环
-- 冲突评论带去重标记 `<!-- BOT:CONFLICT_DETECTED sha:<headSha> -->`，同一 headSha 仅评论一次
+- 命中冲突条件（`mergeable=CONFLICTING` 或 `mergeStateStatus in {DIRTY,BLOCKED}`）时，进入分层修复：
+  - Rule 层：仅处理 Go `import` 区域冲突（并集/去重/排序）
+  - AI 层：仅在 Rule 失败后触发，默认最多重试 `2` 次（`--pr-conflict-ai-max-attempts`）
+  - Human 层：Rule + AI 失败或达上限后自动升级 `needs-human`
+- 预检查：`git diff --name-only --diff-filter=U` 为空时直接 no-op（不改状态/标签）
+- Rule/AI 共用统一门禁（必须全过）：
+  - 结构门禁：不得残留 `<<<<<<<` / `=======` / `>>>>>>>`
+  - 变更范围门禁：`git diff --name-only` 仅允许冲突文件
+  - 质量门禁：冲突文件所在 Go 包 `go test` 必过；可选执行 `--pr-conflict-smoke-test-cmd`
+- 安全边界：AI 仅对白名单冲突类型启用（import、测试辅助代码轻度并合、轻度相邻块冲突）；检测到高风险冲突（核心接口语义变更/迁移脚本/大规模冲突）直接升级 Human
+- 可观测 metadata：
+  - `conflict_resolution_layer`
+  - `conflict_resolution_attempts`
+  - `conflict_resolution_last_error`
+  - `conflict_resolution_last_failed_at`
+- 评论会记录层级切换并带 marker 去重：`rule-fail -> ai-try -> human-escalate`
+- `UNKNOWN` 状态仍按指数退避短重试（默认 `5s,15s,30s`），耗尽后保守 no-op
 
 ### PR Gate 口径（merge-result）
 

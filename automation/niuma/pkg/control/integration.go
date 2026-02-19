@@ -24,6 +24,9 @@ const (
 	// integrationMergeExecutorVersion 用于记录执行器版本，便于审计与回溯。
 	integrationMergeExecutorVersion = "integration-merge-executor/v1"
 	maxWhitelistConflictHunks       = 3
+	maxAIConflictHunks              = 6
+	maxAIMildConflictBlockLines     = 12
+	maxAIConflictTotalLines         = 120
 )
 
 type conflictBlock struct {
@@ -229,12 +232,19 @@ func buildConflictSummary(files []string, perFile map[string]conflictFileSummary
 }
 
 func (b *IntegrationBuilder) parseConflictBlocks(relPath string) (conflictFileSummary, error) {
-	raw, err := os.ReadFile(filepath.Join(b.repoDir, relPath))
+	return parseConflictFileSummary(b.repoDir, relPath)
+}
+
+func parseConflictFileSummary(repoDir, relPath string) (conflictFileSummary, error) {
+	raw, err := os.ReadFile(filepath.Join(repoDir, relPath))
 	if err != nil {
 		return conflictFileSummary{}, fmt.Errorf("读取冲突文件 %s 失败: %w", relPath, err)
 	}
+	return parseConflictBlocksContent(relPath, string(raw))
+}
 
-	lines := strings.Split(string(raw), "\n")
+func parseConflictBlocksContent(relPath string, raw string) (conflictFileSummary, error) {
+	lines := strings.Split(raw, "\n")
 	summary := conflictFileSummary{}
 
 	for i := 0; i < len(lines); i++ {
@@ -292,6 +302,189 @@ func canAutoResolveConflict(file string, fileSummary conflictFileSummary) (bool,
 		}
 	}
 	return true, "注释或空白差异"
+}
+
+// isAIConflictWhitelisted 判断冲突是否允许进入 AI 层。
+func isAIConflictWhitelisted(file string, fileSummary conflictFileSummary) (bool, string) {
+	if fileSummary.hunks == 0 || len(fileSummary.blocks) == 0 {
+		return false, "未识别到可处理的文本冲突块"
+	}
+	if risky, reason := hasHighRiskConflict(file, fileSummary); risky {
+		return false, reason
+	}
+	if isGoImportConflictOnly(fileSummary) {
+		return true, "go import 冲突"
+	}
+	if isLightweightGoTestConflict(file, fileSummary) {
+		return true, "测试辅助代码轻度并合"
+	}
+	if isAdjacentMildConflict(fileSummary) {
+		return true, "轻度相邻块冲突"
+	}
+	return false, "未命中 AI 白名单冲突类型"
+}
+
+func hasHighRiskConflict(file string, fileSummary conflictFileSummary) (bool, string) {
+	fileLower := strings.ToLower(file)
+	if strings.Contains(fileLower, "migration") || strings.HasSuffix(fileLower, ".sql") {
+		return true, "检测到迁移脚本冲突"
+	}
+	if fileSummary.hunks > maxAIConflictHunks {
+		return true, fmt.Sprintf("冲突块过多: %d", fileSummary.hunks)
+	}
+
+	totalLines := 0
+	for _, block := range fileSummary.blocks {
+		totalLines += countConflictSideLines(block.ours)
+		totalLines += countConflictSideLines(block.theirs)
+		merged := block.ours + "\n" + block.theirs
+		if containsCoreInterfaceSignal(merged) {
+			return true, "检测到核心接口语义变更信号"
+		}
+	}
+	if totalLines > maxAIConflictTotalLines {
+		return true, fmt.Sprintf("冲突行数过多: %d", totalLines)
+	}
+	return false, ""
+}
+
+func containsCoreInterfaceSignal(s string) bool {
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		normalized := strings.ToLower(strings.TrimSpace(line))
+		if strings.Contains(normalized, "type ") && strings.Contains(normalized, " interface") {
+			return true
+		}
+		if strings.Contains(normalized, "interface{") {
+			return true
+		}
+	}
+	return false
+}
+
+func isGoImportConflictOnly(fileSummary conflictFileSummary) bool {
+	for _, block := range fileSummary.blocks {
+		if !isImportSideText(block.ours) || !isImportSideText(block.theirs) {
+			return false
+		}
+	}
+	return true
+}
+
+func isImportSideText(side string) bool {
+	lines := strings.Split(side, "\n")
+	seen := 0
+	for _, line := range lines {
+		item, ok := normalizeImportItem(line)
+		if !ok {
+			return false
+		}
+		if item != "" {
+			seen++
+		}
+	}
+	return seen > 0
+}
+
+func isLightweightGoTestConflict(file string, fileSummary conflictFileSummary) bool {
+	if !strings.HasSuffix(strings.ToLower(file), "_test.go") {
+		return false
+	}
+	if fileSummary.hunks > 2 {
+		return false
+	}
+	for _, block := range fileSummary.blocks {
+		if countConflictSideLines(block.ours) > maxAIMildConflictBlockLines {
+			return false
+		}
+		if countConflictSideLines(block.theirs) > maxAIMildConflictBlockLines {
+			return false
+		}
+	}
+	return true
+}
+
+func isAdjacentMildConflict(fileSummary conflictFileSummary) bool {
+	if fileSummary.hunks > 2 {
+		return false
+	}
+	for _, block := range fileSummary.blocks {
+		if countConflictSideLines(block.ours) > maxAIMildConflictBlockLines {
+			return false
+		}
+		if countConflictSideLines(block.theirs) > maxAIMildConflictBlockLines {
+			return false
+		}
+	}
+	return true
+}
+
+func countConflictSideLines(side string) int {
+	count := 0
+	for _, line := range strings.Split(side, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func normalizeImportItem(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || trimmed == "(" || trimmed == ")" {
+		return "", true
+	}
+	if strings.HasPrefix(trimmed, "//") {
+		return "", true
+	}
+	if idx := strings.Index(trimmed, "//"); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	if trimmed == "" {
+		return "", true
+	}
+	if strings.HasPrefix(trimmed, "import ") {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "import "))
+	}
+
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return "", true
+	}
+	if len(fields) > 2 {
+		return "", false
+	}
+
+	path := fields[len(fields)-1]
+	if !strings.HasPrefix(path, "\"") || !strings.HasSuffix(path, "\"") || len(path) < 2 {
+		return "", false
+	}
+
+	if len(fields) == 1 {
+		return path, true
+	}
+
+	alias := fields[0]
+	if !isValidGoImportAlias(alias) {
+		return "", false
+	}
+	return alias + " " + path, true
+}
+
+func isValidGoImportAlias(alias string) bool {
+	if alias == "." || alias == "_" {
+		return true
+	}
+	for i, r := range alias {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' {
+			continue
+		}
+		if i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return alias != ""
 }
 
 func isNonCoreWhitelistedFile(file string) bool {
