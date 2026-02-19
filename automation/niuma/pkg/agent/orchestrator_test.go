@@ -5,7 +5,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
@@ -732,4 +734,129 @@ func TestCurrentState_DirtyStateAutoHeals(t *testing.T) {
 	require.NotEmpty(t, comments)
 	assert.Contains(t, comments[len(comments)-1].GetBody(), "状态自愈")
 	assert.Equal(t, []string{string(state.StateImplementing)}, mockGH.Labels[1])
+}
+
+// ===== buildPromptInputWithFilter 集成测试 =====
+
+func TestBuildPromptInputWithFilter_CompatWithBuildPromptInput(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockGH.Comments[1] = []*github.IssueComment{
+		{Body: github.Ptr("comment1"), CreatedAt: &github.Timestamp{Time: base},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("alice")}},
+		{Body: github.Ptr("comment2"), CreatedAt: &github.Timestamp{Time: base.Add(time.Minute)},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("bob")}},
+	}
+
+	mockAI := ai.NewMockProvider("unused")
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+
+	ctx := context.Background()
+	full, err := orch.buildPromptInput(ctx)
+	require.NoError(t, err)
+
+	filtered, err := orch.buildPromptInputWithFilter(ctx, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, full.IssueTitle, filtered.IssueTitle)
+	assert.Equal(t, full.IssueBody, filtered.IssueBody)
+	assert.Equal(t, full.Comments, filtered.Comments)
+}
+
+func TestBuildPromptInputWithFilter_DebatePathTrimsComments(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	var comments []*github.IssueComment
+	// 100 条 BOT 评论
+	for i := 0; i < 100; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("BOT %d", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("Bot"), Login: github.Ptr("niuma[bot]")},
+		})
+	}
+	// 15 条人类评论
+	for i := 0; i < 15; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("Human %d", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(100+i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")},
+		})
+	}
+	mockGH.Comments[1] = comments
+
+	mockAI := ai.NewMockProvider("unused")
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+
+	ctx := context.Background()
+	result, err := orch.buildPromptInputWithFilter(ctx, 10)
+	require.NoError(t, err)
+	// 最多 10 条（无 summary marker，故无 BOT 附加）
+	assert.LessOrEqual(t, len(result.Comments), 10)
+	// 全量模式返回 115 条（100 BOT + 15 human，空 body 已过滤）
+	full, err := orch.buildPromptInput(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 115, len(full.Comments))
+}
+
+func TestGetMaxHumanComments_Default(t *testing.T) {
+	var cfg *OrchestratorConfig
+	assert.Equal(t, 10, cfg.getMaxHumanComments())
+
+	cfg = &OrchestratorConfig{}
+	assert.Equal(t, 10, cfg.getMaxHumanComments())
+
+	cfg = &OrchestratorConfig{MaxHumanComments: 20}
+	assert.Equal(t, 20, cfg.getMaxHumanComments())
+}
+
+func TestRecoverableKind_Helper(t *testing.T) {
+	recErr := &RecoverableError{Kind: MissingJSON, Message: "test"}
+	assert.Equal(t, "MissingJSON", recoverableKind(recErr))
+	assert.Equal(t, "Unknown", recoverableKind(fmt.Errorf("plain error")))
+}
+
+func TestTruncatePrefix(t *testing.T) {
+	assert.Equal(t, "abc", truncatePrefix("abc", 10))
+	assert.Equal(t, "ab...", truncatePrefix("abcde", 2))
+	assert.Equal(t, "", truncatePrefix("", 10))
+}
+
+func TestDoDebateABDiscussion_ParseFailure_StructuredLog(t *testing.T) {
+	// 验证 parse 失败时 abort 评论包含 raw_prefix
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockGH.Comments[1] = []*github.IssueComment{
+		{Body: github.Ptr("讨论开始"), CreatedAt: &github.Timestamp{Time: base},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")}},
+	}
+
+	// provider 返回缺少 JSON 的文本
+	mockAI := ai.NewMockProvider("纯文本回复，没有 JSON 代码块")
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{mockAI},
+		ImplementProvider:   mockAI,
+	})
+
+	_, err := orch.doDebateABDiscussion(context.Background(), 1, 5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "3 级降级均失败")
+
+	// abort 评论应包含 raw_prefix
+	comments := mockGH.Comments[1]
+	abortFound := false
+	for _, c := range comments {
+		if strings.Contains(c.GetBody(), "DISCUSS_ABORT") {
+			abortFound = true
+			assert.Contains(t, c.GetBody(), "raw_prefix")
+		}
+	}
+	assert.True(t, abortFound, "应有 abort 评论")
 }
