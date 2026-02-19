@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/gate"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
@@ -22,20 +24,34 @@ var gateRunCmd = &cobra.Command{
 	RunE:  runGateRun,
 }
 
-var flagGateMaxRetries int
+var flagGateMaxRetries string
 
 func init() {
 	gateCmd.AddCommand(gateRunCmd)
-	gateRunCmd.Flags().IntVar(&flagGateMaxRetries, "max-retries", 2, "gate 自动修复最大重试次数")
+	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", "2", "gate 自动修复最大重试次数")
+}
+
+// parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2，值 ≤0 clamp 到 1。
+func parseMaxRetries(raw string) int {
+	const defaultVal = 2
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 '%s' 非法，回退为 %d\n", raw, defaultVal)
+		return defaultVal
+	}
+	if n <= 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 %d ≤ 0，clamp 到 1\n", n)
+		return 1
+	}
+	return n
 }
 
 func runGateRun(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 || flagPR == 0 {
 		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
 	}
-	if flagGateMaxRetries < 0 {
-		return fmt.Errorf("--max-retries 不能小于 0")
-	}
+
+	maxRetries := parseMaxRetries(flagGateMaxRetries)
 
 	repoDir := "."
 	if flagRepoDir != "" {
@@ -53,7 +69,7 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 		Issue:      flagIssue,
 		PR:         flagPR,
 		RepoDir:    repoDir,
-		MaxRetries: flagGateMaxRetries,
+		MaxRetries: maxRetries,
 		MarkNeedsFix: func(ctx context.Context, repo string, issue int) error {
 			return markIssueNeedsFix(ctx, client, issue)
 		},
