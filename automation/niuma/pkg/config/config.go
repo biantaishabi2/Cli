@@ -244,13 +244,27 @@ func (c *Config) GetProvider(name string) (*ResolvedProvider, error) {
 	return rp, nil
 }
 
+// ResolveDefaultPlaceholder 将 "default" 占位符或空字符串替换为 ai.default 的实际值
+func (c *Config) ResolveDefaultPlaceholder(name string) string {
+	if name == "" || name == "default" {
+		return c.AI.Default
+	}
+	return name
+}
+
 // GetImplementationProvider 获取实现阶段的 provider
 func (c *Config) GetImplementationProvider() (*ResolvedProvider, error) {
-	name := c.AI.Implementation.Provider
-	if name == "" {
-		name = c.AI.Default
-	}
+	name := c.ResolveDefaultPlaceholder(c.AI.Implementation.Provider)
 	return c.GetProvider(name)
+}
+
+// GetDiscussionProviderNames 获取讨论阶段的 provider 名称列表，自动解析 "default" 占位符
+func (c *Config) GetDiscussionProviderNames() []string {
+	resolved := make([]string, len(c.AI.Discussion.Providers))
+	for i, name := range c.AI.Discussion.Providers {
+		resolved[i] = c.ResolveDefaultPlaceholder(name)
+	}
+	return resolved
 }
 
 // firstNonEmpty 返回第一个非空字符串
@@ -327,7 +341,7 @@ func LoadWithDefaults(dir string) *Config {
 func defaultConfig() *Config {
 	return &Config{
 		AI: AIConfig{
-			Default:   "codex",
+			Default:   "claude",
 			Providers: map[string]ProviderConfig{},
 			Templates: map[string]TemplateConfig{},
 		},
