@@ -396,12 +396,16 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		orchCfg.DiscussionProviders = append(orchCfg.DiscussionProviders, p)
 	}
 
-	// 实现 provider（支持 "default" 占位符和空值 fallback）
-	implName := cfg.ResolveDefaultPlaceholder(cfg.AI.Implementation.Provider)
-	if p, ok := providers[implName]; ok {
-		orchCfg.ImplementProvider = p
-	} else {
+	// 实现 provider（仅空值或 "default" 允许回退；显式配置错误需 fail-fast）
+	implName := cfg.AI.Implementation.Provider
+	if implName == "" || implName == "default" {
 		orchCfg.ImplementProvider = defaultProvider
+	} else {
+		p, ok := providers[implName]
+		if !ok {
+			return nil, fmt.Errorf("实现 provider %q 未配置", implName)
+		}
+		orchCfg.ImplementProvider = p
 	}
 
 	return agent.NewOrchestratorWithConfig(client, issueNumber, orchCfg), nil

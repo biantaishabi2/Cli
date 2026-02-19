@@ -1,9 +1,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveDiscussMaxRounds_Priority(t *testing.T) {
@@ -133,4 +136,32 @@ func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 			assert.Equal(t, tt.expected, resolveIntegrationGateMaxRetries(tt.flag, tt.env))
 		})
 	}
+}
+
+func TestBuildOrchestrator_InvalidImplementationProvider_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "claude -p {prompt_file}"
+    kimi:
+      cmd: "kimi --print {prompt_file}"
+  discussion:
+    providers: [default, kimi]
+  implementation:
+    provider: claudee
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	origRepoDir := flagRepoDir
+	flagRepoDir = dir
+	defer func() {
+		flagRepoDir = origRepoDir
+	}()
+
+	_, err = buildOrchestrator(nil, 123)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `实现 provider "claudee" 未配置`)
 }
