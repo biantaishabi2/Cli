@@ -269,12 +269,12 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConf
 }
 
 func TestCanAutoResolveConflict_DoesNotStripCommentMarkersInsideStringLiteral(t *testing.T) {
-	fileSummary := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
 			{
-				ours:   `const endpoint = "http://service-a/*v1*/"` + "\n" + `const path = "api//v1"`,
-				theirs: `const endpoint = "http://service-b/*v2*/"` + "\n" + `const path = "api//v2"`,
+				Ours:   `const endpoint = "http://service-a/*v1*/"` + "\n" + `const path = "api//v1"`,
+				Theirs: `const endpoint = "http://service-b/*v2*/"` + "\n" + `const path = "api//v2"`,
 			},
 		},
 	}
@@ -285,12 +285,12 @@ func TestCanAutoResolveConflict_DoesNotStripCommentMarkersInsideStringLiteral(t 
 }
 
 func TestCanAutoResolveConflict_DoesNotTreatLeadingAsteriskCodeAsComment(t *testing.T) {
-	fileSummary := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
 			{
-				ours:   "\t*ptr = 1\nreturn value",
-				theirs: "\t*ptr = 2\nreturn value",
+				Ours:   "\t*ptr = 1\nreturn value",
+				Theirs: "\t*ptr = 2\nreturn value",
 			},
 		},
 	}
@@ -301,12 +301,12 @@ func TestCanAutoResolveConflict_DoesNotTreatLeadingAsteriskCodeAsComment(t *test
 }
 
 func TestCanAutoResolveConflict_DoesNotDropCodeAfterLeadingBlockComment(t *testing.T) {
-	fileSummary := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
+	fileSummary := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
 			{
-				ours:   "/*note*/ return 1",
-				theirs: "/*note*/ return 2",
+				Ours:   "/*note*/ return 1",
+				Theirs: "/*note*/ return 2",
 			},
 		},
 	}
@@ -317,20 +317,20 @@ func TestCanAutoResolveConflict_DoesNotDropCodeAfterLeadingBlockComment(t *testi
 }
 
 func TestHasHighRiskConflict_HunkBoundary(t *testing.T) {
-	summaryAtLimit := conflictFileSummary{
-		hunks: 6,
-		blocks: []conflictBlock{
-			{ours: "valueA", theirs: "valueB"},
+	summaryAtLimit := ConflictFileSummary{
+		Hunks: 6,
+		Blocks: []ConflictBlock{
+			{Ours: "valueA", Theirs: "valueB"},
 		},
 	}
 	risky, reason := hasHighRiskConflict("pkg/service.go", summaryAtLimit)
 	assert.False(t, risky)
 	assert.Empty(t, reason)
 
-	summaryOverLimit := conflictFileSummary{
-		hunks: 7,
-		blocks: []conflictBlock{
-			{ours: "valueA", theirs: "valueB"},
+	summaryOverLimit := ConflictFileSummary{
+		Hunks: 7,
+		Blocks: []ConflictBlock{
+			{Ours: "valueA", Theirs: "valueB"},
 		},
 	}
 	risky, reason = hasHighRiskConflict("pkg/service.go", summaryOverLimit)
@@ -339,38 +339,38 @@ func TestHasHighRiskConflict_HunkBoundary(t *testing.T) {
 }
 
 func TestIsAdjacentMildConflict_BlockLineBoundary(t *testing.T) {
-	summaryAtLimit := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
-			{ours: buildConflictSideLines(12), theirs: buildConflictSideLines(12)},
+	summaryAtLimit := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{Ours: buildConflictSideLines(12), Theirs: buildConflictSideLines(12)},
 		},
 	}
 	assert.True(t, isAdjacentMildConflict(summaryAtLimit))
 
-	summaryOverLimit := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
-			{ours: buildConflictSideLines(13), theirs: buildConflictSideLines(12)},
+	summaryOverLimit := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{Ours: buildConflictSideLines(13), Theirs: buildConflictSideLines(12)},
 		},
 	}
 	assert.False(t, isAdjacentMildConflict(summaryOverLimit))
 }
 
 func TestHasHighRiskConflict_TotalLineBoundary(t *testing.T) {
-	summaryAtLimit := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
-			{ours: buildConflictSideLines(60), theirs: buildConflictSideLines(60)},
+	summaryAtLimit := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{Ours: buildConflictSideLines(60), Theirs: buildConflictSideLines(60)},
 		},
 	}
 	risky, reason := hasHighRiskConflict("pkg/service.go", summaryAtLimit)
 	assert.False(t, risky)
 	assert.Empty(t, reason)
 
-	summaryOverLimit := conflictFileSummary{
-		hunks: 1,
-		blocks: []conflictBlock{
-			{ours: buildConflictSideLines(61), theirs: buildConflictSideLines(60)},
+	summaryOverLimit := ConflictFileSummary{
+		Hunks: 1,
+		Blocks: []ConflictBlock{
+			{Ours: buildConflictSideLines(61), Theirs: buildConflictSideLines(60)},
 		},
 	}
 	risky, reason = hasHighRiskConflict("pkg/service.go", summaryOverLimit)

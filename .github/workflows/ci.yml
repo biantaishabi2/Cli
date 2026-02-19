@@ -6,12 +6,15 @@ on:
   pull_request:
 
 jobs:
-  test-niuma-gate:
-    name: niuma gate script test (ubuntu)
+  bot-label-guard:
+    name: bot label guard + niuma gate tests (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enforce managed bot label operations
+        run: .github/scripts/check-bot-label-ops.sh
 
       - name: Run niuma gate unit tests
         run: .github/scripts/tests/niuma-test-gate.unit.sh
@@ -22,9 +25,25 @@ jobs:
       - name: Run niuma gate bdd tests
         run: .github/scripts/tests/niuma-test-gate.bdd.sh
 
+  cleanup-worktrees-script:
+    name: cleanup worktrees script test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run cleanup worktrees bats tests
+        run: bats automation/niuma/scripts/tests/cleanup_worktrees.bats
+
   taskctl:
     name: taskctl test (ubuntu)
     runs-on: ubuntu-latest
+    needs: bot-label-guard
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,6 +66,7 @@ jobs:
   bcc:
     name: bcc test (ubuntu)
     runs-on: ubuntu-latest
+    needs: bot-label-guard
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -111,6 +131,7 @@ jobs:
   bddc:
     name: bddc test (ubuntu)
     runs-on: ubuntu-latest
+    needs: bot-label-guard
     defaults:
       run:
         working-directory: compiler/bddc
@@ -151,6 +172,7 @@ jobs:
   build-matrix:
     name: taskctl+bcc build (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
+    needs: bot-label-guard
     strategy:
       fail-fast: false
       matrix:

@@ -1,30 +1,31 @@
 ai:
-  default: codex
-  
+  # 唯一真相源：切换 provider 只需改这里
+  default: claude
+
   providers:
     # Claude Code
     claude:
       cmd: "cat {prompt_file} | CLAUDECODE= claude -p --output-format text --max-budget-usd 10 --permission-mode acceptEdits --add-dir {workdir}"
-    
+
     # OpenAI Codex（需要 OPENAI_API_KEY）
     codex:
       cmd: "codex exec --sandbox workspace-write -C {workdir} - < {prompt_file}"
       cmd_agent: "codex exec --sandbox workspace-write -C {workdir} - < {prompt_file}"
-    
+
     # Kimi（Moonshot AI）
     kimi:
       cmd: "cat {prompt_file} | kimi --print --input-format text --output-format text --final-message-only -w {workdir}"
-  
+
   # 讨论阶段：多 provider 左右互搏
+  # "default" 占位符自动解析为 ai.default 的值
   discussion:
     providers:
-      - codex
+      - default
       - kimi
-  
-  # 实现阶段：切换 provider 只需改这里
-  # 可选: claude | codex | kimi
+
+  # 实现阶段：空值或 "default" 自动使用 ai.default
   implementation:
-    provider: codex
+    provider: default
 
 workflow:
   max_discussion_rounds: 5
