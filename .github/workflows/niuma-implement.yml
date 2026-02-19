@@ -122,10 +122,14 @@ jobs:
         if: steps.gate.outcome == 'failure' && steps.gate_policy.outputs.should_auto_fix == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
-          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
-            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --to bot:pr-needs-fix
           gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n实现后自动测试门禁失败，已回退为 \`bot:pr-needs-fix\`，请继续迭代修复。\n\n- retry_count=${{ steps.gate_policy.outputs.retry_count }}\n- max_retries=${{ steps.gate_policy.outputs.max_retries }}\n- attempt_key=\`${{ steps.gate_policy.outputs.attempt_key }}\`"
           exit 1
 

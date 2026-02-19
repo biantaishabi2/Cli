@@ -60,6 +60,21 @@ git worktree remove ../Cli-feat-<N>
 - **Commit message 关联 issue** - `git commit -m "feat: xxx (#N)"`
 - **PR 必须关联 issue** - PR body 中写 `Closes #N`
 - **及时更新状态** - 避免 issue 长期处于 open 状态
+- **bot 状态标签受控** - 禁止直接 `gh issue edit --add-label/--remove-label bot:*`
+- **统一入口** - 迁移 `bot:*` 状态必须使用 `niuma state-label`
+
+### Niuma 状态标签操作（机器人必读）
+
+```bash
+# 单 issue 流程
+niuma state-label set --repo <owner/repo> --issue <num> --to bot:fix
+
+# 多 issue DAG 入口
+niuma state-label set --repo <owner/repo> --issue <num> --to bot:orchestrate
+```
+
+- 推荐安装 gh wrapper：`bash automation/niuma/scripts/install-gh-wrapper.sh`
+- wrapper 会拦截直接改 `bot:*` 并提示改用 `niuma state-label`
 
 ## Git 提交规范
 

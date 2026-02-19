@@ -65,10 +65,12 @@ jobs:
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state != 'OPEN'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
         run: |
-          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-needs-fix --add-label needs-human || true
+          "$NIUMA_BIN" state-label clear --repo "$REPO" --issue "$ISSUE_NUMBER" || true
+          gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
           gh issue comment "$ISSUE_NUMBER" --body "## ⚠️ 自动迭代已停止\n\n检测到 PR #$PR_NUMBER 当前状态不是 OPEN，已转人工处理（`needs-human`）。"
           exit 1
 
@@ -101,10 +103,13 @@ jobs:
         if: steps.gate.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
-            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --to bot:pr-needs-fix
           gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n迭代后自动测试门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
           exit 1
 
@@ -174,9 +179,12 @@ jobs:
         if: steps.gate_human.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
-          gh issue edit "$ISSUE_NUMBER" --remove-label bot:pr-created --add-label bot:pr-needs-fix || \
-            gh issue edit "$ISSUE_NUMBER" --add-label bot:pr-needs-fix
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --to bot:pr-needs-fix
           gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n根据人工 review 迭代后门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
           exit 1

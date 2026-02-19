@@ -17,7 +17,7 @@ AI 驱动的全自动开发机器人：Issue → Plan → Code → PR → Iterat
 - 自动提 PR
 - 根据 Review 意见自动迭代
 
-**多 Issue 协调（Phase 3 开发中）**：
+**多 Issue 协调（Phase 3 核心已完成，持续迭代）**：
 - 扫描所有带 `bot:fix` 标签的 Issue
 - AI 分析 Issue 间依赖关系
 - 调用 taskctl 构建 DAG（有依赖的自动编排执行顺序）
@@ -72,7 +72,7 @@ Iterate（根据意见自动修复）
 Merged
 ```
 
-### 多 Issue 协调流程（Phase 3）
+### 多 Issue 协调流程（Phase 3，核心能力已落地）
 
 ```
 扫描所有 bot:fix Issues

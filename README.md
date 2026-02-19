@@ -36,7 +36,7 @@
   - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/)
 
 ### `automation/`
-- [**`niuma/`**](automation/niuma/README.md)（Go，Phase 2.5/2.6 已就绪，Phase 3 开发中）
+- [**`niuma/`**](automation/niuma/README.md)（Go，Phase 2.5/2.6 已就绪，Phase 3 核心已完成）
   **AI 驱动的全自动开发机器人**：Issue → Plan → Code → PR → Iterate → **Control（多 Issue 协调）**
   
   **Phase 2.5/2.6（已就绪）**：
@@ -45,10 +45,11 @@
   - review-iterate 自动交流
   - 给 Issue 加 `bot:fix` 标签即触发全流程
   
-  **Phase 3（开发中）**：
+  **Phase 3（核心已完成，持续迭代）**：
   - **多 Issue 协调** (`niuma control`)：扫描所有 bot:fix issue → AI 分析依赖 → 调 taskctl 建 DAG → 按序执行
   - **Integration 分支**：批量 PR 合并验证，CI 联合检查冲突
   - **批量合并**：按拓扑序自动合并，人只需最终批准
+  - **当前迭代方向**：冲突修复 profile 化（Go/Elixir/Rust）、状态机与门禁稳健性增强
   
   人只做三件事：建 issue + 加 `bot:fix` 标签 + 最终批准合并。其他全部 AI 自动化。
 

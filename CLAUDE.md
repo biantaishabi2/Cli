@@ -53,6 +53,21 @@ cargo build --release -p bcc
 7. 合并到 master
 8. 如用 worktree，合并后清理：`git worktree remove ../Cli-feat-<N>`
 
+## Niuma 状态标签操作（机器人必读）
+
+- 禁止直接执行：`gh issue edit --add-label/--remove-label bot:*`
+- 统一使用受控入口：`niuma state-label`
+
+```bash
+# 单 issue 流程
+niuma state-label set --repo <owner/repo> --issue <num> --to bot:fix
+
+# 多 issue DAG 入口
+niuma state-label set --repo <owner/repo> --issue <num> --to bot:orchestrate
+```
+
+- 建议先安装 gh wrapper：`bash automation/niuma/scripts/install-gh-wrapper.sh`
+
 ## 测试规范
 
 - **单元测试**：写在对应源文件的 `#[cfg(test)] mod tests` 中（如 `bugfix.rs` 底部）
