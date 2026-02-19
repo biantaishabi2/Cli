@@ -2,7 +2,9 @@ package control
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,6 +41,52 @@ func TestAssemblePrompt_CommonThenProfile(t *testing.T) {
 	assert.Contains(t, combined, "允许修改文件")
 	assert.True(t, strings.Index(combined, "- a.go") < strings.Index(combined, "- b.go"))
 	assert.True(t, strings.Index(combined, "通用约束") < strings.Index(combined, profile))
+}
+
+func TestAssemblePrompt_EmptyBranches(t *testing.T) {
+	assert.Equal(t, "PROFILE_PROMPT", assemblePrompt(" ", "PROFILE_PROMPT"))
+	assert.Equal(t, "COMMON_PROMPT", assemblePrompt("COMMON_PROMPT", " "))
+	assert.Equal(t, "", assemblePrompt(" ", " "))
+}
+
+func TestResolveConflictProfileGroups_EmptyInput(t *testing.T) {
+	groups, err := ResolveConflictProfileGroups(nil)
+	require.NoError(t, err)
+	assert.Empty(t, groups)
+}
+
+func TestResolveConflictProfileGroups_ConcurrentSafe(t *testing.T) {
+	files := []string{
+		"pkg/service.go",
+		"apps/web/lib/web.ex",
+		"apps/web/test/web_test.exs",
+		"crates/core/src/lib.rs",
+	}
+	const workers = 32
+
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			groups, err := ResolveConflictProfileGroups(files)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if len(groups) != 3 {
+				errCh <- fmt.Errorf("unexpected group count: %d", len(groups))
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 }
 
 func TestResolveConflictProfileGroups_MixedLanguagesStableGrouping(t *testing.T) {

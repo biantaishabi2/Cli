@@ -106,7 +106,7 @@ func Value() int { return 2 }
 
 	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries, profileGroups)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "out of scope")
+	assert.Contains(t, err.Error(), "AI 输出超出当前 profile 允许范围")
 
 	readme, readErr := os.ReadFile(filepath.Join(dir, "README.md"))
 	require.NoError(t, readErr)
@@ -262,6 +262,69 @@ end
 	assert.Contains(t, calls[1].Prompt, "你是 go 冲突修复助手")
 	assert.Contains(t, calls[1].Prompt, conflictGo)
 	assert.NotContains(t, calls[1].Prompt, conflictEx)
+}
+
+func TestTryResolveConflictByAIOnce_MixedProfilesRejectCrossProfileEdits(t *testing.T) {
+	dir := setupGitRepo(t)
+	conflictGo := "pkg.go"
+	conflictEx := "lib/app.ex"
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	goConflictContent := `package main
+
+<<<<<<< HEAD
+func Value() int { return 1 }
+=======
+func Value() int { return 2 }
+>>>>>>> feature
+`
+	exConflictContent := `defmodule Demo do
+<<<<<<< HEAD
+  def value, do: 1
+=======
+  def value, do: 2
+>>>>>>> feature
+end
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictGo), []byte(goConflictContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictEx), []byte(exConflictContent), 0o644))
+
+	provider := ai.NewMockProvider(
+		fmt.Sprintf(`{"edits":[{"path":"%s","content":"package main\n\nfunc Value() int { return 2 }\n"}]}`, conflictGo),
+	)
+	ctrl := &Controller{
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
+			PRConflictAIMaxAttempts: 2,
+		},
+	}
+
+	conflictFiles := []string{conflictGo, conflictEx}
+	summaries := map[string]conflictFileSummary{
+		conflictGo: {
+			hunks:  1,
+			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
+		},
+		conflictEx: {
+			hunks:  1,
+			blocks: []conflictBlock{{ours: "def value, do: 1", theirs: "def value, do: 2"}},
+		},
+	}
+	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)
+	require.NoError(t, groupErr)
+
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AI 输出超出当前 profile 允许范围")
+	assert.Equal(t, 1, provider.CallCount())
+
+	goCurrent, goReadErr := os.ReadFile(filepath.Join(dir, conflictGo))
+	require.NoError(t, goReadErr)
+	assert.Equal(t, goConflictContent, string(goCurrent))
+	exCurrent, exReadErr := os.ReadFile(filepath.Join(dir, conflictEx))
+	require.NoError(t, exReadErr)
+	assert.Equal(t, exConflictContent, string(exCurrent))
 }
 
 func TestResolvePRConflictWithLayers_UnknownProfileEscalatesWithoutAICall(t *testing.T) {

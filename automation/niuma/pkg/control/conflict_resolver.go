@@ -361,6 +361,9 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		if err != nil {
 			return rollbackWithCause(err)
 		}
+		if err := validatePRConflictAIEditsScope(groupEdits, group.Files); err != nil {
+			return rollbackWithCause(err)
+		}
 		edits = append(edits, groupEdits...)
 	}
 	if len(edits) == 0 {
@@ -406,6 +409,20 @@ func parsePRConflictAIEdits(resp string) ([]prConflictAIEdit, error) {
 		})
 	}
 	return edits, nil
+}
+
+func validatePRConflictAIEditsScope(edits []prConflictAIEdit, allowedFiles []string) error {
+	allowed := make(map[string]struct{}, len(allowedFiles))
+	for _, file := range allowedFiles {
+		allowed[filepath.Clean(strings.TrimSpace(file))] = struct{}{}
+	}
+	for _, edit := range edits {
+		if _, ok := allowed[edit.Path]; ok {
+			continue
+		}
+		return fmt.Errorf("AI 输出超出当前 profile 允许范围: %s", edit.Path)
+	}
+	return nil
 }
 
 func sanitizeEditPath(path string) (string, error) {
