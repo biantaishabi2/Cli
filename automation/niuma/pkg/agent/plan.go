@@ -92,16 +92,14 @@ func (e *PlanEngine) FinalWithRetry(ctx context.Context, input *PromptInput, pro
 				return plan, nil
 			}
 
-			if IsRecoverable(parseErr) {
-				var re *RecoverableError
-				if ok := errors.As(parseErr, &re); ok {
-					attempts = append(attempts, retryAttempt{
-						Provider: p.Name(),
-						Attempt:  attempt,
-						Error:    parseErr.Error(),
-						Kind:     string(re.Kind),
-					})
-				}
+			var re *RecoverableError
+			if errors.As(parseErr, &re) {
+				attempts = append(attempts, retryAttempt{
+					Provider: p.Name(),
+					Attempt:  attempt,
+					Error:    parseErr.Error(),
+					Kind:     string(re.Kind),
+				})
 				if attempt < maxAttempts {
 					// 格式错误：短随机抖动后重试
 					jitter := time.Duration(rand.Intn(500)) * time.Millisecond

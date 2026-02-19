@@ -4,7 +4,6 @@ package agent
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -41,11 +40,6 @@ func (e *RecoverableError) Unwrap() error {
 	return e.Err
 }
 
-// IsRecoverable 判断错误是否为可恢复错误
-func IsRecoverable(err error) bool {
-	var re *RecoverableError
-	return errors.As(err, &re)
-}
 
 // jsonBlockRe 匹配 ```json ... ``` 代码块
 var jsonBlockRe = regexp.MustCompile("(?s)```json\\s*\n?(.*?)\n?```")
