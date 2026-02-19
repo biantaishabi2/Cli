@@ -91,33 +91,28 @@ jobs:
             --repo-dir "$WORKSPACE"
 
       - name: Run PR Gate
-        id: gate
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
-
-      - name: Keep Needs-Fix On Gate Failure
-        if: steps.gate.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+          WORKSPACE: ${{ github.workspace }}
+          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
         run: |
-          "$NIUMA_BIN" state-label set \
+          GATE_MAX_RETRIES=2
+          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
+          else
+            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
+          fi
+
+          "$NIUMA_BIN" gate run \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
-            --from bot:pr-created \
-            --to bot:pr-needs-fix || \
-          "$NIUMA_BIN" state-label set \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --to bot:pr-needs-fix
-          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n迭代后自动测试门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
-          exit 1
+            --pr "$PR_NUMBER" \
+            --repo-dir "$WORKSPACE" \
+            --max-retries "$GATE_MAX_RETRIES"
 
   # 人工 PR review changes_requested → 迭代
   iterate-from-human:
@@ -172,30 +167,25 @@ jobs:
             --repo-dir "$WORKSPACE"
 
       - name: Run PR Gate
-        id: gate_human
         if: steps.extract.outputs.issue_number != ''
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
-        run: |
-          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
-
-      - name: Keep Needs-Fix On Gate Failure
-        if: steps.gate_human.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
+          WORKSPACE: ${{ github.workspace }}
+          NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
         run: |
-          "$NIUMA_BIN" state-label set \
+          GATE_MAX_RETRIES=2
+          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
+          else
+            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
+          fi
+
+          "$NIUMA_BIN" gate run \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
-            --from bot:pr-created \
-            --to bot:pr-needs-fix || \
-          "$NIUMA_BIN" state-label set \
-            --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
-            --to bot:pr-needs-fix
-          gh issue comment "$ISSUE_NUMBER" --body "## ❌ Gate 未通过\n\n根据人工 review 迭代后门禁失败，状态保持为 \`bot:pr-needs-fix\`，请继续修复。"
-          exit 1
+            --pr "$PR_NUMBER" \
+            --repo-dir "$WORKSPACE" \
+            --max-retries "$GATE_MAX_RETRIES"
