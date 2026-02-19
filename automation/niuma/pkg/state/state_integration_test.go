@@ -8,8 +8,8 @@ import (
 	"math/rand"
 	"testing"
 
-	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/internal/testutil"
+	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,8 +35,8 @@ func TestIntegration_StateLifecycle(t *testing.T) {
 		_ = client.CloseIssue(context.Background(), number)
 	})
 
-	// 添加初始状态 label
-	err = client.AddLabel(ctx, number, string(StateFixRequested))
+	// 添加初始状态 label（受控入口）
+	err = Transition(ctx, client, number, "", StateFixRequested)
 	require.NoError(t, err)
 
 	// 创建状态机
