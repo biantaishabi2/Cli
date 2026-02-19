@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +39,8 @@ type mockGitHubOps struct {
 	replaceLabelError         map[string]error
 	replaceLabelPairError     map[string]error
 	replaceLabelFails         map[string]int
+	addLabelError             map[string]error
+	addLabelFails             map[string]int
 	updateIssueBodyCalls      []updateIssueBodyCall
 	listCommentBodies         map[int][]string
 	addIssueCommentCalls      []addIssueCommentCall
@@ -95,6 +98,8 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		replaceLabelError:        make(map[string]error),
 		replaceLabelPairError:    make(map[string]error),
 		replaceLabelFails:        make(map[string]int),
+		addLabelError:            make(map[string]error),
+		addLabelFails:            make(map[string]int),
 		listCommentBodies:        make(map[int][]string),
 		closeIssueError:          make(map[int]error),
 		blockedBy:                make(map[int]map[int]struct{}),
@@ -220,38 +225,60 @@ func (m *mockGitHubOps) ResolvePRReviewStatus(_ context.Context, issueNumber int
 	return PRReviewStatus{}, ErrPRMarkerNotFound
 }
 
-func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+func (m *mockGitHubOps) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		return nil, nil
+	}
+	labels := make([]string, len(issue.Labels))
+	copy(labels, issue.Labels)
+	return labels, nil
+}
+
+func (m *mockGitHubOps) AddLabel(_ context.Context, issueNumber int, label string) error {
+	if remaining := m.addLabelFails[label]; remaining > 0 {
+		m.addLabelFails[label] = remaining - 1
+		return fmt.Errorf("add label %q temporary failed", label)
+	}
+	if err, ok := m.addLabelError[label]; ok {
+		return err
+	}
+	issue := m.issuesByNumber[issueNumber]
+	issue.Labels = append(issue.Labels, label)
+	m.issuesByNumber[issueNumber] = issue
+	return nil
+}
+
+func (m *mockGitHubOps) replaceLabelCore(issueNumber int, oldLabel, newLabel string, addWhenMissing bool) (bool, error) {
 	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
 		issueNumber: issueNumber,
 		oldLabel:    oldLabel,
 		newLabel:    newLabel,
 	})
 	if err, ok := m.replaceLabelPairError[fmt.Sprintf("%s=>%s", oldLabel, newLabel)]; ok {
-		return err
+		return false, err
 	}
 
 	if remaining := m.replaceLabelFails[newLabel]; remaining > 0 {
 		m.replaceLabelFails[newLabel] = remaining - 1
-		return fmt.Errorf("replace label %q temporary failed", newLabel)
+		return false, fmt.Errorf("replace label %q temporary failed", newLabel)
 	}
 	if err, ok := m.replaceLabelError[newLabel]; ok {
-		return err
+		return false, err
 	}
-	issue, ok := m.issuesByNumber[issueNumber]
-	if ok {
-		issue.Labels = replaceIssueLabel(issue.Labels, oldLabel, newLabel)
-		m.issuesByNumber[issueNumber] = issue
-	}
-	if m.replaceLabelHook != nil {
-		m.replaceLabelHook()
-	}
-	return nil
-}
 
-func replaceIssueLabel(labels []string, oldLabel, newLabel string) []string {
-	filtered := make([]string, 0, len(labels))
-	for _, label := range labels {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		if m.replaceLabelHook != nil {
+			m.replaceLabelHook()
+		}
+		return false, nil
+	}
+	found := false
+	filtered := make([]string, 0, len(issue.Labels))
+	for _, label := range issue.Labels {
 		if label == oldLabel {
+			found = true
 			continue
 		}
 		if label == newLabel {
@@ -259,10 +286,76 @@ func replaceIssueLabel(labels []string, oldLabel, newLabel string) []string {
 		}
 		filtered = append(filtered, label)
 	}
-	if newLabel != "" {
-		filtered = append(filtered, newLabel)
+	if found || addWhenMissing {
+		if newLabel != "" {
+			filtered = append(filtered, newLabel)
+		}
+		issue.Labels = filtered
+		m.issuesByNumber[issueNumber] = issue
 	}
-	return filtered
+	if m.replaceLabelHook != nil {
+		m.replaceLabelHook()
+	}
+	return found, nil
+}
+
+func (m *mockGitHubOps) ReplaceLabel(_ context.Context, issueNumber int, oldLabel, newLabel string) error {
+	_, err := m.replaceLabelCore(issueNumber, oldLabel, newLabel, true)
+	return err
+}
+
+func (m *mockGitHubOps) ReplaceLabelIfPresent(_ context.Context, issueNumber int, oldLabel, newLabel string) (bool, error) {
+	return m.replaceLabelCore(issueNumber, oldLabel, newLabel, false)
+}
+
+func (m *mockGitHubOps) ReplaceLabels(_ context.Context, issueNumber int, labels []string) error {
+	issue, ok := m.issuesByNumber[issueNumber]
+	if !ok {
+		issue = IssueInfo{Number: issueNumber}
+	}
+	oldBot := ""
+	for _, label := range issue.Labels {
+		if strings.HasPrefix(label, "bot:") {
+			oldBot = label
+			break
+		}
+	}
+	next := make([]string, 0, len(labels))
+	seen := make(map[string]struct{}, len(labels))
+	newBot := ""
+	for _, label := range labels {
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		next = append(next, label)
+		if newBot == "" && strings.HasPrefix(label, "bot:") {
+			newBot = label
+		}
+	}
+
+	m.replaceLabelCalls = append(m.replaceLabelCalls, replaceLabelCall{
+		issueNumber: issueNumber,
+		oldLabel:    oldBot,
+		newLabel:    newBot,
+	})
+	if err, ok := m.replaceLabelPairError[fmt.Sprintf("%s=>%s", oldBot, newBot)]; ok {
+		return err
+	}
+	if remaining := m.replaceLabelFails[newBot]; remaining > 0 {
+		m.replaceLabelFails[newBot] = remaining - 1
+		return fmt.Errorf("replace label %q temporary failed", newBot)
+	}
+	if err, ok := m.replaceLabelError[newBot]; ok {
+		return err
+	}
+
+	issue.Labels = next
+	m.issuesByNumber[issueNumber] = issue
+	if m.replaceLabelHook != nil {
+		m.replaceLabelHook()
+	}
+	return nil
 }
 
 func (m *mockGitHubOps) ListIssueBlockedBy(_ context.Context, issueNumber int) ([]int, error) {
@@ -313,6 +406,7 @@ func (m *mockGitHubOps) RemoveIssueBlockedBy(_ context.Context, issueNumber int,
 type mockTaskCtlClient struct {
 	tasks                  []Task
 	nextID                 int
+	createCallCount        int
 	readyList              []Task
 	readyCallCount         int
 	readyHook              func([]Task) error
@@ -326,6 +420,17 @@ func newMockTaskCtlClient() *mockTaskCtlClient {
 }
 
 func (m *mockTaskCtlClient) create(subject, desc string, meta map[string]string) (*Task, error) {
+	m.createCallCount++
+	issueNum, hasIssue := parseIssueNum(meta)
+	if hasIssue {
+		for i := range m.tasks {
+			if m.tasks[i].IssueNum() == issueNum && isTaskActiveStatus(m.tasks[i].Status) {
+				task := m.tasks[i]
+				return &task, nil
+			}
+		}
+	}
+
 	m.nextID++
 	task := Task{
 		ID:       fmt.Sprintf("task-%d", m.nextID),
@@ -517,10 +622,10 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		return err
 	}
 
-	// 找新 issue
+	// 找新 issue（仅以 active task 去重）
 	existing := make(map[int]bool)
 	for _, t := range c.mockTaskCtl.tasks {
-		if n := t.IssueNum(); n > 0 {
+		if n := t.IssueNum(); n > 0 && isTaskActiveStatus(t.Status) {
 			existing[n] = true
 		}
 	}
@@ -549,6 +654,9 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 			continue
 		}
 		issueToTask[issue.Number] = task.ID
+		if hasLabel(issue.Labels, string(state.StateOrchestrate)) {
+			_ = state.TransitionBotState(ctx, c.mockGitHub, issue.Number, state.StateOrchestrate, state.StateQueued)
+		}
 	}
 
 	// 先落盘 blocked_by，再决定是否推进 ready。
@@ -589,6 +697,9 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		status := TaskStatusInProgress
 		if err := c.mockTaskCtl.update(task.ID, UpdateOpts{Status: &status}); err != nil {
 			return err
+		}
+		if issueNum := task.IssueNum(); issueNum > 0 {
+			_ = state.TransitionBotState(ctx, c.mockGitHub, issueNum, state.StateQueued, state.StateFixRequested)
 		}
 	}
 
@@ -1009,7 +1120,7 @@ func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *t
 	err = ctrl.ProcessIssue(context.Background(), task)
 	require.NoError(t, err)
 
-	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	assert.Len(t, mockGH.replaceLabelCalls, 1)
 	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(
 		t,
@@ -1344,6 +1455,43 @@ func TestController_Idempotent(t *testing.T) {
 	err = ctrl.RunInMem(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	assert.Equal(t, 1, ctrl.mockTaskCtl.createCallCount)
+}
+
+func TestController_IntakeOnlyOrchestrateIssues(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 101, Title: "entry", Labels: []string{"bot:orchestrate"}},
+		{Number: 102, Title: "single", Labels: []string{"bot:implementing"}},
+	}
+	ctrl := newInMemController(issues, "")
+	ctrl.mockGitHub.issuesByLabel[string(state.StateOrchestrate)] = []IssueInfo{issues[0]}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	assert.Equal(t, 101, ctrl.mockTaskCtl.tasks[0].IssueNum())
+}
+
+func TestController_ReadyProgressDoesNotDowngradeImplementing(t *testing.T) {
+	ctrl := newInMemController([]IssueInfo{
+		{Number: 312, Title: "polluted", Labels: []string{"bot:implementing"}},
+	}, "")
+	ctrl.mockTaskCtl.tasks = []Task{
+		{
+			ID:       "task-312",
+			Status:   TaskStatusPending,
+			Metadata: map[string]string{"issue_num": "312"},
+		},
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	labels, err := ctrl.mockGitHub.ListLabels(context.Background(), 312)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:implementing"}, labels)
+	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[0].Status)
 }
 
 func TestController_ReadyTaskAdvance(t *testing.T) {
@@ -1582,9 +1730,10 @@ func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.
 		Metadata: map[string]string{"issue_num": "41"},
 	}
 	ctrl.escalateIntegrationConflict(context.Background(), firstTask, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 2)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
-	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[1].newLabel)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, integrationConflictLabel)
+	assert.Contains(t, labels, needsHumanLabel)
 
 	retryTask := Task{
 		ID: "task-1",
@@ -1598,7 +1747,10 @@ func TestController_EscalateIntegrationConflict_LabelIdempotentRetry(t *testing.
 		},
 	}
 	ctrl.escalateIntegrationConflict(context.Background(), retryTask, outcome)
-	assert.Len(t, mockGH.replaceLabelCalls, 2)
+	labels, err = mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countLabel(labels, integrationConflictLabel))
+	assert.Equal(t, 1, countLabel(labels, needsHumanLabel))
 }
 
 func TestShouldRetryEscalationLabels(t *testing.T) {
@@ -1642,7 +1794,7 @@ func TestMergeOutcomeFromEscalatedTask_FromMetadata(t *testing.T) {
 
 func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *testing.T) {
 	mockGH := newMockGitHubOps()
-	mockGH.replaceLabelFails[integrationConflictLabel] = 1
+	mockGH.addLabelFails[integrationConflictLabel] = 1
 	ctrl := &Controller{
 		github: mockGH,
 		taskctl: &TaskCtlClient{
@@ -1670,13 +1822,16 @@ func TestController_EscalateIntegrationConflict_LabelCanRetryAfterFailure(t *tes
 	}
 
 	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 1)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[0].newLabel)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.NotContains(t, labels, integrationConflictLabel)
+	assert.NotContains(t, labels, needsHumanLabel)
 
 	ctrl.escalateIntegrationConflict(context.Background(), task, outcome)
-	require.Len(t, mockGH.replaceLabelCalls, 3)
-	assert.Equal(t, integrationConflictLabel, mockGH.replaceLabelCalls[1].newLabel)
-	assert.Equal(t, needsHumanLabel, mockGH.replaceLabelCalls[2].newLabel)
+	labels, err = mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, integrationConflictLabel)
+	assert.Contains(t, labels, needsHumanLabel)
 }
 
 func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T) {
@@ -1708,8 +1863,10 @@ func TestHandleIntegrationGateFailure_TriggersRetryLabelUnderLimit(t *testing.T)
 	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-1", errors.New("gate failed once"))
 	require.NoError(t, err)
 
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
-	assert.Equal(t, 0, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel))
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-needs-fix")
+	assert.NotContains(t, labels, integrationGateFailLabel)
 }
 
 func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
@@ -1738,9 +1895,10 @@ func TestHandleIntegrationGateFailure_EscalatesWhenExceeded(t *testing.T) {
 
 	err := ctrl.handleIntegrationGateFailure(context.Background(), task, "attempt-3", errors.New("gate failed third time"))
 	require.NoError(t, err)
-
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, needsHumanLabel), 0)
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, integrationGateFailLabel), 0)
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Contains(t, labels, integrationGateFailLabel)
 }
 
 func TestHandleIntegrationGateFailure_DuplicateAttemptNoop(t *testing.T) {
@@ -1862,7 +2020,9 @@ func TestIntegrationGate(t *testing.T) {
 	integrated, err := ctrl.runIntegrationGateAndDecide(context.Background(), firstTask, outcome)
 	require.NoError(t, err)
 	assert.False(t, integrated)
-	assert.Greater(t, countReplaceLabelByTarget(mockGH.replaceLabelCalls, "bot:pr-needs-fix"), 0)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-needs-fix")
 
 	firstAttemptKey, err := ctrl.buildIntegrationGateAttemptKey(outcome)
 	require.NoError(t, err)
@@ -1902,20 +2062,21 @@ func TestIntegrationGate(t *testing.T) {}
 	assert.Contains(t, strings.ToLower(string(logContent)), `"integrated":"true"`)
 }
 
-func TestCollectAutomationIssues_IncludesQueuedIssues(t *testing.T) {
+func TestCollectAutomationIssues_OnlyOrchestrateEntry(t *testing.T) {
 	mockGH := newMockGitHubOps()
-	mockGH.issuesByLabel["bot:queued"] = []IssueInfo{
-		{Number: 214, Title: "queued task", State: "open", Labels: []string{"bot:queued"}},
+	mockGH.issuesByLabel["bot:orchestrate"] = []IssueInfo{
+		{Number: 214, Title: "entry task", State: "open", Labels: []string{"bot:orchestrate"}},
 	}
-	mockGH.issuesByLabel["bot:fix"] = []IssueInfo{
-		{Number: 215, Title: "in progress task", State: "open", Labels: []string{"bot:fix"}},
+	mockGH.issuesByLabel["bot:implementing"] = []IssueInfo{
+		{Number: 215, Title: "single issue", State: "open", Labels: []string{"bot:implementing"}},
 	}
 
 	ctrl := &Controller{github: mockGH}
 	issues, orchestrateCount, err := ctrl.collectAutomationIssues(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 0, orchestrateCount)
-	assert.Len(t, issues, 2)
+	assert.Equal(t, 1, orchestrateCount)
+	require.Len(t, issues, 1)
+	assert.Equal(t, 214, issues[0].Number)
 }
 
 func TestSyncPRReviewableMetadata_SyncsMetadataBeforeIntegration(t *testing.T) {
@@ -2358,8 +2519,12 @@ func TestFinalizeIntegratedIssues_ClosesSubAndParent(t *testing.T) {
 
 	assert.Contains(t, mockGH.closeIssueCalls, 214)
 	assert.Contains(t, mockGH.closeIssueCalls, 210)
-	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 214, botDoneLabel), 0)
-	assert.Greater(t, countReplaceLabelByIssueAndTarget(mockGH.replaceLabelCalls, 210, botDoneLabel), 0)
+	labels214, err := mockGH.ListLabels(context.Background(), 214)
+	require.NoError(t, err)
+	assert.Contains(t, labels214, botDoneLabel)
+	labels210, err := mockGH.ListLabels(context.Background(), 210)
+	require.NoError(t, err)
+	assert.Contains(t, labels210, botDoneLabel)
 }
 
 func TestFinalizeIntegratedIssues_ParentRemainsOpenWhenSubNotAllClosed(t *testing.T) {
@@ -2395,14 +2560,39 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 func TestSyncIssueStateLabel_SkipsSelfReplacement(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.replaceLabelPairError["bot:fix=>bot:fix"] = errors.New("self replacement should not happen")
+	mockGH.issuesByNumber[41] = IssueInfo{Number: 41}
 	ctrl := &Controller{github: mockGH}
 
 	err := ctrl.syncIssueStateLabel(context.Background(), 41, "bot:fix")
 	require.NoError(t, err)
-	require.NotEmpty(t, mockGH.replaceLabelCalls)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:fix")
 	for _, call := range mockGH.replaceLabelCalls {
 		assert.NotEqual(t, call.oldLabel, call.newLabel)
 	}
+}
+
+func TestSyncIssueStateLabel_AutoHealMultiStateAndDedupComment(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 41,
+			Labels: []string{string(state.StateFixRequested), string(state.StateNeedsDiscussion)},
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.syncIssueStateLabel(context.Background(), 41, string(state.StateNeedsDiscussion))
+	require.NoError(t, err)
+	labels, err := mockGH.ListLabels(context.Background(), 41)
+	require.NoError(t, err)
+	assert.Equal(t, []string{string(state.StateNeedsDiscussion)}, labels)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "状态自愈")
+
+	err = ctrl.syncIssueStateLabel(context.Background(), 41, string(state.StateNeedsDiscussion))
+	require.NoError(t, err)
+	assert.Len(t, mockGH.addIssueCommentCalls, 1)
 }
 
 func countReplaceLabelByTarget(calls []replaceLabelCall, label string) int {
@@ -2419,6 +2609,16 @@ func countReplaceLabelByIssueAndTarget(calls []replaceLabelCall, issueNum int, l
 	count := 0
 	for _, call := range calls {
 		if call.issueNumber == issueNum && call.newLabel == label {
+			count++
+		}
+	}
+	return count
+}
+
+func countLabel(labels []string, target string) int {
+	count := 0
+	for _, label := range labels {
+		if label == target {
 			count++
 		}
 	}

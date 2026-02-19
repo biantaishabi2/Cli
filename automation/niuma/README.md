@@ -183,6 +183,27 @@ control:
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
 
+### 状态标签管控（受控单值）
+
+- `bot:*` 必须通过受控入口迁移，禁止在脚本中散落 `gh issue edit --add-label/--remove-label bot:*`。
+- 推荐命令：
+
+```bash
+# CAS 迁移（from 可选）
+niuma state-label set --repo owner/repo --issue 325 --from bot:plan-draft --to bot:needs-discussion
+
+# 多状态自愈收敛
+niuma state-label normalize --repo owner/repo --issue 325
+
+# 清理所有 bot 状态（升级人工时使用）
+niuma state-label clear --repo owner/repo --issue 325
+```
+
+- 本地门禁：`automation/niuma/scripts/gh` 会拦截直接改 `bot:*` 并提示改用 `niuma state-label`。
+- 推荐安装（全局默认接管 `gh`）：`bash automation/niuma/scripts/install-gh-wrapper.sh`（默认安装到 `~/.local/bin/gh`）。
+- 服务端门禁：`.github/workflows/niuma-label-guard.yml` 会在非 allowlist actor 直改 `bot:*` 时评论（dry-run）或自动回滚（enforce）。
+- 自愈优先级可由 `NIUMA_STATE_PRIORITY` 覆盖；默认优先级见 `automation/niuma/docs/state-machine-spec.md`。
+
 ### `pr-reviewable` 冲突自动回退
 
 - control 循环会持续检查 `bot:pr-reviewable` 对应 PR 的 `mergeable / mergeStateStatus / headSha`
@@ -191,6 +212,19 @@ control:
 - issue body 维护 `<!-- PR_CONFLICT_RETRY:N -->` 计数；PR 恢复可合并时自动重置为 `0`
 - 超过阈值（默认 `N=3`）自动升级 `needs-human`，停止自动冲突回退循环
 - 冲突评论带去重标记 `<!-- BOT:CONFLICT_DETECTED sha:<headSha> -->`，同一 headSha 仅评论一次
+
+### PR Gate 口径（merge-result）
+
+- review/iterate/implement 三条 workflow 共用 `.github/scripts/niuma-test-gate.sh`，统一按 `merge-result` 基线执行 gate
+- 基线优先级：`origin/pull/<pr>/merge`（GitHub merge ref）> 本地 `origin/<base> + origin/<head>` 临时合并
+- 本地合并出现冲突时，gate 直接失败并输出 `CONFLICT:` 前缀、冲突文件清单和 merge 错误摘要；不会推进到 `bot:pr-reviewable`
+
+Gate 日志固定字段（用于与 PR checks 对账）：
+- `baseline=merge-result`
+- `merge_ref_source=github-merge-ref|local-merge`
+- `base_sha=<sha>`
+- `head_sha=<sha>`
+- `merge_sha=<sha>`（可得时输出）
 
 ## Discussion 协议（当前）
 
