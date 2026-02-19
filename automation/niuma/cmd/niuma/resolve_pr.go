@@ -1,4 +1,3 @@
-// cmd/niuma/resolve_pr.go
 // resolve-pr 子命令：从 issue 评论中分页解析 BOT:PR_CREATED marker，输出 PR 号
 package main
 
