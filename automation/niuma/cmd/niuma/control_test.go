@@ -323,6 +323,14 @@ func (s *stubGitHubControlClient) ListIssuesByState(_ context.Context, _ string)
 	return nil, nil
 }
 
+func (s *stubGitHubControlClient) ListLabels(_ context.Context, _ int) ([]string, error) {
+	return nil, nil
+}
+
+func (s *stubGitHubControlClient) AddLabel(_ context.Context, _ int, _ string) error {
+	return nil
+}
+
 func (s *stubGitHubControlClient) GetIssue(_ context.Context, _ int) (*ghapi.Issue, error) {
 	return nil, nil
 }
@@ -348,6 +356,14 @@ func (s *stubGitHubControlClient) MergePR(_ context.Context, _ int, _ string) er
 }
 
 func (s *stubGitHubControlClient) ReplaceLabel(_ context.Context, _ int, _, _ string) error {
+	return nil
+}
+
+func (s *stubGitHubControlClient) ReplaceLabelIfPresent(_ context.Context, _ int, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubGitHubControlClient) ReplaceLabels(_ context.Context, _ int, _ []string) error {
 	return nil
 }
 

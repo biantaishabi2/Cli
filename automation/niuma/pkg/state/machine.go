@@ -30,13 +30,15 @@ func (m *Machine) Current(ctx context.Context) (State, error) {
 		return "", fmt.Errorf("读取状态失败: %w", err)
 	}
 
-	for _, label := range labels {
-		if s, err := ParseState(label); err == nil {
-			return s, nil
-		}
+	current, found, err := CurrentBotState(labels)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("issue #%d 没有 bot: 状态 label", m.issueNumber)
 	}
 
-	return "", fmt.Errorf("issue #%d 没有 bot: 状态 label", m.issueNumber)
+	return current, nil
 }
 
 // Transition 执行状态转换：校验合法性，替换 label
@@ -46,11 +48,7 @@ func (m *Machine) Transition(ctx context.Context, to State) error {
 		return err
 	}
 
-	if !IsValidTransition(current, to) {
-		return fmt.Errorf("非法状态转换: %s → %s", current, to)
-	}
-
-	return m.client.ReplaceLabel(ctx, m.issueNumber, string(current), string(to))
+	return TransitionBotState(ctx, m.client, m.issueNumber, current, to)
 }
 
 // IssueNumber 返回关联的 issue 编号
