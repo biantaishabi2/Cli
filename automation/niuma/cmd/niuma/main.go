@@ -387,8 +387,8 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		VisibleOnlyOnDiff:    cfg.Workflow.GetVisibleOnlyOnDiff(),
 	}
 
-	// 讨论 provider
-	for _, name := range cfg.AI.Discussion.Providers {
+	// 讨论 provider（支持 "default" 占位符）
+	for _, name := range cfg.GetDiscussionProviderNames() {
 		p, ok := providers[name]
 		if !ok {
 			return nil, fmt.Errorf("讨论 provider %q 未配置", name)
@@ -396,12 +396,9 @@ func buildOrchestrator(client *gh.Client, issueNumber int) (*agent.Orchestrator,
 		orchCfg.DiscussionProviders = append(orchCfg.DiscussionProviders, p)
 	}
 
-	// 实现 provider
-	if cfg.AI.Implementation.Provider != "" {
-		p, ok := providers[cfg.AI.Implementation.Provider]
-		if !ok {
-			return nil, fmt.Errorf("实现 provider %q 未配置", cfg.AI.Implementation.Provider)
-		}
+	// 实现 provider（支持 "default" 占位符和空值 fallback）
+	implName := cfg.ResolveDefaultPlaceholder(cfg.AI.Implementation.Provider)
+	if p, ok := providers[implName]; ok {
 		orchCfg.ImplementProvider = p
 	} else {
 		orchCfg.ImplementProvider = defaultProvider

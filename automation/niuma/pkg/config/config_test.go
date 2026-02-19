@@ -50,7 +50,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 
 func TestLoadWithDefaults_FileNotFound(t *testing.T) {
 	cfg := LoadWithDefaults(t.TempDir())
-	assert.Equal(t, "codex", cfg.AI.Default)
+	assert.Equal(t, "claude", cfg.AI.Default)
 	assert.NotNil(t, cfg.AI.Providers)
 	assert.Equal(t, 5, cfg.Workflow.GetMaxDiscussionRounds())
 	assert.Equal(t, 20, cfg.Workflow.GetDiscussTimeoutMinutes())
@@ -137,4 +137,90 @@ func TestLoad_EnvOverride(t *testing.T) {
 	assert.Equal(t, "opencode", cfg.AI.Default)
 	assert.Equal(t, 4, cfg.Workflow.GetVisibleRoundInterval())
 	assert.False(t, cfg.Workflow.GetVisibleOnlyOnDiff())
+}
+
+func TestResolveDefaultPlaceholder(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Default: "claude"}}
+
+	// "default" 占位符替换为 ai.default
+	assert.Equal(t, "claude", cfg.ResolveDefaultPlaceholder("default"))
+	// 空字符串也 fallback 到 ai.default
+	assert.Equal(t, "claude", cfg.ResolveDefaultPlaceholder(""))
+	// 具体 provider 名不受影响
+	assert.Equal(t, "kimi", cfg.ResolveDefaultPlaceholder("kimi"))
+}
+
+func TestGetDiscussionProviderNames_DefaultPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Discussion: DiscussionConfig{
+				Providers: []string{"default", "kimi"},
+			},
+		},
+	}
+
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"claude", "kimi"}, names)
+}
+
+func TestGetDiscussionProviderNames_NoPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Discussion: DiscussionConfig{
+				Providers: []string{"codex", "kimi"},
+			},
+		},
+	}
+
+	// 直接写 provider 名字仍然有效
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"codex", "kimi"}, names)
+}
+
+func TestGetImplementationProvider_DefaultPlaceholder(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Default: "claude",
+			Providers: map[string]ProviderConfig{
+				"claude": {Cmd: "claude -p {prompt_file}"},
+			},
+			Implementation: ImplementationConfig{Provider: "default"},
+		},
+	}
+
+	rp, err := cfg.GetImplementationProvider()
+	require.NoError(t, err)
+	assert.Equal(t, "claude -p {prompt_file}", rp.Cmd)
+}
+
+func TestEnvOverride_AffectsDefaultPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "claude -p {prompt_file}"
+    opencode:
+      cmd: "opencode {prompt_file}"
+  discussion:
+    providers: [default]
+  implementation:
+    provider: default
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	t.Setenv("NIUMA_AI_DEFAULT", "opencode")
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+
+	// 环境变量覆盖后，default 占位符跟随变化
+	names := cfg.GetDiscussionProviderNames()
+	assert.Equal(t, []string{"opencode"}, names)
+
+	rp, err := cfg.GetImplementationProvider()
+	require.NoError(t, err)
+	assert.Equal(t, "opencode {prompt_file}", rp.Cmd)
 }
