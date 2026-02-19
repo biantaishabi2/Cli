@@ -254,6 +254,46 @@ func fixedNow() time.Time {
 	return time.Date(2026, 2, 19, 12, 0, 0, 0, time.UTC)
 }
 
+func TestWithTaskStoreLock_SerializesCriticalSection(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".niuma", "tasks.json.lock")
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- withTaskStoreLock(lockPath, func() error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+
+	select {
+	case <-firstEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("第一个协程未能进入临界区")
+	}
+
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- withTaskStoreLock(lockPath, func() error {
+			close(secondEntered)
+			return nil
+		})
+	}()
+
+	select {
+	case <-secondEntered:
+		t.Fatal("第二个协程在第一个协程释放锁前进入了临界区")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+}
+
 func writeTaskStore(t *testing.T, repoDir string, issue int, extraMetadata map[string]string) string {
 	t.Helper()
 

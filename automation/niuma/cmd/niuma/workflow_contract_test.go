@@ -79,6 +79,9 @@ func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-implement.yml")
 
 	assert.Contains(t, content, "\"$NIUMA_BIN\" gate run")
+	assert.Contains(t, content, "GATE_MAX_RETRIES=2")
+	assert.Contains(t, content, "[[ \"$NIUMA_INTEGRATION_GATE_MAX_RETRIES\" =~ ^[0-9]+$ ]]")
+	assert.Contains(t, content, "--max-retries \"$GATE_MAX_RETRIES\"")
 	assert.NotContains(t, content, "Resolve Gate Retry Policy")
 	assert.NotContains(t, content, "Escalate Human On Gate Failure")
 }
@@ -87,6 +90,9 @@ func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-iterate.yml")
 
 	assert.Equal(t, 2, strings.Count(content, "\"$NIUMA_BIN\" gate run"))
+	assert.Equal(t, 2, strings.Count(content, "GATE_MAX_RETRIES=2"))
+	assert.Equal(t, 2, strings.Count(content, "--max-retries \"$GATE_MAX_RETRIES\""))
+	assert.Contains(t, content, "NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法")
 	assert.NotContains(t, content, "Keep Needs-Fix On Gate Failure")
 }
 

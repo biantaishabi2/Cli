@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -111,73 +112,81 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 
 	attemptKey := buildAttemptKey(r.opts.Issue, r.opts.PR, r.opts.Now())
 	storePath := filepath.Join(r.opts.RepoDir, ".niuma", "tasks.json")
-	store, err := loadTaskStore(storePath, r.opts.Issue)
-	if err != nil {
-		return result, fmt.Errorf("读取 tasks.json 失败: %w", err)
-	}
-
-	retryCount := 1
-	lastEscalatedAttemptKey := ""
-	if store.hasMatchedTask() {
-		retryCount = parseNonNegativeInt(store.metadata[metaKeyGateRetryCount]) + 1
-		lastEscalatedAttemptKey = parseString(store.metadata[metaKeyLastEscalatedAttemptKey])
-	}
-
-	result.RetryCount = retryCount
 	result.AttemptKey = attemptKey
+	gateFailure := trimGateError(gateOutput, gateErr)
 
-	status := gateStatusRetrying
-	if retryCount > r.opts.MaxRetries {
-		status = gateStatusEscalated
-		result.Escalated = true
-	}
-
-	if store.hasMatchedTask() {
-		store.metadata[metaKeyGateStatus] = status
-		store.metadata[metaKeyGateRetryCount] = strconv.Itoa(retryCount)
-		store.metadata[metaKeyGateAttemptKey] = attemptKey
-		store.metadata[metaKeyGateLastCheckedAt] = r.opts.Now().UTC().Format(time.RFC3339)
-		store.metadata[metaKeyGateLastError] = trimGateError(gateOutput, gateErr)
-		if err := store.save(); err != nil {
-			return result, fmt.Errorf("写入 tasks.json 失败: %w", err)
+	lockPath := storePath + ".lock"
+	if err := withTaskStoreLock(lockPath, func() error {
+		store, err := loadTaskStore(storePath, r.opts.Issue)
+		if err != nil {
+			return fmt.Errorf("读取 tasks.json 失败: %w", err)
 		}
-		result.StatePersisted = true
-	}
 
-	if !result.Escalated {
-		if err := r.opts.MarkNeedsFix(ctx, r.opts.Repo, r.opts.Issue); err != nil {
-			return result, fmt.Errorf("%w: gate 失败后设置 bot:pr-needs-fix 失败: %v", ErrGateFailed, err)
+		retryCount := 1
+		lastEscalatedAttemptKey := ""
+		if store.hasMatchedTask() {
+			retryCount = parseNonNegativeInt(store.metadata[metaKeyGateRetryCount]) + 1
+			lastEscalatedAttemptKey = parseString(store.metadata[metaKeyLastEscalatedAttemptKey])
 		}
-		commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
-		if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
-			return result, fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
+
+		result.RetryCount = retryCount
+		status := gateStatusRetrying
+		if retryCount > r.opts.MaxRetries {
+			status = gateStatusEscalated
+			result.Escalated = true
 		}
-		return result, fmt.Errorf("%w: %s", ErrGateFailed, trimGateError(gateOutput, gateErr))
-	}
 
-	if err := r.opts.AddLabels(ctx, r.opts.Repo, r.opts.Issue, []string{needsHumanLabel, integrationGateFailedLabel}); err != nil {
-		return result, fmt.Errorf("%w: gate 超限后打标失败: %v", ErrGateFailed, err)
-	}
-
-	if lastEscalatedAttemptKey == attemptKey {
-		result.EscalationCommentSkipped = true
-		return result, fmt.Errorf("%w: %s", ErrGateFailed, trimGateError(gateOutput, gateErr))
-	}
-
-	escalatedComment := fmt.Sprintf(defaultEscalatedCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
-	if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, escalatedComment); err != nil {
-		return result, fmt.Errorf("%w: gate 超限升级评论发布失败: %v", ErrGateFailed, err)
-	}
-
-	if store.hasMatchedTask() {
-		store.metadata[metaKeyLastEscalatedAttemptKey] = attemptKey
-		if err := store.save(); err != nil {
-			return result, fmt.Errorf("写入 last_escalated_attempt_key 失败: %w", err)
+		if store.hasMatchedTask() {
+			store.metadata[metaKeyGateStatus] = status
+			store.metadata[metaKeyGateRetryCount] = strconv.Itoa(retryCount)
+			store.metadata[metaKeyGateAttemptKey] = attemptKey
+			store.metadata[metaKeyGateLastCheckedAt] = r.opts.Now().UTC().Format(time.RFC3339)
+			store.metadata[metaKeyGateLastError] = gateFailure
+			if err := store.save(); err != nil {
+				return fmt.Errorf("写入 tasks.json 失败: %w", err)
+			}
+			result.StatePersisted = true
 		}
-		result.StatePersisted = true
+
+		if !result.Escalated {
+			if err := r.opts.MarkNeedsFix(ctx, r.opts.Repo, r.opts.Issue); err != nil {
+				return fmt.Errorf("%w: gate 失败后设置 bot:pr-needs-fix 失败: %v", ErrGateFailed, err)
+			}
+			commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
+			if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
+				return fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
+			}
+			return fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
+		}
+
+		if err := r.opts.AddLabels(ctx, r.opts.Repo, r.opts.Issue, []string{needsHumanLabel, integrationGateFailedLabel}); err != nil {
+			return fmt.Errorf("%w: gate 超限后打标失败: %v", ErrGateFailed, err)
+		}
+
+		if lastEscalatedAttemptKey == attemptKey {
+			result.EscalationCommentSkipped = true
+			return fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
+		}
+
+		escalatedComment := fmt.Sprintf(defaultEscalatedCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
+		if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, escalatedComment); err != nil {
+			return fmt.Errorf("%w: gate 超限升级评论发布失败: %v", ErrGateFailed, err)
+		}
+
+		if store.hasMatchedTask() {
+			store.metadata[metaKeyLastEscalatedAttemptKey] = attemptKey
+			if err := store.save(); err != nil {
+				return fmt.Errorf("写入 last_escalated_attempt_key 失败: %w", err)
+			}
+			result.StatePersisted = true
+		}
+
+		return fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
+	}); err != nil {
+		return result, err
 	}
 
-	return result, fmt.Errorf("%w: %s", ErrGateFailed, trimGateError(gateOutput, gateErr))
+	return result, fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
 }
 
 func runGateScript(ctx context.Context, repoDir string, pr int) (string, error) {
@@ -412,14 +421,21 @@ func parseString(v any) string {
 }
 
 func writeAtomicJSON(path string, payload []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmpPath := path + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	file, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmpPath := file.Name()
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
 	if _, err := file.Write(payload); err != nil {
 		file.Close()
 		return err
@@ -431,5 +447,28 @@ func writeAtomicJSON(path string, payload []byte) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	tmpPath = ""
+	return nil
+}
+
+func withTaskStoreLock(lockPath string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return fmt.Errorf("创建锁目录失败: %w", err)
+	}
+	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("打开 store 锁失败: %w", err)
+	}
+	defer fd.Close()
+
+	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("加锁 store 失败: %w", err)
+	}
+	defer func() {
+		_ = syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)
+	}()
+	return fn()
 }

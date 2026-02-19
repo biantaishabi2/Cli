@@ -66,9 +66,16 @@ jobs:
           WORKSPACE: ${{ github.workspace }}
           NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
         run: |
+          GATE_MAX_RETRIES=2
+          if [[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+            GATE_MAX_RETRIES="$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
+          else
+            echo "::warning::NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法: '$NIUMA_INTEGRATION_GATE_MAX_RETRIES'，回退为 2"
+          fi
+
           "$NIUMA_BIN" gate run \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
             --repo-dir "$WORKSPACE" \
-            --max-retries "$NIUMA_INTEGRATION_GATE_MAX_RETRIES"
+            --max-retries "$GATE_MAX_RETRIES"
