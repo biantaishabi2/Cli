@@ -25,6 +25,21 @@ jobs:
       - name: Run niuma gate bdd tests
         run: .github/scripts/tests/niuma-test-gate.bdd.sh
 
+  cleanup-worktrees-script:
+    name: cleanup worktrees script test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run cleanup worktrees bats tests
+        run: bats automation/niuma/scripts/tests/cleanup_worktrees.bats
+
   taskctl:
     name: taskctl test (ubuntu)
     runs-on: ubuntu-latest

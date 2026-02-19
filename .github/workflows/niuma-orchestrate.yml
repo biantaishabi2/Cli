@@ -3,6 +3,8 @@ name: niuma - Orchestrate
 on:
   issues:
     types: [labeled]
+  pull_request:
+    types: [closed]
   repository_dispatch:
     types: [niuma.task.completed]
   schedule:
@@ -17,11 +19,14 @@ jobs:
     if: >
       (github.event_name == 'issues' && (github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable')) ||
       (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
+      (github.event_name == 'pull_request' && github.event.action == 'closed') ||
       github.event_name == 'schedule'
     uses: ./.github/workflows/niuma-orchestrate-reusable.yml
     secrets: inherit
     with:
       repo: ${{ github.repository }}
+      workflow_source_repo: ${{ github.repository }}
+      workflow_source_ref: ${{ github.event.repository.default_branch }}
       repo_dir: "."
       build_niuma: true
       label_whitelist: "bot:queued,bot:pr-reviewable"
@@ -29,3 +34,4 @@ jobs:
       event_id: ${{ github.event.client_payload.event_id || '' }}
       dedup_window_hours: 24
       concurrency_key: "niuma-orchestrate-${repo}"
+      enable_local_cleanup: true
