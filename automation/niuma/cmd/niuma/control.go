@@ -75,6 +75,7 @@ var flagPRConflictUnknownBackoffs string
 var flagPRConflictEnableAI bool
 var flagPRConflictAIMaxAttempts int
 var flagPRConflictSmokeTestCmd string
+var flagPRConflictElixirTestCmd string
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
@@ -95,6 +96,7 @@ func init() {
 	controlRunCmd.Flags().BoolVar(&flagPRConflictEnableAI, "pr-conflict-enable-ai", true, "是否启用冲突 AI 修复层（Rule 失败后触发）")
 	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
+	controlRunCmd.Flags().StringVar(&flagPRConflictElixirTestCmd, "pr-conflict-elixir-test-cmd", "mix test", "Elixir 冲突修复门禁测试命令，为空则跳过")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
 
@@ -174,6 +176,7 @@ func buildController() (*control.Controller, error) {
 		PRConflictEnableAI:        flagPRConflictEnableAI,
 		PRConflictAIMaxAttempts:   flagPRConflictAIMaxAttempts,
 		PRConflictSmokeTestCmd:    flagPRConflictSmokeTestCmd,
+		PRConflictElixirTestCmd:   flagPRConflictElixirTestCmd,
 		RepoDir:                   repoDir,
 	}
 

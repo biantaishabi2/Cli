@@ -89,6 +89,107 @@ func TestResolveConflictProfileGroups_ConcurrentSafe(t *testing.T) {
 	}
 }
 
+func TestIsElixirLightweightConflict(t *testing.T) {
+	cases := []struct {
+		name     string
+		file     string
+		summary  ConflictFileSummary
+		expected bool
+	}{
+		{
+			name: "alias/import/use 轻度冲突命中",
+			file: "lib/my_app.ex",
+			summary: ConflictFileSummary{
+				Hunks: 2,
+				Blocks: []ConflictBlock{
+					{Ours: "alias MyApp.Repo", Theirs: "alias MyApp.Schema"},
+					{Ours: "import Ecto.Query", Theirs: "import Ecto.Changeset"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "use 语句命中",
+			file: "lib/web.ex",
+			summary: ConflictFileSummary{
+				Hunks: 1,
+				Blocks: []ConflictBlock{
+					{Ours: "use Phoenix.Controller", Theirs: "use Phoenix.LiveView"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: ".exs 文件命中",
+			file: "test/my_test.exs",
+			summary: ConflictFileSummary{
+				Hunks: 1,
+				Blocks: []ConflictBlock{
+					{Ours: "alias MyApp.Factory", Theirs: "alias MyApp.TestHelper"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "非 Elixir 文件不命中",
+			file: "pkg/main.go",
+			summary: ConflictFileSummary{
+				Hunks: 1,
+				Blocks: []ConflictBlock{
+					{Ours: "alias Foo", Theirs: "alias Bar"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "包含 def 等非 alias/import/use 语句不命中",
+			file: "lib/app.ex",
+			summary: ConflictFileSummary{
+				Hunks: 1,
+				Blocks: []ConflictBlock{
+					{Ours: "def value, do: 1", Theirs: "def value, do: 2"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "hunks 超过阈值不命中",
+			file: "lib/app.ex",
+			summary: ConflictFileSummary{
+				Hunks: 4,
+				Blocks: []ConflictBlock{
+					{Ours: "alias A", Theirs: "alias B"},
+					{Ours: "alias C", Theirs: "alias D"},
+					{Ours: "alias E", Theirs: "alias F"},
+					{Ours: "alias G", Theirs: "alias H"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "单侧行数过多不命中",
+			file: "lib/app.ex",
+			summary: ConflictFileSummary{
+				Hunks: 1,
+				Blocks: []ConflictBlock{
+					{
+						Ours:   "alias A\nalias B\nalias C\nalias D\nalias E\nalias F\nalias G\nalias H\nalias I\nalias J\nalias K\nalias L\nalias M",
+						Theirs: "alias Z",
+					},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isElixirLightweightConflict(tc.file, tc.summary)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 func TestResolveConflictProfileGroups_MixedLanguagesStableGrouping(t *testing.T) {
 	groups, err := ResolveConflictProfileGroups([]string{
 		"pkg/service.go",

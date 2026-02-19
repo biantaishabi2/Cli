@@ -502,6 +502,9 @@ func (c *Controller) runPRConflictGates(ctx context.Context, repoDir string, con
 	if err := c.gateConflictGoTests(ctx, repoDir, conflictFiles); err != nil {
 		return err
 	}
+	if err := c.gateConflictElixirTests(ctx, repoDir, conflictFiles); err != nil {
+		return err
+	}
 	if smoke := c.prConflictSmokeTestCmd(); smoke != "" {
 		if _, err := c.runCommand(ctx, repoDir, "bash", "-lc", smoke); err != nil {
 			return fmt.Errorf("smoke tests 失败: %w", err)
@@ -769,6 +772,30 @@ func (c *Controller) gateConflictGoTests(ctx context.Context, repoDir string, co
 		if _, err := c.runCommand(ctx, target.moduleRoot, "go", "test", target.pkgPattern); err != nil {
 			return fmt.Errorf("质量门禁失败 (%s %s): %w", target.moduleRoot, target.pkgPattern, err)
 		}
+	}
+	return nil
+}
+
+// gateConflictElixirTests 对包含 .ex/.exs 冲突文件的仓库执行 Elixir 测试门禁。
+// 命令可通过 PRConflictElixirTestCmd 配置，为空字符串时跳过。
+func (c *Controller) gateConflictElixirTests(ctx context.Context, repoDir string, conflictFiles []string) error {
+	cmd := c.prConflictElixirTestCmd()
+	if strings.TrimSpace(cmd) == "" {
+		return nil
+	}
+	hasElixir := false
+	for _, file := range conflictFiles {
+		ext := strings.ToLower(filepath.Ext(file))
+		if ext == ".ex" || ext == ".exs" {
+			hasElixir = true
+			break
+		}
+	}
+	if !hasElixir {
+		return nil
+	}
+	if _, err := c.runCommand(ctx, repoDir, "bash", "-lc", cmd); err != nil {
+		return fmt.Errorf("elixir tests 失败: %w", err)
 	}
 	return nil
 }
