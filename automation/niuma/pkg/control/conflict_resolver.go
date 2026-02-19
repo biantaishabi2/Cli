@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -90,6 +91,13 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 	if !c.prConflictAIEnabled() {
 		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("AI 层已禁用，Rule 层失败后升级人工"))
 	}
+	profileGroups, err := ResolveConflictProfileGroups(conflictFiles)
+	if err != nil {
+		if errors.Is(err, ErrUnknownProfile) {
+			return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("冲突文件存在未知 profile，拒绝进入 AI: %w", err))
+		}
+		return false, err
+	}
 	if allowed, reason := c.allowAIConflictResolution(conflictFiles, summaries); !allowed {
 		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("冲突超出 AI 安全边界: %s", reason))
 	}
@@ -107,7 +115,7 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 	maxAttempts := c.prConflictAIMaxAttempts()
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries)
+		err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries, profileGroups)
 		if err == nil {
 			if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
 				return false, err
@@ -319,32 +327,44 @@ func (c *Controller) tryResolveConflictByAIOnce(
 	repoDir string,
 	conflictFiles []string,
 	summaries map[string]conflictFileSummary,
+	profileGroups []ConflictProfileGroup,
 ) error {
 	provider := c.prConflictAIProvider()
 	if provider == nil {
 		return fmt.Errorf("AI provider 不可用")
 	}
-
-	prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, conflictFiles, summaries)
-	if err != nil {
-		return err
+	if len(profileGroups) == 0 {
+		return fmt.Errorf("AI 层未找到可用冲突 profile")
 	}
 
-	resp, err := provider.Complete(ctx, prompt, ai.WithWorkDir(repoDir))
-	if err != nil {
-		return fmt.Errorf("AI 冲突修复调用失败: %w", err)
-	}
-
-	edits, err := parsePRConflictAIEdits(resp)
-	if err != nil {
-		return err
-	}
-	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, collectEditPaths(edits))
+	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, conflictFiles)
 	if err != nil {
 		return err
 	}
 	rollbackWithCause := func(cause error) error {
 		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
+	}
+
+	edits := make([]prConflictAIEdit, 0, len(conflictFiles))
+	for _, group := range profileGroups {
+		prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, group.Profile, group.Files, summaries)
+		if err != nil {
+			return rollbackWithCause(err)
+		}
+
+		resp, err := provider.Complete(ctx, prompt, ai.WithWorkDir(repoDir))
+		if err != nil {
+			return rollbackWithCause(fmt.Errorf("AI 冲突修复调用失败: %w", err))
+		}
+
+		groupEdits, err := parsePRConflictAIEdits(resp)
+		if err != nil {
+			return rollbackWithCause(err)
+		}
+		edits = append(edits, groupEdits...)
+	}
+	if len(edits) == 0 {
+		return rollbackWithCause(fmt.Errorf("AI 冲突修复响应为空"))
 	}
 
 	if err := applyPRConflictAIEdits(repoDir, edits); err != nil {
@@ -397,19 +417,6 @@ func sanitizeEditPath(path string) (string, error) {
 		return "", fmt.Errorf("AI 输出包含越界路径: %s", path)
 	}
 	return clean, nil
-}
-
-func collectEditPaths(edits []prConflictAIEdit) []string {
-	seen := make(map[string]struct{}, len(edits))
-	paths := make([]string, 0, len(edits))
-	for _, edit := range edits {
-		if _, ok := seen[edit.Path]; ok {
-			continue
-		}
-		seen[edit.Path] = struct{}{}
-		paths = append(paths, edit.Path)
-	}
-	return paths
 }
 
 func captureFileSnapshots(repoDir string, files []string) (map[string]fileSnapshot, error) {
@@ -827,18 +834,15 @@ func (c *Controller) stageConflictFiles(ctx context.Context, repoDir string, fil
 func (c *Controller) buildPRConflictAIPrompt(
 	ctx context.Context,
 	repoDir string,
+	profile ConflictProfile,
 	conflictFiles []string,
 	summaries map[string]conflictFileSummary,
 ) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("你是 Go 冲突修复助手。请仅返回 JSON，不要返回其他文本。\\n")
-	sb.WriteString("输出格式：{\"edits\":[{\"path\":\"<file>\",\"content\":\"<full file content>\"}]}\\n")
-	sb.WriteString("约束：\\n")
-	sb.WriteString("1) 仅允许修改下面给出的冲突文件；\\n")
-	sb.WriteString("2) 输出必须彻底移除冲突标记；\\n")
-	sb.WriteString("3) 保持最小改动，不改语义；\\n")
-	sb.WriteString("4) 仅输出 JSON。\\n\\n")
+	if profile == nil {
+		return "", fmt.Errorf("构造 AI prompt 失败: profile 为空")
+	}
 
+	promptFiles := make([]ConflictPromptFile, 0, len(conflictFiles))
 	for _, file := range conflictFiles {
 		raw, err := os.ReadFile(filepath.Join(repoDir, file))
 		if err != nil {
@@ -847,20 +851,19 @@ func (c *Controller) buildPRConflictAIPrompt(
 		base, _ := c.readConflictBaseSide(ctx, repoDir, file)
 		summary := summaries[file]
 
-		sb.WriteString(fmt.Sprintf("### file: %s\\n", file))
-		sb.WriteString("[base side]\\n")
-		sb.WriteString(base)
-		sb.WriteString("\\n[conflict file content]\\n")
-		sb.Write(raw)
-		sb.WriteString("\\n[conflict hunks]\\n")
-		for idx, block := range summary.blocks {
-			sb.WriteString(fmt.Sprintf("hunk-%d ours:\\n%s\\n", idx+1, block.ours))
-			sb.WriteString(fmt.Sprintf("hunk-%d theirs:\\n%s\\n", idx+1, block.theirs))
-		}
-		sb.WriteString("\\n")
+		promptFiles = append(promptFiles, ConflictPromptFile{
+			Path:    file,
+			Base:    base,
+			Content: string(raw),
+			Summary: summary,
+		})
+	}
+	profilePrompt, err := profile.BuildPrompt(promptFiles)
+	if err != nil {
+		return "", fmt.Errorf("构造 profile prompt 失败(%s): %w", profile.Name(), err)
 	}
 
-	return sb.String(), nil
+	return assemblePrompt(buildCommonConflictPrompt(conflictFiles), profilePrompt), nil
 }
 
 func (c *Controller) readConflictBaseSide(ctx context.Context, repoDir, file string) (string, error) {

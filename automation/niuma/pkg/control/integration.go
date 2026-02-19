@@ -612,6 +612,43 @@ func splitNonEmptyLines(s string) []string {
 	return lines
 }
 
+func buildCommonConflictPrompt(conflictFiles []string) string {
+	files := append([]string(nil), conflictFiles...)
+	sort.Strings(files)
+
+	var sb strings.Builder
+	sb.WriteString("你是代码冲突修复助手。请仅返回 JSON，不要返回其他文本。\n")
+	sb.WriteString("输出格式：{\"edits\":[{\"path\":\"<file>\",\"content\":\"<full file content>\"}]}\n")
+	sb.WriteString("通用约束：\n")
+	sb.WriteString("1) 仅允许修改输入中声明的冲突文件；\n")
+	sb.WriteString("2) 输出必须完全移除冲突标记（<<<<<<<、=======、>>>>>>>）；\n")
+	sb.WriteString("3) 保持最小改动，不要越权重构；\n")
+	sb.WriteString("4) 严禁修改与冲突无关的文件；\n")
+	sb.WriteString("5) 仅输出 JSON。\n")
+	if len(files) > 0 {
+		sb.WriteString("\n允许修改文件：\n")
+		for _, file := range files {
+			sb.WriteString("- ")
+			sb.WriteString(file)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+func assemblePrompt(commonPrompt, profilePrompt string) string {
+	common := strings.TrimSpace(commonPrompt)
+	profile := strings.TrimSpace(profilePrompt)
+
+	if common == "" {
+		return profile
+	}
+	if profile == "" {
+		return common
+	}
+	return common + "\n\n" + profile
+}
+
 // Reset 从 master 重建 integration 分支（冲突无法解决时）
 // branchName: 要重建的 integration 分支名
 func (b *IntegrationBuilder) Reset(branchName string) error {

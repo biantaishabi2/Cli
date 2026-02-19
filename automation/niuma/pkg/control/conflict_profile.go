@@ -1,0 +1,148 @@
+package control
+
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+var (
+	// ErrUnknownProfile 表示冲突文件未命中任何已注册 profile。
+	ErrUnknownProfile = errors.New("unknown conflict profile")
+
+	defaultConflictProfiles = []ConflictProfile{
+		newSuffixConflictProfile("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。"),
+		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。"),
+		newSuffixConflictProfile("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。"),
+	}
+)
+
+// ConflictPromptFile 表示构造 profile prompt 所需的文件上下文。
+type ConflictPromptFile struct {
+	Path    string
+	Base    string
+	Content string
+	Summary conflictFileSummary
+}
+
+// ConflictProfile 定义语言 profile 的匹配与 prompt 构造能力。
+type ConflictProfile interface {
+	Name() string
+	Match(path string) bool
+	BuildPrompt(files []ConflictPromptFile) (string, error)
+}
+
+// ConflictProfileGroup 表示同一 profile 命中的冲突文件集合。
+type ConflictProfileGroup struct {
+	Profile ConflictProfile
+	Files   []string
+}
+
+func registeredConflictProfiles() []ConflictProfile {
+	profiles := make([]ConflictProfile, len(defaultConflictProfiles))
+	copy(profiles, defaultConflictProfiles)
+	return profiles
+}
+
+// ResolveConflictProfile 根据文件路径解析匹配的冲突 profile。
+func ResolveConflictProfile(path string) (ConflictProfile, error) {
+	for _, profile := range registeredConflictProfiles() {
+		if profile.Match(path) {
+			return profile, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnknownProfile, path)
+}
+
+// ResolveConflictProfileGroups 将冲突文件按 profile 分组并按名称稳定排序。
+func ResolveConflictProfileGroups(conflictFiles []string) ([]ConflictProfileGroup, error) {
+	indexByProfile := make(map[string]int)
+	groups := make([]ConflictProfileGroup, 0)
+
+	for _, file := range conflictFiles {
+		profile, err := ResolveConflictProfile(file)
+		if err != nil {
+			return nil, err
+		}
+
+		name := profile.Name()
+		idx, exists := indexByProfile[name]
+		if !exists {
+			idx = len(groups)
+			indexByProfile[name] = idx
+			groups = append(groups, ConflictProfileGroup{
+				Profile: profile,
+				Files:   []string{},
+			})
+		}
+		groups[idx].Files = append(groups[idx].Files, file)
+	}
+
+	for i := range groups {
+		sort.Strings(groups[i].Files)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return groups[i].Profile.Name() < groups[j].Profile.Name()
+	})
+	return groups, nil
+}
+
+type suffixConflictProfile struct {
+	name        string
+	suffixes    map[string]struct{}
+	profileHint string
+}
+
+func newSuffixConflictProfile(name string, suffixes []string, profileHint string) ConflictProfile {
+	normalized := make(map[string]struct{}, len(suffixes))
+	for _, suffix := range suffixes {
+		normalized[strings.ToLower(strings.TrimSpace(suffix))] = struct{}{}
+	}
+	return &suffixConflictProfile{
+		name:        strings.TrimSpace(name),
+		suffixes:    normalized,
+		profileHint: strings.TrimSpace(profileHint),
+	}
+}
+
+func (p *suffixConflictProfile) Name() string {
+	return p.name
+}
+
+func (p *suffixConflictProfile) Match(path string) bool {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(path)))
+	_, ok := p.suffixes[ext]
+	return ok
+}
+
+func (p *suffixConflictProfile) BuildPrompt(files []ConflictPromptFile) (string, error) {
+	if len(files) == 0 {
+		return "", fmt.Errorf("profile %s 没有可处理的冲突文件", p.name)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("你是 %s 冲突修复助手。\n", p.name))
+	if p.profileHint != "" {
+		sb.WriteString("语言策略：")
+		sb.WriteString(p.profileHint)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("仅处理本段提供的文件，不要生成额外说明。\n\n")
+
+	for _, file := range files {
+		sb.WriteString(fmt.Sprintf("### file: %s\n", file.Path))
+		sb.WriteString("[base side]\n")
+		sb.WriteString(file.Base)
+		sb.WriteString("\n[conflict file content]\n")
+		sb.WriteString(file.Content)
+		sb.WriteString("\n[conflict hunks]\n")
+		for idx, block := range file.Summary.blocks {
+			sb.WriteString(fmt.Sprintf("hunk-%d ours:\n%s\n", idx+1, block.ours))
+			sb.WriteString(fmt.Sprintf("hunk-%d theirs:\n%s\n", idx+1, block.theirs))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String(), nil
+}

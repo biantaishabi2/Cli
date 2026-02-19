@@ -101,8 +101,10 @@ func Value() int { return 2 }
 			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
 		},
 	}
+	profileGroups, groupErr := ResolveConflictProfileGroups([]string{"pkg.go"})
+	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries)
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries, profileGroups)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "out of scope")
 
@@ -181,8 +183,10 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 			blocks: []conflictBlock{{ours: "func helperValue() int { return 1 }", theirs: "func helperValue() string { return \"feature\" }"}},
 		},
 	}
+	profileGroups, groupErr := ResolveConflictProfileGroups([]string{conflictFile})
+	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries)
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "质量门禁失败")
 
@@ -195,6 +199,103 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 	conflictInfo, modeErr := os.Stat(filepath.Join(dir, conflictFile))
 	require.NoError(t, modeErr)
 	assert.Equal(t, os.FileMode(0o755), conflictInfo.Mode().Perm())
+}
+
+func TestTryResolveConflictByAIOnce_MixedProfilesDispatchSeparately(t *testing.T) {
+	dir := setupGitRepo(t)
+	conflictGo := "pkg.go"
+	conflictEx := "lib/app.ex"
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictGo), []byte(`package main
+
+<<<<<<< HEAD
+func Value() int { return 1 }
+=======
+func Value() int { return 2 }
+>>>>>>> feature
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictEx), []byte(`defmodule Demo do
+<<<<<<< HEAD
+  def value, do: 1
+=======
+  def value, do: 2
+>>>>>>> feature
+end
+`), 0o644))
+
+	provider := ai.NewMockProvider(
+		fmt.Sprintf(`{"edits":[{"path":"%s","content":"defmodule Demo do\n  def value, do: 2\nend\n"}]}`, conflictEx),
+		fmt.Sprintf(`{"edits":[{"path":"%s","content":"package main\n\nfunc Value() int { return 2 }\n"}]}`, conflictGo),
+	)
+	ctrl := &Controller{
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
+			PRConflictAIMaxAttempts: 2,
+		},
+	}
+
+	conflictFiles := []string{conflictGo, conflictEx}
+	summaries := map[string]conflictFileSummary{
+		conflictGo: {
+			hunks:  1,
+			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
+		},
+		conflictEx: {
+			hunks:  1,
+			blocks: []conflictBlock{{ours: "def value, do: 1", theirs: "def value, do: 2"}},
+		},
+	}
+	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)
+	require.NoError(t, groupErr)
+
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, provider.CallCount())
+	calls := provider.Calls()
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[0].Prompt, "你是 elixir 冲突修复助手")
+	assert.Contains(t, calls[0].Prompt, conflictEx)
+	assert.NotContains(t, calls[0].Prompt, conflictGo)
+	assert.Contains(t, calls[1].Prompt, "你是 go 冲突修复助手")
+	assert.Contains(t, calls[1].Prompt, conflictGo)
+	assert.NotContains(t, calls[1].Prompt, conflictEx)
+}
+
+func TestResolvePRConflictWithLayers_UnknownProfileEscalatesWithoutAICall(t *testing.T) {
+	dir := setupGitRepo(t)
+	conflictFile := "notes.txt"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte("base\n"), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "add notes")
+
+	runGit(t, dir, "checkout", "-b", "feat/unknown-profile")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte("from feature\n"), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "feature notes")
+
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte("from master\n"), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "master notes")
+	runGitWithExpectedFailure(t, dir, "merge", "--no-ff", "feat/unknown-profile")
+
+	provider := ai.NewMockProvider(`{"edits":[{"path":"notes.txt","content":"resolved\n"}]}`)
+	ctrl := &Controller{
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
+			PRConflictAIMaxAttempts: 2,
+		},
+	}
+
+	handled, err := ctrl.resolvePRConflictWithLayers(context.Background(), Task{}, PRReviewStatus{})
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Equal(t, 0, provider.CallCount())
 }
 
 func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
