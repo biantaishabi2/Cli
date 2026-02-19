@@ -11,8 +11,12 @@ const (
 	// 冲突修复可观测性 metadata 键。
 	metaKeyConflictResolutionLayer        = "conflict_resolution_layer"
 	metaKeyConflictResolutionAttempts     = "conflict_resolution_attempts"
+	metaKeyConflictResolutionProfile      = "conflict_resolution_profile"
+	metaKeyConflictResolutionFiles        = "conflict_resolution_files"
 	metaKeyConflictResolutionLastError    = "conflict_resolution_last_error"
 	metaKeyConflictResolutionLastFailedAt = "conflict_resolution_last_failed_at"
+	metaKeyConflictResolutionGatePassed   = "gate_passed"
+	metaKeyConflictResolutionPath         = "resolution_path"
 )
 
 const (
@@ -21,6 +25,33 @@ const (
 	conflictResolutionLayerAI    = "ai"
 	conflictResolutionLayerHuman = "human"
 )
+
+// PRConflictThresholdConfig 表示冲突自动修复阈值配置。
+type PRConflictThresholdConfig struct {
+	MaxHunks      int `json:"max_hunks" yaml:"max_hunks"`
+	MaxHunkLines  int `json:"max_hunk_lines" yaml:"max_hunk_lines"`
+	MaxTotalLines int `json:"max_total_lines" yaml:"max_total_lines"`
+}
+
+// PRConflictProfileConfig 表示单个语言 profile 的配置。
+type PRConflictProfileConfig struct {
+	Enabled     bool                      `json:"enabled" yaml:"enabled"`
+	GateCommand string                    `json:"gate_command" yaml:"gate_command"`
+	Threshold   PRConflictThresholdConfig `json:"threshold" yaml:"threshold"`
+}
+
+// PRConflictResolutionConfig 表示冲突修复 profile 总配置。
+type PRConflictResolutionConfig struct {
+	Profiles map[string]PRConflictProfileConfig `json:"profiles" yaml:"profiles"`
+}
+
+// ConflictResolutionMeta 表示冲突修复 metadata 扩展字段。
+type ConflictResolutionMeta struct {
+	Profile        string
+	Files          []string
+	GatePassed     bool
+	ResolutionPath string
+}
 
 // TaskStatus 任务状态
 type TaskStatus string

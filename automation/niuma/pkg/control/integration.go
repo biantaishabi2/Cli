@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ type IntegrationBuilder struct {
 	repoDir    string
 	baseBranch string
 }
+
+var gateTemplateTokenPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
 const (
 	// integrationMergeExecutorVersion 用于记录执行器版本，便于审计与回溯。
@@ -610,6 +613,23 @@ func splitNonEmptyLines(s string) []string {
 		}
 	}
 	return lines
+}
+
+func renderGateCommandTemplate(template string, vars map[string]string) string {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		return ""
+	}
+	rendered := gateTemplateTokenPattern.ReplaceAllStringFunc(template, func(token string) string {
+		key := strings.Trim(token, "{}")
+		return strings.TrimSpace(vars[key])
+	})
+	return strings.Join(strings.Fields(rendered), " ")
+}
+
+func templateContainsToken(template string, key string) bool {
+	token := fmt.Sprintf("{%s}", strings.TrimSpace(key))
+	return strings.Contains(template, token)
 }
 
 // Reset 从 master 重建 integration 分支（冲突无法解决时）

@@ -28,8 +28,13 @@ type prConflictAIEdit struct {
 	Content string `json:"content"`
 }
 
+type prConflictAIEditPayload struct {
+	Path    *string `json:"path"`
+	Content *string `json:"content"`
+}
+
 type prConflictAIResponse struct {
-	Edits []prConflictAIEdit `json:"edits"`
+	Edits []prConflictAIEditPayload `json:"edits"`
 }
 
 type fileSnapshot struct {
@@ -64,16 +69,63 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		return true, nil
 	}
 
-	if err := c.tryResolveConflictByRule(ctx, repoDir, conflictFiles); err == nil {
-		if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
-			return false, err
+	registry := defaultConflictProfileRegistry()
+	groups, unknownFiles := groupConflictFilesByProfile(repoDir, conflictFiles, registry)
+	meta := conflictMetadataFromGroups(groups, conflictFiles)
+	if len(unknownFiles) > 0 {
+		return c.escalateConflictToHuman(
+			ctx,
+			task,
+			reviewStatus,
+			0,
+			fmt.Errorf("存在未知冲突文件类型: %s", strings.Join(unknownFiles, ", ")),
+			meta,
+		)
+	}
+
+	for _, group := range groups {
+		profileCfg := c.prConflictProfileConfig(group.Name)
+		if !profileCfg.Enabled {
+			return c.escalateConflictToHuman(
+				ctx,
+				task,
+				reviewStatus,
+				0,
+				fmt.Errorf("profile %s 已禁用: %s", group.Name, strings.Join(group.Files, ", ")),
+				meta,
+			)
 		}
-		if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerRule, 0, "", time.Time{}); err != nil {
-			return false, err
+	}
+
+	sessionSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, conflictFiles)
+	if err != nil {
+		return false, err
+	}
+	rollbackSessionWithCause := func(attempts int, cause error) (bool, error) {
+		rollbackErr := c.rollbackPRConflictAttempt(ctx, repoDir, sessionSnapshot)
+		return c.escalateConflictToHuman(ctx, task, reviewStatus, attempts, wrapConflictAttemptRollbackError(cause, rollbackErr), meta)
+	}
+
+	layer := conflictResolutionLayerRule
+	totalAIAttempts := 0
+	enteredAI := false
+
+	for _, group := range groups {
+		err := c.tryResolveConflictByRule(ctx, repoDir, conflictFiles, group)
+		if err == nil {
+			continue
 		}
-		return true, nil
-	} else {
-		if persistErr := c.persistConflictResolutionMetadata(task, conflictResolutionLayerRule, 0, err.Error(), time.Now().UTC()); persistErr != nil {
+
+		ruleMeta := meta
+		ruleMeta.ResolutionPath = conflictResolutionLayerRule
+		if persistErr := c.persistConflictResolutionMetadata(
+			task,
+			conflictResolutionLayerRule,
+			totalAIAttempts,
+			err.Error(),
+			time.Now().UTC(),
+			ruleMeta,
+		); persistErr != nil {
 			return false, persistErr
 		}
 		if commentErr := c.emitConflictLayerSwitchComment(
@@ -81,50 +133,76 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 			task.IssueNum(),
 			reviewStatus.HeadSHA,
 			prConflictLayerStepRuleFail,
-			fmt.Sprintf("## ⚠️ Rule 层冲突修复失败\n\n- 层级: `rule`\n- 错误: `%s`", trimPRConflictError(err)),
+			fmt.Sprintf(
+				"## ⚠️ Rule 层冲突修复失败\n\n- profile: `%s`\n- 文件: `%s`\n- 错误: `%s`",
+				group.Name,
+				strings.Join(group.Files, ", "),
+				trimPRConflictError(err),
+			),
 		); commentErr != nil {
 			return false, commentErr
 		}
+
+		if !c.prConflictAIEnabled() {
+			return rollbackSessionWithCause(totalAIAttempts, fmt.Errorf("AI 层已禁用，Rule 层失败后升级人工"))
+		}
+		if allowed, reason := c.allowAIConflictResolution(group, summaries); !allowed {
+			return rollbackSessionWithCause(totalAIAttempts, fmt.Errorf("冲突超出 AI 安全边界: %s", reason))
+		}
+		if !enteredAI {
+			if commentErr := c.emitConflictLayerSwitchComment(
+				ctx,
+				task.IssueNum(),
+				reviewStatus.HeadSHA,
+				prConflictLayerStepAITry,
+				"## 🤖 进入 AI 层冲突修复\n\n- 层级切换: `rule-fail -> ai-try`\n- 将执行 Common Gate + Profile Gate",
+			); commentErr != nil {
+				return false, commentErr
+			}
+			enteredAI = true
+		}
+
+		layer = conflictResolutionLayerAI
+		resolvedByAI := false
+		var lastErr error
+		for attempt := 1; attempt <= c.prConflictAIMaxAttempts(); attempt++ {
+			totalAIAttempts++
+			err = c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, group, summaries)
+			if err == nil {
+				resolvedByAI = true
+				break
+			}
+
+			lastErr = err
+			aiMeta := meta
+			aiMeta.ResolutionPath = conflictResolutionLayerAI
+			if persistErr := c.persistConflictResolutionMetadata(
+				task,
+				conflictResolutionLayerAI,
+				totalAIAttempts,
+				err.Error(),
+				time.Now().UTC(),
+				aiMeta,
+			); persistErr != nil {
+				return false, persistErr
+			}
+		}
+		if !resolvedByAI {
+			return rollbackSessionWithCause(totalAIAttempts, lastErr)
+		}
 	}
 
-	if !c.prConflictAIEnabled() {
-		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("AI 层已禁用，Rule 层失败后升级人工"))
-	}
-	if allowed, reason := c.allowAIConflictResolution(conflictFiles, summaries); !allowed {
-		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("冲突超出 AI 安全边界: %s", reason))
+	if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
+		rollbackErr := c.rollbackPRConflictAttempt(ctx, repoDir, sessionSnapshot)
+		return false, wrapConflictAttemptRollbackError(err, rollbackErr)
 	}
 
-	if err := c.emitConflictLayerSwitchComment(
-		ctx,
-		task.IssueNum(),
-		reviewStatus.HeadSHA,
-		prConflictLayerStepAITry,
-		"## 🤖 进入 AI 层冲突修复\n\n- 层级切换: `rule-fail -> ai-try`\n- 将执行统一门禁（结构/范围/质量）",
-	); err != nil {
+	meta.GatePassed = true
+	meta.ResolutionPath = layer
+	if err := c.persistConflictResolutionMetadata(task, layer, totalAIAttempts, "", time.Time{}, meta); err != nil {
 		return false, err
 	}
-
-	maxAttempts := c.prConflictAIMaxAttempts()
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries)
-		if err == nil {
-			if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
-				return false, err
-			}
-			if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, "", time.Time{}); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-
-		lastErr = err
-		if persistErr := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, err.Error(), time.Now().UTC()); persistErr != nil {
-			return false, persistErr
-		}
-	}
-
-	return c.escalateConflictToHuman(ctx, task, reviewStatus, maxAttempts, lastErr)
+	return true, nil
 }
 
 func (c *Controller) prConflictRepoDir() string {
@@ -153,12 +231,17 @@ func (c *Controller) collectPRConflictDetails(ctx context.Context, repoDir strin
 	return files, summaries, nil
 }
 
-func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir string, conflictFiles []string) error {
-	if len(conflictFiles) == 0 {
+func (c *Controller) tryResolveConflictByRule(
+	ctx context.Context,
+	repoDir string,
+	allConflictFiles []string,
+	group conflictProfileGroup,
+) error {
+	if len(group.Files) == 0 {
 		return fmt.Errorf("无冲突文件")
 	}
 
-	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, conflictFiles)
+	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, allConflictFiles, group.Files)
 	if err != nil {
 		return err
 	}
@@ -166,16 +249,17 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
 	}
 
-	for _, file := range conflictFiles {
-		if strings.ToLower(filepath.Ext(file)) != ".go" {
-			return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import 冲突，发现非 Go 文件: %s", file))
-		}
-		if err := resolveGoImportConflictFile(repoDir, file); err != nil {
+	for _, file := range group.Files {
+		changed, err := group.Profile.ApplyRuleFix(repoDir, file)
+		if err != nil {
 			return rollbackWithCause(err)
+		}
+		if !changed {
+			return rollbackWithCause(fmt.Errorf("Rule 层未修改文件: %s", file))
 		}
 	}
 
-	if err := c.runPRConflictGates(ctx, repoDir, conflictFiles); err != nil {
+	if err := c.runPRConflictGates(ctx, repoDir, allConflictFiles, group); err != nil {
 		return rollbackWithCause(err)
 	}
 	return nil
@@ -303,10 +387,18 @@ func leadingWhitespace(line string) string {
 	return ""
 }
 
-func (c *Controller) allowAIConflictResolution(conflictFiles []string, summaries map[string]conflictFileSummary) (bool, string) {
-	for _, file := range conflictFiles {
+func (c *Controller) prConflictProfileConfig(name string) PRConflictProfileConfig {
+	if c == nil || c.cfg == nil {
+		return lookupPRConflictProfileConfig(defaultPRConflictResolutionConfig(), name)
+	}
+	return lookupPRConflictProfileConfig(c.cfg.ConflictResolution, name)
+}
+
+func (c *Controller) allowAIConflictResolution(group conflictProfileGroup, summaries map[string]conflictFileSummary) (bool, string) {
+	profileCfg := c.prConflictProfileConfig(group.Name)
+	for _, file := range group.Files {
 		summary := summaries[file]
-		allowed, reason := isAIConflictWhitelisted(file, summary)
+		allowed, reason := group.Profile.Allow(file, summary, profileCfg.Threshold)
 		if !allowed {
 			return false, fmt.Sprintf("%s: %s", file, reason)
 		}
@@ -317,7 +409,8 @@ func (c *Controller) allowAIConflictResolution(conflictFiles []string, summaries
 func (c *Controller) tryResolveConflictByAIOnce(
 	ctx context.Context,
 	repoDir string,
-	conflictFiles []string,
+	allConflictFiles []string,
+	group conflictProfileGroup,
 	summaries map[string]conflictFileSummary,
 ) error {
 	provider := c.prConflictAIProvider()
@@ -325,7 +418,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		return fmt.Errorf("AI provider 不可用")
 	}
 
-	prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, conflictFiles, summaries)
+	prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, group, summaries)
 	if err != nil {
 		return err
 	}
@@ -339,7 +432,12 @@ func (c *Controller) tryResolveConflictByAIOnce(
 	if err != nil {
 		return err
 	}
-	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, collectEditPaths(edits))
+	if err := validateProfileEditScope(group.Files, edits); err != nil {
+		return err
+	}
+
+	editedPaths := append(collectEditPaths(edits), group.Files...)
+	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, allConflictFiles, editedPaths)
 	if err != nil {
 		return err
 	}
@@ -351,7 +449,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		return rollbackWithCause(err)
 	}
 
-	if err := c.runPRConflictGates(ctx, repoDir, conflictFiles); err != nil {
+	if err := c.runPRConflictGates(ctx, repoDir, allConflictFiles, group); err != nil {
 		return rollbackWithCause(err)
 	}
 	return nil
@@ -376,13 +474,20 @@ func parsePRConflictAIEdits(resp string) ([]prConflictAIEdit, error) {
 
 	edits := make([]prConflictAIEdit, 0, len(payload.Edits))
 	for _, edit := range payload.Edits {
-		cleanPath, err := sanitizeEditPath(edit.Path)
+		if edit.Path == nil {
+			return nil, fmt.Errorf("AI 冲突修复响应缺少 path 字段")
+		}
+		if edit.Content == nil {
+			return nil, fmt.Errorf("AI 冲突修复响应缺少 content 字段: %s", strings.TrimSpace(*edit.Path))
+		}
+
+		cleanPath, err := sanitizeEditPath(*edit.Path)
 		if err != nil {
 			return nil, err
 		}
 		edits = append(edits, prConflictAIEdit{
 			Path:    cleanPath,
-			Content: edit.Content,
+			Content: *edit.Content,
 		})
 	}
 	return edits, nil
@@ -410,6 +515,20 @@ func collectEditPaths(edits []prConflictAIEdit) []string {
 		paths = append(paths, edit.Path)
 	}
 	return paths
+}
+
+func validateProfileEditScope(profileFiles []string, edits []prConflictAIEdit) error {
+	allowed := make(map[string]struct{}, len(profileFiles))
+	for _, file := range profileFiles {
+		allowed[file] = struct{}{}
+	}
+	for _, edit := range edits {
+		if _, ok := allowed[edit.Path]; ok {
+			continue
+		}
+		return fmt.Errorf("范围门禁失败: AI 输出越组修改 %s", edit.Path)
+	}
+	return nil
 }
 
 func captureFileSnapshots(repoDir string, files []string) (map[string]fileSnapshot, error) {
@@ -471,20 +590,47 @@ func applyPRConflictAIEdits(repoDir string, edits []prConflictAIEdit) error {
 	return nil
 }
 
-func (c *Controller) runPRConflictGates(ctx context.Context, repoDir string, conflictFiles []string) error {
-	if err := gateConflictMarkers(repoDir, conflictFiles); err != nil {
+func (c *Controller) runPRConflictGates(
+	ctx context.Context,
+	repoDir string,
+	allConflictFiles []string,
+	group conflictProfileGroup,
+) error {
+	if err := gateConflictMarkers(repoDir, group.Files); err != nil {
 		return err
 	}
-	if err := c.gateConflictGoTests(ctx, repoDir, conflictFiles); err != nil {
+	if err := c.gateChangedFileScope(ctx, repoDir, allConflictFiles); err != nil {
 		return err
 	}
+
+	profileCfg := c.prConflictProfileConfig(group.Name)
+	commands, err := group.Profile.GateCommands(repoDir, group.Files, profileCfg)
+	if err != nil {
+		return fmt.Errorf("profile gate 命令构建失败 (%s): %w", group.Name, err)
+	}
+	if err := c.runProfileGateCommands(ctx, group.Name, commands); err != nil {
+		return err
+	}
+
 	if smoke := c.prConflictSmokeTestCmd(); smoke != "" {
 		if _, err := c.runCommand(ctx, repoDir, "bash", "-lc", smoke); err != nil {
 			return fmt.Errorf("smoke tests 失败: %w", err)
 		}
 	}
-	if err := c.gateChangedFileScope(ctx, repoDir, conflictFiles); err != nil {
+	if err := c.gateChangedFileScope(ctx, repoDir, allConflictFiles); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c *Controller) runProfileGateCommands(ctx context.Context, profileName string, commands []profileGateCommand) error {
+	for _, command := range commands {
+		if strings.TrimSpace(command.Command) == "" {
+			continue
+		}
+		if _, err := c.runCommand(ctx, command.Dir, "bash", "-lc", command.Command); err != nil {
+			return fmt.Errorf("质量门禁失败 [%s] (%s): %w", profileName, command.Command, err)
+		}
 	}
 	return nil
 }
@@ -827,19 +973,22 @@ func (c *Controller) stageConflictFiles(ctx context.Context, repoDir string, fil
 func (c *Controller) buildPRConflictAIPrompt(
 	ctx context.Context,
 	repoDir string,
-	conflictFiles []string,
+	group conflictProfileGroup,
 	summaries map[string]conflictFileSummary,
 ) (string, error) {
 	var sb strings.Builder
-	sb.WriteString("你是 Go 冲突修复助手。请仅返回 JSON，不要返回其他文本。\\n")
-	sb.WriteString("输出格式：{\"edits\":[{\"path\":\"<file>\",\"content\":\"<full file content>\"}]}\\n")
-	sb.WriteString("约束：\\n")
-	sb.WriteString("1) 仅允许修改下面给出的冲突文件；\\n")
-	sb.WriteString("2) 输出必须彻底移除冲突标记；\\n")
-	sb.WriteString("3) 保持最小改动，不改语义；\\n")
-	sb.WriteString("4) 仅输出 JSON。\\n\\n")
+	sb.WriteString("你是 Git 冲突修复助手。请仅返回 JSON，不要返回其他文本。\\n")
+	sb.WriteString("输出 schema：{\"edits\":[{\"path\":\"<file>\",\"content\":\"<full file content>\"}]}\\n")
+	sb.WriteString("Common 约束：\\n")
+	sb.WriteString("1) 仅允许修改当前 profile 的冲突文件；\\n")
+	sb.WriteString("2) 仅修改冲突块，不得越界修改无关区域；\\n")
+	sb.WriteString("3) 输出必须彻底移除冲突标记；\\n")
+	sb.WriteString("4) 保持最小改动，禁止跨文件重构；\\n")
+	sb.WriteString("5) 仅输出合法 JSON。\\n\\n")
+	sb.WriteString(group.Profile.PromptAddon())
+	sb.WriteString("\\n\\n")
 
-	for _, file := range conflictFiles {
+	for _, file := range group.Files {
 		raw, err := os.ReadFile(filepath.Join(repoDir, file))
 		if err != nil {
 			return "", fmt.Errorf("构造 AI prompt 读取文件失败 %s: %w", file, err)
@@ -873,6 +1022,7 @@ func (c *Controller) persistConflictResolutionMetadata(
 	attempts int,
 	lastErr string,
 	lastFailedAt time.Time,
+	ext ConflictResolutionMeta,
 ) error {
 	if c == nil || c.taskctl == nil || strings.TrimSpace(task.ID) == "" {
 		return nil
@@ -884,9 +1034,13 @@ func (c *Controller) persistConflictResolutionMetadata(
 	}
 
 	meta := map[string]string{
-		metaKeyConflictResolutionLayer:     strings.TrimSpace(layer),
-		metaKeyConflictResolutionAttempts:  strconv.Itoa(attempts),
-		metaKeyConflictResolutionLastError: trimmedLastErr,
+		metaKeyConflictResolutionLayer:      strings.TrimSpace(layer),
+		metaKeyConflictResolutionAttempts:   strconv.Itoa(attempts),
+		metaKeyConflictResolutionProfile:    strings.TrimSpace(ext.Profile),
+		metaKeyConflictResolutionFiles:      formatConflictFileList(ext.Files),
+		metaKeyConflictResolutionLastError:  trimmedLastErr,
+		metaKeyConflictResolutionGatePassed: strconv.FormatBool(ext.GatePassed),
+		metaKeyConflictResolutionPath:       strings.TrimSpace(ext.ResolutionPath),
 	}
 	if lastFailedAt.IsZero() {
 		meta[metaKeyConflictResolutionLastFailedAt] = ""
@@ -932,9 +1086,12 @@ func (c *Controller) escalateConflictToHuman(
 	reviewStatus PRReviewStatus,
 	attempts int,
 	cause error,
+	meta ConflictResolutionMeta,
 ) (bool, error) {
 	now := time.Now().UTC()
-	if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerHuman, attempts, trimPRConflictError(cause), now); err != nil {
+	meta.GatePassed = false
+	meta.ResolutionPath = conflictResolutionLayerHuman
+	if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerHuman, attempts, trimPRConflictError(cause), now, meta); err != nil {
 		return true, err
 	}
 

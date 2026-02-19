@@ -102,9 +102,15 @@ func Value() int { return 2 }
 		},
 	}
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries)
+	err := ctrl.tryResolveConflictByAIOnce(
+		context.Background(),
+		dir,
+		[]string{"pkg.go"},
+		conflictProfileGroup{Name: conflictProfileGo, Profile: goConflictProfile{}, Files: []string{"pkg.go"}},
+		summaries,
+	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "out of scope")
+	assert.Contains(t, err.Error(), "范围门禁失败")
 
 	readme, readErr := os.ReadFile(filepath.Join(dir, "README.md"))
 	require.NoError(t, readErr)
@@ -138,11 +144,12 @@ func TestGateChangedFileScope_RejectsUntrackedFiles(t *testing.T) {
 
 func TestRunPRConflictGates_SmokeSideEffectsBlockedByScopeGate(t *testing.T) {
 	dir := setupGitRepo(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.txt"), []byte("resolved\n"), 0o644))
-	runGit(t, dir, "add", "conflict.txt")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/conflict\n\ngo 1.22\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.go"), []byte("package conflict\n\nfunc Value() int { return 1 }\n"), 0o644))
+	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "add conflict file")
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.txt"), []byte("resolved by gate\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.go"), []byte("package conflict\n\nfunc Value() int { return 2 }\n"), 0o644))
 	ctrl := &Controller{
 		cfg: &ControlConfig{
 			RepoDir:                dir,
@@ -150,7 +157,12 @@ func TestRunPRConflictGates_SmokeSideEffectsBlockedByScopeGate(t *testing.T) {
 		},
 	}
 
-	err := ctrl.runPRConflictGates(context.Background(), dir, []string{"conflict.txt"})
+	err := ctrl.runPRConflictGates(
+		context.Background(),
+		dir,
+		[]string{"conflict.go"},
+		conflictProfileGroup{Name: conflictProfileGo, Profile: goConflictProfile{}, Files: []string{"conflict.go"}},
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "changed files out of scope")
 	assert.Contains(t, err.Error(), "smoke-side-effect.txt")
@@ -182,7 +194,13 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 		},
 	}
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries)
+	err := ctrl.tryResolveConflictByAIOnce(
+		context.Background(),
+		dir,
+		[]string{conflictFile},
+		conflictProfileGroup{Name: conflictProfileGo, Profile: goConflictProfile{}, Files: []string{conflictFile}},
+		summaries,
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "质量门禁失败")
 
@@ -203,7 +221,19 @@ func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	task := Task{ID: "task-1", Metadata: map[string]string{"issue_num": "321"}}
 
 	failedAt := time.Date(2026, 2, 19, 10, 0, 0, 0, time.UTC)
-	err := ctrl.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, 2, "gate failed", failedAt)
+	err := ctrl.persistConflictResolutionMetadata(
+		task,
+		conflictResolutionLayerAI,
+		2,
+		"gate failed",
+		failedAt,
+		ConflictResolutionMeta{
+			Profile:        "go",
+			Files:          []string{"pkg.go"},
+			GatePassed:     false,
+			ResolutionPath: conflictResolutionLayerAI,
+		},
+	)
 	require.NoError(t, err)
 
 	raw, readErr := os.ReadFile(logPath)
@@ -217,6 +247,13 @@ func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	assert.Contains(t, text, "gate failed")
 	assert.Contains(t, text, metaKeyConflictResolutionLastFailedAt)
 	assert.Contains(t, text, failedAt.Format(time.RFC3339))
+	assert.Contains(t, text, metaKeyConflictResolutionProfile)
+	assert.Contains(t, text, "go")
+	assert.Contains(t, text, metaKeyConflictResolutionFiles)
+	assert.Contains(t, text, "pkg.go")
+	assert.Contains(t, text, metaKeyConflictResolutionGatePassed)
+	assert.Contains(t, text, "false")
+	assert.Contains(t, text, metaKeyConflictResolutionPath)
 }
 
 func setupPRConflictRepoWithFailingGoTestSideEffects(t *testing.T) (string, string) {

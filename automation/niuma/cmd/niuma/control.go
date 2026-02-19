@@ -75,6 +75,15 @@ var flagPRConflictUnknownBackoffs string
 var flagPRConflictEnableAI bool
 var flagPRConflictAIMaxAttempts int
 var flagPRConflictSmokeTestCmd string
+var flagPRConflictGoProfileEnabled bool
+var flagPRConflictElixirProfileEnabled bool
+var flagPRConflictRustProfileEnabled bool
+var flagPRConflictGoGateCmd string
+var flagPRConflictElixirGateCmd string
+var flagPRConflictRustGateCmd string
+var flagPRConflictMaxHunks int
+var flagPRConflictMaxHunkLines int
+var flagPRConflictMaxTotalLines int
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
@@ -95,6 +104,15 @@ func init() {
 	controlRunCmd.Flags().BoolVar(&flagPRConflictEnableAI, "pr-conflict-enable-ai", true, "是否启用冲突 AI 修复层（Rule 失败后触发）")
 	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
+	controlRunCmd.Flags().BoolVar(&flagPRConflictGoProfileEnabled, "pr-conflict-profile-go-enabled", true, "是否启用 Go 冲突 profile")
+	controlRunCmd.Flags().BoolVar(&flagPRConflictElixirProfileEnabled, "pr-conflict-profile-elixir-enabled", true, "是否启用 Elixir 冲突 profile")
+	controlRunCmd.Flags().BoolVar(&flagPRConflictRustProfileEnabled, "pr-conflict-profile-rust-enabled", true, "是否启用 Rust 冲突 profile")
+	controlRunCmd.Flags().StringVar(&flagPRConflictGoGateCmd, "pr-conflict-profile-go-gate-cmd", "go test {pkg}", "Go profile 门禁命令模板")
+	controlRunCmd.Flags().StringVar(&flagPRConflictElixirGateCmd, "pr-conflict-profile-elixir-gate-cmd", "mix test {scope}", "Elixir profile 门禁命令模板")
+	controlRunCmd.Flags().StringVar(&flagPRConflictRustGateCmd, "pr-conflict-profile-rust-gate-cmd", "cargo test --manifest-path {path}", "Rust profile 门禁命令模板")
+	controlRunCmd.Flags().IntVar(&flagPRConflictMaxHunks, "pr-conflict-max-hunks", 3, "冲突自动修复阈值：单文件 hunk 数上限")
+	controlRunCmd.Flags().IntVar(&flagPRConflictMaxHunkLines, "pr-conflict-max-hunk-lines", 15, "冲突自动修复阈值：单 hunk 行数上限")
+	controlRunCmd.Flags().IntVar(&flagPRConflictMaxTotalLines, "pr-conflict-max-total-lines", 50, "冲突自动修复阈值：总冲突行数上限")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
 
@@ -174,7 +192,38 @@ func buildController() (*control.Controller, error) {
 		PRConflictEnableAI:        flagPRConflictEnableAI,
 		PRConflictAIMaxAttempts:   flagPRConflictAIMaxAttempts,
 		PRConflictSmokeTestCmd:    flagPRConflictSmokeTestCmd,
-		RepoDir:                   repoDir,
+		ConflictResolution: control.PRConflictResolutionConfig{
+			Profiles: map[string]control.PRConflictProfileConfig{
+				"go": {
+					Enabled:     flagPRConflictGoProfileEnabled,
+					GateCommand: flagPRConflictGoGateCmd,
+					Threshold: control.PRConflictThresholdConfig{
+						MaxHunks:      flagPRConflictMaxHunks,
+						MaxHunkLines:  flagPRConflictMaxHunkLines,
+						MaxTotalLines: flagPRConflictMaxTotalLines,
+					},
+				},
+				"elixir": {
+					Enabled:     flagPRConflictElixirProfileEnabled,
+					GateCommand: flagPRConflictElixirGateCmd,
+					Threshold: control.PRConflictThresholdConfig{
+						MaxHunks:      flagPRConflictMaxHunks,
+						MaxHunkLines:  flagPRConflictMaxHunkLines,
+						MaxTotalLines: flagPRConflictMaxTotalLines,
+					},
+				},
+				"rust": {
+					Enabled:     flagPRConflictRustProfileEnabled,
+					GateCommand: flagPRConflictRustGateCmd,
+					Threshold: control.PRConflictThresholdConfig{
+						MaxHunks:      flagPRConflictMaxHunks,
+						MaxHunkLines:  flagPRConflictMaxHunkLines,
+						MaxTotalLines: flagPRConflictMaxTotalLines,
+					},
+				},
+			},
+		},
+		RepoDir: repoDir,
 	}
 
 	builder := control.NewIntegrationBuilder(

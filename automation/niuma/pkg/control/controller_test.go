@@ -2743,6 +2743,67 @@ func TestReconcilePRReviewableConflicts_AIDisabledEscalatesHuman(t *testing.T) {
 	assert.Contains(t, logText, "AI 层已禁用")
 }
 
+func TestReconcilePRReviewableConflicts_ProfileDisabledEscalatesHuman(t *testing.T) {
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "profile disabled body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-profile-disabled",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+			ConflictResolution: PRConflictResolutionConfig{
+				Profiles: map[string]PRConflictProfileConfig{
+					"go": {
+						Enabled: false,
+						Threshold: PRConflictThresholdConfig{
+							MaxHunks:      3,
+							MaxHunkLines:  15,
+							MaxTotalLines: 50,
+						},
+					},
+				},
+			},
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+
+	rawLog, logErr := os.ReadFile(logPath)
+	require.NoError(t, logErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionProfile)
+	assert.Contains(t, logText, "go")
+	assert.Contains(t, logText, "profile go 已禁用")
+}
+
 func TestNewController_PRConflictAIMaxAttemptsDefaultsWhenNonPositive(t *testing.T) {
 	cfgZero := &ControlConfig{
 		RepoDir:                 ".",
@@ -2761,6 +2822,22 @@ func TestNewController_PRConflictAIMaxAttemptsDefaultsWhenNonPositive(t *testing
 	ctrlNegative := NewController(nil, nil, nil, nil, cfgNegative)
 	assert.Equal(t, prConflictAIDefaultMaxAttempts, cfgNegative.PRConflictAIMaxAttempts)
 	assert.Equal(t, prConflictAIDefaultMaxAttempts, ctrlNegative.prConflictAIMaxAttempts())
+}
+
+func TestNewController_ConflictResolutionProfilesDefaultEnabled(t *testing.T) {
+	cfg := &ControlConfig{RepoDir: "."}
+	ctrl := NewController(nil, nil, nil, nil, cfg)
+
+	goCfg := ctrl.prConflictProfileConfig("go")
+	elixirCfg := ctrl.prConflictProfileConfig("elixir")
+	rustCfg := ctrl.prConflictProfileConfig("rust")
+
+	assert.True(t, goCfg.Enabled)
+	assert.True(t, elixirCfg.Enabled)
+	assert.True(t, rustCfg.Enabled)
+	assert.Equal(t, 3, goCfg.Threshold.MaxHunks)
+	assert.Equal(t, 15, goCfg.Threshold.MaxHunkLines)
+	assert.Equal(t, 50, goCfg.Threshold.MaxTotalLines)
 }
 
 func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {

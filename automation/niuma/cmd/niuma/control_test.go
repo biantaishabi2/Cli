@@ -277,6 +277,18 @@ func TestControlRunFlags_PRConflictLayeredOptionsExist(t *testing.T) {
 	smoke := controlRunCmd.Flags().Lookup("pr-conflict-smoke-test-cmd")
 	require.NotNil(t, smoke)
 	assert.Equal(t, "", smoke.DefValue)
+
+	goProfile := controlRunCmd.Flags().Lookup("pr-conflict-profile-go-enabled")
+	require.NotNil(t, goProfile)
+	assert.Equal(t, "true", goProfile.DefValue)
+
+	elixirProfile := controlRunCmd.Flags().Lookup("pr-conflict-profile-elixir-enabled")
+	require.NotNil(t, elixirProfile)
+	assert.Equal(t, "true", elixirProfile.DefValue)
+
+	rustProfile := controlRunCmd.Flags().Lookup("pr-conflict-profile-rust-enabled")
+	require.NotNil(t, rustProfile)
+	assert.Equal(t, "true", rustProfile.DefValue)
 }
 
 func TestWorkflowGateStatusJQ_ObjectTasksPending(t *testing.T) {

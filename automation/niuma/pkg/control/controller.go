@@ -193,6 +193,7 @@ type ControlConfig struct {
 	PRConflictEnableAI         bool
 	PRConflictAIMaxAttempts    int
 	PRConflictSmokeTestCmd     string
+	ConflictResolution         PRConflictResolutionConfig
 	RepoDir                    string           `yaml:"-"`
 	IssueLockTTL               time.Duration    `yaml:"-"`
 	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
@@ -221,6 +222,7 @@ func DefaultControlConfig() *ControlConfig {
 		PRConflictUnknownBackoffs:  append([]time.Duration(nil), defaultPRConflictUnknownBackoffs...),
 		PRConflictEnableAI:         true,
 		PRConflictAIMaxAttempts:    prConflictAIDefaultMaxAttempts,
+		ConflictResolution:         defaultPRConflictResolutionConfig(),
 		RepoDir:                    ".",
 		IssueLockTTL:               issueLockDefaultTTL,
 		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
@@ -263,6 +265,7 @@ func NewController(
 	if cfg.PRConflictAIMaxAttempts <= 0 {
 		cfg.PRConflictAIMaxAttempts = prConflictAIDefaultMaxAttempts
 	}
+	cfg.ConflictResolution = normalizePRConflictResolutionConfig(cfg.ConflictResolution)
 	if cfg.IssueLockTTL <= 0 {
 		cfg.IssueLockTTL = issueLockDefaultTTL
 	}
