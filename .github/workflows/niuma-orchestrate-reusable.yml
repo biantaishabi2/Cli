@@ -33,7 +33,7 @@ on:
         default: ""
         type: string
       dedup_window_hours:
-        description: "event_id 去重窗口（小时）"
+        description: "event_id 去重窗口（小时，正整数）"
         required: false
         default: 24
         type: number
@@ -182,7 +182,12 @@ jobs:
           event_hash="$(printf '%s' "${{ steps.trigger_context.outputs.event_id }}" | sha256sum | awk '{print $1}')"
           marker_file="${dedup_dir}/${event_hash}.ts"
           now_epoch="$(date +%s)"
-          window_hours="${{ inputs.dedup_window_hours }}"
+          window_hours_raw="${{ inputs.dedup_window_hours }}"
+          if ! echo "$window_hours_raw" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::dedup_window_hours 必须为正整数，当前值: $window_hours_raw"
+            exit 1
+          fi
+          window_hours="$window_hours_raw"
           window_seconds=$((window_hours * 3600))
 
           mkdir -p "$dedup_dir"

@@ -18,7 +18,7 @@ jobs:
       (github.event_name == 'issues' && (github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable')) ||
       (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
       github.event_name == 'schedule'
-    uses: biantaishabi2/Cli/.github/workflows/niuma-orchestrate-reusable.yml@0123456789abcdef0123456789abcdef01234567
+    uses: biantaishabi2/Cli/.github/workflows/niuma-orchestrate-reusable.yml@198be1691ffa316e91c513586e97b175ebeddc6b
     secrets: inherit
     with:
       repo: biantaishabi2/gong

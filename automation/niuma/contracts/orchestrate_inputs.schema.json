@@ -41,10 +41,11 @@
       "description": "外部事件唯一键；为空时退化为 run 级唯一键"
     },
     "dedup_window_hours": {
-      "type": "integer",
+      "type": "number",
       "minimum": 1,
+      "multipleOf": 1,
       "default": 24,
-      "description": "event_id 去重窗口（小时）"
+      "description": "event_id 去重窗口（小时，正整数）"
     },
     "concurrency_key": {
       "type": "string",
