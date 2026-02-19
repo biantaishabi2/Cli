@@ -5,10 +5,18 @@ on:
     branches: [master]
     paths:
       - 'automation/niuma/**'
+      - 'gong/.github/workflows/niuma-*.yml'
+      - '.github/workflows/niuma-orchestrate.yml'
+      - '.github/workflows/niuma-orchestrate-reusable.yml'
+      - '.github/workflows/niuma-dispatch-completed.yml'
       - '.github/workflows/niuma-ci.yml'
   pull_request:
     paths:
       - 'automation/niuma/**'
+      - 'gong/.github/workflows/niuma-*.yml'
+      - '.github/workflows/niuma-orchestrate.yml'
+      - '.github/workflows/niuma-orchestrate-reusable.yml'
+      - '.github/workflows/niuma-dispatch-completed.yml'
       - '.github/workflows/niuma-ci.yml'
 
 defaults:
@@ -37,6 +45,9 @@ jobs:
 
       - name: Unit Tests
         run: go test ./...
+
+      - name: Workflow Contract Tests (Python)
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: BDD Tests
         run: go test -tags bdd ./...

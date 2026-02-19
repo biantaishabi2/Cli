@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/biantaishabi2/Cli/automation/niuma/contracts/orchestrate_inputs.schema.json",
+  "title": "niuma orchestrate reusable workflow v1 inputs",
+  "description": "Cli 作为真源暴露给消费者仓库的 orchestrate 输入契约",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo"
+  ],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "minLength": 3,
+      "description": "目标仓库，格式 owner/repo",
+      "pattern": "^[^/\\s]+/[^/\\s]+$"
+    },
+    "repo_dir": {
+      "type": "string",
+      "default": ".",
+      "description": "仓库目录（默认当前仓库根目录）"
+    },
+    "build_niuma": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否在 workflow 内构建 niuma"
+    },
+    "label_whitelist": {
+      "type": "string",
+      "default": "bot:queued,bot:pr-reviewable",
+      "description": "issues:labeled 允许触发标签白名单（逗号分隔）"
+    },
+    "enable_dispatch_wakeup": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用 repository_dispatch 唤醒"
+    },
+    "event_id": {
+      "type": "string",
+      "default": "",
+      "description": "外部事件唯一键；为空时退化为 run 级唯一键"
+    },
+    "dedup_window_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 24,
+      "description": "event_id 去重窗口（小时）"
+    },
+    "concurrency_key": {
+      "type": "string",
+      "default": "niuma-orchestrate-${repo}",
+      "description": "同仓库串行并发键，默认支持 ${repo} 占位"
+    }
+  },
+  "x-compatibility": {
+    "version": "v1",
+    "rules": [
+      "新增字段必须提供默认值或标记为非 required",
+      "repo 为唯一 required 字段",
+      "默认行为必须与 Cli 现有 orchestrate 保持兼容"
+    ]
+  }
+}
