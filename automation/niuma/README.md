@@ -183,6 +183,19 @@ niuma state-label clear --repo owner/repo --issue 325
 - 超过阈值（默认 `N=3`）自动升级 `needs-human`，停止自动冲突回退循环
 - 冲突评论带去重标记 `<!-- BOT:CONFLICT_DETECTED sha:<headSha> -->`，同一 headSha 仅评论一次
 
+### PR Gate 口径（merge-result）
+
+- review/iterate/implement 三条 workflow 共用 `.github/scripts/niuma-test-gate.sh`，统一按 `merge-result` 基线执行 gate
+- 基线优先级：`origin/pull/<pr>/merge`（GitHub merge ref）> 本地 `origin/<base> + origin/<head>` 临时合并
+- 本地合并出现冲突时，gate 直接失败并输出 `CONFLICT:` 前缀、冲突文件清单和 merge 错误摘要；不会推进到 `bot:pr-reviewable`
+
+Gate 日志固定字段（用于与 PR checks 对账）：
+- `baseline=merge-result`
+- `merge_ref_source=github-merge-ref|local-merge`
+- `base_sha=<sha>`
+- `head_sha=<sha>`
+- `merge_sha=<sha>`（可得时输出）
+
 ## Discussion 协议（当前）
 
 - 讨论模式：仅 `debate_ab`
