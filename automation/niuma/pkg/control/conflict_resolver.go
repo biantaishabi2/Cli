@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -34,6 +35,11 @@ type prConflictAIResponse struct {
 type fileSnapshot struct {
 	exists  bool
 	content []byte
+}
+
+type prConflictAttemptSnapshot struct {
+	preserveSet map[string]struct{}
+	snapshots   map[string]fileSnapshot
 }
 
 type goTestTarget struct {
@@ -151,25 +157,25 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 		return fmt.Errorf("无冲突文件")
 	}
 
-	snapshots, err := captureFileSnapshots(repoDir, conflictFiles)
+	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, conflictFiles)
 	if err != nil {
 		return err
+	}
+	rollbackWithCause := func(cause error) error {
+		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
 	}
 
 	for _, file := range conflictFiles {
 		if strings.ToLower(filepath.Ext(file)) != ".go" {
-			restoreFileSnapshots(repoDir, snapshots)
-			return fmt.Errorf("规则层仅支持 Go import 冲突，发现非 Go 文件: %s", file)
+			return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import 冲突，发现非 Go 文件: %s", file))
 		}
 		if err := resolveGoImportConflictFile(repoDir, file); err != nil {
-			restoreFileSnapshots(repoDir, snapshots)
-			return err
+			return rollbackWithCause(err)
 		}
 	}
 
 	if err := c.runPRConflictGates(ctx, repoDir, conflictFiles); err != nil {
-		restoreFileSnapshots(repoDir, snapshots)
-		return err
+		return rollbackWithCause(err)
 	}
 	return nil
 }
@@ -327,19 +333,20 @@ func (c *Controller) tryResolveConflictByAIOnce(
 	if err != nil {
 		return err
 	}
-	snapshots, err := captureFileSnapshots(repoDir, collectEditPaths(edits))
+	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, collectEditPaths(edits))
 	if err != nil {
 		return err
 	}
+	rollbackWithCause := func(cause error) error {
+		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
+	}
 
 	if err := applyPRConflictAIEdits(repoDir, edits); err != nil {
-		restoreFileSnapshots(repoDir, snapshots)
-		return err
+		return rollbackWithCause(err)
 	}
 
 	if err := c.runPRConflictGates(ctx, repoDir, conflictFiles); err != nil {
-		restoreFileSnapshots(repoDir, snapshots)
-		return err
+		return rollbackWithCause(err)
 	}
 	return nil
 }
@@ -445,9 +452,6 @@ func (c *Controller) runPRConflictGates(ctx context.Context, repoDir string, con
 	if err := gateConflictMarkers(repoDir, conflictFiles); err != nil {
 		return err
 	}
-	if err := c.gateChangedFileScope(ctx, repoDir, conflictFiles); err != nil {
-		return err
-	}
 	if err := c.gateConflictGoTests(ctx, repoDir, conflictFiles); err != nil {
 		return err
 	}
@@ -456,7 +460,156 @@ func (c *Controller) runPRConflictGates(ctx context.Context, repoDir string, con
 			return fmt.Errorf("smoke tests 失败: %w", err)
 		}
 	}
+	if err := c.gateChangedFileScope(ctx, repoDir, conflictFiles); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c *Controller) capturePRConflictAttemptSnapshot(
+	ctx context.Context,
+	repoDir string,
+	preserveFiles []string,
+	snapshotFiles []string,
+) (*prConflictAttemptSnapshot, error) {
+	baselineFiles, err := c.listScopeGateChangedFiles(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("捕获冲突修复回滚基线失败: %w", err)
+	}
+
+	preserveList := uniqueConflictFiles(append(append([]string(nil), baselineFiles...), preserveFiles...))
+	targets := uniqueConflictFiles(append(append([]string(nil), preserveList...), snapshotFiles...))
+	snapshots, err := captureFileSnapshots(repoDir, targets)
+	if err != nil {
+		return nil, err
+	}
+
+	preserveSet := make(map[string]struct{}, len(preserveList))
+	for _, file := range preserveList {
+		preserveSet[file] = struct{}{}
+	}
+	return &prConflictAttemptSnapshot{
+		preserveSet: preserveSet,
+		snapshots:   snapshots,
+	}, nil
+}
+
+func (c *Controller) rollbackPRConflictAttempt(
+	ctx context.Context,
+	repoDir string,
+	attemptSnapshot *prConflictAttemptSnapshot,
+) error {
+	if attemptSnapshot == nil {
+		return nil
+	}
+	restoreFileSnapshots(repoDir, attemptSnapshot.snapshots)
+
+	changedFiles, err := c.listScopeGateChangedFiles(ctx, repoDir)
+	if err != nil {
+		return fmt.Errorf("回滚后检查变更失败: %w", err)
+	}
+
+	var rollbackErrs []string
+	for _, file := range changedFiles {
+		if _, keep := attemptSnapshot.preserveSet[file]; keep {
+			continue
+		}
+		if err := c.restorePathFromHeadOrRemove(ctx, repoDir, file); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("%s: %v", file, err))
+		}
+	}
+	if len(rollbackErrs) > 0 {
+		return fmt.Errorf("回滚未完全恢复: %s", strings.Join(rollbackErrs, "; "))
+	}
+
+	remainingChangedFiles, err := c.listScopeGateChangedFiles(ctx, repoDir)
+	if err != nil {
+		return fmt.Errorf("回滚后复检变更失败: %w", err)
+	}
+	outOfScope := make([]string, 0)
+	for _, file := range remainingChangedFiles {
+		if _, keep := attemptSnapshot.preserveSet[file]; keep {
+			continue
+		}
+		outOfScope = append(outOfScope, file)
+	}
+	if len(outOfScope) > 0 {
+		return fmt.Errorf("回滚后仍存在越界变更: %s", strings.Join(outOfScope, ", "))
+	}
+	return nil
+}
+
+func wrapConflictAttemptRollbackError(cause error, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return fmt.Errorf("%s; 回滚失败: %v", cause.Error(), rollbackErr)
+}
+
+func uniqueConflictFiles(files []string) []string {
+	seen := make(map[string]struct{}, len(files))
+	result := make([]string, 0, len(files))
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		result = append(result, file)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (c *Controller) restorePathFromHeadOrRemove(ctx context.Context, repoDir, file string) error {
+	tracked, err := isPathTrackedInGit(ctx, repoDir, file)
+	if err != nil {
+		return err
+	}
+	abs := filepath.Join(repoDir, file)
+	if !tracked {
+		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("删除越界文件失败: %w", err)
+		}
+		return nil
+	}
+
+	content, err := readPathContentFromHead(ctx, repoDir, file)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return fmt.Errorf("创建回滚目录失败: %w", err)
+	}
+	if err := os.WriteFile(abs, content, 0o644); err != nil {
+		return fmt.Errorf("恢复 tracked 文件失败: %w", err)
+	}
+	return nil
+}
+
+func isPathTrackedInGit(ctx context.Context, repoDir, file string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--error-unmatch", "--", file)
+	cmd.Dir = repoDir
+	if err := cmd.Run(); err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return false, nil
+		}
+		return false, fmt.Errorf("检查 tracked 文件失败 %s: %w", file, err)
+	}
+	return true, nil
+}
+
+func readPathContentFromHead(ctx context.Context, repoDir, file string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "show", fmt.Sprintf("HEAD:%s", file))
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("读取 HEAD 文件失败 %s: %w\noutput: %s", file, err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
 }
 
 func gateConflictMarkers(repoDir string, conflictFiles []string) error {

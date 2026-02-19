@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,6 +107,63 @@ func TestGateChangedFileScope_RejectsUntrackedFiles(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected.txt")
 }
 
+func TestRunPRConflictGates_SmokeSideEffectsBlockedByScopeGate(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.txt"), []byte("resolved\n"), 0o644))
+	runGit(t, dir, "add", "conflict.txt")
+	runGit(t, dir, "commit", "-m", "add conflict file")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conflict.txt"), []byte("resolved by gate\n"), 0o644))
+	ctrl := &Controller{
+		cfg: &ControlConfig{
+			RepoDir:                dir,
+			PRConflictSmokeTestCmd: "echo smoke > smoke-side-effect.txt",
+		},
+	}
+
+	err := ctrl.runPRConflictGates(context.Background(), dir, []string{"conflict.txt"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "changed files out of scope")
+	assert.Contains(t, err.Error(), "smoke-side-effect.txt")
+}
+
+func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
+	dir, conflictFile := setupPRConflictRepoWithFailingGoTestSideEffects(t)
+	originalConflict, readErr := os.ReadFile(filepath.Join(dir, conflictFile))
+	require.NoError(t, readErr)
+
+	provider := ai.NewMockProvider(fmt.Sprintf(
+		`{"edits":[{"path":"%s","content":"package pkg\n\nfunc helperValue() string {\n\treturn \"merged\"\n}\n"}]}`,
+		conflictFile,
+	))
+	ctrl := &Controller{
+		analyzer: NewDependencyAnalyzer(provider),
+		cfg: &ControlConfig{
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
+			PRConflictAIMaxAttempts: 2,
+		},
+	}
+
+	summaries := map[string]conflictFileSummary{
+		conflictFile: {
+			hunks:  1,
+			blocks: []conflictBlock{{ours: "func helperValue() int { return 1 }", theirs: "func helperValue() string { return \"feature\" }"}},
+		},
+	}
+
+	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "质量门禁失败")
+
+	_, statErr := os.Stat(filepath.Join(dir, "pkg", "go-test-side-effect.txt"))
+	assert.True(t, os.IsNotExist(statErr))
+
+	currentConflict, currentErr := os.ReadFile(filepath.Join(dir, conflictFile))
+	require.NoError(t, currentErr)
+	assert.Equal(t, string(originalConflict), string(currentConflict))
+}
+
 func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	taskctlClient, logPath := newRecordingTaskCtlClient(t)
 	ctrl := &Controller{taskctl: taskctlClient}
@@ -126,4 +184,58 @@ func TestPersistConflictResolutionMetadata_WritesAllFields(t *testing.T) {
 	assert.Contains(t, text, "gate failed")
 	assert.Contains(t, text, metaKeyConflictResolutionLastFailedAt)
 	assert.Contains(t, text, failedAt.Format(time.RFC3339))
+}
+
+func setupPRConflictRepoWithFailingGoTestSideEffects(t *testing.T) (string, string) {
+	t.Helper()
+
+	dir := setupGitRepo(t)
+	conflictFile := filepath.ToSlash(filepath.Join("pkg", "helper_test.go"))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/prconflict\n\ngo 1.22\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(`package pkg
+
+func helperValue() string {
+	return "base"
+}
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "helper_value_test.go"), []byte(`package pkg
+
+import (
+	"os"
+	"testing"
+)
+
+func TestHelperValue(t *testing.T) {
+	if err := os.WriteFile("go-test-side-effect.txt", []byte("side"), 0o644); err != nil {
+		t.Fatalf("write side effect: %v", err)
+	}
+	t.Fatalf("quality gate failed")
+}
+`), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add helper conflict fixture")
+
+	runGit(t, dir, "checkout", "-b", "feat/test-helper-conflict")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(`package pkg
+
+func helperValue() string {
+	return "feature"
+}
+`), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "feature helper change")
+
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, conflictFile), []byte(`package pkg
+
+func helperValue() int {
+	return 1
+}
+`), 0o644))
+	runGit(t, dir, "add", conflictFile)
+	runGit(t, dir, "commit", "-m", "master helper change")
+
+	runGitWithExpectedFailure(t, dir, "merge", "--no-ff", "feat/test-helper-conflict")
+	return dir, conflictFile
 }
