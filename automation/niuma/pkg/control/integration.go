@@ -29,14 +29,16 @@ const (
 	maxAIConflictTotalLines         = 120
 )
 
-type conflictBlock struct {
-	ours   string
-	theirs string
+// ConflictBlock 表示单个冲突块的 ours/theirs 内容。
+type ConflictBlock struct {
+	Ours   string
+	Theirs string
 }
 
-type conflictFileSummary struct {
-	hunks  int
-	blocks []conflictBlock
+// ConflictFileSummary 表示单个文件的冲突摘要。
+type ConflictFileSummary struct {
+	Hunks  int
+	Blocks []ConflictBlock
 }
 
 // NewIntegrationBuilder 创建构建器
@@ -194,7 +196,7 @@ func (b *IntegrationBuilder) abortAndEscalate(outcome MergeOutcome, summary *Con
 	return outcome
 }
 
-func (b *IntegrationBuilder) collectConflictDetails() ([]string, map[string]conflictFileSummary, error) {
+func (b *IntegrationBuilder) collectConflictDetails() ([]string, map[string]ConflictFileSummary, error) {
 	out, err := b.gitOutput("diff", "--name-only", "--diff-filter=U")
 	if err != nil {
 		return nil, nil, err
@@ -202,7 +204,7 @@ func (b *IntegrationBuilder) collectConflictDetails() ([]string, map[string]conf
 	files := splitNonEmptyLines(out)
 	sort.Strings(files)
 
-	perFile := make(map[string]conflictFileSummary, len(files))
+	perFile := make(map[string]ConflictFileSummary, len(files))
 	for _, file := range files {
 		fileSummary, err := b.parseConflictBlocks(file)
 		if err != nil {
@@ -214,11 +216,11 @@ func (b *IntegrationBuilder) collectConflictDetails() ([]string, map[string]conf
 	return files, perFile, nil
 }
 
-func buildConflictSummary(files []string, perFile map[string]conflictFileSummary) *ConflictSummary {
+func buildConflictSummary(files []string, perFile map[string]ConflictFileSummary) *ConflictSummary {
 	fileHunkCount := make(map[string]int, len(files))
 	totalHunks := 0
 	for _, file := range files {
-		hunks := perFile[file].hunks
+		hunks := perFile[file].Hunks
 		fileHunkCount[file] = hunks
 		totalHunks += hunks
 	}
@@ -231,21 +233,21 @@ func buildConflictSummary(files []string, perFile map[string]conflictFileSummary
 	}
 }
 
-func (b *IntegrationBuilder) parseConflictBlocks(relPath string) (conflictFileSummary, error) {
+func (b *IntegrationBuilder) parseConflictBlocks(relPath string) (ConflictFileSummary, error) {
 	return parseConflictFileSummary(b.repoDir, relPath)
 }
 
-func parseConflictFileSummary(repoDir, relPath string) (conflictFileSummary, error) {
+func parseConflictFileSummary(repoDir, relPath string) (ConflictFileSummary, error) {
 	raw, err := os.ReadFile(filepath.Join(repoDir, relPath))
 	if err != nil {
-		return conflictFileSummary{}, fmt.Errorf("读取冲突文件 %s 失败: %w", relPath, err)
+		return ConflictFileSummary{}, fmt.Errorf("读取冲突文件 %s 失败: %w", relPath, err)
 	}
 	return parseConflictBlocksContent(relPath, string(raw))
 }
 
-func parseConflictBlocksContent(relPath string, raw string) (conflictFileSummary, error) {
+func parseConflictBlocksContent(relPath string, raw string) (ConflictFileSummary, error) {
 	lines := strings.Split(raw, "\n")
-	summary := conflictFileSummary{}
+	summary := ConflictFileSummary{}
 
 	for i := 0; i < len(lines); i++ {
 		if !strings.HasPrefix(lines[i], "<<<<<<<") {
@@ -259,7 +261,7 @@ func parseConflictBlocksContent(relPath string, raw string) (conflictFileSummary
 			i++
 		}
 		if i >= len(lines) {
-			return conflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 =======", relPath)
+			return ConflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 =======", relPath)
 		}
 
 		i++
@@ -269,35 +271,35 @@ func parseConflictBlocksContent(relPath string, raw string) (conflictFileSummary
 			i++
 		}
 		if i >= len(lines) {
-			return conflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 >>>>>>>", relPath)
+			return ConflictFileSummary{}, fmt.Errorf("解析冲突文件 %s 失败: 缺少 >>>>>>>", relPath)
 		}
 
-		summary.hunks++
-		summary.blocks = append(summary.blocks, conflictBlock{
-			ours:   strings.Join(ours, "\n"),
-			theirs: strings.Join(theirs, "\n"),
+		summary.Hunks++
+		summary.Blocks = append(summary.Blocks, ConflictBlock{
+			Ours:   strings.Join(ours, "\n"),
+			Theirs: strings.Join(theirs, "\n"),
 		})
 	}
 
 	return summary, nil
 }
 
-func canAutoResolveConflict(file string, fileSummary conflictFileSummary) (bool, string) {
-	if fileSummary.hunks == 0 || len(fileSummary.blocks) == 0 {
+func canAutoResolveConflict(file string, fileSummary ConflictFileSummary) (bool, string) {
+	if fileSummary.Hunks == 0 || len(fileSummary.Blocks) == 0 {
 		return false, "未识别到可处理的文本冲突块"
 	}
 
 	// 非核心白名单文件允许小规模冲突直接选择 theirs。
 	if isNonCoreWhitelistedFile(file) {
-		if fileSummary.hunks <= maxWhitelistConflictHunks {
+		if fileSummary.Hunks <= maxWhitelistConflictHunks {
 			return true, "非核心白名单文件小规模冲突"
 		}
-		return false, fmt.Sprintf("白名单文件冲突块过多: %d", fileSummary.hunks)
+		return false, fmt.Sprintf("白名单文件冲突块过多: %d", fileSummary.Hunks)
 	}
 
 	// 其他文件仅允许注释/空白差异。
-	for _, block := range fileSummary.blocks {
-		if !isCommentWhitespaceEquivalent(file, block.ours, block.theirs) {
+	for _, block := range fileSummary.Blocks {
+		if !isCommentWhitespaceEquivalent(file, block.Ours, block.Theirs) {
 			return false, "冲突内容包含语义差异"
 		}
 	}
@@ -305,8 +307,8 @@ func canAutoResolveConflict(file string, fileSummary conflictFileSummary) (bool,
 }
 
 // isAIConflictWhitelisted 判断冲突是否允许进入 AI 层。
-func isAIConflictWhitelisted(file string, fileSummary conflictFileSummary) (bool, string) {
-	if fileSummary.hunks == 0 || len(fileSummary.blocks) == 0 {
+func isAIConflictWhitelisted(file string, fileSummary ConflictFileSummary) (bool, string) {
+	if fileSummary.Hunks == 0 || len(fileSummary.Blocks) == 0 {
 		return false, "未识别到可处理的文本冲突块"
 	}
 	if risky, reason := hasHighRiskConflict(file, fileSummary); risky {
@@ -324,20 +326,20 @@ func isAIConflictWhitelisted(file string, fileSummary conflictFileSummary) (bool
 	return false, "未命中 AI 白名单冲突类型"
 }
 
-func hasHighRiskConflict(file string, fileSummary conflictFileSummary) (bool, string) {
+func hasHighRiskConflict(file string, fileSummary ConflictFileSummary) (bool, string) {
 	fileLower := strings.ToLower(file)
 	if strings.Contains(fileLower, "migration") || strings.HasSuffix(fileLower, ".sql") {
 		return true, "检测到迁移脚本冲突"
 	}
-	if fileSummary.hunks > maxAIConflictHunks {
-		return true, fmt.Sprintf("冲突块过多: %d", fileSummary.hunks)
+	if fileSummary.Hunks > maxAIConflictHunks {
+		return true, fmt.Sprintf("冲突块过多: %d", fileSummary.Hunks)
 	}
 
 	totalLines := 0
-	for _, block := range fileSummary.blocks {
-		totalLines += countConflictSideLines(block.ours)
-		totalLines += countConflictSideLines(block.theirs)
-		merged := block.ours + "\n" + block.theirs
+	for _, block := range fileSummary.Blocks {
+		totalLines += countConflictSideLines(block.Ours)
+		totalLines += countConflictSideLines(block.Theirs)
+		merged := block.Ours + "\n" + block.Theirs
 		if containsCoreInterfaceSignal(merged) {
 			return true, "检测到核心接口语义变更信号"
 		}
@@ -362,9 +364,9 @@ func containsCoreInterfaceSignal(s string) bool {
 	return false
 }
 
-func isGoImportConflictOnly(fileSummary conflictFileSummary) bool {
-	for _, block := range fileSummary.blocks {
-		if !isImportSideText(block.ours) || !isImportSideText(block.theirs) {
+func isGoImportConflictOnly(fileSummary ConflictFileSummary) bool {
+	for _, block := range fileSummary.Blocks {
+		if !isImportSideText(block.Ours) || !isImportSideText(block.Theirs) {
 			return false
 		}
 	}
@@ -386,33 +388,33 @@ func isImportSideText(side string) bool {
 	return seen > 0
 }
 
-func isLightweightGoTestConflict(file string, fileSummary conflictFileSummary) bool {
+func isLightweightGoTestConflict(file string, fileSummary ConflictFileSummary) bool {
 	if !strings.HasSuffix(strings.ToLower(file), "_test.go") {
 		return false
 	}
-	if fileSummary.hunks > 2 {
+	if fileSummary.Hunks > 2 {
 		return false
 	}
-	for _, block := range fileSummary.blocks {
-		if countConflictSideLines(block.ours) > maxAIMildConflictBlockLines {
+	for _, block := range fileSummary.Blocks {
+		if countConflictSideLines(block.Ours) > maxAIMildConflictBlockLines {
 			return false
 		}
-		if countConflictSideLines(block.theirs) > maxAIMildConflictBlockLines {
+		if countConflictSideLines(block.Theirs) > maxAIMildConflictBlockLines {
 			return false
 		}
 	}
 	return true
 }
 
-func isAdjacentMildConflict(fileSummary conflictFileSummary) bool {
-	if fileSummary.hunks > 2 {
+func isAdjacentMildConflict(fileSummary ConflictFileSummary) bool {
+	if fileSummary.Hunks > 2 {
 		return false
 	}
-	for _, block := range fileSummary.blocks {
-		if countConflictSideLines(block.ours) > maxAIMildConflictBlockLines {
+	for _, block := range fileSummary.Blocks {
+		if countConflictSideLines(block.Ours) > maxAIMildConflictBlockLines {
 			return false
 		}
-		if countConflictSideLines(block.theirs) > maxAIMildConflictBlockLines {
+		if countConflictSideLines(block.Theirs) > maxAIMildConflictBlockLines {
 			return false
 		}
 	}

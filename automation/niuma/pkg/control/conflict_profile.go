@@ -24,7 +24,7 @@ type ConflictPromptFile struct {
 	Path    string
 	Base    string
 	Content string
-	Summary conflictFileSummary
+	Summary ConflictFileSummary
 }
 
 // ConflictProfile 定义语言 profile 的匹配与 prompt 构造能力。
@@ -138,9 +138,9 @@ func (p *suffixConflictProfile) BuildPrompt(files []ConflictPromptFile) (string,
 		sb.WriteString("\n[conflict file content]\n")
 		sb.WriteString(file.Content)
 		sb.WriteString("\n[conflict hunks]\n")
-		for idx, block := range file.Summary.blocks {
-			sb.WriteString(fmt.Sprintf("hunk-%d ours:\n%s\n", idx+1, block.ours))
-			sb.WriteString(fmt.Sprintf("hunk-%d theirs:\n%s\n", idx+1, block.theirs))
+		for idx, block := range file.Summary.Blocks {
+			sb.WriteString(fmt.Sprintf("hunk-%d ours:\n%s\n", idx+1, block.Ours))
+			sb.WriteString(fmt.Sprintf("hunk-%d theirs:\n%s\n", idx+1, block.Theirs))
 		}
 		sb.WriteString("\n")
 	}

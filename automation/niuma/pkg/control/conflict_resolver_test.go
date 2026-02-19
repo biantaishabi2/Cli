@@ -95,10 +95,10 @@ func Value() int { return 2 }
 		},
 	}
 
-	summaries := map[string]conflictFileSummary{
+	summaries := map[string]ConflictFileSummary{
 		"pkg.go": {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "func Value() int { return 1 }", Theirs: "func Value() int { return 2 }"}},
 		},
 	}
 	profileGroups, groupErr := ResolveConflictProfileGroups([]string{"pkg.go"})
@@ -177,10 +177,10 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 		},
 	}
 
-	summaries := map[string]conflictFileSummary{
+	summaries := map[string]ConflictFileSummary{
 		conflictFile: {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "func helperValue() int { return 1 }", theirs: "func helperValue() string { return \"feature\" }"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "func helperValue() int { return 1 }", Theirs: "func helperValue() string { return \"feature\" }"}},
 		},
 	}
 	profileGroups, groupErr := ResolveConflictProfileGroups([]string{conflictFile})
@@ -237,14 +237,14 @@ end
 	}
 
 	conflictFiles := []string{conflictGo, conflictEx}
-	summaries := map[string]conflictFileSummary{
+	summaries := map[string]ConflictFileSummary{
 		conflictGo: {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "func Value() int { return 1 }", Theirs: "func Value() int { return 2 }"}},
 		},
 		conflictEx: {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "def value, do: 1", theirs: "def value, do: 2"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "def value, do: 1", Theirs: "def value, do: 2"}},
 		},
 	}
 	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)
@@ -301,14 +301,14 @@ end
 	}
 
 	conflictFiles := []string{conflictGo, conflictEx}
-	summaries := map[string]conflictFileSummary{
+	summaries := map[string]ConflictFileSummary{
 		conflictGo: {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "func Value() int { return 1 }", theirs: "func Value() int { return 2 }"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "func Value() int { return 1 }", Theirs: "func Value() int { return 2 }"}},
 		},
 		conflictEx: {
-			hunks:  1,
-			blocks: []conflictBlock{{ours: "def value, do: 1", theirs: "def value, do: 2"}},
+			Hunks:  1,
+			Blocks: []ConflictBlock{{Ours: "def value, do: 1", Theirs: "def value, do: 2"}},
 		},
 	}
 	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)

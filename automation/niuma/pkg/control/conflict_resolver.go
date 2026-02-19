@@ -142,7 +142,7 @@ func (c *Controller) prConflictRepoDir() string {
 	return strings.TrimSpace(c.cfg.RepoDir)
 }
 
-func (c *Controller) collectPRConflictDetails(ctx context.Context, repoDir string) ([]string, map[string]conflictFileSummary, error) {
+func (c *Controller) collectPRConflictDetails(ctx context.Context, repoDir string) ([]string, map[string]ConflictFileSummary, error) {
 	out, err := c.runCommand(ctx, repoDir, "git", "diff", "--name-only", "--diff-filter=U")
 	if err != nil {
 		return nil, nil, err
@@ -150,7 +150,7 @@ func (c *Controller) collectPRConflictDetails(ctx context.Context, repoDir strin
 	files := splitNonEmptyLines(out)
 	sort.Strings(files)
 
-	summaries := make(map[string]conflictFileSummary, len(files))
+	summaries := make(map[string]ConflictFileSummary, len(files))
 	for _, file := range files {
 		summary, err := parseConflictFileSummary(repoDir, file)
 		if err != nil {
@@ -311,7 +311,7 @@ func leadingWhitespace(line string) string {
 	return ""
 }
 
-func (c *Controller) allowAIConflictResolution(conflictFiles []string, summaries map[string]conflictFileSummary) (bool, string) {
+func (c *Controller) allowAIConflictResolution(conflictFiles []string, summaries map[string]ConflictFileSummary) (bool, string) {
 	for _, file := range conflictFiles {
 		summary := summaries[file]
 		allowed, reason := isAIConflictWhitelisted(file, summary)
@@ -326,7 +326,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 	ctx context.Context,
 	repoDir string,
 	conflictFiles []string,
-	summaries map[string]conflictFileSummary,
+	summaries map[string]ConflictFileSummary,
 	profileGroups []ConflictProfileGroup,
 ) error {
 	provider := c.prConflictAIProvider()
@@ -853,7 +853,7 @@ func (c *Controller) buildPRConflictAIPrompt(
 	repoDir string,
 	profile ConflictProfile,
 	conflictFiles []string,
-	summaries map[string]conflictFileSummary,
+	summaries map[string]ConflictFileSummary,
 ) (string, error) {
 	if profile == nil {
 		return "", fmt.Errorf("构造 AI prompt 失败: profile 为空")
