@@ -10,6 +10,37 @@ import (
 	"strings"
 )
 
+// RecoverableErrorKind 可恢复错误的分类
+type RecoverableErrorKind string
+
+const (
+	// EmptyResponse AI 返回空响应
+	EmptyResponse RecoverableErrorKind = "EmptyResponse"
+	// MissingJSON AI 返回中缺少 JSON
+	MissingJSON RecoverableErrorKind = "MissingJSON"
+	// JSONParseError JSON 解析失败
+	JSONParseError RecoverableErrorKind = "JSONParseError"
+)
+
+// RecoverableError 可恢复的解析错误，供重试层判断是否值得重试
+type RecoverableError struct {
+	Kind    RecoverableErrorKind
+	Err     error
+	Message string
+}
+
+func (e *RecoverableError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %s (%v)", e.Kind, e.Message, e.Err)
+	}
+	return fmt.Sprintf("%s: %s", e.Kind, e.Message)
+}
+
+func (e *RecoverableError) Unwrap() error {
+	return e.Err
+}
+
+
 // jsonBlockRe 匹配 ```json ... ``` 代码块
 var jsonBlockRe = regexp.MustCompile("(?s)```json\\s*\n?(.*?)\n?```")
 
@@ -66,28 +97,31 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 }
 
 // ParseFinalPlanResponse 解析 AI 返回的最终方案
+// 对可恢复的格式错误返回 RecoverableError，供重试层判断是否值得重试。
+// 字段校验失败（title/approach 为空）返回普通 error，不触发重试。
 func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("空响应")
+		return nil, &RecoverableError{Kind: EmptyResponse, Message: "AI 返回空响应"}
 	}
 
 	jsonStr := extractJSON(raw)
-	if jsonStr != "" {
-		var plan FinalPlan
-		if err := json.Unmarshal([]byte(jsonStr), &plan); err == nil {
-			// 必填字段校验
-			if plan.Title == "" {
-				return nil, fmt.Errorf("最终方案缺少 title 字段")
-			}
-			if plan.Approach == "" {
-				return nil, fmt.Errorf("最终方案缺少 approach 字段")
-			}
-			return &plan, nil
-		}
+	if jsonStr == "" {
+		return nil, &RecoverableError{Kind: MissingJSON, Message: "无法解析最终方案，AI 返回非 JSON 格式"}
 	}
 
-	// FinalPlan 不做 fallback（结构化要求更高）
-	return nil, fmt.Errorf("无法解析最终方案，AI 返回非 JSON 格式")
+	var plan FinalPlan
+	if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
+		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "JSON 解析失败"}
+	}
+
+	// 必填字段校验——不可恢复，重试也不会修复
+	if plan.Title == "" {
+		return nil, fmt.Errorf("最终方案缺少 title 字段")
+	}
+	if plan.Approach == "" {
+		return nil, fmt.Errorf("最终方案缺少 approach 字段")
+	}
+	return &plan, nil
 }
 
 // ParseReviewResponse 解析 AI 返回的审查结果

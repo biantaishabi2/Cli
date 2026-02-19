@@ -34,6 +34,10 @@ type OrchestratorConfig struct {
 	RequirePlanApproval bool // 方案定稿后是否需要人工审批
 	MaxIterateRounds    int  // 最大自动迭代轮数（0=默认3）
 	MaxDiscussionRounds int  // discuss 单次 run 内最大轮数（0=默认5）
+
+	// plan-final 重试与降级
+	PlanFinalProviders []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
+	PlanFinalMaxRetries int          // 每个 provider 的重试次数（0=默认1）
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -349,9 +353,22 @@ func (o *Orchestrator) DoPlanFinal(ctx context.Context) error {
 		return err
 	}
 
-	// AI 生成最终方案
-	finalPlan, err := o.plan.Final(ctx, input)
+	// AI 生成最终方案（带重试与 provider 降级）
+	providers := []ai.Provider{o.provider}
+	maxRetries := 1
+	if o.config != nil {
+		if len(o.config.PlanFinalProviders) > 0 {
+			providers = o.config.PlanFinalProviders
+		}
+		if o.config.PlanFinalMaxRetries > 0 {
+			maxRetries = o.config.PlanFinalMaxRetries
+		}
+	}
+
+	finalPlan, err := o.plan.FinalWithRetry(ctx, input, providers, maxRetries)
 	if err != nil {
+		// 全失败时发布结构化错误评论
+		o.postPlanFinalFailureComment(ctx, err)
 		return err
 	}
 
@@ -803,6 +820,31 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return o.transition(ctx, state.StatePRReviewable)
 	}
 	return o.transition(ctx, state.StatePRNeedsFix)
+}
+
+// postPlanFinalFailureComment 全失败时在 issue 上发布结构化错误评论
+func (o *Orchestrator) postPlanFinalFailureComment(ctx context.Context, err error) {
+	var sb strings.Builder
+	sb.WriteString("## ❌ 定稿失败：所有 provider 均未返回有效 JSON\n\n")
+
+	var aggErr *AggregateRetryError
+	if errors.As(err, &aggErr) {
+		sb.WriteString("| Provider | Attempt | 错误分类 | 错误信息 |\n")
+		sb.WriteString("|----------|---------|----------|----------|\n")
+		for _, a := range aggErr.Attempts {
+			sb.WriteString(fmt.Sprintf("| %s | %d | %s | %s |\n", a.Provider, a.Attempt, a.Kind, a.Error))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("错误: %s\n", err.Error()))
+	}
+
+	sb.WriteString("\n### 建议操作\n\n")
+	sb.WriteString("- 检查 provider 配置和网络连接\n")
+	sb.WriteString("- 手动恢复: `niuma state-label set --repo <owner/repo> --issue ")
+	sb.WriteString(fmt.Sprintf("%d", o.issueNumber))
+	sb.WriteString(" --to bot:plan-final`\n")
+
+	_, _ = o.github.AddComment(ctx, o.issueNumber, sb.String())
 }
 
 // ===== 内部方法 =====
