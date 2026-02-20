@@ -1,0 +1,9 @@
+# ast-grep PoC 规则：检测 Elixir Supervisor children 列表
+# 运行方式：ast-grep scan --rule rules/elixir-supervisor-children.yaml <file.ex>
+# 注意：此规则仅供参考和未来评估，当前运行时使用 tree-sitter 直接遍历实现
+id: elixir-supervisor-children
+language: elixir
+rule:
+  pattern: children = [$$$CHILDREN]
+message: "Supervisor children list detected — modules in this list are supervised dependencies"
+severity: info

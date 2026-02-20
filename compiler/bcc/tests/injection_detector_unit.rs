@@ -301,6 +301,103 @@ fn classifier_is_thread_safe_under_parallel_load() {
 }
 
 #[test]
+fn elixir_detector_extracts_supervisor_children_hints() {
+    let source = r#"
+defmodule MyApp.Application do
+  use Application
+
+  def start(_type, _args) do
+    children = [
+      {Registry, keys: :unique, name: MyApp.Registry},
+      {DynamicSupervisor, name: MyApp.DynSup},
+      MyApp.Worker
+    ]
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+end
+"#;
+
+    let record = elixir::extract(source, "lib/my_app/application.ex");
+    let sc_hints: Vec<_> = record
+        .relation_hints
+        .iter()
+        .filter(|h| h.call_type_hint == "supervisor_child")
+        .collect();
+    assert!(sc_hints.iter().any(|h| h.target == "Registry"));
+    assert!(sc_hints.iter().any(|h| h.target == "DynamicSupervisor"));
+    assert!(sc_hints.iter().any(|h| h.target == "MyApp.Worker"));
+    assert!(sc_hints.iter().all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
+}
+
+#[test]
+fn elixir_detector_extracts_genserver_handler_calls() {
+    let source = r#"
+defmodule MyApp.Session do
+  use GenServer
+
+  def handle_call({:prompt, msg}, _from, state) do
+    result = MyApp.Agent.process(msg)
+    stream = MyApp.Stream.emit(result)
+    {:reply, stream, state}
+  end
+end
+"#;
+
+    let record = elixir::extract(source, "lib/my_app/session.ex");
+    let gs_hints: Vec<_> = record
+        .relation_hints
+        .iter()
+        .filter(|h| h.call_type_hint == "genserver_runtime_dep")
+        .collect();
+    assert!(gs_hints.iter().any(|h| h.target == "MyApp.Agent" && h.via == "handle_call"));
+    assert!(gs_hints.iter().any(|h| h.target == "MyApp.Stream" && h.via == "handle_call"));
+}
+
+#[test]
+fn elixir_detector_extracts_keyword_get_injection() {
+    let source = r#"
+defmodule MyApp.Session do
+  def start_link(opts) do
+    llm_backend = Keyword.get(opts, :llm_backend)
+    compaction = Keyword.get(opts, :compaction_strategy)
+    GenServer.start_link(__MODULE__, %{llm: llm_backend, comp: compaction})
+  end
+end
+"#;
+
+    let record = elixir::extract(source, "lib/my_app/session.ex");
+    let cb_hints: Vec<_> = record
+        .relation_hints
+        .iter()
+        .filter(|h| h.call_type_hint == "callback_injection")
+        .collect();
+    assert!(cb_hints.iter().any(|h| h.target == "llm_backend"));
+    assert!(cb_hints.iter().any(|h| h.target == "compaction_strategy"));
+    assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+}
+
+#[test]
+fn elixir_detector_supervisor_ignores_non_module_children() {
+    let source = r#"
+defmodule MyApp.Application do
+  def start(_type, _args) do
+    children = [
+      :some_atom,
+      "a_string"
+    ]
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+end
+"#;
+
+    let record = elixir::extract(source, "lib/my_app/application.ex");
+    assert!(record
+        .relation_hints
+        .iter()
+        .all(|h| h.call_type_hint != "supervisor_child"));
+}
+
+#[test]
 fn typescript_detector_handles_deep_module_imports_without_recursion_break() {
     let depth = 256usize;
     let mut source = String::from("import { Module } from '@nestjs/common';\n");

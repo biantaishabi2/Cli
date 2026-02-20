@@ -422,6 +422,42 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
         });
     }
 
+    // Detector 3: elixir.supervisor_children — children = [...] 中的模块引用
+    for module_name in detect_supervisor_children(content) {
+        hints.push(RelationHintRecord {
+            target: module_name,
+            call_type_hint: "supervisor_child".to_string(),
+            via: "children list".to_string(),
+            confidence: 0.90,
+            detector: "elixir.supervisor_children".to_string(),
+            reason: "Supervisor children 列表中的模块引用".to_string(),
+        });
+    }
+
+    // Detector 4: elixir.genserver_call — handle_call/handle_cast 内的外部模块调用
+    for (module_name, handler_kind) in detect_genserver_handler_calls(content) {
+        hints.push(RelationHintRecord {
+            target: module_name,
+            call_type_hint: "genserver_runtime_dep".to_string(),
+            via: handler_kind,
+            confidence: 0.80,
+            detector: "elixir.genserver_call".to_string(),
+            reason: "GenServer handler 内的外部模块调用".to_string(),
+        });
+    }
+
+    // Detector 5: elixir.callback_injection — Keyword.get(opts, :key) 模式
+    for key_name in detect_keyword_get_injections(content) {
+        hints.push(RelationHintRecord {
+            target: key_name,
+            call_type_hint: "callback_injection".to_string(),
+            via: "Keyword.get opts".to_string(),
+            confidence: 0.75,
+            detector: "elixir.callback_injection".to_string(),
+            reason: "Keyword.get opts 回调注入模式".to_string(),
+        });
+    }
+
     hints.sort_by(|a, b| {
         a.target
             .cmp(&b.target)
@@ -435,6 +471,270 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
             && a.detector == b.detector
     });
     hints
+}
+
+/// 检测 `children = [...]` 赋值中的模块引用（Supervisor child specs）
+/// 提取列表中的模块名和 tuple 首元素
+fn detect_supervisor_children(content: &str) -> Vec<String> {
+    let tree = common::parse_tree(content, tree_sitter_elixir::LANGUAGE, "elixir");
+    let root = tree.root_node();
+    let source = content.as_bytes();
+    let mut modules = Vec::new();
+    collect_supervisor_children(root, source, &mut modules);
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn collect_supervisor_children(
+    node: tree_sitter::Node,
+    source: &[u8],
+    modules: &mut Vec<String>,
+) {
+    // 寻找 match 操作符 `children = [...]`
+    // tree-sitter-elixir: binary_operator[operator="=", left=identifier("children"), right=list]
+    if node.kind() == "binary_operator" {
+        if let Some(op) = node.child_by_field_name("operator") {
+            if common::node_text(op, source) == "=" {
+                if let Some(left) = node.child_by_field_name("left") {
+                    let left_text = common::node_text(left, source);
+                    if left_text == "children" {
+                        if let Some(right) = node.child_by_field_name("right") {
+                            if right.kind() == "list" {
+                                extract_modules_from_list(right, source, modules);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 跳过字符串/注释节点
+    let skip = matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    );
+    if skip {
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_supervisor_children(child, source, modules);
+        }
+    }
+}
+
+/// 从 list 节点提取模块名：裸模块（`MyApp.Worker`）和 tuple 首元素（`{Registry, ...}`）
+fn extract_modules_from_list(
+    list_node: tree_sitter::Node,
+    source: &[u8],
+    modules: &mut Vec<String>,
+) {
+    for i in 0..list_node.child_count() {
+        if let Some(child) = list_node.child(i) {
+            match child.kind() {
+                // 裸模块引用：MyApp.Worker
+                "dot" | "alias" => {
+                    let text = common::node_text(child, source).trim().to_string();
+                    if is_module_chain(&text, false) {
+                        modules.push(text);
+                    }
+                }
+                // tuple: {Registry, keys: :unique, name: ...}
+                "tuple" => {
+                    // tuple 首元素是模块名
+                    if let Some(first) = first_non_paren_child(&child) {
+                        let text = common::node_text(first, source).trim().to_string();
+                        if is_module_chain(&text, false) {
+                            modules.push(text);
+                        }
+                    }
+                }
+                _ => {
+                    // 可能是单个 alias 节点
+                    let text = common::node_text(child, source).trim().to_string();
+                    if is_module_chain(&text, false) && text.contains('.') {
+                        modules.push(text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 获取节点的第一个非标点符号子节点
+fn first_non_paren_child(node: &tree_sitter::Node) -> Option<tree_sitter::Node> {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind != "{" && kind != "}" && kind != "," && kind != "[" && kind != "]" {
+                return Some(child);
+            }
+        }
+    }
+    None
+}
+
+/// 检测 handle_call/handle_cast 函数体内的外部模块调用（Module.function 形式）
+/// 返回 (模块名, handler类型) 对
+fn detect_genserver_handler_calls(content: &str) -> Vec<(String, String)> {
+    let tree = common::parse_tree(content, tree_sitter_elixir::LANGUAGE, "elixir");
+    let root = tree.root_node();
+    let source = content.as_bytes();
+    let mut calls = Vec::new();
+    collect_genserver_handler_calls(root, source, &mut calls);
+    calls.sort();
+    calls.dedup();
+    calls
+}
+
+fn collect_genserver_handler_calls(
+    node: tree_sitter::Node,
+    source: &[u8],
+    calls: &mut Vec<(String, String)>,
+) {
+    // 找 def handle_call / def handle_cast
+    if node.kind() == "call" {
+        if let Some(target) = node.child_by_field_name("target") {
+            let target_text = common::node_text(target, source);
+            if target_text == "def" {
+                if let Some(handler_kind) = extract_handler_kind(&node, source) {
+                    // 在函数体（do_block）中查找 Module.func 调用
+                    if let Some(do_block) = find_child_by_kind(&node, "do_block") {
+                        collect_dot_calls_in_body(do_block, source, &handler_kind, calls);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    let skip = matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    );
+    if skip {
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_genserver_handler_calls(child, source, calls);
+        }
+    }
+}
+
+/// 从 def 调用中提取 handler 类型（handle_call 或 handle_cast），如果匹配则返回
+fn extract_handler_kind(def_node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    // def 的 arguments 中包含 handle_call/handle_cast 调用节点
+    if let Some(args) = find_child_by_kind(def_node, "arguments") {
+        for i in 0..args.child_count() {
+            if let Some(child) = args.child(i) {
+                let text = common::node_text(child, source);
+                if text.starts_with("handle_call") {
+                    return Some("handle_call".to_string());
+                }
+                if text.starts_with("handle_cast") {
+                    return Some("handle_cast".to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 在函数体中递归查找 Module.func 形式的 dot 调用
+fn collect_dot_calls_in_body(
+    node: tree_sitter::Node,
+    source: &[u8],
+    handler_kind: &str,
+    calls: &mut Vec<(String, String)>,
+) {
+    if node.kind() == "dot" {
+        if let Some(left) = node.child_by_field_name("left") {
+            let module = common::node_text(left, source);
+            if !module.is_empty()
+                && module.chars().next().map_or(false, |c| c.is_uppercase())
+                && module.contains('.')
+            {
+                calls.push((module, handler_kind.to_string()));
+            }
+        }
+    }
+
+    let skip = matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    );
+    if skip {
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_dot_calls_in_body(child, source, handler_kind, calls);
+        }
+    }
+}
+
+/// 检测 Keyword.get(opts, :key) 模式，提取 key 名
+fn detect_keyword_get_injections(content: &str) -> Vec<String> {
+    let tree = common::parse_tree(content, tree_sitter_elixir::LANGUAGE, "elixir");
+    let root = tree.root_node();
+    let source = content.as_bytes();
+    let mut keys = Vec::new();
+    collect_keyword_get_injections(root, source, &mut keys);
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn collect_keyword_get_injections(
+    node: tree_sitter::Node,
+    source: &[u8],
+    keys: &mut Vec<String>,
+) {
+    // 匹配 Keyword.get(..., :key) 或 Keyword.get(..., :key, default) 调用
+    if node.kind() == "call" {
+        if let Some(target) = node.child_by_field_name("target") {
+            let target_text = common::node_text(target, source);
+            if target_text == "Keyword.get" || target_text == "Keyword.fetch" || target_text == "Keyword.fetch!" || target_text == "Keyword.get_lazy" {
+                if let Some(args) = find_child_by_kind(&node, "arguments") {
+                    // 从参数中找 :atom 形式的 key
+                    let args_text = common::node_text(args, source);
+                    if let Some(key) = extract_keyword_atom_key(&args_text) {
+                        keys.push(key);
+                    }
+                }
+            }
+        }
+    }
+
+    let skip = matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    );
+    if skip {
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_keyword_get_injections(child, source, keys);
+        }
+    }
+}
+
+/// 从 Keyword.get 的参数文本中提取 :atom key
+/// 例如 `(opts, :llm_backend)` → `llm_backend`
+fn extract_keyword_atom_key(args_text: &str) -> Option<String> {
+    // 找第二个参数中的 :atom
+    let re = Regex::new(r",\s*:([a-z_][a-z0-9_]*)").ok()?;
+    re.captures(args_text)
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
 }
 
 fn detect_external_register_calls(content: &str) -> Vec<(String, String)> {
@@ -973,6 +1273,158 @@ end
             .relation_hints
             .iter()
             .all(|h| h.call_type_hint != "external_registration"));
+    }
+
+    #[test]
+    fn detect_supervisor_children_standard() {
+        let source = r#"
+defmodule MyApp.Application do
+  def start(_type, _args) do
+    children = [
+      {Registry, keys: :unique, name: MyApp.Registry},
+      {DynamicSupervisor, name: MyApp.DynSup},
+      MyApp.Worker
+    ]
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/application.ex");
+        let supervisor_hints: Vec<_> = record
+            .relation_hints
+            .iter()
+            .filter(|h| h.call_type_hint == "supervisor_child")
+            .collect();
+        let targets: Vec<&str> = supervisor_hints.iter().map(|h| h.target.as_str()).collect();
+        assert!(targets.contains(&"Registry"), "should contain Registry, got: {:?}", targets);
+        assert!(targets.contains(&"DynamicSupervisor"), "should contain DynamicSupervisor, got: {:?}", targets);
+        assert!(targets.contains(&"MyApp.Worker"), "should contain MyApp.Worker, got: {:?}", targets);
+        assert!(supervisor_hints.iter().all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn detect_supervisor_children_empty_list() {
+        let source = r#"
+defmodule MyApp.Application do
+  def start(_type, _args) do
+    children = []
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/application.ex");
+        assert!(record
+            .relation_hints
+            .iter()
+            .all(|h| h.call_type_hint != "supervisor_child"));
+    }
+
+    #[test]
+    fn detect_genserver_handle_call_deps() {
+        let source = r#"
+defmodule MyApp.Session do
+  use GenServer
+
+  def handle_call({:prompt, msg}, _from, state) do
+    result = MyApp.Agent.process(msg)
+    stream = MyApp.Stream.emit(result)
+    {:reply, stream, state}
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/session.ex");
+        let gs_hints: Vec<_> = record
+            .relation_hints
+            .iter()
+            .filter(|h| h.call_type_hint == "genserver_runtime_dep")
+            .collect();
+        let targets: Vec<&str> = gs_hints.iter().map(|h| h.target.as_str()).collect();
+        assert!(targets.contains(&"MyApp.Agent"), "should contain MyApp.Agent, got: {:?}", targets);
+        assert!(targets.contains(&"MyApp.Stream"), "should contain MyApp.Stream, got: {:?}", targets);
+        assert!(gs_hints.iter().all(|h| h.via == "handle_call"));
+    }
+
+    #[test]
+    fn detect_genserver_handle_cast_deps() {
+        let source = r#"
+defmodule MyApp.Worker do
+  use GenServer
+
+  def handle_cast({:async_op, data}, state) do
+    MyApp.Worker.process(data)
+    {:noreply, state}
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/worker.ex");
+        let gs_hints: Vec<_> = record
+            .relation_hints
+            .iter()
+            .filter(|h| h.call_type_hint == "genserver_runtime_dep")
+            .collect();
+        assert_eq!(gs_hints.len(), 1);
+        assert_eq!(gs_hints[0].target, "MyApp.Worker");
+        assert_eq!(gs_hints[0].via, "handle_cast");
+    }
+
+    #[test]
+    fn detect_keyword_get_injection() {
+        let source = r#"
+defmodule MyApp.Session do
+  def start_link(opts) do
+    llm_backend = Keyword.get(opts, :llm_backend)
+    compaction = Keyword.get(opts, :compaction_strategy)
+    GenServer.start_link(__MODULE__, %{llm: llm_backend, comp: compaction})
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/session.ex");
+        let cb_hints: Vec<_> = record
+            .relation_hints
+            .iter()
+            .filter(|h| h.call_type_hint == "callback_injection")
+            .collect();
+        let targets: Vec<&str> = cb_hints.iter().map(|h| h.target.as_str()).collect();
+        assert!(targets.contains(&"llm_backend"), "should contain llm_backend, got: {:?}", targets);
+        assert!(targets.contains(&"compaction_strategy"), "should contain compaction_strategy, got: {:?}", targets);
+        assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn detect_all_five_detectors_coexist() {
+        let source = r#"
+defmodule MyApp.FullExample do
+  use Jido.AI.ReActAgent, tools: [MyApp.Tools.Read]
+
+  def start(_type, _args) do
+    ReqLLM.Providers.register(MyApp.Provider.Anthropic)
+
+    children = [
+      {Registry, keys: :unique, name: MyApp.Registry},
+      MyApp.Worker
+    ]
+
+    llm = Keyword.get(opts, :llm_backend)
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+
+  def handle_call(:get, _from, state) do
+    result = MyApp.Agent.process(state)
+    {:reply, result, state}
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/full_example.ex");
+        let types: Vec<&str> = record
+            .relation_hints
+            .iter()
+            .map(|h| h.call_type_hint.as_str())
+            .collect();
+        assert!(types.contains(&"framework_injection"), "missing framework_injection");
+        assert!(types.contains(&"external_registration"), "missing external_registration");
+        assert!(types.contains(&"supervisor_child"), "missing supervisor_child");
+        assert!(types.contains(&"genserver_runtime_dep"), "missing genserver_runtime_dep");
+        assert!(types.contains(&"callback_injection"), "missing callback_injection");
     }
 }
 

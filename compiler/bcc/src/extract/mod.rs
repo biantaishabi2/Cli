@@ -53,6 +53,8 @@ pub struct CallRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationHintRecord {
     pub target: String,
+    /// 关系类型提示：framework_injection | external_registration |
+    /// supervisor_child | genserver_runtime_dep | callback_injection
     #[serde(default)]
     pub call_type_hint: String,
     #[serde(default)]
