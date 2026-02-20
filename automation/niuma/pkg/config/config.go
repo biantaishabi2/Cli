@@ -15,9 +15,16 @@ import (
 
 // Config 顶层配置
 type Config struct {
-	AI       AIConfig       `yaml:"ai"`
-	Workflow WorkflowConfig `yaml:"workflow"`
-	Control  ControlConfig  `yaml:"control"`
+	AI         AIConfig         `yaml:"ai"`
+	Workflow   WorkflowConfig   `yaml:"workflow"`
+	Control    ControlConfig    `yaml:"control"`
+	LabelGuard LabelGuardConfig `yaml:"label_guard"`
+}
+
+// LabelGuardConfig label-guard 配置
+type LabelGuardConfig struct {
+	Allowlist []string `yaml:"allowlist"` // 允许直接操作 bot: 标签的账号
+	Mode      string   `yaml:"mode"`      // dry-run 或 enforce（默认 dry-run）
 }
 
 // ControlConfig 多 Issue 协调配置
@@ -108,7 +115,8 @@ type WorkflowConfig struct {
 	DiscussTimeoutMinutes int      `yaml:"discuss_timeout_minutes"` // discuss 命令超时（分钟，默认 20）
 	VisibleRoundInterval  int      `yaml:"visible_round_interval"`  // 可见评论节流：每 N 轮可见一次（默认 1）
 	VisibleOnlyOnDiff     *bool    `yaml:"visible_only_on_diff"`    // 可见评论节流：仅差异变化时评论（默认 true）
-	AllowedPrefixes       []string `yaml:"allowed_prefixes"`        // 允许修改的路径前缀
+	AllowedPrefixes        []string `yaml:"allowed_prefixes"`         // 允许修改的路径前缀
+	ImplementTriggerLabels []string `yaml:"implement_trigger_labels"` // implement 流程的触发标签（默认 ["bot:plan-final"]）
 }
 
 // GetMaxIterateRounds 获取最大迭代轮数，默认3
@@ -151,6 +159,22 @@ func (w *WorkflowConfig) GetVisibleOnlyOnDiff() bool {
 		return true
 	}
 	return *w.VisibleOnlyOnDiff
+}
+
+// GetImplementTriggerLabels 获取 implement 触发标签列表（默认 ["bot:plan-final"]）。
+func (w *WorkflowConfig) GetImplementTriggerLabels() []string {
+	if len(w.ImplementTriggerLabels) == 0 {
+		return []string{"bot:plan-final"}
+	}
+	return w.ImplementTriggerLabels
+}
+
+// GetLabelGuardMode 获取 label-guard 模式（默认 dry-run）。
+func (c *LabelGuardConfig) GetMode() string {
+	if c.Mode == "" {
+		return "dry-run"
+	}
+	return c.Mode
 }
 
 // AIConfig AI 相关配置
@@ -352,6 +376,10 @@ func defaultConfig() *Config {
 			VisibleRoundInterval:  1,
 			VisibleOnlyOnDiff:     boolPtr(true),
 		},
+		LabelGuard: LabelGuardConfig{
+			Allowlist: []string{"github-actions[bot]", "niuma-bot"},
+			Mode:      "dry-run",
+		},
 		Control: ControlConfig{
 			DagSync: DagSyncConfig{
 				PollInterval:         "5m",
@@ -401,6 +429,15 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Control.DagSync.SkippedEdgeThreshold <= 0 || cfg.Control.DagSync.SkippedEdgeThreshold > 100 {
 		cfg.Control.DagSync.SkippedEdgeThreshold = 20
 	}
+
+	// LabelGuard 默认值：配置文件存在但缺少 label_guard 段时回退
+	if len(cfg.LabelGuard.Allowlist) == 0 {
+		cfg.LabelGuard.Allowlist = []string{"github-actions[bot]", "niuma-bot"}
+	}
+	if cfg.LabelGuard.Mode == "" {
+		cfg.LabelGuard.Mode = "dry-run"
+	}
+
 	if len(cfg.Control.DagSync.RetryBackoff) == 0 {
 		cfg.Control.DagSync.RetryBackoff = append([]string(nil), defaultDagSyncRetryBackoff...)
 	} else {

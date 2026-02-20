@@ -58,21 +58,15 @@ func TestWorkflowContract_ReusableHasIdempotencyLoopGuardAndConcurrency(t *testi
 	assert.Contains(t, content, "event_id=\"run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}\"")
 }
 
-func TestWorkflowContract_DispatchCompletedHasPayloadAndDegradePolicy(t *testing.T) {
+func TestWorkflowContract_DispatchCompletedUsesNiumaBinary(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-dispatch-completed.yml")
 
 	assert.Contains(t, content, "pull_request:")
 	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "github.event.pull_request.merged == true")
 	assert.Contains(t, content, "startsWith(github.event.pull_request.head.ref, 'integration/')")
-	assert.Contains(t, content, "continue-on-error: true")
-	assert.Contains(t, content, "event_type: \"niuma.task.completed\"")
-	assert.Contains(t, content, "source_issue")
-	assert.Contains(t, content, "source_issues")
-	assert.Contains(t, content, "trigger_pr")
-	assert.Contains(t, content, "event_source: \"close-after-integration-merge\"")
-	assert.Contains(t, content, "event_id")
-	assert.Contains(t, content, "Warn Dispatch Failure")
+	assert.Contains(t, content, "control close-merged")
+	assert.Contains(t, content, "--dispatch-wakeup")
 }
 
 func TestWorkflowContract_ImplementGateHasMaxRetriesValidation(t *testing.T) {

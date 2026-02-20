@@ -322,6 +322,146 @@ func runWorkflowGateStatusJQ(t *testing.T, tasksJSON string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestGenerateEventID_WithRunID(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "12345")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+
+	eventID, source := generateEventID(50)
+	assert.Equal(t, "pr-50-run-12345-2", eventID)
+	assert.Equal(t, "run_id", source)
+}
+
+func TestGenerateEventID_WithRunIDDefaultAttempt(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "99999")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "")
+
+	eventID, source := generateEventID(42)
+	assert.Equal(t, "pr-42-run-99999-1", eventID)
+	assert.Equal(t, "run_id", source)
+}
+
+func TestGenerateEventID_FallbackTimestamp(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "")
+
+	eventID, source := generateEventID(50)
+	assert.True(t, strings.HasPrefix(eventID, "pr-50-ts-"), "event_id should start with pr-50-ts-, got: %s", eventID)
+	assert.Equal(t, "timestamp", source)
+}
+
+func TestDispatchWakeupFlag_Exists(t *testing.T) {
+	f := controlCloseMergedCmd.Flags().Lookup("dispatch-wakeup")
+	require.NotNil(t, f)
+	assert.Equal(t, "false", f.DefValue)
+}
+
+// stubDispatchSender 模拟 dispatch 操作
+type stubDispatchSender struct {
+	called      bool
+	eventType   string
+	payload     map[string]interface{}
+	dispatchErr error
+}
+
+func (s *stubDispatchSender) CreateRepositoryDispatch(_ context.Context, eventType string, clientPayload map[string]interface{}) error {
+	s.called = true
+	s.eventType = eventType
+	s.payload = clientPayload
+	return s.dispatchErr
+}
+
+func TestDispatchTaskCompleted_Success(t *testing.T) {
+	// 场景 5：dispatch payload 正常发送
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{}
+	ctx := context.Background()
+	err := dispatchTaskCompleted(ctx, sender, 50, []int{10, 11})
+	require.NoError(t, err)
+
+	assert.True(t, sender.called, "dispatch should be called")
+	assert.Equal(t, "niuma.task.completed", sender.eventType)
+
+	// 验证 payload 字段
+	assert.Equal(t, 10, sender.payload["source_issue"])
+	assert.Equal(t, []int{10, 11}, sender.payload["source_issues"])
+	assert.Equal(t, 50, sender.payload["trigger_pr"])
+	assert.Equal(t, "close-after-integration-merge", sender.payload["event_source"])
+	assert.Equal(t, "pr-50-run-123-1", sender.payload["event_id"])
+	assert.Equal(t, "run_id", sender.payload["event_id_source"])
+	assert.NotEmpty(t, sender.payload["completed_at"])
+}
+
+func TestDispatchTaskCompleted_APIFailureWarningOnly(t *testing.T) {
+	// 场景 7：API 失败仅返回 error（调用方 log warning），不影响主流程
+	t.Setenv("GITHUB_RUN_ID", "456")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{
+		dispatchErr: errors.New("403 Forbidden"),
+	}
+	ctx := context.Background()
+	err := dispatchTaskCompleted(ctx, sender, 50, []int{10})
+
+	// dispatchTaskCompleted 返回 error，但调用方（runControlCloseMerged）仅 warning 不 exit
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "403 Forbidden")
+	// 确认 dispatch 确实被调用了
+	assert.True(t, sender.called)
+}
+
+func TestHandleCloseMergedDispatch_APIFailure_WarningOnly(t *testing.T) {
+	// 场景 7 命令入口级验证：handleCloseMergedDispatch（runControlCloseMerged 调用）
+	// 即使 dispatch API 失败，也不 panic/不返回 error，主流程退出码不受影响
+	t.Setenv("GITHUB_RUN_ID", "789")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{
+		dispatchErr: errors.New("403 Forbidden"),
+	}
+	ctx := context.Background()
+
+	// handleCloseMergedDispatch 不返回 error（warning-only 语义），不应 panic
+	assert.NotPanics(t, func() {
+		handleCloseMergedDispatch(ctx, sender, 50, []int{10, 11})
+	})
+	// 确认 dispatch 确实被调用了
+	assert.True(t, sender.called)
+}
+
+func TestHandleCloseMergedDispatch_Success(t *testing.T) {
+	// handleCloseMergedDispatch 成功路径
+	t.Setenv("GITHUB_RUN_ID", "100")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{}
+	ctx := context.Background()
+
+	assert.NotPanics(t, func() {
+		handleCloseMergedDispatch(ctx, sender, 50, []int{10})
+	})
+	assert.True(t, sender.called)
+	assert.Equal(t, "niuma.task.completed", sender.eventType)
+}
+
+func TestDispatchTaskCompleted_TimestampFallback(t *testing.T) {
+	// 场景 6：无 GITHUB_RUN_ID 时降级为 timestamp
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "")
+
+	sender := &stubDispatchSender{}
+	ctx := context.Background()
+	err := dispatchTaskCompleted(ctx, sender, 50, []int{10})
+	require.NoError(t, err)
+
+	assert.True(t, sender.called)
+	eventID, ok := sender.payload["event_id"].(string)
+	assert.True(t, ok)
+	assert.True(t, strings.HasPrefix(eventID, "pr-50-ts-"), "event_id should start with pr-50-ts-, got: %s", eventID)
+	assert.Equal(t, "timestamp", sender.payload["event_id_source"])
+}
+
 type stubGitHubControlClient struct {
 	findMarkerResp *gh.MarkerComment
 	findMarkerErr  error

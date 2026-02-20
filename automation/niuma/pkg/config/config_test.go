@@ -259,6 +259,23 @@ control:
 	assert.Equal(t, 0.35, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
 }
 
+func TestLoadWithDefaults_MissingLabelGuardSection_AppliesDefaults(t *testing.T) {
+	// 配置文件存在但缺少 label_guard 段时，应回退到默认值
+	dir := t.TempDir()
+	content := `ai:
+  default: claude
+  providers:
+    claude:
+      cmd: "claude -p {prompt_file}"
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := LoadWithDefaults(dir)
+	assert.Equal(t, []string{"github-actions[bot]", "niuma-bot"}, cfg.LabelGuard.Allowlist)
+	assert.Equal(t, "dry-run", cfg.LabelGuard.Mode)
+}
+
 func TestDagSyncConfig_InvalidValueFallback(t *testing.T) {
 	cfg := DagSyncConfig{
 		PollInterval:         "bad",
