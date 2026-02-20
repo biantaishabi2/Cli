@@ -2798,13 +2798,8 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			continue
 		}
 
-		// 只处理已 escalate 到 needs-human + integration-conflict 的 task
-		if task.Metadata == nil || task.Metadata[metaKeyIntegrationConflictLabelSynced] != "true" {
-			continue
-		}
-
-		// 冷却期检查
-		if escalatedAt, ok := task.Metadata[metaKeyEscalatedAt]; ok {
+		// 冷却期检查（需要 metadata 中有 escalated_at）
+		if escalatedAt := valueOrEmpty(task.Metadata, metaKeyEscalatedAt); escalatedAt != "" {
 			if t, err := time.Parse(time.RFC3339, escalatedAt); err == nil {
 				nowFn := c.nowFn
 				if nowFn == nil {
@@ -2845,6 +2840,7 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 
 		// 清除 integration-conflict 和 needs-human 标签（syncIssueStateLabel 已处理 bot:* 标签切换，
 		// 但 integration-conflict 和 needs-human 不是 bot:* 前缀，需要通过 ReplaceLabels 处理）
+		labelsCleaned := false
 		currentLabels, err := c.github.ListLabels(ctx, issueNum)
 		if err == nil {
 			filtered := make([]string, 0, len(currentLabels))
@@ -2856,17 +2852,23 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			if len(filtered) != len(currentLabels) {
 				if err := c.github.ReplaceLabels(ctx, issueNum, filtered); err != nil {
 					fmt.Printf("[control] issue #%d 清除冲突标签失败: %v\n", issueNum, err)
+				} else {
+					labelsCleaned = true
 				}
+			} else {
+				labelsCleaned = true
 			}
 		}
 
-		// 清除 task metadata 中的 escalation 标记
-		clearMeta := map[string]string{
-			metaKeyIntegrationConflictLabelSynced: "",
-			metaKeyEscalatedAt:                    "",
-		}
-		if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
-			fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
+		// 只有标签清理成功才清除 metadata，否则保留以便下次 reconcile 重试
+		if labelsCleaned {
+			clearMeta := map[string]string{
+				metaKeyIntegrationConflictLabelSynced: "",
+				metaKeyEscalatedAt:                    "",
+			}
+			if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
+				fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
+			}
 		}
 
 		// 写恢复日志 comment
