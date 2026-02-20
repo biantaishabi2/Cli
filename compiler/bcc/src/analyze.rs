@@ -125,6 +125,9 @@ fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
         return smells;
     }
 
+    // 按 (line, field_name) 去重，避免同一调用点因 extract 产生多条 CallRecord 而重复上报
+    let mut seen: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
+
     // 检查 calls 中是否有 .get(field_name, default) 模式
     for call in &record.calls {
         // 匹配 callee 为 .get / get 等访问器
@@ -138,6 +141,11 @@ fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
         for field_name in &required_fields {
             // 第一个参数匹配字段名
             if call.args[0] == *field_name {
+                let key = (call.line, field_name.to_string());
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
                 smells.push(SmellRecord {
                     category: "defensive".to_string(),
                     rule: "unnecessary_default".to_string(),
@@ -621,6 +629,48 @@ mod tests {
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
         assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn detect_unnecessary_default_e2e_typescript_no_duplicate() {
+        // P2: 端到端测试——通过真实 TS extractor 驱动，验证同一 .get() 不重复上报
+        let ts_src = r#"
+interface UserSchema {
+    email: string;
+    nickname?: string;
+}
+
+function process(data: Map<string, string>) {
+    const email = data.get("email", "");
+    const nick = data.get("nickname", "anon");
+}
+"#;
+        let record = crate::extract::typescript::extract(ts_src, "test.ts", "typescript");
+
+        // 确认 extractor 提取了 schema_fields
+        assert!(
+            record.schema_fields.iter().any(|f| f.name == "email" && f.required),
+            "should extract required field 'email'"
+        );
+        assert!(
+            record.schema_fields.iter().any(|f| f.name == "nickname" && !f.required),
+            "should extract optional field 'nickname'"
+        );
+
+        // 确认有 .get 调用（extractor 可能产生多条 CallRecord）
+        let get_calls: Vec<_> = record.calls.iter().filter(|c| c.callee.ends_with(".get") || c.callee == "get").collect();
+        assert!(!get_calls.is_empty(), "should have .get calls extracted");
+
+        // 运行 detect_unnecessary_default
+        let smells = detect_unnecessary_default(&record);
+
+        // 只有 email（required）应产生 1 条，不应重复
+        let email_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("email")).collect();
+        assert_eq!(email_smells.len(), 1, "required field 'email' should produce exactly 1 smell, got {}", email_smells.len());
+
+        // nickname（optional）不应报
+        let nick_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("nickname")).collect();
+        assert_eq!(nick_smells.len(), 0, "optional field 'nickname' should produce 0 smells");
     }
 
     #[test]
