@@ -684,6 +684,12 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		return fmt.Errorf("AI 层未找到可用冲突 profile")
 	}
 
+	// 收集所有 group 的文件用于范围门禁（scope gate 需跨 group 感知）
+	allGroupFiles := make([]string, 0)
+	for _, g := range profileGroups {
+		allGroupFiles = append(allGroupFiles, g.Files...)
+	}
+
 	// 按 group 独立执行 AI 修复 + 门禁
 	var groupResults []groupResolutionResult
 	successCount := 0
@@ -699,7 +705,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 			continue
 		}
 
-		err = c.tryResolveGroupByAI(ctx, repoDir, group, summaries, provider)
+		err = c.tryResolveGroupByAI(ctx, repoDir, group, summaries, provider, allGroupFiles)
 		if err != nil {
 			// 回滚该 group 的文件
 			_ = c.rollbackPRConflictAttempt(ctx, repoDir, groupSnapshot)
@@ -733,12 +739,14 @@ func (c *Controller) tryResolveConflictByAIOnce(
 }
 
 // tryResolveGroupByAI 对单个 profile group 执行 AI 修复 + 门禁。
+// allConflictFiles 包含所有 group 的文件，用于范围门禁（scope gate）。
 func (c *Controller) tryResolveGroupByAI(
 	ctx context.Context,
 	repoDir string,
 	group ConflictProfileGroup,
 	summaries map[string]ConflictFileSummary,
 	provider ai.Provider,
+	allConflictFiles []string,
 ) error {
 	prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, group.Profile, group.Files, summaries)
 	if err != nil {
@@ -765,7 +773,25 @@ func (c *Controller) tryResolveGroupByAI(
 		return err
 	}
 
-	if err := c.runPRConflictGates(ctx, repoDir, group.Files); err != nil {
+	// 语言特定门禁使用 group.Files，范围门禁使用 allConflictFiles
+	if err := gateConflictMarkers(repoDir, group.Files); err != nil {
+		return err
+	}
+	if err := c.gateConflictGoTests(ctx, repoDir, group.Files); err != nil {
+		return err
+	}
+	if err := c.gateConflictRustTests(ctx, repoDir, group.Files); err != nil {
+		return err
+	}
+	if err := c.gateConflictElixirTests(ctx, repoDir, group.Files); err != nil {
+		return err
+	}
+	if smoke := c.prConflictSmokeTestCmd(); smoke != "" {
+		if _, err := c.runCommand(ctx, repoDir, "bash", "-lc", smoke); err != nil {
+			return fmt.Errorf("smoke tests 失败: %w", err)
+		}
+	}
+	if err := c.gateChangedFileScope(ctx, repoDir, allConflictFiles); err != nil {
 		return err
 	}
 	return nil
