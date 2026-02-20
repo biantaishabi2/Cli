@@ -823,6 +823,33 @@ x = 1
     }
 
     #[test]
+    fn deeply_nested_ast_does_not_stack_overflow() {
+        // 构造深度嵌套的 Python 代码（50 层 if），验证递归遍历不会栈溢出
+        let mut source = String::new();
+        source.push_str("def deep():\n");
+        let depth = 50;
+        for i in 0..depth {
+            let indent = "    ".repeat(i + 1);
+            source.push_str(&format!("{}if True:\n", indent));
+        }
+        let deepest_indent = "    ".repeat(depth + 1);
+        source.push_str(&format!("{}x = 1\n", deepest_indent));
+
+        let tree = parse_python(&source);
+        let record = make_record("python", "test_deep.py");
+
+        // 三个检测器都不应 panic
+        let d1 = CommentDensityDetector::new(0.5);
+        let _ = d1.detect(&record, &source, &tree);
+
+        let d2 = LeftoverBoilerplateDetector;
+        let _ = d2.detect(&record, &source, &tree);
+
+        let d3 = DeadCodeDetector;
+        let _ = d3.detect(&record, &source, &tree);
+    }
+
+    #[test]
     fn unreachable_code_detected() {
         let source = r#"
 def foo():
