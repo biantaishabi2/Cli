@@ -2,6 +2,7 @@
 //!
 //! YAML to Elixir skeleton generator with extract, trace, and graph capabilities.
 
+pub mod analyze;
 pub mod arch;
 pub mod compile;
 pub mod extract;

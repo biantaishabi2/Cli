@@ -42,6 +42,9 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
+        type_annotations: vec![],
+        type_guards: vec![],
+        schema_fields: vec![],
     }
 }
 

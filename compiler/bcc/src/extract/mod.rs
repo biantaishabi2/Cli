@@ -11,7 +11,7 @@ pub mod rust;
 pub mod testing;
 pub mod typescript;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileRecord {
     pub language: String,
     pub file_path: String,
@@ -28,9 +28,39 @@ pub struct FileRecord {
     pub loc_lines: usize,
     /// 声明总数（def/defp/class/function 等）
     pub declarations: usize,
+    /// 类型注解信息（analyze 检测器使用）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_annotations: Vec<TypeAnnotation>,
+    /// 类型守卫信息（analyze 检测器使用）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_guards: Vec<TypeGuard>,
+    /// Schema 字段信息（analyze 检测器使用）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schema_fields: Vec<SchemaField>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeAnnotation {
+    pub name: String,
+    pub type_expr: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeGuard {
+    pub function: String,
+    pub guarded_type: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaField {
+    pub name: String,
+    pub field_type: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ExportRecord {
     pub name: String,
     pub kind: String,
@@ -38,13 +68,13 @@ pub struct ExportRecord {
     pub line: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ImportRecord {
     pub specifier: String,
     pub kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CallRecord {
     pub callee: String,
     pub line: usize,

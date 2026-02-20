@@ -191,6 +191,22 @@ enum Commands {
         #[command(subcommand)]
         action: GraphAction,
     },
+
+    /// AST 气味检测（读取 extract 产出的 FileRecord JSON，输出 SmellReport）
+    #[command(name = "analyze")]
+    Analyze {
+        /// extract 输出的 AST JSON 文件路径（Vec<FileRecord>）
+        #[arg(long)]
+        ast_file: String,
+
+        /// SmellReport JSON 输出路径
+        #[arg(short, long)]
+        output: String,
+
+        /// 逗号分隔的规则类别过滤（如 defensive,security）
+        #[arg(long)]
+        rules: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -777,6 +793,16 @@ fn main() {
                 }
             }
         },
+        Some(Commands::Analyze {
+            ast_file,
+            output,
+            rules,
+        }) => {
+            if let Err(e) = bcc::analyze::run(&ast_file, &output, rules) {
+                eprintln!("[analyze] Error: {}", e);
+                std::process::exit(1);
+            }
+        }
         None => {
             eprintln!("Usage: bcc <COMMAND>\n\nFor more information, try '--help'.");
             std::process::exit(2);
