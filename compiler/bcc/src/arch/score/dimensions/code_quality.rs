@@ -25,26 +25,17 @@ impl CodeQualityDimension {
     }
 
     /// 从 SmellReport JSON 文件加载所有 smell
-    fn load_smells(&self) -> Vec<SmellRecord> {
+    /// 返回 Ok(smells) 或 Err(reason)；未指定路径时返回 Ok(空)
+    fn load_smells(&self) -> Result<Vec<SmellRecord>, String> {
         let path = match &self.smell_report_path {
             Some(p) => p,
-            None => return vec![],
+            None => return Ok(vec![]),
         };
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[code_quality] warn: cannot read {}: {}", path, e);
-                return vec![];
-            }
-        };
-        let reports: Vec<SmellReport> = match serde_json::from_str(&content) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[code_quality] warn: cannot parse {}: {}", path, e);
-                return vec![];
-            }
-        };
-        reports.into_iter().flat_map(|r| r.smells).collect()
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {}", path, e))?;
+        let reports: Vec<SmellReport> = serde_json::from_str(&content)
+            .map_err(|e| format!("cannot parse {}: {}", path, e))?;
+        Ok(reports.into_iter().flat_map(|r| r.smells).collect())
     }
 }
 
@@ -66,7 +57,24 @@ impl ScoringDimension for CodeQualityDimension {
     }
 
     fn calculate(&self, _ctx: &ScoringContext) -> DimensionResult {
-        let smells = self.load_smells();
+        let smells = match self.load_smells() {
+            Ok(s) => s,
+            Err(reason) => {
+                eprintln!("[code_quality] error: {}", reason);
+                // 读取/解析失败 → 评分 0、不通过，防止门禁误放行
+                let mut result = DimensionResult::new(0.0);
+                result.passed = false;
+                result.issues.push(Issue {
+                    severity: Severity::Critical,
+                    message: format!("Failed to load smell report: {}", reason),
+                    metric: None,
+                    actual: None,
+                    threshold: None,
+                    location: None,
+                });
+                return result;
+            }
+        };
 
         if smells.is_empty() && self.smell_report_path.is_none() {
             // 未指定 smell-report，返回满分（不影响总分）
@@ -232,5 +240,36 @@ mod tests {
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
         assert!(!result.passed);
+    }
+
+    #[test]
+    fn file_not_found_fails_with_zero() {
+        let dim = CodeQualityDimension::new(0.10, true, Some("/nonexistent/path.json".to_string()));
+        let ctx = ScoringContext::default();
+        let result = dim.calculate(&ctx);
+        assert_eq!(result.score, 0.0);
+        assert!(!result.passed);
+        assert!(!result.issues.is_empty(), "should have an error issue");
+        assert!(
+            result.issues[0].message.contains("Failed to load smell report"),
+            "issue message should indicate load failure"
+        );
+    }
+
+    #[test]
+    fn invalid_json_fails_with_zero() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"not valid json{{{").unwrap();
+        let dim =
+            CodeQualityDimension::new(0.10, true, Some(f.path().to_str().unwrap().to_string()));
+        let ctx = ScoringContext::default();
+        let result = dim.calculate(&ctx);
+        assert_eq!(result.score, 0.0);
+        assert!(!result.passed);
+        assert!(!result.issues.is_empty(), "should have an error issue");
+        assert!(
+            result.issues[0].message.contains("Failed to load smell report"),
+            "issue message should indicate parse failure"
+        );
     }
 }

@@ -2710,3 +2710,103 @@ fn critical_smell_triggers_blocking_fail_in_score() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn score_with_nonexistent_smell_report_fails() {
+    let root = temp_dir("bcc_score_missing_report");
+    let input = root.join("input");
+    fs::create_dir_all(&input).expect("create input dir");
+
+    write(
+        &input.join("scenario-validation.tsv"),
+        "category\tscenario\tcaller\tcallee\tstatus\n",
+    );
+    write(
+        &input.join("gate-evaluation.tsv"),
+        "profile\tgate\tvalue\tthreshold\tstatus\n",
+    );
+    write(
+        &input.join("summary.json"),
+        r#"{"target_gate_pass":true,"transition_gate_pass":true,"forbidden_edges_count":0,"unexpected_edges_count":0,"missing_edges_count":0,"total_edges":0,"directed_density_pct":0,"bidirectional_pair_count":0,"matched_edges_count":0}"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "score", "score",
+            "--input", &input.to_string_lossy(),
+            "--smell-report", "/nonexistent/smell_report.json",
+            "--mode", "strict",
+        ])
+        .output()
+        .expect("run arch score with nonexistent smell-report");
+
+    // 文件不存在 → code_quality 维度 score=0, passed=false → strict 模式 exit 2
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "nonexistent smell-report should cause blocking fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot read"),
+        "stderr should mention read failure, stderr: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn score_with_invalid_json_smell_report_fails() {
+    let root = temp_dir("bcc_score_invalid_json");
+    let input = root.join("input");
+    let smells_file = root.join("bad_smells.json");
+    fs::create_dir_all(&input).expect("create input dir");
+
+    write(
+        &input.join("scenario-validation.tsv"),
+        "category\tscenario\tcaller\tcallee\tstatus\n",
+    );
+    write(
+        &input.join("gate-evaluation.tsv"),
+        "profile\tgate\tvalue\tthreshold\tstatus\n",
+    );
+    write(
+        &input.join("summary.json"),
+        r#"{"target_gate_pass":true,"transition_gate_pass":true,"forbidden_edges_count":0,"unexpected_edges_count":0,"missing_edges_count":0,"total_edges":0,"directed_density_pct":0,"bidirectional_pair_count":0,"matched_edges_count":0}"#,
+    );
+
+    // 写入非法 JSON
+    write(&smells_file, "this is not valid json{{{");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "score", "score",
+            "--input", &input.to_string_lossy(),
+            "--smell-report", &smells_file.to_string_lossy(),
+            "--mode", "strict",
+        ])
+        .output()
+        .expect("run arch score with invalid json smell-report");
+
+    // 解析失败 → code_quality 维度 score=0, passed=false → strict 模式 exit 2
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "invalid JSON smell-report should cause blocking fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot parse"),
+        "stderr should mention parse failure, stderr: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
