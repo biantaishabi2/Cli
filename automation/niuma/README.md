@@ -191,7 +191,7 @@ control:
 
 **限制**：
 - 白名单模式下，非白名单 profile 的文件同时跳过 Rule 层和 AI 层
-- `none` 模式下，Rule 层仍然会先尝试，失败后不进入 AI 层直接升级 human
+- `none` 模式下，Rule 层和 AI 层均被跳过，所有冲突直接升级 human
 
 ## 状态机（Labels）
 

@@ -2789,7 +2789,7 @@ func TestReconcilePRReviewableConflicts_ProfileNone(t *testing.T) {
 	require.NoError(t, logErr)
 	logText := string(rawLog)
 	assert.Contains(t, logText, conflictResolutionLayerHuman)
-	assert.Contains(t, logText, "profile=none")
+	assert.Contains(t, logText, "profile=none，跳过 Rule/AI 层")
 }
 
 func TestReconcilePRReviewableConflicts_ProfileAutoDefault(t *testing.T) {

@@ -69,6 +69,11 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		return true, nil
 	}
 
+	// profile=none 时跳过 Rule/AI 层，直接升级 human
+	if c.prConflictProfileMode() == "none" {
+		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("profile=none，跳过 Rule/AI 层直接升级人工"))
+	}
+
 	if err := c.tryResolveConflictByRule(ctx, repoDir, conflictFiles); err == nil {
 		if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
 			return false, err
@@ -90,11 +95,6 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		); commentErr != nil {
 			return false, commentErr
 		}
-	}
-
-	// profile=none 时跳过 AI 层，直接升级 human
-	if c.prConflictProfileMode() == "none" {
-		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("profile=none，跳过 AI 层直接升级人工"))
 	}
 
 	if !c.prConflictAIEnabled() {
@@ -133,21 +133,27 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 	maxAttempts := c.prConflictAIMaxAttempts()
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries, profileGroups)
-		if err == nil {
-			if err := c.stageConflictFiles(ctx, repoDir, conflictFiles); err != nil {
-				return false, err
+		result, err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries, profileGroups)
+		if err != nil {
+			lastErr = err
+			if persistErr := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, err.Error(), time.Now().UTC()); persistErr != nil {
+				return false, persistErr
 			}
-			if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, "", time.Time{}); err != nil {
-				return false, err
-			}
-			return true, nil
+			continue
 		}
 
-		lastErr = err
-		if persistErr := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, err.Error(), time.Now().UTC()); persistErr != nil {
-			return false, persistErr
+		// 仅 stage 成功 group 的文件
+		if err := c.stageConflictFiles(ctx, repoDir, result.SuccessFiles); err != nil {
+			return false, err
 		}
+		if err := c.persistConflictResolutionMetadata(task, conflictResolutionLayerAI, attempt, "", time.Time{}); err != nil {
+			return false, err
+		}
+		// 持久化 group results 到 metadata
+		if err := c.persistGroupResultsMetadata(task, result); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
 	return c.escalateConflictToHuman(ctx, task, reviewStatus, maxAttempts, lastErr)
@@ -193,7 +199,7 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 	}
 
 	if useProfileRuleResolver {
-		// 白名单过滤：非白名单内的文件跳过 Rule 层
+		// 白名单过滤：非白名单内的文件跳过 Rule 层（不中断其他文件处理）
 		profileMode := c.prConflictProfileMode()
 		profileWhitelist := c.prConflictProfileWhitelist()
 		whitelistSet := make(map[string]struct{}, len(profileWhitelist))
@@ -201,15 +207,17 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 			whitelistSet[strings.ToLower(lang)] = struct{}{}
 		}
 
+		skippedByWhitelist := false
 		for _, file := range conflictFiles {
 			profile, profErr := ResolveConflictProfile(file)
 			if profErr != nil {
 				return rollbackWithCause(fmt.Errorf("规则层未找到 profile: %s: %w", file, profErr))
 			}
-			// 白名单模式下，不在白名单内的 profile 跳过 Rule 层
+			// 白名单模式下，不在白名单内的 profile 跳过该文件的 Rule 处理
 			if profileMode == "whitelist" {
 				if _, ok := whitelistSet[strings.ToLower(profile.Name())]; !ok {
-					return rollbackWithCause(fmt.Errorf("profile %s 不在白名单中，跳过 Rule 层: %s", profile.Name(), file))
+					skippedByWhitelist = true
+					continue
 				}
 			}
 			rr, ok := profile.(RuleResolver)
@@ -219,6 +227,10 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 			if err := rr.TryResolveByRule(repoDir, file); err != nil {
 				return rollbackWithCause(err)
 			}
+		}
+		// 有文件被白名单跳过时，Rule 层视为不完整，回退让 AI 层接手
+		if skippedByWhitelist {
+			return rollbackWithCause(fmt.Errorf("白名单过滤跳过了部分文件，Rule 层无法完整解决"))
 		}
 	} else {
 		for _, file := range conflictFiles {
@@ -669,19 +681,26 @@ type groupResolutionResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// aiOnceResult 汇总一次 AI 修复的结果（含各 group 状态和成功文件列表）。
+type aiOnceResult struct {
+	GroupResults  []groupResolutionResult
+	SuccessFiles  []string // 仅成功 group 的文件
+	PartialSuccess bool    // 部分成功（有成功也有失败）
+}
+
 func (c *Controller) tryResolveConflictByAIOnce(
 	ctx context.Context,
 	repoDir string,
-	_ []string, // conflictFiles（由调用方用于 stageConflictFiles）
+	_ []string, // conflictFiles（未使用，成功文件由返回值提供）
 	summaries map[string]ConflictFileSummary,
 	profileGroups []ConflictProfileGroup,
-) error {
+) (*aiOnceResult, error) {
 	provider := c.prConflictAIProvider()
 	if provider == nil {
-		return fmt.Errorf("AI provider 不可用")
+		return nil, fmt.Errorf("AI provider 不可用")
 	}
 	if len(profileGroups) == 0 {
-		return fmt.Errorf("AI 层未找到可用冲突 profile")
+		return nil, fmt.Errorf("AI 层未找到可用冲突 profile")
 	}
 
 	// 收集所有 group 的文件用于范围门禁（scope gate 需跨 group 感知）
@@ -692,7 +711,9 @@ func (c *Controller) tryResolveConflictByAIOnce(
 
 	// 按 group 独立执行 AI 修复 + 门禁
 	var groupResults []groupResolutionResult
+	var successFiles []string
 	successCount := 0
+	failCount := 0
 
 	for _, group := range profileGroups {
 		groupSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, group.Files, group.Files)
@@ -702,6 +723,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 				Status:  "failed",
 				Error:   fmt.Sprintf("snapshot: %s", trimPRConflictError(err)),
 			})
+			failCount++
 			continue
 		}
 
@@ -714,6 +736,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 				Status:  "failed",
 				Error:   trimPRConflictError(err),
 			})
+			failCount++
 			continue
 		}
 
@@ -721,6 +744,7 @@ func (c *Controller) tryResolveConflictByAIOnce(
 			Profile: group.Profile.Name(),
 			Status:  "success",
 		})
+		successFiles = append(successFiles, group.Files...)
 		successCount++
 	}
 
@@ -732,10 +756,14 @@ func (c *Controller) tryResolveConflictByAIOnce(
 				errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", r.Profile, r.Error))
 			}
 		}
-		return fmt.Errorf("所有 profile group AI 修复失败: %s", strings.Join(errMsgs, "; "))
+		return nil, fmt.Errorf("所有 profile group AI 修复失败: %s", strings.Join(errMsgs, "; "))
 	}
 
-	return nil
+	return &aiOnceResult{
+		GroupResults:   groupResults,
+		SuccessFiles:   successFiles,
+		PartialSuccess: failCount > 0,
+	}, nil
 }
 
 // tryResolveGroupByAI 对单个 profile group 执行 AI 修复 + 门禁。
@@ -1359,6 +1387,23 @@ func (c *Controller) persistConflictResolutionMetadata(
 		meta[metaKeyConflictResolutionLastFailedAt] = ""
 	} else {
 		meta[metaKeyConflictResolutionLastFailedAt] = lastFailedAt.UTC().Format(time.RFC3339)
+	}
+	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &meta})
+}
+
+func (c *Controller) persistGroupResultsMetadata(task Task, result *aiOnceResult) error {
+	if c == nil || c.taskctl == nil || strings.TrimSpace(task.ID) == "" || result == nil {
+		return nil
+	}
+	groupJSON, err := json.Marshal(result.GroupResults)
+	if err != nil {
+		return fmt.Errorf("序列化 group results 失败: %w", err)
+	}
+	meta := map[string]string{
+		metaKeyConflictResolutionGroupResults: string(groupJSON),
+	}
+	if result.PartialSuccess {
+		meta["conflict_resolution_partial_success"] = "true"
 	}
 	return c.taskctl.Update(task.ID, UpdateOpts{Metadata: &meta})
 }

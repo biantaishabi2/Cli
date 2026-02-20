@@ -105,7 +105,7 @@ func Value() int { return 2 }
 	profileGroups, groupErr := ResolveConflictProfileGroups([]string{"pkg.go"})
 	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries, profileGroups)
+	_, err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{"pkg.go"}, summaries, profileGroups)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AI 输出超出当前 profile 允许范围")
 
@@ -187,7 +187,7 @@ func TestTryResolveConflictByAIOnce_RollbackOnGoTestSideEffects(t *testing.T) {
 	profileGroups, groupErr := ResolveConflictProfileGroups([]string{conflictFile})
 	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
+	_, err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "质量门禁失败")
 
@@ -251,8 +251,11 @@ end
 	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)
 	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
+	result, err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
 	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.SuccessFiles, 2)
+	assert.False(t, result.PartialSuccess)
 
 	assert.Equal(t, 2, provider.CallCount())
 	calls := provider.Calls()
@@ -315,7 +318,7 @@ end
 	profileGroups, groupErr := ResolveConflictProfileGroups(conflictFiles)
 	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
+	_, err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
 	require.Error(t, err)
 	// per-group 独立执行：elixir group 跨 profile 拒绝 + go group mock 响应耗尽，两个 group 均失败
 	assert.Contains(t, err.Error(), "AI 输出超出当前 profile 允许范围")
@@ -777,7 +780,7 @@ end
 	profileGroups, groupErr := ResolveConflictProfileGroups([]string{conflictFile})
 	require.NoError(t, groupErr)
 
-	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
+	_, err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, []string{conflictFile}, summaries, profileGroups)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "elixir tests 失败")
 
