@@ -75,14 +75,12 @@ fn get_language(lang: &str) -> Option<tree_sitter::Language> {
     }
 }
 
-/// 构建所有已注册的检测器
+/// 构建单文件检测器（不含 duplication，duplication 仅在跨文件阶段执行）
 fn build_detectors() -> Vec<Box<dyn SmellDetector>> {
     vec![
         Box::new(noise::CommentDensityDetector::new(0.5)),
         Box::new(noise::LeftoverBoilerplateDetector),
         Box::new(noise::DeadCodeDetector),
-        Box::new(duplication::StructuralDuplicationDetector),
-        Box::new(duplication::BoilerplateSkeletonDetector),
     ]
 }
 
