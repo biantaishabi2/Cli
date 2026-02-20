@@ -9,6 +9,7 @@ import (
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/gate"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/spf13/cobra"
 )
@@ -83,6 +84,41 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 		},
 		AddComment: func(ctx context.Context, repo string, issue int, body string) error {
 			_, err := client.AddComment(ctx, issue, body)
+			return err
+		},
+		FindGateRetryCount: func(ctx context.Context, issue int) (int, error) {
+			mc, err := client.FindMarker(ctx, issue, marker.TypeGateRetry)
+			if err != nil {
+				return 0, err
+			}
+			if mc == nil {
+				return 0, nil
+			}
+			return mc.Marker.Revision, nil
+		},
+		UpsertGateRetryCount: func(ctx context.Context, issue int, count int) error {
+			m := &marker.Marker{
+				Type:     marker.TypeGateRetry,
+				Issue:    issue,
+				Revision: count,
+			}
+			body := fmt.Sprintf("gate retry_count=%d", count)
+			return client.CreateOrUpdateMarker(ctx, issue, m, body)
+		},
+		HasLabel: func(ctx context.Context, issue int, label string) (bool, error) {
+			labels, err := client.ListLabels(ctx, issue)
+			if err != nil {
+				return false, err
+			}
+			for _, l := range labels {
+				if l == label {
+					return true, nil
+				}
+			}
+			return false, nil
+		},
+		AddPRReview: func(ctx context.Context, repo string, pr int, body string) error {
+			_, err := client.CreatePRReview(ctx, pr, body, "COMMENT")
 			return err
 		},
 	})

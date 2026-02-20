@@ -5,7 +5,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
@@ -732,4 +734,218 @@ func TestCurrentState_DirtyStateAutoHeals(t *testing.T) {
 	require.NotEmpty(t, comments)
 	assert.Contains(t, comments[len(comments)-1].GetBody(), "状态自愈")
 	assert.Equal(t, []string{string(state.StateImplementing)}, mockGH.Labels[1])
+}
+
+// ===== buildPromptInputWithFilter 集成测试 =====
+
+func TestBuildPromptInputWithFilter_CompatWithBuildPromptInput(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockGH.Comments[1] = []*github.IssueComment{
+		{Body: github.Ptr("comment1"), CreatedAt: &github.Timestamp{Time: base},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("alice")}},
+		{Body: github.Ptr("comment2"), CreatedAt: &github.Timestamp{Time: base.Add(time.Minute)},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("bob")}},
+	}
+
+	mockAI := ai.NewMockProvider("unused")
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+
+	ctx := context.Background()
+	full, err := orch.buildPromptInput(ctx)
+	require.NoError(t, err)
+
+	filtered, err := orch.buildPromptInputWithFilter(ctx, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, full.IssueTitle, filtered.IssueTitle)
+	assert.Equal(t, full.IssueBody, filtered.IssueBody)
+	assert.Equal(t, full.Comments, filtered.Comments)
+}
+
+func TestBuildPromptInputWithFilter_DebatePathTrimsComments(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	var comments []*github.IssueComment
+	// 100 条 BOT 评论
+	for i := 0; i < 100; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("BOT %d", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("Bot"), Login: github.Ptr("niuma[bot]")},
+		})
+	}
+	// 15 条人类评论
+	for i := 0; i < 15; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("Human %d", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(100+i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")},
+		})
+	}
+	mockGH.Comments[1] = comments
+
+	mockAI := ai.NewMockProvider("unused")
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+
+	ctx := context.Background()
+	result, err := orch.buildPromptInputWithFilter(ctx, 10)
+	require.NoError(t, err)
+	// 最多 10 条（无 summary marker，故无 BOT 附加）
+	assert.LessOrEqual(t, len(result.Comments), 10)
+	// 全量模式返回 115 条（100 BOT + 15 human，空 body 已过滤）
+	full, err := orch.buildPromptInput(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 115, len(full.Comments))
+}
+
+func TestGetMaxHumanComments_Default(t *testing.T) {
+	var cfg *OrchestratorConfig
+	assert.Equal(t, 10, cfg.getMaxHumanComments())
+
+	cfg = &OrchestratorConfig{}
+	assert.Equal(t, 10, cfg.getMaxHumanComments())
+
+	cfg = &OrchestratorConfig{MaxHumanComments: 20}
+	assert.Equal(t, 20, cfg.getMaxHumanComments())
+}
+
+func TestRecoverableKind_Helper(t *testing.T) {
+	recErr := &RecoverableError{Kind: MissingJSON, Message: "test"}
+	assert.Equal(t, "MissingJSON", recoverableKind(recErr))
+	assert.Equal(t, "Unknown", recoverableKind(fmt.Errorf("plain error")))
+}
+
+func TestTruncatePrefix(t *testing.T) {
+	assert.Equal(t, "abc", truncatePrefix("abc", 10))
+	assert.Equal(t, "ab...", truncatePrefix("abcde", 2))
+	assert.Equal(t, "", truncatePrefix("", 10))
+}
+
+func TestDoDebateABDiscussion_ParseFailure_StructuredLog(t *testing.T) {
+	// 验证 parse 失败时 abort 评论包含 raw_prefix
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockGH.Comments[1] = []*github.IssueComment{
+		{Body: github.Ptr("讨论开始"), CreatedAt: &github.Timestamp{Time: base},
+			User: &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")}},
+	}
+
+	// provider 返回缺少 JSON 的文本
+	mockAI := ai.NewMockProvider("纯文本回复，没有 JSON 代码块")
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{mockAI},
+		ImplementProvider:   mockAI,
+	})
+
+	_, err := orch.doDebateABDiscussion(context.Background(), 1, 5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "3 级降级均失败")
+
+	// abort 评论应包含 raw_prefix
+	comments := mockGH.Comments[1]
+	abortFound := false
+	for _, c := range comments {
+		if strings.Contains(c.GetBody(), "DISCUSS_ABORT") {
+			abortFound = true
+			assert.Contains(t, c.GetBody(), "raw_prefix")
+		}
+	}
+	assert.True(t, abortFound, "应有 abort 评论")
+}
+
+func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
+	// 验证 120+ 评论场景下 debate 路径评论裁剪生效，prompt 中评论数 <= maxHuman+1
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Large comment test", "Body")
+	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
+
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	var comments []*github.IssueComment
+	// 117 条 BOT 评论（其中 1 条含 DISCUSSION_SUMMARY marker）
+	for i := 0; i < 117; i++ {
+		body := fmt.Sprintf("BOT 评论 %d", i)
+		if i == 100 {
+			body = "<!-- BOT:DISCUSSION_SUMMARY issue=1 rev=1 -->汇总内容"
+		}
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(body),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("Bot"), Login: github.Ptr("niuma[bot]")},
+		})
+	}
+	// 15 条人类评论
+	for i := 0; i < 15; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("人类评论[%d]", i)),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(117+i) * time.Minute)},
+			User:      &github.User{Type: github.Ptr("User"), Login: github.Ptr("wangbo")},
+		})
+	}
+	mockGH.Comments[1] = comments
+
+	// provider 返回合法的 debate JSON 响应（should_finish=true 使第 1 轮即结束）
+	validResponse := "我认为方案A更优。\n\n```json\n{\"should_finish\": true}\n```"
+	mockAI := ai.NewMockProvider(validResponse)
+
+	maxHuman := 10
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		DiscussionProviders: []ai.Provider{mockAI},
+		ImplementProvider:   mockAI,
+		MaxHumanComments:    maxHuman,
+	})
+
+	summary, err := orch.doDebateABDiscussion(context.Background(), 1, 5)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.True(t, summary.ShouldFinish)
+
+	// 验证传给 AI 的 prompt 中评论数受限：
+	// buildPromptInputWithFilter(ctx, 10) 应只保留 10 条人类 + 1 条 summary BOT = 11 条
+	calls := mockAI.Calls()
+	require.GreaterOrEqual(t, len(calls), 1)
+	prompt := calls[0].Prompt
+	// 统计 prompt 中出现的人类评论数量，早期人类评论（0-4）不应出现
+	for i := 0; i < 5; i++ {
+		assert.NotContains(t, prompt, fmt.Sprintf("人类评论[%d]", i),
+			"早期人类评论 %d 不应出现在裁剪后的 prompt 中", i)
+	}
+	// 最近 10 条人类评论（5-14）应出现
+	for i := 5; i < 15; i++ {
+		assert.Contains(t, prompt, fmt.Sprintf("人类评论[%d]", i),
+			"最近的人类评论 %d 应出现在 prompt 中", i)
+	}
+	// summary BOT 评论应保留
+	assert.Contains(t, prompt, "汇总内容", "DISCUSSION_SUMMARY BOT 评论应保留在 prompt 中")
+
+	// 显式验证 maxHuman+1 上限：统计 prompt 中各类评论出现次数
+	humanInPrompt := 0
+	for i := 0; i < 15; i++ {
+		if strings.Contains(prompt, fmt.Sprintf("人类评论[%d]", i)) {
+			humanInPrompt++
+		}
+	}
+	botInPrompt := 0
+	for i := 0; i < 117; i++ {
+		if strings.Contains(prompt, fmt.Sprintf("BOT 评论 %d", i)) {
+			botInPrompt++
+		}
+	}
+	summaryInPrompt := 0
+	if strings.Contains(prompt, "汇总内容") {
+		summaryInPrompt = 1
+	}
+	totalComments := humanInPrompt + botInPrompt + summaryInPrompt
+	assert.LessOrEqual(t, totalComments, maxHuman+1,
+		"prompt 中评论总数 (%d) 应 <= maxHuman+1 (%d)", totalComments, maxHuman+1)
+	assert.Equal(t, maxHuman, humanInPrompt,
+		"应恰好包含 maxHuman (%d) 条人类评论", maxHuman)
+	assert.Equal(t, 0, botInPrompt, "普通 BOT 评论应全部被过滤")
 }

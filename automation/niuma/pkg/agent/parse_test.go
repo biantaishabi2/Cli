@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -242,4 +243,52 @@ func TestExtractJSON_BracesInText(t *testing.T) {
 	jsonStr := extractJSON(text)
 	assert.Contains(t, jsonStr, `"approved"`)
 	assert.Contains(t, jsonStr, `"bug1"`)
+}
+
+// ===== ParseDebateResponse RecoverableError 测试 =====
+
+func TestParseDebateResponse_EmptyResponse_RecoverableError(t *testing.T) {
+	_, err := ParseDebateResponse("")
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, EmptyResponse, recErr.Kind)
+}
+
+func TestParseDebateResponse_MissingJSON_RecoverableError(t *testing.T) {
+	_, err := ParseDebateResponse("我认为方案合理，建议采纳")
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, MissingJSON, recErr.Kind)
+}
+
+func TestParseDebateResponse_JSONParseError_RecoverableError(t *testing.T) {
+	raw := "分析如下\n```json\n{should_finish: yes}\n```"
+	_, err := ParseDebateResponse(raw)
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, JSONParseError, recErr.Kind)
+	// Unwrap 返回底层 json 解析错误
+	assert.NotNil(t, recErr.Unwrap())
+}
+
+func TestParseDebateResponse_MissingField_RecoverableError(t *testing.T) {
+	raw := "分析如下\n```json\n{\"other_field\": true}\n```"
+	_, err := ParseDebateResponse(raw)
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, MissingField, recErr.Kind)
+}
+
+func TestParseDebateResponse_Success_Unchanged(t *testing.T) {
+	raw := "本轮达成共识。\n```json\n{\"should_finish\": true}\n```"
+	comment, err := ParseDebateResponse(raw)
+	require.NoError(t, err)
+	require.NotNil(t, comment)
+	assert.True(t, comment.ShouldFinish)
+	assert.NotContains(t, comment.Body, "should_finish")
+	assert.Contains(t, comment.Body, "本轮达成共识")
 }
