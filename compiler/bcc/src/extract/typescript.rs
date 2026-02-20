@@ -512,11 +512,9 @@ fn extract_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
                     continue;
                 }
                 let text = common::node_text(arg, source);
-                // 去掉引号
+                // 去掉引号（保留空字符串，它是合法的默认值参数）
                 let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
-                if !cleaned.is_empty() {
-                    args.push(cleaned.to_string());
-                }
+                args.push(cleaned.to_string());
             }
         }
     }
@@ -827,9 +825,27 @@ fn extract_ts_param_annotations(
         if param_name.is_empty() {
             continue;
         }
-        // 类型标注节点
+        // 类型标注节点（type_annotation 包含 ":" 前缀，需要跳过）
         if let Some(type_ann) = child.child_by_field_name("type") {
-            let type_text = common::node_text(type_ann, source);
+            let type_text = {
+                let mut t = String::new();
+                for k in 0..type_ann.child_count() {
+                    if let Some(tn) = type_ann.child(k) {
+                        if tn.kind() != ":" {
+                            t = common::node_text(tn, source);
+                            break;
+                        }
+                    }
+                }
+                if t.is_empty() {
+                    common::node_text(type_ann, source)
+                        .trim_start_matches(':')
+                        .trim()
+                        .to_string()
+                } else {
+                    t
+                }
+            };
             if !type_text.is_empty() {
                 type_annotations.push(TypeAnnotation {
                     name: format!("param:{}", param_name),
@@ -897,17 +913,28 @@ fn parse_typeof_guard(
     let left = node.child_by_field_name("left")?;
     let right = node.child_by_field_name("right")?;
 
+    // tree-sitter-typescript 将 typeof x 解析为 unary_expression（operator="typeof"）
+    let is_typeof = |n: tree_sitter::Node| -> bool {
+        n.kind() == "typeof_expression"
+            || (n.kind() == "unary_expression"
+                && n.child_by_field_name("operator")
+                    .map(|o| common::node_text(o, source) == "typeof")
+                    .unwrap_or(false))
+    };
+
     // typeof x === 'type'
-    let (typeof_node, type_literal) = if left.kind() == "typeof_expression" {
+    let (typeof_node, type_literal) = if is_typeof(left) {
         (left, right)
-    } else if right.kind() == "typeof_expression" {
+    } else if is_typeof(right) {
         (right, left)
     } else {
         return None;
     };
 
-    // 提取 typeof 的操作数（变量名）
-    let var_node = typeof_node.child(1)?; // typeof <operand>
+    // 提取 typeof 的操作数（变量名）：unary_expression 用 argument field
+    let var_node = typeof_node
+        .child_by_field_name("argument")
+        .or_else(|| typeof_node.child(1))?;
     let var = common::node_text(var_node, source);
 
     // 提取类型字符串

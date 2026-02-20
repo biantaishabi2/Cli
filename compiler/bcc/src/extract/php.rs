@@ -77,7 +77,6 @@ fn extract_php_class_properties(
         if node.kind() == "property_declaration" {
             // property_declaration 包含 visibility + type? + property_element
             let mut prop_type = String::new();
-
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     // 类型标注（如 ?string, int 等）
@@ -91,7 +90,13 @@ fn extract_php_class_properties(
                                 .trim_start_matches('$')
                                 .to_string();
                             // 每个 property_element 独立检查是否有默认值
-                            let has_default = child.child_by_field_name("value").is_some();
+                            // tree-sitter-php 可能用 default_value field 或 "=" 后跟值
+                            // tree-sitter-php 中 property_element 的默认值可能通过 value/default_value field 或 "=" 子节点表示
+                            let has_default = child.child_by_field_name("value").is_some()
+                                || child.child_by_field_name("default_value").is_some()
+                                || (0..child.child_count()).any(|k| {
+                                    child.child(k).map_or(false, |c| c.kind() == "=")
+                                });
                             let is_nullable = prop_type.starts_with('?');
                             if !name.is_empty() {
                                 schema_fields.push(SchemaField {

@@ -367,7 +367,8 @@ fn extract_def_name(call_node: &tree_sitter::Node, source: &[u8]) -> Option<(Str
             }
             match child.kind() {
                 "arguments" => {
-                    // arguments 内含函数签名 call 节点
+                    // arguments 内含函数签名 call 节点，
+                    // 或 binary_operator[when]（def foo(x) when is_map(x)）
                     for j in 0..child.child_count() {
                         if let Some(sub) = child.child(j) {
                             match sub.kind() {
@@ -377,6 +378,19 @@ fn extract_def_name(call_node: &tree_sitter::Node, source: &[u8]) -> Option<(Str
                                             common::node_text(t, source),
                                             sub.start_position().row + 1,
                                         ));
+                                    }
+                                }
+                                "binary_operator" => {
+                                    // when 子句：左侧是函数签名 call
+                                    if let Some(left) = sub.child_by_field_name("left") {
+                                        if left.kind() == "call" {
+                                            if let Some(t) = left.child_by_field_name("target") {
+                                                return Some((
+                                                    common::node_text(t, source),
+                                                    left.start_position().row + 1,
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                                 "identifier" => {
