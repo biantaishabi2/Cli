@@ -341,6 +341,9 @@ mod tests {
                 has_pubsub: false,
             },
             loc_lines: 1,
+            type_annotations: vec![],
+            type_guards: vec![],
+            schema_fields: vec![],
             declarations: 0,
         }
     }
