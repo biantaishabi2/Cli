@@ -123,6 +123,11 @@ func validateLabelGuardAction(action string) error {
 }
 
 func executeLabelGuard(ctx context.Context, client labelGuardGitHubClient, mode string, issue int, actor, action, label string) error {
+	// 防御式校验：即使被直接调用，也保证 action 语义合法。
+	if err := validateLabelGuardAction(action); err != nil {
+		return err
+	}
+
 	// 幂等评论去重：通过 pkg/marker 检查是否已有相同 key 的 marker
 	comments, err := client.ListComments(ctx, issue)
 	if err != nil {
