@@ -27,7 +27,7 @@
     },
     "label_whitelist": {
       "type": "string",
-      "default": "bot:queued,bot:pr-reviewable",
+      "default": "bot:orchestrate,bot:queued,bot:pr-reviewable",
       "description": "issues:labeled 允许触发标签白名单（逗号分隔）"
     },
     "enable_dispatch_wakeup": {

@@ -22,8 +22,8 @@ jobs:
 
       - name: Install niuma
         run: |
-          sudo cp automation/niuma/niuma /usr/local/bin/niuma
-          sudo chmod +x /usr/local/bin/niuma
+          sudo install -m 0755 automation/niuma/niuma /usr/local/bin/niuma.new
+          sudo mv -f /usr/local/bin/niuma.new /usr/local/bin/niuma
           niuma --help
 
       # Rust: taskctl + bcc (同一 workspace)
@@ -32,14 +32,14 @@ jobs:
 
       - name: Install taskctl
         run: |
-          sudo cp target/release/taskctl /usr/local/bin/taskctl
-          sudo chmod +x /usr/local/bin/taskctl
+          sudo install -m 0755 target/release/taskctl /usr/local/bin/taskctl.new
+          sudo mv -f /usr/local/bin/taskctl.new /usr/local/bin/taskctl
           taskctl --help
 
       - name: Install bcc
         run: |
-          sudo cp target/release/bcc /usr/local/bin/bcc
-          sudo chmod +x /usr/local/bin/bcc
+          sudo install -m 0755 target/release/bcc /usr/local/bin/bcc.new
+          sudo mv -f /usr/local/bin/bcc.new /usr/local/bin/bcc
           bcc --help
 
       # Elixir: bddc (escript)
@@ -51,7 +51,7 @@ jobs:
 
       - name: Install bddc
         run: |
-          sudo cp compiler/bddc/bdd_compiler /usr/local/bin/bdd_compiler
-          sudo chmod +x /usr/local/bin/bdd_compiler
+          sudo install -m 0755 compiler/bddc/bdd_compiler /usr/local/bin/bdd_compiler.new
+          sudo mv -f /usr/local/bin/bdd_compiler.new /usr/local/bin/bdd_compiler
           sudo ln -sfn /usr/local/bin/bdd_compiler /usr/local/bin/bddc
           bddc --help
