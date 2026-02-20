@@ -192,7 +192,7 @@ control:
 - 推荐命令：
 
 ```bash
-# CAS 迁移（from 可选）
+# CAS 迁移（默认推荐，避免并发覆盖）
 niuma state-label set --repo owner/repo --issue 325 --from bot:plan-draft --to bot:needs-discussion
 
 # 多状态自愈收敛

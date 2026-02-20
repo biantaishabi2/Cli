@@ -858,9 +858,9 @@ func (o *Orchestrator) postPlanFinalFailureComment(ctx context.Context, err erro
 
 	sb.WriteString("\n### 建议操作\n\n")
 	sb.WriteString("- 检查 provider 配置和网络连接\n")
-	sb.WriteString("- 手动恢复: `niuma state-label set --repo <owner/repo> --issue ")
+	sb.WriteString("- 手动恢复（CAS）: `niuma state-label set --repo <owner/repo> --issue ")
 	sb.WriteString(fmt.Sprintf("%d", o.issueNumber))
-	sb.WriteString(" --to bot:plan-final`\n")
+	sb.WriteString(" --from <bot:current> --to bot:plan-final`\n")
 
 	_, _ = o.github.AddComment(ctx, o.issueNumber, sb.String())
 }

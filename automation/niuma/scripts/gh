@@ -125,7 +125,7 @@ if is_issue_edit_command "$@"; then
 fi
 
 if [[ "$is_blocked_command" == "true" ]]; then
-  echo "禁止直接通过 gh 修改 bot:* 状态标签，请改用: niuma state-label set --repo <owner/repo> --issue <num> --to <bot:state>" >&2
+  echo "禁止直接通过 gh 修改 bot:* 状态标签，请改用: niuma state-label set --repo <owner/repo> --issue <num> --from <bot:current> --to <bot:state>" >&2
   if [[ "${CI:-}" == "true" ]]; then
     exit 2
   fi
