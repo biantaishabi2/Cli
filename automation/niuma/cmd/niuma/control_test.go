@@ -411,6 +411,40 @@ func TestDispatchTaskCompleted_APIFailureWarningOnly(t *testing.T) {
 	assert.True(t, sender.called)
 }
 
+func TestHandleCloseMergedDispatch_APIFailure_WarningOnly(t *testing.T) {
+	// 场景 7 命令入口级验证：handleCloseMergedDispatch（runControlCloseMerged 调用）
+	// 即使 dispatch API 失败，也不 panic/不返回 error，主流程退出码不受影响
+	t.Setenv("GITHUB_RUN_ID", "789")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{
+		dispatchErr: errors.New("403 Forbidden"),
+	}
+	ctx := context.Background()
+
+	// handleCloseMergedDispatch 不返回 error（warning-only 语义），不应 panic
+	assert.NotPanics(t, func() {
+		handleCloseMergedDispatch(ctx, sender, 50, []int{10, 11})
+	})
+	// 确认 dispatch 确实被调用了
+	assert.True(t, sender.called)
+}
+
+func TestHandleCloseMergedDispatch_Success(t *testing.T) {
+	// handleCloseMergedDispatch 成功路径
+	t.Setenv("GITHUB_RUN_ID", "100")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	sender := &stubDispatchSender{}
+	ctx := context.Background()
+
+	assert.NotPanics(t, func() {
+		handleCloseMergedDispatch(ctx, sender, 50, []int{10})
+	})
+	assert.True(t, sender.called)
+	assert.Equal(t, "niuma.task.completed", sender.eventType)
+}
+
 func TestDispatchTaskCompleted_TimestampFallback(t *testing.T) {
 	// 场景 6：无 GITHUB_RUN_ID 时降级为 timestamp
 	t.Setenv("GITHUB_RUN_ID", "")

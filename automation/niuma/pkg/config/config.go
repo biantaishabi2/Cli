@@ -429,6 +429,15 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Control.DagSync.SkippedEdgeThreshold <= 0 || cfg.Control.DagSync.SkippedEdgeThreshold > 100 {
 		cfg.Control.DagSync.SkippedEdgeThreshold = 20
 	}
+
+	// LabelGuard 默认值：配置文件存在但缺少 label_guard 段时回退
+	if len(cfg.LabelGuard.Allowlist) == 0 {
+		cfg.LabelGuard.Allowlist = []string{"github-actions[bot]", "niuma-bot"}
+	}
+	if cfg.LabelGuard.Mode == "" {
+		cfg.LabelGuard.Mode = "dry-run"
+	}
+
 	if len(cfg.Control.DagSync.RetryBackoff) == 0 {
 		cfg.Control.DagSync.RetryBackoff = append([]string(nil), defaultDagSyncRetryBackoff...)
 	} else {

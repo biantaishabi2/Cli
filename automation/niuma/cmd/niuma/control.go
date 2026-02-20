@@ -645,12 +645,18 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 
 	// dispatch-wakeup：发送 niuma.task.completed 事件
 	if flagDispatchWakeup && len(issueNums) > 0 {
-		if err := dispatchTaskCompleted(ctx, client, flagPR, issueNums); err != nil {
-			log.Printf("WARNING: dispatch niuma.task.completed 失败: %v", err)
-		}
+		handleCloseMergedDispatch(ctx, client, flagPR, issueNums)
 	}
 
 	return nil
+}
+
+// handleCloseMergedDispatch 处理 close-merged 的 dispatch-wakeup 逻辑。
+// dispatch 失败仅 warning，不影响主流程退出码。
+func handleCloseMergedDispatch(ctx context.Context, sender dispatchSender, prNum int, issueNums []int) {
+	if err := dispatchTaskCompleted(ctx, sender, prNum, issueNums); err != nil {
+		log.Printf("WARNING: dispatch niuma.task.completed 失败: %v", err)
+	}
 }
 
 // dispatchSender 定义 dispatch 操作接口，方便测试注入
