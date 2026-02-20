@@ -35,6 +35,10 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     let mut type_guards = Vec::new();
     extract_rust_type_info(root, source, &mut type_annotations, &mut type_guards);
 
+    // 提取 struct 字段 → SchemaField
+    let mut schema_fields = Vec::new();
+    extract_rust_struct_fields(root, source, &mut schema_fields);
+
     FileRecord {
         language: "rust".into(),
         file_path: path.to_string(),
@@ -49,7 +53,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         declarations,
         type_annotations,
         type_guards,
-        schema_fields: vec![],
+        schema_fields,
     }
 }
 
@@ -336,6 +340,52 @@ fn detect_side_effects(content: &str) -> SideEffects {
         has_pubsub: content.contains("channel")
             || content.contains("mpsc::")
             || content.contains("broadcast::"),
+    }
+}
+
+// === SchemaField 提取（struct 字段） ===
+
+/// 从 Rust struct 定义中提取字段 → SchemaField
+fn extract_rust_struct_fields(
+    root: tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "struct_item" {
+            if let Some(body) = node.child_by_field_name("body") {
+                for i in 0..body.child_count() {
+                    if let Some(field) = body.child(i) {
+                        if field.kind() == "field_declaration" {
+                            let mut field_name = String::new();
+                            let mut field_type = String::new();
+                            if let Some(name_node) = field.child_by_field_name("name") {
+                                field_name = common::node_text(name_node, source);
+                            }
+                            if let Some(type_node) = field.child_by_field_name("type") {
+                                field_type = common::node_text(type_node, source);
+                            }
+                            if !field_name.is_empty() {
+                                // Option<T> 字段视为 optional，其他为 required
+                                let required = !field_type.starts_with("Option");
+                                schema_fields.push(SchemaField {
+                                    name: field_name,
+                                    field_type,
+                                    line: field.start_position().row + 1,
+                                    required,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
     }
 }
 

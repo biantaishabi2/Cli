@@ -94,6 +94,10 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
     let mut type_guards = Vec::new();
     extract_ts_type_info(root, source, &mut type_annotations, &mut type_guards);
 
+    // 提取 interface 属性 → SchemaField
+    let mut schema_fields = Vec::new();
+    extract_ts_interface_fields(root, source, &mut schema_fields);
+
     FileRecord {
         language: lang.to_string(),
         file_path: path.to_string(),
@@ -108,7 +112,7 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         declarations,
         type_annotations,
         type_guards,
-        schema_fields: vec![],
+        schema_fields,
     }
 }
 
@@ -618,7 +622,108 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
+// === SchemaField 提取（interface 属性） ===
+
+/// 从 TypeScript interface 声明中提取属性 → SchemaField
+fn extract_ts_interface_fields(
+    root: tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "interface_declaration" {
+            // 查找 object_type（interface body）
+            if let Some(body) = node.child_by_field_name("body") {
+                for i in 0..body.child_count() {
+                    if let Some(prop) = body.child(i) {
+                        if prop.kind() == "property_signature" {
+                            let mut prop_name = String::new();
+                            let mut prop_type = String::new();
+                            let mut is_optional = false;
+
+                            if let Some(name_node) = prop.child_by_field_name("name") {
+                                prop_name = common::node_text(name_node, source);
+                            }
+                            // 检查 `?` 标记（optional property）
+                            for j in 0..prop.child_count() {
+                                if let Some(child) = prop.child(j) {
+                                    if child.kind() == "?" {
+                                        is_optional = true;
+                                    }
+                                    if child.kind() == "type_annotation" {
+                                        // 提取类型
+                                        for k in 0..child.child_count() {
+                                            if let Some(type_node) = child.child(k) {
+                                                if type_node.kind() != ":" {
+                                                    prop_type = common::node_text(type_node, source);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !prop_name.is_empty() {
+                                schema_fields.push(SchemaField {
+                                    name: prop_name,
+                                    field_type: prop_type,
+                                    line: prop.start_position().row + 1,
+                                    required: !is_optional,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 继续遍历子树
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
 // === TypeAnnotation / TypeGuard 提取 ===
+
+/// 从匿名函数的父节点推导函数名
+/// - `const foo = (x) => ...` → "foo"
+/// - `let bar = function(x) { ... }` → "bar"
+/// - 无法推导时生成合成名 `<anon:L{line}>`，确保不与其他函数误配
+fn derive_func_name_from_parent(node: tree_sitter::Node, source: &[u8]) -> String {
+    if let Some(parent) = node.parent() {
+        // 赋值场景：const/let/var foo = arrow_function / function_expression
+        if parent.kind() == "variable_declarator" {
+            if let Some(name_node) = parent.child_by_field_name("name") {
+                let name = common::node_text(name_node, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+        // 对象属性赋值：{ foo: (x) => ... }
+        if parent.kind() == "pair" {
+            if let Some(key_node) = parent.child_by_field_name("key") {
+                let name = common::node_text(key_node, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+        // 属性赋值：obj.foo = (x) => ...
+        if parent.kind() == "assignment_expression" {
+            if let Some(left) = parent.child_by_field_name("left") {
+                let name = common::node_text(left, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+    }
+    // 无法推导：生成基于行号的唯一合成名
+    format!("<anon:L{}>", node.start_position().row + 1)
+}
 
 /// 从 TypeScript AST 中提取类型标注和类型守卫
 fn extract_ts_type_info(
@@ -638,16 +743,20 @@ fn extract_ts_type_info(
                 .child_by_field_name("name")
                 .map(|n| common::node_text(n, source))
                 .unwrap_or_default();
-            // 跳过匿名函数（空 func_name），避免跨函数误配
-            if !func_name.is_empty() {
-                // 提取参数的类型标注
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    extract_ts_param_annotations(params, source, &func_name, type_annotations);
-                }
-                // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
-                if let Some(body) = node.child_by_field_name("body") {
-                    extract_ts_type_guards(body, source, &func_name, type_guards);
-                }
+            // 匿名函数：尝试从父节点推导名称（如 const foo = () => ...），
+            // 否则生成唯一合成名称，避免跨函数误配
+            let effective_name = if func_name.is_empty() {
+                derive_func_name_from_parent(node, source)
+            } else {
+                func_name
+            };
+            // 提取参数的类型标注
+            if let Some(params) = node.child_by_field_name("parameters") {
+                extract_ts_param_annotations(params, source, &effective_name, type_annotations);
+            }
+            // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
+            if let Some(body) = node.child_by_field_name("body") {
+                extract_ts_type_guards(body, source, &effective_name, type_guards);
             }
         }
         // 压栈子节点（逆序以保持遍历顺序）

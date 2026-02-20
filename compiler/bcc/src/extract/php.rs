@@ -44,6 +44,10 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     // module_doc: 用 class 名标识
     let module_doc = class_name.clone();
 
+    // 提取 class 属性 → SchemaField
+    let mut schema_fields = Vec::new();
+    extract_php_class_properties(root, source, &mut schema_fields);
+
     FileRecord {
         language: "php".into(),
         file_path: path.to_string(),
@@ -58,7 +62,58 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         declarations,
         type_annotations: vec![],
         type_guards: vec![],
-        schema_fields: vec![],
+        schema_fields,
+    }
+}
+
+/// 从 PHP class 中提取属性 → SchemaField
+fn extract_php_class_properties(
+    root: tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "property_declaration" {
+            // property_declaration 包含 visibility + type? + property_element
+            let mut prop_type = String::new();
+            let mut has_default = false;
+
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    // 类型标注（如 ?string, int 等）
+                    if matches!(child.kind(), "union_type" | "named_type" | "primitive_type" | "nullable_type" | "optional_type") {
+                        prop_type = common::node_text(child, source);
+                    }
+                    if child.kind() == "property_element" {
+                        // 提取属性名
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            let name = common::node_text(name_node, source)
+                                .trim_start_matches('$')
+                                .to_string();
+                            // 检查是否有默认值
+                            if child.child_by_field_name("value").is_some() {
+                                has_default = true;
+                            }
+                            let is_nullable = prop_type.starts_with('?');
+                            if !name.is_empty() {
+                                schema_fields.push(SchemaField {
+                                    name,
+                                    field_type: prop_type.clone(),
+                                    line: child.start_position().row + 1,
+                                    required: !has_default && !is_nullable,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
     }
 }
 

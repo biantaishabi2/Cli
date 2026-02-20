@@ -18,6 +18,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     let mut pending_spec: Option<String> = None;
     let mut type_annotations = Vec::new();
     let mut type_guards = Vec::new();
+    let mut schema_fields = Vec::new();
 
     let mut cursor = root.walk();
     extract_recursive(
@@ -32,6 +33,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         &mut pending_spec,
         &mut type_annotations,
         &mut type_guards,
+        &mut schema_fields,
     );
 
     detect_side_effects(content, &mut side_effects);
@@ -53,7 +55,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         declarations,
         type_annotations,
         type_guards,
-        schema_fields: vec![],
+        schema_fields,
     }
 }
 
@@ -85,6 +87,7 @@ fn extract_recursive(
     pending_spec: &mut Option<String>,
     type_annotations: &mut Vec<TypeAnnotation>,
     type_guards: &mut Vec<TypeGuard>,
+    schema_fields: &mut Vec<SchemaField>,
 ) {
     loop {
         let node = cursor.node();
@@ -157,6 +160,10 @@ fn extract_recursive(
                         }
                         "defmodule" => {
                             *declarations += 1;
+                        }
+                        // Ecto schema / embedded_schema：提取 field 定义 → SchemaField
+                        "schema" | "embedded_schema" => {
+                            extract_ecto_schema_fields(&node, source, schema_fields);
                         }
                         "alias" => {
                             if let Some(args) = find_child_by_kind(&node, "arguments") {
@@ -237,6 +244,7 @@ fn extract_recursive(
                 pending_spec,
                 type_annotations,
                 type_guards,
+                schema_fields,
             );
             cursor.goto_parent();
         }
@@ -539,6 +547,77 @@ fn collect_param_names(args_node: tree_sitter::Node, source: &[u8], names: &mut 
     }
 }
 
+/// 从 Ecto schema/embedded_schema 的 do 块中提取 field 定义
+fn extract_ecto_schema_fields(
+    schema_call: &tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    // 查找 do_block 子节点
+    let mut do_block = None;
+    for i in 0..schema_call.child_count() {
+        if let Some(child) = schema_call.child(i) {
+            if child.kind() == "do_block" {
+                do_block = Some(child);
+                break;
+            }
+        }
+    }
+    let Some(block) = do_block else { return };
+
+    // 遍历 do_block 内的节点，查找 field 调用
+    let mut stack = vec![block];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call" {
+            if let Some(target) = node.child_by_field_name("target") {
+                let target_text = common::node_text(target, source);
+                if target_text == "field" {
+                    if let Some(args) = find_child_by_kind(&node, "arguments") {
+                        let mut field_name = String::new();
+                        let mut field_type = String::new();
+                        let mut has_default = false;
+                        let mut arg_idx = 0;
+                        for j in 0..args.child_count() {
+                            if let Some(arg) = args.child(j) {
+                                // 跳过分隔符
+                                if arg.kind() == "," { continue; }
+                                let text = common::node_text(arg, source);
+                                if arg_idx == 0 {
+                                    // 第一个参数：字段名（atom）
+                                    field_name = text.trim_start_matches(':').to_string();
+                                } else if arg_idx == 1 {
+                                    // 第二个参数：类型
+                                    field_type = text.trim_start_matches(':').to_string();
+                                } else {
+                                    // 后续参数：keyword args（检查 default）
+                                    if text.contains("default") {
+                                        has_default = true;
+                                    }
+                                }
+                                arg_idx += 1;
+                            }
+                        }
+                        if !field_name.is_empty() {
+                            schema_fields.push(SchemaField {
+                                name: field_name,
+                                field_type,
+                                line: node.start_position().row + 1,
+                                // Ecto field 默认 required，有 default 值则视为 optional
+                                required: !has_default,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
 /// Elixir guard 函数名 → 类型映射
 fn guard_to_type(guard_func: &str) -> Option<&'static str> {
     match guard_func {
@@ -619,11 +698,12 @@ fn collect_guard_calls(
         }
     }
     // 递归处理 and/or 组合 guard（binary_operator with 'and'/'or'）
+    // 注意：不跳过 call 子节点，因为组合 guard 如 `when is_integer(x) and is_binary(y)` 中，
+    // binary_operator[and] 的子节点直接是 call 节点，跳过会导致漏提取。
+    // 已提取的 call 节点在递归时不会重复匹配（guard_to_type 只匹配 is_* 函数）。
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            if child.kind() != "call" {
-                collect_guard_calls(child, source, func_name, guards);
-            }
+            collect_guard_calls(child, source, func_name, guards);
         }
     }
 }
