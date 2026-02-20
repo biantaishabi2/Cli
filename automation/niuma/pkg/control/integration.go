@@ -767,7 +767,7 @@ func assemblePrompt(commonPrompt, profilePrompt string) string {
 
 // ComputeOldestMergeBase 对每个 PR 分支计算与 baseBranch 的 merge-base，
 // 返回拓扑序最旧的那个 commit（即最早的公共祖先）。
-// 如果 prBranches 为空或全部计算失败，返回空字符串（调用方应 fallback 到 baseBranch）。
+// 如果 prBranches 为空，返回空字符串。任一分支计算失败则返回 error。
 // TODO(#411): add merge-base distance check
 func (b *IntegrationBuilder) ComputeOldestMergeBase(prBranches []string) (string, error) {
 	if len(prBranches) == 0 {
@@ -778,7 +778,7 @@ func (b *IntegrationBuilder) ComputeOldestMergeBase(prBranches []string) (string
 	for _, branch := range prBranches {
 		mb, err := b.gitOutput("merge-base", b.baseBranch, branch)
 		if err != nil {
-			continue
+			return "", fmt.Errorf("计算分支 %s 的 merge-base 失败: %w", branch, err)
 		}
 		if mb != "" {
 			mergeBases = append(mergeBases, mb)
@@ -838,7 +838,11 @@ func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchIn
 	for _, bi := range branches {
 		prBranches = append(prBranches, bi.Branch)
 	}
-	startPoint, _ := b.ComputeOldestMergeBase(prBranches)
+	startPoint, err := b.ComputeOldestMergeBase(prBranches)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Build] ComputeOldestMergeBase 失败，fallback 到 baseBranch: %v\n", err)
+		startPoint = ""
+	}
 
 	// 重置 integration 分支，从 merge-base 开始批量 merge
 	if err := b.Reset(integrationBranch, startPoint); err != nil {

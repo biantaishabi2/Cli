@@ -552,6 +552,11 @@ func TestComputeOldestMergeBase(t *testing.T) {
 	mbB := runGitOutput(t, dir, "merge-base", "master", "feat/51-b")
 	assert.NotEqual(t, mbA, mbB, "两个 merge-base 应不同")
 
+	// 验证 oldest 是其他 merge-base 的祖先（关键断言）
+	isAncestorCmd := exec.Command("git", "merge-base", "--is-ancestor", oldest, mbB)
+	isAncestorCmd.Dir = dir
+	assert.NoError(t, isAncestorCmd.Run(), "oldest merge-base 应是其他 merge-base 的祖先")
+
 	// 空列表返回空
 	empty, err := builder.ComputeOldestMergeBase(nil)
 	require.NoError(t, err)
