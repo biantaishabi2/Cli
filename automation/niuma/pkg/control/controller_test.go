@@ -1182,6 +1182,7 @@ func TestController_ProcessIssue_IdempotencyGetFailureStopsSideEffects(t *testin
 func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *testing.T) {
 	taskctl, logPath := newTaskCtlLoggingClient(t)
 	mockGH := newMockGitHubOps()
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	ctrl := &Controller{
 		taskctl: taskctl,
 		github:  mockGH,
@@ -1202,10 +1203,11 @@ func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *t
 	require.NoError(t, err)
 
 	task.Metadata[metaKeyTaskInputHash] = "def"
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	err = ctrl.ProcessIssue(context.Background(), task)
 	require.NoError(t, err)
 
-	assert.Len(t, mockGH.replaceLabelCalls, 1)
+	assert.Len(t, mockGH.replaceLabelCalls, 2)
 	assert.Equal(t, 2, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Equal(
 		t,
@@ -1217,6 +1219,7 @@ func TestController_ProcessIssue_IdempotencyInputHashChangedAllowsReprocess(t *t
 func TestController_ProcessIssue_IdempotencyBackfillsLegacyMetadataAndNoopsOnRepeat(t *testing.T) {
 	taskctl, logPath := newTaskCtlLoggingClient(t)
 	mockGH := newMockGitHubOps()
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	ctrl := &Controller{
 		taskctl: taskctl,
 		github:  mockGH,
@@ -1260,6 +1263,7 @@ func TestController_ProcessIssue_IdempotencyConcurrentDuplicateUsesLatestSnapsho
 	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
 	taskctl, logPath := newTaskCtlStatefulIdempotencyClient(t, idempotencyKey)
 	mockGH := newMockGitHubOps()
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var startedOnce sync.Once
@@ -1341,6 +1345,7 @@ func TestController_ProcessIssue_RepeatedWakeupLockThenIdempotencyNoop(t *testin
 	idempotencyKey := buildIssueIdempotencyKey(repo, 314, phase, inputHash)
 	taskctl, logPath := newTaskCtlStatefulIdempotencyClient(t, idempotencyKey)
 	mockGH := newMockGitHubOps()
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	store := newInMemoryIssueLockStore()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -1417,6 +1422,7 @@ func TestController_ProcessIssue_RepeatedWakeupLockThenIdempotencyNoop(t *testin
 func TestController_ProcessIssue_IssueLockTTLRecoveryAfterSkip(t *testing.T) {
 	taskctl, logPath := newTaskCtlLoggingClient(t)
 	mockGH := newMockGitHubOps()
+	mockGH.issuesByNumber[314] = IssueInfo{Number: 314, Labels: []string{string(state.StateQueued)}}
 	store := newInMemoryIssueLockStore()
 	ttl := 30 * time.Second
 
@@ -1481,6 +1487,40 @@ func TestController_ProcessIssue_IssueLockTTLRecoveryAfterSkip(t *testing.T) {
 	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 	assert.Contains(t, secondOutput, "[control][idempotency]")
 	assert.Contains(t, secondOutput, "action=recorded")
+}
+
+func TestController_ProcessIssue_NonQueuedStateDoesNotRollbackToFix(t *testing.T) {
+	taskctl, logPath := newTaskCtlLoggingClient(t)
+	mockGH := newMockGitHubOps(IssueInfo{
+		Number: 314,
+		Labels: []string{string(state.StatePRReviewable)},
+	})
+	ctrl := &Controller{
+		taskctl: taskctl,
+		github:  mockGH,
+	}
+
+	task := Task{
+		ID:      "task-314",
+		Subject: "issue 314",
+		Metadata: map[string]string{
+			"issue_num":          "314",
+			metaKeyTaskRepo:      "biantaishabi2/Cli",
+			metaKeyTaskPhase:     "fix",
+			metaKeyTaskInputHash: "abc",
+		},
+	}
+
+	output := captureControllerStdout(t, func() {
+		require.NoError(t, ctrl.ProcessIssue(context.Background(), task))
+	})
+
+	labels, err := mockGH.ListLabels(context.Background(), 314)
+	require.NoError(t, err)
+	assert.Contains(t, labels, string(state.StatePRReviewable))
+	assert.NotContains(t, labels, string(state.StateFixRequested))
+	assert.Contains(t, output, "迁移状态失败")
+	assert.Equal(t, 1, countTaskctlLogMatches(t, logPath, "--status in-progress"))
 }
 func TestController_NewIssueDiscovery(t *testing.T) {
 	issues := []IssueInfo{

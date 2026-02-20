@@ -641,8 +641,8 @@ func (c *Controller) ProcessIssue(ctx context.Context, task Task) error {
 			return nil
 		}
 
-		// 将 bot:queued 改为 bot:fix，触发单 issue 流程。
-		if err := c.transitionWithSelfHeal(runCtx, issueNum, "", state.StateFixRequested); err != nil {
+		// 严格按状态机迁移：仅允许 bot:queued -> bot:fix。
+		if err := c.transitionWithSelfHeal(runCtx, issueNum, state.StateQueued, state.StateFixRequested); err != nil {
 			fmt.Printf("[control] 迁移状态失败 (issue #%d): %v\n", issueNum, err)
 			return nil
 		}
