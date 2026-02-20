@@ -458,6 +458,13 @@ fn extract_rust_type_guards(
                 }
             }
         }
+        // downcast_ref::<Type>() 调用
+        if node.kind() == "call_expression" {
+            let call_text = common::node_text(node, source);
+            if let Some(guard) = parse_downcast_ref(&call_text, func_name, node.start_position().row + 1) {
+                type_guards.push(guard);
+            }
+        }
         // matches! 宏
         if node.kind() == "macro_invocation" {
             let macro_text = common::node_text(node, source);
@@ -483,13 +490,21 @@ fn extract_rust_type_guards(
     }
 }
 
-/// 从 "if let Some(x) = expr" 提取变量名
+/// 从 "if let Some(x) = expr" 提取被检查的表达式变量名（expr 而非 x）
 fn extract_if_let_var(text: &str, variant: &str) -> Option<String> {
-    // "if let Some(x) = expr" → 提取 "x"
+    // "if let Some(x) = expr {" → 提取 "expr"（被检查的变量）
     let pattern = format!("if let {}(", variant);
     let rest = text.strip_prefix(&pattern)?;
     let close = rest.find(')')?;
-    let var = rest[..close].trim().to_string();
+    let after_close = rest[close + 1..].trim();
+    // 跳过 "= "
+    let after_eq = after_close.strip_prefix('=')?.trim();
+    // 提取变量名（到空格或 { 为止）
+    let var = after_eq
+        .split(|c: char| c.is_whitespace() || c == '{')
+        .next()?
+        .trim()
+        .to_string();
     if var.is_empty() || var == "_" {
         return None;
     }
@@ -513,6 +528,25 @@ fn parse_matches_macro(text: &str) -> Option<(String, String)> {
         return None;
     }
     Some((var, guarded))
+}
+
+/// 解析 expr.downcast_ref::<Type>() 形式的类型守卫
+fn parse_downcast_ref(text: &str, func_name: &str, line: usize) -> Option<TypeGuard> {
+    // 匹配 var.downcast_ref::<Type>()
+    let idx = text.find(".downcast_ref::<")?;
+    let var = text[..idx].trim().to_string();
+    let rest = &text[idx + ".downcast_ref::<".len()..];
+    let end = rest.find('>')?;
+    let guarded_type = rest[..end].trim().to_string();
+    if var.is_empty() || guarded_type.is_empty() {
+        return None;
+    }
+    Some(TypeGuard {
+        function: func_name.to_string(),
+        guarded_type,
+        line,
+        var,
+    })
 }
 
 #[cfg(test)]

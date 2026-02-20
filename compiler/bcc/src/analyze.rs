@@ -50,7 +50,18 @@ fn type_compatible(ann_type: &str, guard_type: &str, lang: &str) -> bool {
             }
         }
         "rust" => {
-            // Rust 类型匹配（预留）
+            // Option<T> / &Option<T> ↔ Some 守卫
+            if guard == "Some"
+                && (ann.starts_with("Option") || ann.starts_with("&Option"))
+            {
+                return true;
+            }
+            // Result<T, E> / &Result<T, E> ↔ Ok/Err 守卫
+            if (guard == "Ok" || guard == "Err")
+                && (ann.starts_with("Result") || ann.starts_with("&Result"))
+            {
+                return true;
+            }
             matches!(
                 (ann, guard),
                 ("&str", "str") | ("String", "String") | ("Vec", "Vec")

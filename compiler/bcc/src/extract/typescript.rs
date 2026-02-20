@@ -638,13 +638,16 @@ fn extract_ts_type_info(
                 .child_by_field_name("name")
                 .map(|n| common::node_text(n, source))
                 .unwrap_or_default();
-            // 提取参数的类型标注
-            if let Some(params) = node.child_by_field_name("parameters") {
-                extract_ts_param_annotations(params, source, &func_name, type_annotations);
-            }
-            // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
-            if let Some(body) = node.child_by_field_name("body") {
-                extract_ts_type_guards(body, source, &func_name, type_guards);
+            // 跳过匿名函数（空 func_name），避免跨函数误配
+            if !func_name.is_empty() {
+                // 提取参数的类型标注
+                if let Some(params) = node.child_by_field_name("parameters") {
+                    extract_ts_param_annotations(params, source, &func_name, type_annotations);
+                }
+                // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
+                if let Some(body) = node.child_by_field_name("body") {
+                    extract_ts_type_guards(body, source, &func_name, type_guards);
+                }
             }
         }
         // 压栈子节点（逆序以保持遍历顺序）
