@@ -110,9 +110,33 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 
 	// 白名单过滤：仅保留 --profile 指定的语言 group
 	if mode := c.prConflictProfileMode(); mode == "whitelist" {
-		profileGroups = FilterConflictProfileGroups(profileGroups, c.prConflictProfileWhitelist())
+		whitelist := c.prConflictProfileWhitelist()
+		filteredOut := FilterConflictProfileGroupsExcluded(profileGroups, whitelist)
+		profileGroups = FilterConflictProfileGroups(profileGroups, whitelist)
 		if len(profileGroups) == 0 {
 			return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("白名单过滤后无可用 profile group，升级人工"))
+		}
+		// 被过滤的文件升级 human
+		if len(filteredOut) > 0 {
+			var filteredFiles []string
+			var filteredProfiles []string
+			for _, g := range filteredOut {
+				filteredFiles = append(filteredFiles, g.Files...)
+				filteredProfiles = append(filteredProfiles, g.Profile.Name())
+			}
+			if err := c.emitConflictLayerSwitchComment(
+				ctx,
+				task.IssueNum(),
+				reviewStatus.HeadSHA,
+				prConflictLayerStepHumanEscalate,
+				fmt.Sprintf("## ⚠️ 白名单过滤文件升级人工\n\n- 被过滤 profile: `%s`\n- 被过滤文件: `%s`\n- 原因: 不在白名单 `%s` 中",
+					strings.Join(filteredProfiles, ", "),
+					strings.Join(filteredFiles, ", "),
+					strings.Join(whitelist, ", "),
+				),
+			); err != nil {
+				return false, err
+			}
 		}
 	}
 
@@ -730,11 +754,23 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		err = c.tryResolveGroupByAI(ctx, repoDir, group, summaries, provider, allGroupFiles)
 		if err != nil {
 			// 回滚该 group 的文件
-			_ = c.rollbackPRConflictAttempt(ctx, repoDir, groupSnapshot)
+			rollbackErr := c.rollbackPRConflictAttempt(ctx, repoDir, groupSnapshot)
+			errMsg := trimPRConflictError(err)
+			if rollbackErr != nil {
+				errMsg = fmt.Sprintf("%s; rollback failed: %s", errMsg, trimPRConflictError(rollbackErr))
+				// 回滚失败会污染工作区，中止后续 group 处理
+				groupResults = append(groupResults, groupResolutionResult{
+					Profile: group.Profile.Name(),
+					Status:  "failed",
+					Error:   errMsg,
+				})
+				failCount++
+				break
+			}
 			groupResults = append(groupResults, groupResolutionResult{
 				Profile: group.Profile.Name(),
 				Status:  "failed",
-				Error:   trimPRConflictError(err),
+				Error:   errMsg,
 			})
 			failCount++
 			continue

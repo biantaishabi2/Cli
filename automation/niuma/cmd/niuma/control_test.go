@@ -298,6 +298,8 @@ func TestResolveProfileFlag(t *testing.T) {
 		{"flag=none", "none", "auto", "none"},
 		{"空格 flag 忽略", "  ", "elixir", "elixir"},
 		{"空格 env 忽略", "", "  ", "auto"},
+		{"cobra 默认 auto 时 env 可覆盖", "auto", "go,rust", "go,rust"},
+		{"cobra 默认 auto 无 env", "auto", "", "auto"},
 	}
 
 	for _, tc := range cases {

@@ -325,6 +325,39 @@ func TestFilterConflictProfileGroups(t *testing.T) {
 	})
 }
 
+func TestFilterConflictProfileGroupsExcluded(t *testing.T) {
+	groups, err := ResolveConflictProfileGroups([]string{
+		"pkg/service.go",
+		"apps/web/lib/web.ex",
+		"crates/core/src/lib.rs",
+	})
+	require.NoError(t, err)
+	require.Len(t, groups, 3)
+
+	t.Run("空白名单返回空", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, nil)
+		assert.Empty(t, excluded)
+	})
+
+	t.Run("仅排除 elixir", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, []string{"go", "rust"})
+		require.Len(t, excluded, 1)
+		assert.Equal(t, "elixir", excluded[0].Profile.Name())
+	})
+
+	t.Run("全部排除", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, []string{"python"})
+		assert.Len(t, excluded, 3)
+	})
+
+	t.Run("与 Filter 互补", func(t *testing.T) {
+		whitelist := []string{"go", "rust"}
+		included := FilterConflictProfileGroups(groups, whitelist)
+		excluded := FilterConflictProfileGroupsExcluded(groups, whitelist)
+		assert.Equal(t, len(groups), len(included)+len(excluded))
+	})
+}
+
 func TestResolveConflictProfileGroups_MixedLanguagesStableGrouping(t *testing.T) {
 	groups, err := ResolveConflictProfileGroups([]string{
 		"pkg/service.go",

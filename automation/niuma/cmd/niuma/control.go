@@ -100,7 +100,7 @@ func init() {
 	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictElixirTestCmd, "pr-conflict-elixir-test-cmd", "mix test", "Elixir 冲突修复门禁测试命令，为空则跳过")
-	controlRunCmd.Flags().StringVar(&flagPRConflictProfile, "profile", "", "冲突修复 profile 路由（auto|<lang,...>|none），默认 auto（env: NIUMA_PR_CONFLICT_PROFILE）")
+	controlRunCmd.Flags().StringVar(&flagPRConflictProfile, "profile", "auto", "冲突修复 profile 路由（auto|<lang,...>|none）（env: NIUMA_PR_CONFLICT_PROFILE）")
 	controlCloseMergedCmd.Flags().BoolVar(&flagDispatchWakeup, "dispatch-wakeup", false, "close-merged 后发送 niuma.task.completed dispatch 事件")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
@@ -267,11 +267,18 @@ func parseBackoffDurations(raw string) ([]time.Duration, error) {
 
 // resolveProfileFlag 按 flag > env > default 分层解析 profile 配置。
 func resolveProfileFlag(flagVal, envVal string) string {
-	if strings.TrimSpace(flagVal) != "" {
-		return strings.TrimSpace(flagVal)
+	flagVal = strings.TrimSpace(flagVal)
+	envVal = strings.TrimSpace(envVal)
+	// flag 显式设置非默认值时优先
+	if flagVal != "" && flagVal != "auto" {
+		return flagVal
 	}
-	if strings.TrimSpace(envVal) != "" {
-		return strings.TrimSpace(envVal)
+	// env 可覆盖默认值 auto
+	if envVal != "" {
+		return envVal
+	}
+	if flagVal != "" {
+		return flagVal
 	}
 	return "auto"
 }

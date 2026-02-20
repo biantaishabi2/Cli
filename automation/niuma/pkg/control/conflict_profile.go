@@ -189,6 +189,24 @@ func FilterConflictProfileGroups(groups []ConflictProfileGroup, whitelist []stri
 	return filtered
 }
 
+// FilterConflictProfileGroupsExcluded 返回不在白名单中的 profile groups（与 FilterConflictProfileGroups 互补）。
+func FilterConflictProfileGroupsExcluded(groups []ConflictProfileGroup, whitelist []string) []ConflictProfileGroup {
+	if len(whitelist) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(whitelist))
+	for _, lang := range whitelist {
+		allowed[strings.TrimSpace(strings.ToLower(lang))] = struct{}{}
+	}
+	excluded := make([]ConflictProfileGroup, 0)
+	for _, g := range groups {
+		if _, ok := allowed[strings.ToLower(g.Profile.Name())]; !ok {
+			excluded = append(excluded, g)
+		}
+	}
+	return excluded
+}
+
 func (p *suffixConflictProfile) BuildPrompt(files []ConflictPromptFile) (string, error) {
 	if len(files) == 0 {
 		return "", fmt.Errorf("profile %s 没有可处理的冲突文件", p.name)
