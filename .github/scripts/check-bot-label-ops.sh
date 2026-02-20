@@ -30,7 +30,7 @@ if [ -n "$MATCHES" ]; then
   echo "$MATCHES"
   echo
   echo "请改用受控命令："
-  echo "  niuma state-label set --repo <owner/repo> --issue <num> --to <bot:state>"
+  echo "  niuma state-label set --repo <owner/repo> --issue <num> --from <bot:current> --to <bot:state>"
   echo
   echo "说明：gh issue edit --add-label/--remove-label bot:* 会破坏状态机一致性。"
   exit 1
