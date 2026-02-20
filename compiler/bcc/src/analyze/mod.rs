@@ -122,15 +122,31 @@ pub fn run(
         .map(|d| d.as_ref())
         .collect();
 
-    let reports: Vec<SmellReport> = records
+    let mut reports: Vec<SmellReport> = records
         .iter()
         .map(|record| {
             // 读取源码：优先从 source_code 字段，否则从 file_path 读取
-            let source_code = record
-                .source_code
-                .clone()
-                .or_else(|| fs::read_to_string(&record.file_path).ok())
-                .unwrap_or_default();
+            let source_code = match &record.source_code {
+                Some(code) => code.clone(),
+                None => match fs::read_to_string(&record.file_path) {
+                    Ok(code) => code,
+                    Err(e) => {
+                        eprintln!(
+                            "[analyze] warning: cannot read source '{}': {}, skipping detectors",
+                            record.file_path, e
+                        );
+                        return SmellReport {
+                            file: record.file_path.clone(),
+                            summary: SmellSummary {
+                                total_smells: 0,
+                                by_severity: HashMap::new(),
+                                by_category: HashMap::new(),
+                            },
+                            smells: Vec::new(),
+                        };
+                    }
+                },
+            };
 
             // 尝试 tree-sitter parse（可能失败，如不支持的语言）
             let tree = get_language(&record.language).and_then(|lang| {
@@ -167,6 +183,39 @@ pub fn run(
         })
         .collect();
 
+    // 跨文件重复检测
+    let cross_smells = run_cross_file_detectors(&records, &rule_filter);
+    if !cross_smells.is_empty() {
+        // 将跨文件 smell 分配到对应文件的 report 中
+        let report_map: HashMap<String, usize> = reports
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.file.clone(), i))
+            .collect();
+        for smell in cross_smells {
+            if let Some(&idx) = report_map.get(&smell.file) {
+                reports[idx].smells.push(smell);
+            }
+        }
+        // 重新计算受影响 report 的 summary
+        for report in &mut reports {
+            let total = report.smells.len();
+            if total != report.summary.total_smells {
+                let mut by_severity: HashMap<String, usize> = HashMap::new();
+                let mut by_category: HashMap<String, usize> = HashMap::new();
+                for smell in &report.smells {
+                    *by_severity.entry(smell.severity.clone()).or_insert(0) += 1;
+                    *by_category.entry(smell.category.clone()).or_insert(0) += 1;
+                }
+                report.summary = SmellSummary {
+                    total_smells: total,
+                    by_severity,
+                    by_category,
+                };
+            }
+        }
+    }
+
     let json = serde_json::to_string_pretty(&reports)?;
     if let Some(parent) = std::path::Path::new(output).parent() {
         fs::create_dir_all(parent).ok();
@@ -197,11 +246,19 @@ pub fn run_cross_file_detectors(
     {
         let mut all_functions = Vec::new();
         for record in records {
-            let source_code = record
-                .source_code
-                .clone()
-                .or_else(|| fs::read_to_string(&record.file_path).ok())
-                .unwrap_or_default();
+            let source_code = match &record.source_code {
+                Some(code) => code.clone(),
+                None => match fs::read_to_string(&record.file_path) {
+                    Ok(code) => code,
+                    Err(e) => {
+                        eprintln!(
+                            "[analyze] warning: cannot read source '{}': {}, skipping cross-file detection",
+                            record.file_path, e
+                        );
+                        continue;
+                    }
+                },
+            };
 
             if let Some(lang) = get_language(&record.language) {
                 let mut parser = tree_sitter::Parser::new();
