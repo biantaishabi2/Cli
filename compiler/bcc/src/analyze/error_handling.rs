@@ -43,11 +43,16 @@ impl Detector for SwallowedErrorDetector {
             }
 
             // Python: except ... : \n pass/...
-            // 跳过空行找到第一个非空行来判断
+            // 跳过空行和注释行找到第一个实际语句来判断
             if lang == "python" && trimmed.starts_with("except") && trimmed.ends_with(':') {
                 let mut next_idx = i + 1;
-                while next_idx < lines.len() && lines[next_idx].trim().is_empty() {
-                    next_idx += 1;
+                while next_idx < lines.len() {
+                    let t = lines[next_idx].trim();
+                    if t.is_empty() || t.starts_with('#') {
+                        next_idx += 1;
+                    } else {
+                        break;
+                    }
                 }
                 if let Some(next) = lines.get(next_idx) {
                     let next_trimmed = next.trim();
@@ -335,6 +340,16 @@ mod tests {
         let source = "try { risky() } catch (e) { handleError(e) }";
         let results = d.detect(source, "main.ts", "typescript");
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn swallowed_error_detects_comment_then_pass() {
+        let d = SwallowedErrorDetector;
+        // except: 后第一行是注释，第二行是 pass → 应检出
+        let source = "try:\n    risky()\nexcept:\n    # ignore error\n    pass\n";
+        let results = d.detect(source, "main.py", "python");
+        assert_eq!(results.len(), 1, "Comment followed by pass should be detected as swallowed error");
+        assert_eq!(results[0].rule, "swallowed_error");
     }
 
     #[test]

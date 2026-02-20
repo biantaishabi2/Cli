@@ -320,6 +320,69 @@ fn e2e_rust_no_broad_catch() {
         "Rust should not trigger broad_catch, got: {:?}", smells);
 }
 
+// --- 空文件应正常处理 ---
+
+#[test]
+fn e2e_empty_source_file_succeeds() {
+    let dir = temp_dir("analyze_bdd_empty");
+    let src_path = dir.join("empty.py");
+    let ast_path = dir.join("ast.json");
+    let out_path = dir.join("smells.json");
+
+    fs::write(&src_path, "").unwrap(); // 合法的空文件
+
+    let ast_json = format!(r#"[{{
+        "language": "python",
+        "file_path": "{}",
+        "module_doc": null,
+        "exports": [],
+        "imports": [],
+        "calls": [],
+        "side_effects": {{
+            "hasAsync": false,
+            "hasHttp": false,
+            "hasGenserver": false,
+            "hasFileIo": false,
+            "hasPubsub": false
+        }},
+        "loc_lines": 0,
+        "declarations": 0
+    }}]"#, src_path.to_str().unwrap());
+    fs::write(&ast_path, &ast_json).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", ast_path.to_str().unwrap(),
+            "-o", out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run bcc analyze");
+    assert!(output.status.success(),
+        "Empty source file should not cause failure: {}", String::from_utf8_lossy(&output.stderr));
+
+    let raw = fs::read_to_string(&out_path).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.is_empty(), "Empty file should produce no smells");
+}
+
+// --- Python comment+pass 应检出 swallowed_error ---
+
+#[test]
+fn e2e_swallowed_error_comment_then_pass() {
+    // except: 后跟注释再跟 pass → 应检出 swallowed_error
+    let result = run_analyze(
+        "try:\n    risky()\nexcept:\n    # ignore error\n    pass\n",
+        "main.py",
+        "python",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().any(|s| s["rule"] == "swallowed_error"),
+        "Comment followed by pass should trigger swallowed_error, got: {:?}", smells);
+}
+
 // --- 源码读取失败应返回非零退出码 ---
 
 #[test]

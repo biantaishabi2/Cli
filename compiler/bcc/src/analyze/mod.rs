@@ -158,7 +158,7 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
             {
                 Ok(s) if !s.is_empty() => s,
                 Ok(_) => {
-                    read_failures.push(format!("{}: file is empty", file_path));
+                    // 空文件是合法的，直接返回空报告（不视为读取失败）
                     return SmellReport {
                         file: file_path.clone(),
                         smells: vec![],
@@ -444,6 +444,48 @@ mod tests {
         for smell in &result[0].smells {
             assert_eq!(smell.category, "security");
         }
+    }
+
+    #[test]
+    fn empty_source_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("empty.py");
+        fs::write(&src_path, "").unwrap(); // 合法的空文件
+
+        let ast_path = dir.path().join("ast.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = format!(r#"[{{
+            "language": "python",
+            "file_path": "{}",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {{
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            }},
+            "loc_lines": 0,
+            "declarations": 0
+        }}]"#, src_path.to_str().unwrap());
+        fs::write(&ast_path, &ast_json).unwrap();
+
+        // 空文件不应导致失败
+        let result = run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            None,
+        );
+        assert!(result.is_ok(), "Empty source file should not cause failure: {:?}", result.err());
+
+        let reports: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].smells.is_empty());
     }
 
     #[test]
