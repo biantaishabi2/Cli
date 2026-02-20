@@ -798,7 +798,15 @@ func (b *IntegrationBuilder) ComputeOldestMergeBase(prBranches []string) (string
 		// 如果 candidate 是 oldest 的祖先，candidate 更旧
 		if err := b.git("merge-base", "--is-ancestor", candidate, oldest); err == nil {
 			oldest = candidate
+		} else if err := b.git("merge-base", "--is-ancestor", oldest, candidate); err != nil {
+			// 互不可比：取两者的公共祖先
+			common, mbErr := b.gitOutput("merge-base", oldest, candidate)
+			if mbErr != nil {
+				return "", fmt.Errorf("计算不可比 merge-base 的公共祖先失败: %w", mbErr)
+			}
+			oldest = common
 		}
+		// else: oldest 是 candidate 的祖先，oldest 更旧，保持不变
 	}
 
 	return oldest, nil

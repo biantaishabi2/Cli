@@ -597,6 +597,41 @@ func TestIntegrationBuilder_MasterAdvanced_NoFalseConflict(t *testing.T) {
 	assert.Error(t, showErr, "integration 分支不应包含 master 新增的文件")
 }
 
+func TestIntegrationBuilder_SinglePRBranch_MasterAdvanced(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	// 创建分支 A 基于 c0
+	createBranch(t, dir, "feat/80-single", "single.go", "package single\n")
+
+	// master 前进
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "master_new.go"), []byte("package masternew\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	branches := []BranchInfo{
+		{Branch: "feat/80-single", IssueNum: 80},
+	}
+
+	// Build 应成功，单个分支正常 merge
+	result, err := builder.Build("integration/test-single-pr", branches, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []int{80}, result.Merged)
+	assert.Empty(t, result.Conflicts)
+
+	// integration 分支应从该分支的 merge-base 创建，不包含 master 新增文件
+	cmd := exec.Command("git", "show", "integration/test-single-pr:master_new.go")
+	cmd.Dir = dir
+	_, showErr := cmd.CombinedOutput()
+	assert.Error(t, showErr, "integration 分支不应包含 master 新增的文件")
+
+	// 但应包含 PR 分支的文件
+	content := runGitOutput(t, dir, "show", "integration/test-single-pr:single.go")
+	assert.Contains(t, content, "package single")
+}
+
 func TestIntegrationBuilder_RealConflictStillDetected(t *testing.T) {
 	dir := setupGitRepo(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
