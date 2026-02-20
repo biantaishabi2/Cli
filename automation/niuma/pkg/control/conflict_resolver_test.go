@@ -585,6 +585,8 @@ func helperValue() int {
 func TestProfileRule_GoImportConflictViaProfileDispatch(t *testing.T) {
 	// 验证 useProfileRuleResolver=true 时，tryResolveConflictByRule 通过 profile 派发
 	// 正确解析 Go import 冲突（与既有直接调用行为一致）。
+	// 注：编译期常量 useProfileRuleResolver 无法运行时切换，fallback switch 分支为编译期死代码。
+	// fallback 路径中调用的底层函数（resolveGoImportConflictFile 等）由各自独立的单元测试覆盖。
 	dir := setupGitRepo(t)
 	relPath := "pkg.go"
 	content := `package main
@@ -654,7 +656,7 @@ end
 
 	err := ctrl.tryResolveConflictByRule(context.Background(), dir, []string{relPath})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "未实现 RuleResolver")
+	assert.Contains(t, err.Error(), "未实现 RuleResolver，无法通过规则层处理")
 
 	// 验证回滚：文件恢复原始冲突内容
 	current, readErr := os.ReadFile(filepath.Join(dir, relPath))

@@ -13,9 +13,9 @@ var (
 	ErrUnknownProfile = errors.New("unknown conflict profile")
 
 	defaultConflictProfiles = []ConflictProfile{
-		newSuffixConflictProfile("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。", resolveGoImportConflictFile),
-		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。", nil),
-		newSuffixConflictProfile("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。", resolveRustUseConflictFile),
+		newSuffixConflictProfileWithRule("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。", resolveGoImportConflictFile),
+		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。"),
+		newSuffixConflictProfileWithRule("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。", resolveRustUseConflictFile),
 	}
 )
 
@@ -95,32 +95,42 @@ func ResolveConflictProfileGroups(conflictFiles []string) ([]ConflictProfileGrou
 }
 
 type suffixConflictProfile struct {
-	name           string
-	suffixes       map[string]struct{}
-	profileHint    string
-	ruleResolverFn func(repoDir, relPath string) error
+	name        string
+	suffixes    map[string]struct{}
+	profileHint string
 }
 
-func newSuffixConflictProfile(name string, suffixes []string, profileHint string, ruleResolverFn func(repoDir, relPath string) error) ConflictProfile {
+func newSuffixConflictProfile(name string, suffixes []string, profileHint string) ConflictProfile {
 	normalized := make(map[string]struct{}, len(suffixes))
 	for _, suffix := range suffixes {
 		normalized[strings.ToLower(strings.TrimSpace(suffix))] = struct{}{}
 	}
 	return &suffixConflictProfile{
-		name:           strings.TrimSpace(name),
-		suffixes:       normalized,
-		profileHint:    strings.TrimSpace(profileHint),
-		ruleResolverFn: ruleResolverFn,
+		name:        strings.TrimSpace(name),
+		suffixes:    normalized,
+		profileHint: strings.TrimSpace(profileHint),
 	}
 }
 
-// TryResolveByRule 通过注册的 ruleResolverFn 执行 Rule 层冲突修复。
-// 未注册 ruleResolverFn 的 profile 返回错误。
-func (p *suffixConflictProfile) TryResolveByRule(repoDir string, relPath string) error {
-	if p.ruleResolverFn == nil {
-		return fmt.Errorf("profile %s 未实现 RuleResolver", p.name)
+// suffixRuleResolverProfile 包装 suffixConflictProfile 并添加 RuleResolver 能力。
+// 仅 Go/Rust 等注册了 ruleResolverFn 的 profile 使用此包装，
+// Elixir 等不注册的 profile 不实现 RuleResolver 接口。
+type suffixRuleResolverProfile struct {
+	*suffixConflictProfile
+	resolverFn func(repoDir, relPath string) error
+}
+
+func newSuffixConflictProfileWithRule(name string, suffixes []string, profileHint string, resolverFn func(repoDir, relPath string) error) ConflictProfile {
+	base := newSuffixConflictProfile(name, suffixes, profileHint).(*suffixConflictProfile)
+	return &suffixRuleResolverProfile{
+		suffixConflictProfile: base,
+		resolverFn:            resolverFn,
 	}
-	return p.ruleResolverFn(repoDir, relPath)
+}
+
+// TryResolveByRule 通过注册的 resolverFn 执行 Rule 层冲突修复。
+func (p *suffixRuleResolverProfile) TryResolveByRule(repoDir string, relPath string) error {
+	return p.resolverFn(repoDir, relPath)
 }
 
 func (p *suffixConflictProfile) Name() string {

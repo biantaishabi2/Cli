@@ -230,13 +230,10 @@ func TestElixirProfile_NoRuleResolver(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "elixir", profile.Name())
 
-	// suffixConflictProfile 统一实现了 RuleResolver 接口，
-	// 但 Elixir 未注册 ruleResolverFn，调用应返回错误。
-	rr, ok := profile.(RuleResolver)
-	require.True(t, ok)
-	err = rr.TryResolveByRule("/tmp", "lib/app.ex")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "未实现 RuleResolver")
+	// Elixir profile 使用 suffixConflictProfile（无 wrapper），不实现 RuleResolver 接口，
+	// 类型断言应失败。
+	_, ok := profile.(RuleResolver)
+	assert.False(t, ok, "Elixir profile 不应实现 RuleResolver 接口")
 }
 
 func TestRustProfile_TryResolveByRule(t *testing.T) {
