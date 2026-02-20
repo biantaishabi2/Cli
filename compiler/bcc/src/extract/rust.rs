@@ -196,10 +196,11 @@ fn extract_recursive(
                 if let Some(macro_node) = node.child(0) {
                     let macro_name = common::node_text(macro_node, source);
                     if !macro_name.is_empty() {
+                        let args = extract_macro_args(node, source);
                         calls.push(CallRecord {
                             callee: format!("{}!", macro_name),
                             line: node.start_position().row + 1,
-                            args: vec![],
+                            args,
                         });
                     }
                 }
@@ -241,6 +242,48 @@ fn extract_rust_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<St
                 if !cleaned.is_empty() {
                     args.push(cleaned.to_string());
                 }
+            }
+        }
+    }
+    args
+}
+
+/// 提取宏调用的参数列表（从 token_tree 子节点中按逗号分割）
+fn extract_macro_args(macro_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    // macro_invocation 的第二个子节点通常是 token_tree（括号/方括号/花括号包裹）
+    for i in 0..macro_node.child_count() {
+        if let Some(child) = macro_node.child(i) {
+            if child.kind() == "token_tree" {
+                // 按逗号分割 token_tree 内的内容
+                let mut current_arg = String::new();
+                for j in 0..child.child_count() {
+                    if let Some(token) = child.child(j) {
+                        let kind = token.kind();
+                        // 跳过外层括号
+                        if matches!(kind, "(" | ")" | "[" | "]" | "{" | "}") {
+                            continue;
+                        }
+                        if kind == "," {
+                            let trimmed = current_arg.trim().to_string();
+                            if !trimmed.is_empty() {
+                                args.push(trimmed);
+                            }
+                            current_arg.clear();
+                        } else {
+                            let text = common::node_text(token, source);
+                            if !current_arg.is_empty() {
+                                current_arg.push(' ');
+                            }
+                            current_arg.push_str(&text);
+                        }
+                    }
+                }
+                let trimmed = current_arg.trim().to_string();
+                if !trimmed.is_empty() {
+                    args.push(trimmed);
+                }
+                break;
             }
         }
     }
@@ -826,5 +869,31 @@ pub fn parse(rest: Vec<String>) {
         // 不包含 downcast_ref
         let result = parse_downcast_ref("e.as_ref()", "f", 1);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn macro_invocation_extracts_args() {
+        let source = r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("hello {}", name);
+    format!("{}-{}", a, b);
+}
+"#;
+        let record = super::extract(source, "test_macro_args.rs");
+        // vec! 应提取 args
+        let vec_call = record.calls.iter().find(|c| c.callee == "vec!").unwrap();
+        assert!(
+            !vec_call.args.is_empty(),
+            "vec! 宏调用应提取 args，实际: {:?}",
+            vec_call.args
+        );
+        // println! 应提取 args
+        let println_call = record.calls.iter().find(|c| c.callee == "println!").unwrap();
+        assert!(
+            !println_call.args.is_empty(),
+            "println! 宏调用应提取 args，实际: {:?}",
+            println_call.args
+        );
     }
 }
