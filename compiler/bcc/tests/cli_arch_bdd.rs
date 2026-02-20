@@ -2946,3 +2946,76 @@ fn multi_linter_one_fails_one_succeeds() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn multi_linter_one_timeout_one_succeeds_with_results() {
+    // 验证多 --linter 场景：一个超时、一个成功并产出非空结果，
+    // 超时分支不影响后续成功 linter 的结果聚合
+    let root = temp_dir("bcc_multi_linter_timeout_combo");
+    let ast = root.join("ast.json");
+    let out = root.join("out.json");
+
+    write(&ast, r#"{"source_count":0,"records":[]}"#);
+
+    // slow linter: sleep 60 会被 1s 超时 kill
+    // good linter: 输出 2 条 ruff 格式的 smell 记录
+    let good_cmd = r#"echo '[{"code":"E501","message":"line too long","filename":"f.py","row":1},{"code":"E302","message":"expected 2 blank lines","filename":"g.py","row":10}]'"#;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", &ast.to_string_lossy(),
+            "-o", &out.to_string_lossy(),
+            "--linter", "slow:sleep 60",
+            "--linter", &format!("good:{}", good_cmd),
+        ])
+        .env("BCC_LINTER_TIMEOUT", "1")
+        .output()
+        .expect("run analyze with timeout + success linter");
+
+    assert!(
+        output.status.success(),
+        "should succeed despite one linter timeout, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // 超时的 linter 应有 timeout 告警
+    assert!(
+        stderr.contains("slow") && stderr.contains("timed out"),
+        "should warn about timed-out linter 'slow', stderr: {}",
+        stderr
+    );
+
+    // 成功的 linter 应报告 2 条结果
+    assert!(
+        stderr.contains("good") && stderr.contains("2 smell(s)"),
+        "should report 2 smells from 'good' linter, stderr: {}",
+        stderr
+    );
+
+    // 输出文件应存在且可解析
+    assert!(out.exists(), "output file should exist");
+    let raw = fs::read_to_string(&out).expect("read output");
+    let report: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
+
+    // 验证输出中包含来自 good linter 的 smell 记录
+    let smells = report.get("smells").and_then(|v| v.as_array());
+    assert!(
+        smells.is_some(),
+        "output should contain smells array, raw: {}",
+        raw
+    );
+    let smells = smells.unwrap();
+    let good_smells: Vec<_> = smells.iter().filter(|s| {
+        s.get("source").and_then(|v| v.as_str()) == Some("good")
+    }).collect();
+    assert_eq!(
+        good_smells.len(), 2,
+        "should have 2 smells from 'good' linter, got {}: {:?}",
+        good_smells.len(), good_smells
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
