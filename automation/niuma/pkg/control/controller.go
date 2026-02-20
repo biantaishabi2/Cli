@@ -126,6 +126,7 @@ const (
 	metaKeyIntegrationConflictSuggestion  = "integration_conflict_suggestion"
 	metaKeyIntegrationConflictRecordedAt  = "integration_conflict_recorded_at"
 	metaKeyIntegrationConflictLabelSynced = "integration_conflict_labeled"
+	metaKeyEscalatedAt                    = "escalated_at"
 
 	metaKeyIntegrationGateStatus                = "integration_gate_status"
 	metaKeyIntegrationGateRetryCount            = "integration_gate_retry_count"
@@ -141,7 +142,8 @@ const (
 
 	integrationGateDefaultMaxRetries = 2
 	integrationGateErrorLimit        = 800
-	prConflictRetryDefaultThreshold  = 3
+	prConflictRetryDefaultThreshold              = 3
+	integrationConflictRetryDefaultThreshold     = 3
 	prConflictAIDefaultMaxAttempts   = 2
 
 	issueLockDefaultTTL       = 5 * time.Minute
@@ -158,10 +160,13 @@ const (
 )
 
 var (
-	prConflictRetryMarkerRe             = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
-	defaultPRConflictUnknownBackoffs    = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
-	prConflictDetectedCommentMarkerFmt  = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
-	prConflictEscalatedCommentMarkerFmt = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
+	prConflictRetryMarkerRe                 = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
+	integrationConflictRetryMarkerRe        = regexp.MustCompile(`<!--\s*INTEGRATION_CONFLICT_RETRY:(\d+)\s*-->`)
+	defaultPRConflictUnknownBackoffs        = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+	prConflictDetectedCommentMarkerFmt      = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
+	prConflictEscalatedCommentMarkerFmt     = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
+	integrationConflictCommentMarker        = "<!-- BOT:INTEGRATION_CONFLICT_RETRY -->"
+	needsHumanRecoveryCooldown              = 5 * time.Minute
 )
 
 // Controller 多 Issue 协调控制器
@@ -918,6 +923,17 @@ func (c *Controller) Run(ctx context.Context) error {
 
 			fmt.Printf("[control] Integration 分支 %s: 有 %d 个 PR 待合入\n", branchName, len(tasks))
 
+			// 收集所有 PR 分支名，计算最旧 merge-base 作为 integration 分支起点
+			var prBranches []string
+			for _, task := range tasks {
+				prBranches = append(prBranches, task.Branch())
+			}
+			startPoint, err := c.builder.ComputeOldestMergeBase(prBranches)
+			if err != nil {
+				fmt.Printf("[control] 计算 merge-base 失败，fallback 到 baseBranch: %v\n", err)
+				startPoint = ""
+			}
+
 			for _, task := range tasks {
 				bi := BranchInfo{
 					Branch:   task.Branch(),
@@ -926,7 +942,7 @@ func (c *Controller) Run(ctx context.Context) error {
 					TaskID:   task.ID,
 				}
 
-				outcome, err := c.builder.ExecuteIntegrationMerge(branchName, bi)
+				outcome, err := c.builder.ExecuteIntegrationMerge(branchName, bi, startPoint)
 				if err != nil {
 					fmt.Printf("[control] 合入 %s 失败: %v\n", bi.Branch, err)
 					continue
@@ -946,7 +962,20 @@ func (c *Controller) Run(ctx context.Context) error {
 					fmt.Printf("[control] 合入 %s 后 gate 未通过，等待修复 (issue #%d)\n", bi.Branch, bi.IssueNum)
 
 				case MergeStatusEscalated:
-					c.escalateIntegrationConflict(ctx, task, outcome)
+					if c.tryResolveIntegrationConflictWithAI(ctx, task, outcome) {
+						integrated, err := c.runIntegrationGateAndDecide(ctx, task, outcome)
+						if err != nil {
+							fmt.Printf("[control] integration gate 决策失败 (AI 解冲突后, task %s): %v\n", task.ID, err)
+							continue
+						}
+						if integrated {
+							fmt.Printf("[control] AI 解冲突后合入 %s (issue #%d) 到 %s\n", bi.Branch, bi.IssueNum, branchName)
+							continue
+						}
+						fmt.Printf("[control] AI 解冲突后 gate 未通过，等待修复 (issue #%d)\n", bi.IssueNum)
+						continue
+					}
+					c.handleIntegrationConflictRetry(ctx, task, outcome)
 
 				default:
 					fmt.Printf("[control] 合入 %s 返回未知状态 %q，跳过\n", bi.Branch, outcome.Status)
@@ -954,6 +983,9 @@ func (c *Controller) Run(ctx context.Context) error {
 				}
 			}
 		}
+
+		// ⑦.5 检查 needs-human + integration-conflict 的自动恢复
+		c.reconcileNeedsHumanRecovery(ctx, allTasks)
 
 		// ⑧ 检查父 issue 进度（Sub-Issue 模式）
 		c.checkParentProgress(ctx, allIssuesCache)
@@ -2510,7 +2542,11 @@ func (c *Controller) escalateIntegrationConflict(ctx context.Context, task Task,
 		return
 	}
 
-	labelMeta := map[string]string{metaKeyIntegrationConflictLabelSynced: "true"}
+	now := time.Now().UTC().Format(time.RFC3339)
+	labelMeta := map[string]string{
+		metaKeyIntegrationConflictLabelSynced: "true",
+		metaKeyEscalatedAt:                    now,
+	}
 	if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &labelMeta}); err != nil {
 		fmt.Printf("[control] 写入打标状态失败 (task %s): %v\n", task.ID, err)
 	}
@@ -2597,4 +2633,265 @@ func uniquePositiveIssueNumbers(nums []int) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+// tryResolveIntegrationConflictWithAI 在 integration merge 冲突后尝试 AI 解冲突。
+// 成功返回 true（merge commit 已完成），失败返回 false（已 abort）。
+func (c *Controller) tryResolveIntegrationConflictWithAI(ctx context.Context, task Task, outcome MergeOutcome) bool {
+	repoDir := c.prConflictRepoDir()
+	if repoDir == "" {
+		fmt.Printf("[control] repoDir 为空，跳过 AI 解冲突 (task %s)\n", task.ID)
+		return false
+	}
+
+	// abortAndEscalate 已执行 git merge --abort，需要重新 merge 重现冲突
+	if _, err := c.runCommand(ctx, repoDir, "git", "checkout", outcome.IntegrationBranch); err != nil {
+		fmt.Printf("[control] checkout %s 失败，跳过 AI 解冲突: %v\n", outcome.IntegrationBranch, err)
+		return false
+	}
+
+	if _, err := c.runCommand(ctx, repoDir, "git", "merge", "--no-ff", "--no-commit", outcome.SourceBranch); err == nil {
+		// merge 成功说明冲突已消解，直接 commit
+		if _, commitErr := c.runCommand(ctx, repoDir, "git", "commit", "--no-edit"); commitErr != nil {
+			fmt.Printf("[control] 冲突已消解但 commit 失败: %v\n", commitErr)
+			c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+			return false
+		}
+		fmt.Printf("[control] 冲突已消解，直接合入 %s (issue #%d)\n", outcome.SourceBranch, task.IssueNum())
+		return true
+	}
+
+	// 收集冲突详情
+	conflictFiles, summaries, err := c.collectPRConflictDetails(ctx, repoDir)
+	if err != nil || len(conflictFiles) == 0 {
+		fmt.Printf("[control] 收集冲突详情失败或无冲突文件，放弃 AI 解冲突: %v\n", err)
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+
+	// 检查 AI 白名单
+	allowed, reason := c.allowAIConflictResolution(conflictFiles, summaries)
+	if !allowed {
+		fmt.Printf("[control] 冲突不在 AI 白名单内 (%s)，放弃 AI 解冲突 (issue #%d)\n", reason, task.IssueNum())
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+
+	// 构建 profile groups
+	profileGroups, err := ResolveConflictProfileGroups(conflictFiles)
+	if err != nil {
+		fmt.Printf("[control] 解析 profile groups 失败: %v\n", err)
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+
+	// 调用 AI 解冲突
+	result, err := c.tryResolveConflictByAIOnce(ctx, repoDir, conflictFiles, summaries, profileGroups)
+	if err != nil || result == nil || len(result.SuccessFiles) != len(conflictFiles) {
+		fmt.Printf("[control] AI 解冲突失败 (issue #%d): err=%v\n", task.IssueNum(), err)
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+
+	// AI 解冲突成功，只 git add 冲突文件（避免将无关变更带入 merge commit）
+	gitAddArgs := append([]string{"add", "--"}, conflictFiles...)
+	if _, err := c.runCommand(ctx, repoDir, "git", gitAddArgs...); err != nil {
+		fmt.Printf("[control] AI 解冲突后 git add 失败: %v\n", err)
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+	if _, err := c.runCommand(ctx, repoDir, "git", "commit", "--no-edit"); err != nil {
+		fmt.Printf("[control] AI 解冲突后 commit 失败: %v\n", err)
+		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
+		return false
+	}
+
+	fmt.Printf("[control] AI 解冲突成功，已合入 %s (issue #%d, files=%d)\n",
+		outcome.SourceBranch, task.IssueNum(), len(conflictFiles))
+	return true
+}
+
+// handleIntegrationConflictRetry 在 AI 解冲突失败后执行 retry 机制。
+// retryCount <= threshold: 回退到 bot:pr-needs-fix 让 bot rebase PR
+// retryCount > threshold: 走原有 escalate 路径
+func (c *Controller) handleIntegrationConflictRetry(ctx context.Context, task Task, outcome MergeOutcome) {
+	issueNum := task.IssueNum()
+	if issueNum <= 0 {
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
+	}
+
+	issue, err := c.github.GetIssue(ctx, issueNum)
+	if err != nil {
+		fmt.Printf("[control] 读取 issue #%d 失败，直接 escalate: %v\n", issueNum, err)
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
+	}
+
+	retryCount := parseIntegrationConflictRetryCount(issue.Body) + 1
+	threshold := integrationConflictRetryDefaultThreshold
+
+	if retryCount > threshold {
+		fmt.Printf("[control] integration 冲突 retry 超限 (%d > %d)，escalate issue #%d\n", retryCount, threshold, issueNum)
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
+	}
+
+	// 更新 retry marker（失败则 escalate，避免 retryCount 无法递增导致无限重试）
+	if err := c.persistIntegrationConflictRetryCount(ctx, issue, retryCount); err != nil {
+		fmt.Printf("[control] 写入 integration retry marker 失败 (issue #%d)，escalate: %v\n", issueNum, err)
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
+	}
+
+	// 写 comment 标注来源
+	commentBody := fmt.Sprintf(
+		"%s\n\n**Integration merge 冲突** (retry %d/%d)\n\n"+
+			"源分支 `%s` 在合入 integration 分支 `%s` 时发生冲突，AI 解冲突未能处理。\n"+
+			"已回退到 `bot:pr-needs-fix`，等待 bot rebase 后重新尝试。",
+		integrationConflictCommentMarker, retryCount, threshold,
+		outcome.SourceBranch, outcome.IntegrationBranch,
+	)
+	if err := c.github.AddIssueComment(ctx, issueNum, commentBody); err != nil {
+		fmt.Printf("[control] 写入 integration 冲突 comment 失败 (issue #%d): %v\n", issueNum, err)
+	}
+
+	// 回退到 bot:pr-needs-fix
+	if err := c.syncIssueStateLabel(ctx, issueNum, "bot:pr-needs-fix"); err != nil {
+		fmt.Printf("[control] 回退 issue #%d 到 bot:pr-needs-fix 失败: %v\n", issueNum, err)
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
+	}
+
+	fmt.Printf("[control] integration 冲突 retry %d/%d: issue #%d 回退到 bot:pr-needs-fix\n", retryCount, threshold, issueNum)
+}
+
+func parseIntegrationConflictRetryCount(body string) int {
+	matches := integrationConflictRetryMarkerRe.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		return 0
+	}
+	count, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func upsertIntegrationConflictRetryMarker(body string, retryCount int) (string, bool) {
+	markerLine := fmt.Sprintf("<!-- INTEGRATION_CONFLICT_RETRY:%d -->", retryCount)
+	if loc := integrationConflictRetryMarkerRe.FindStringIndex(body); loc != nil {
+		current := body[loc[0]:loc[1]]
+		if current == markerLine {
+			return body, false
+		}
+		return body[:loc[0]] + markerLine + body[loc[1]:], true
+	}
+
+	trimmed := strings.TrimRight(body, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return markerLine, true
+	}
+	return trimmed + "\n\n" + markerLine, true
+}
+
+func (c *Controller) persistIntegrationConflictRetryCount(ctx context.Context, issue IssueInfo, retryCount int) error {
+	updatedBody, changed := upsertIntegrationConflictRetryMarker(issue.Body, retryCount)
+	if !changed {
+		return nil
+	}
+	return c.github.UpdateIssueBody(ctx, issue.Number, updatedBody)
+}
+
+// reconcileNeedsHumanRecovery 检查带 needs-human + integration-conflict 标签的 issue，
+// 如果关联 PR 恢复 MERGEABLE，则自动恢复到 bot:pr-reviewable。
+func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Task) {
+	for _, task := range tasks {
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+
+		// 冷却期检查（需要 metadata 中有 escalated_at）
+		if escalatedAt := valueOrEmpty(task.Metadata, metaKeyEscalatedAt); escalatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, escalatedAt); err == nil {
+				nowFn := c.nowFn
+				if nowFn == nil {
+					nowFn = time.Now
+				}
+				if nowFn().Sub(t) < needsHumanRecoveryCooldown {
+					continue
+				}
+			}
+		}
+
+		// 确认 issue 确实带 needs-human + integration-conflict
+		labels, err := c.github.ListLabels(ctx, issueNum)
+		if err != nil {
+			continue
+		}
+		if !hasLabel(labels, needsHumanLabel) || !hasLabel(labels, integrationConflictLabel) {
+			continue
+		}
+
+		// 查询 PR mergeable 状态
+		reviewStatus, err := c.github.ResolvePRReviewStatus(ctx, issueNum)
+		if err != nil {
+			continue
+		}
+		if !reviewStatus.IsMergeable() {
+			continue
+		}
+
+		// PR 恢复 MERGEABLE，清除标签恢复流转
+		fmt.Printf("[control] issue #%d PR 已恢复 MERGEABLE，自动恢复到 bot:pr-reviewable\n", issueNum)
+
+		// 恢复到 bot:pr-reviewable
+		if err := c.syncIssueStateLabel(ctx, issueNum, "bot:pr-reviewable"); err != nil {
+			fmt.Printf("[control] issue #%d 恢复到 bot:pr-reviewable 失败: %v\n", issueNum, err)
+			continue
+		}
+
+		// 清除 integration-conflict 和 needs-human 标签（syncIssueStateLabel 已处理 bot:* 标签切换，
+		// 但 integration-conflict 和 needs-human 不是 bot:* 前缀，需要通过 ReplaceLabels 处理）
+		labelsCleaned := false
+		currentLabels, err := c.github.ListLabels(ctx, issueNum)
+		if err == nil {
+			filtered := make([]string, 0, len(currentLabels))
+			for _, l := range currentLabels {
+				if l != integrationConflictLabel && l != needsHumanLabel {
+					filtered = append(filtered, l)
+				}
+			}
+			if len(filtered) != len(currentLabels) {
+				if err := c.github.ReplaceLabels(ctx, issueNum, filtered); err != nil {
+					fmt.Printf("[control] issue #%d 清除冲突标签失败: %v\n", issueNum, err)
+				} else {
+					labelsCleaned = true
+				}
+			} else {
+				labelsCleaned = true
+			}
+		}
+
+		// 只有标签清理成功才清除 metadata 和写恢复 comment，否则保留以便下次 reconcile 重试
+		if labelsCleaned {
+			clearMeta := map[string]string{
+				metaKeyIntegrationConflictLabelSynced: "",
+				metaKeyEscalatedAt:                    "",
+			}
+			if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
+				fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
+			}
+
+			recoveryComment := fmt.Sprintf(
+				"<!-- BOT:NEEDS_HUMAN_RECOVERY -->\n\n"+
+					"**自动恢复**: issue #%d PR 已恢复 MERGEABLE 状态，从 `needs-human` + `integration-conflict` 恢复到 `bot:pr-reviewable`。",
+				issueNum,
+			)
+			if err := c.github.AddIssueComment(ctx, issueNum, recoveryComment); err != nil {
+				fmt.Printf("[control] issue #%d 写恢复 comment 失败: %v\n", issueNum, err)
+			}
+		}
+	}
 }

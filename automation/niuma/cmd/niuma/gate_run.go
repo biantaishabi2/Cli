@@ -71,6 +71,8 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 		PR:         flagPR,
 		RepoDir:    repoDir,
 		MaxRetries: maxRetries,
+		RunID:      os.Getenv("GITHUB_RUN_ID"),
+		RunAttempt: os.Getenv("GITHUB_RUN_ATTEMPT"),
 		MarkNeedsFix: func(ctx context.Context, repo string, issue int) error {
 			return markIssueNeedsFix(ctx, client, issue)
 		},
@@ -86,21 +88,22 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 			_, err := client.AddComment(ctx, issue, body)
 			return err
 		},
-		FindGateRetryCount: func(ctx context.Context, issue int) (int, error) {
+		FindGateRetryState: func(ctx context.Context, issue int) (int, string, error) {
 			mc, err := client.FindMarker(ctx, issue, marker.TypeGateRetry)
 			if err != nil {
-				return 0, err
+				return 0, "", err
 			}
 			if mc == nil {
-				return 0, nil
+				return 0, "", nil
 			}
-			return mc.Marker.Revision, nil
+			return mc.Marker.Revision, mc.Marker.AttemptKey, nil
 		},
-		UpsertGateRetryCount: func(ctx context.Context, issue int, count int) error {
+		UpsertGateRetryCount: func(ctx context.Context, issue int, count int, attemptKey string) error {
 			m := &marker.Marker{
-				Type:     marker.TypeGateRetry,
-				Issue:    issue,
-				Revision: count,
+				Type:       marker.TypeGateRetry,
+				Issue:      issue,
+				Revision:   count,
+				AttemptKey: attemptKey,
 			}
 			body := fmt.Sprintf("gate retry_count=%d", count)
 			return client.CreateOrUpdateMarker(ctx, issue, m, body)

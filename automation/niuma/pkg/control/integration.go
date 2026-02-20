@@ -59,17 +59,24 @@ func IntegrationBranchName(metaIssueSlug string) string {
 	return "integration/" + metaIssueSlug
 }
 
-// EnsureBranch 确保 integration 分支存在（首次从 master 创建）
+// EnsureBranch 确保 integration 分支存在（首次创建）
 // branchName: integration 分支名，如 "integration/phase-3"
-func (b *IntegrationBuilder) EnsureBranch(branchName string) (string, error) {
+// startPoint: 非空时作为创建起点；为空时 fallback 到 baseBranch
+func (b *IntegrationBuilder) EnsureBranch(branchName, startPoint string) (string, error) {
 	// 检查 integration 分支是否已存在
 	out, err := b.gitOutput("branch", "--list", branchName)
 	if err == nil && strings.TrimSpace(out) != "" {
 		return branchName, nil
 	}
 
-	// 从 baseBranch 创建 integration 分支
-	if err := b.git("branch", branchName, b.baseBranch); err != nil {
+	// 决定创建起点
+	base := b.baseBranch
+	if startPoint != "" {
+		base = startPoint
+	}
+
+	// 从 base 创建 integration 分支
+	if err := b.git("branch", branchName, base); err != nil {
 		return "", fmt.Errorf("创建 integration 分支 %s 失败: %w", branchName, err)
 	}
 
@@ -78,8 +85,9 @@ func (b *IntegrationBuilder) EnsureBranch(branchName string) (string, error) {
 
 // MergeOne 将单个完成的 PR 分支 merge 进 integration
 // integrationBranch: 目标 integration 分支名
-func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo) error {
-	outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi)
+// startPoint: 非空时传给 EnsureBranch 作为创建起点
+func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo, startPoint string) error {
+	outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi, startPoint)
 	if err != nil {
 		return err
 	}
@@ -97,7 +105,8 @@ func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo) e
 
 // ExecuteIntegrationMerge 执行统一 integration 合并流程。
 // 结果分为 merged / auto_resolved / escalated。
-func (b *IntegrationBuilder) ExecuteIntegrationMerge(integrationBranch string, bi BranchInfo) (MergeOutcome, error) {
+// startPoint: 非空时传给 EnsureBranch 作为创建起点
+func (b *IntegrationBuilder) ExecuteIntegrationMerge(integrationBranch string, bi BranchInfo, startPoint string) (MergeOutcome, error) {
 	outcome := MergeOutcome{
 		Status:            MergeStatusMerged,
 		IntegrationBranch: integrationBranch,
@@ -109,7 +118,7 @@ func (b *IntegrationBuilder) ExecuteIntegrationMerge(integrationBranch string, b
 	}
 
 	// 确保 integration 分支存在
-	if _, err := b.EnsureBranch(integrationBranch); err != nil {
+	if _, err := b.EnsureBranch(integrationBranch, startPoint); err != nil {
 		return MergeOutcome{}, err
 	}
 
@@ -756,17 +765,71 @@ func assemblePrompt(commonPrompt, profilePrompt string) string {
 	return common + "\n\n" + profile
 }
 
-// Reset 从 master 重建 integration 分支（冲突无法解决时）
+// ComputeOldestMergeBase 对每个 PR 分支计算与 baseBranch 的 merge-base，
+// 返回拓扑序最旧的那个 commit（即最早的公共祖先）。
+// 如果 prBranches 为空，返回空字符串。任一分支计算失败则返回 error。
+// TODO(#411): add merge-base distance check
+func (b *IntegrationBuilder) ComputeOldestMergeBase(prBranches []string) (string, error) {
+	if len(prBranches) == 0 {
+		return "", nil
+	}
+
+	var mergeBases []string
+	for _, branch := range prBranches {
+		mb, err := b.gitOutput("merge-base", b.baseBranch, branch)
+		if err != nil {
+			return "", fmt.Errorf("计算分支 %s 的 merge-base 失败: %w", branch, err)
+		}
+		if mb != "" {
+			mergeBases = append(mergeBases, mb)
+		}
+	}
+
+	if len(mergeBases) == 0 {
+		return "", fmt.Errorf("无法计算任何 PR 分支的 merge-base")
+	}
+
+	// 取拓扑序最旧的 merge-base：两两比较，用 --is-ancestor 找到最旧的
+	oldest := mergeBases[0]
+	for _, candidate := range mergeBases[1:] {
+		if candidate == oldest {
+			continue
+		}
+		// 如果 candidate 是 oldest 的祖先，candidate 更旧
+		if err := b.git("merge-base", "--is-ancestor", candidate, oldest); err == nil {
+			oldest = candidate
+		} else if err := b.git("merge-base", "--is-ancestor", oldest, candidate); err != nil {
+			// 互不可比：取两者的公共祖先
+			common, mbErr := b.gitOutput("merge-base", oldest, candidate)
+			if mbErr != nil {
+				return "", fmt.Errorf("计算不可比 merge-base 的公共祖先失败: %w", mbErr)
+			}
+			oldest = common
+		}
+		// else: oldest 是 candidate 的祖先，oldest 更旧，保持不变
+	}
+
+	return oldest, nil
+}
+
+// Reset 重建 integration 分支（冲突无法解决时）
 // branchName: 要重建的 integration 分支名
-func (b *IntegrationBuilder) Reset(branchName string) error {
+// startPoint: 非空时作为创建起点；为空时 fallback 到 baseBranch
+func (b *IntegrationBuilder) Reset(branchName, startPoint string) error {
 	// 确保不在 integration 分支上
 	_ = b.git("checkout", b.baseBranch)
 
 	// 删除旧的 integration 分支（如果存在）
 	_ = b.git("branch", "-D", branchName)
 
-	// 从 baseBranch 重新创建
-	if err := b.git("branch", branchName, b.baseBranch); err != nil {
+	// 决定创建起点
+	base := b.baseBranch
+	if startPoint != "" {
+		base = startPoint
+	}
+
+	// 从 base 重新创建
+	if err := b.git("branch", branchName, base); err != nil {
 		return fmt.Errorf("重建 integration 分支 %s 失败: %w", branchName, err)
 	}
 
@@ -778,8 +841,19 @@ func (b *IntegrationBuilder) Reset(branchName string) error {
 // branches: 应已按 topo 序排列
 // deps: 依赖关系，key 的分支依赖 value 列表中的 issue
 func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchInfo, deps map[int][]int) (*IntegrationResult, error) {
-	// 重置 integration 分支，从头开始批量 merge
-	if err := b.Reset(integrationBranch); err != nil {
+	// 收集所有 PR 分支名，计算最旧 merge-base 作为 integration 分支起点
+	var prBranches []string
+	for _, bi := range branches {
+		prBranches = append(prBranches, bi.Branch)
+	}
+	startPoint, err := b.ComputeOldestMergeBase(prBranches)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Build] ComputeOldestMergeBase 失败，fallback 到 baseBranch: %v\n", err)
+		startPoint = ""
+	}
+
+	// 重置 integration 分支，从 merge-base 开始批量 merge
+	if err := b.Reset(integrationBranch, startPoint); err != nil {
 		return nil, fmt.Errorf("重置 integration 分支失败: %w", err)
 	}
 
@@ -795,7 +869,7 @@ func (b *IntegrationBuilder) Build(integrationBranch string, branches []BranchIn
 			continue
 		}
 
-		outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi)
+		outcome, err := b.ExecuteIntegrationMerge(integrationBranch, bi, "")
 		if err != nil {
 			return nil, err
 		}
