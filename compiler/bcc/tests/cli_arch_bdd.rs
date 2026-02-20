@@ -2903,3 +2903,46 @@ fn smell_gate_preserves_higher_failure_code() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn multi_linter_one_fails_one_succeeds() {
+    // 验证多个 --linter 时，一个失败不影响另一个成功的结果聚合
+    let root = temp_dir("bcc_multi_linter_combo");
+    let ast = root.join("ast.json");
+    let out = root.join("out.json");
+
+    write(&ast, r#"{"source_count":0,"records":[]}"#);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", &ast.to_string_lossy(),
+            "-o", &out.to_string_lossy(),
+            "--linter", "bad:false",
+            "--linter", "good:echo '[]'",
+        ])
+        .env("BCC_LINTER_TIMEOUT", "5")
+        .output()
+        .expect("run analyze with multi linter");
+
+    assert!(
+        output.status.success(),
+        "should succeed despite one linter failing, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // 失败的 linter 应有告警
+    assert!(
+        stderr.contains("bad") && stderr.contains("failed"),
+        "should warn about failed linter 'bad', stderr: {}",
+        stderr
+    );
+
+    // 输出文件应存在且可解析
+    assert!(out.exists(), "output file should exist");
+    let raw = fs::read_to_string(&out).expect("read output");
+    let _: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
+
+    let _ = fs::remove_dir_all(&root);
+}

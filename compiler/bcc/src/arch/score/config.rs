@@ -500,12 +500,12 @@ impl ScoringConfig {
             threshold: 80.0,
             dimensions: DimensionsConfig {
                 compliance: DimensionConfig::enabled(
-                    0.30,
+                    0.25,
                     true,
                     ComplianceDimensionConfig::default(),
                 ),
                 density: DimensionConfig::enabled(
-                    0.25,
+                    0.20,
                     true,
                     DensityDimensionConfig {
                         ideal_min: 10.0,
@@ -557,12 +557,12 @@ impl ScoringConfig {
             threshold: 60.0,
             dimensions: DimensionsConfig {
                 compliance: DimensionConfig::enabled(
-                    0.30,
+                    0.25,
                     false, // 非一票否决
                     ComplianceDimensionConfig::default(),
                 ),
                 density: DimensionConfig::enabled(
-                    0.25,
+                    0.20,
                     false,
                     DensityDimensionConfig {
                         ideal_min: 10.0,
