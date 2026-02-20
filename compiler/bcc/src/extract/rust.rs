@@ -763,4 +763,45 @@ pub fn parse(rest: Vec<String>) {
             call_names
         );
     }
+
+    #[test]
+    fn parse_matches_macro_complex_patterns() {
+        // 基本用法
+        let result = parse_matches_macro("matches!(x, Some(_))");
+        assert_eq!(result, Some(("x".into(), "Some".into())));
+
+        // 嵌套模式：matches!(val, Ok(Some(_)))
+        let result = parse_matches_macro("matches!(val, Ok(Some(_)))");
+        assert_eq!(result, Some(("val".into(), "Ok".into())));
+
+        // 空变量名
+        assert!(parse_matches_macro("matches!(, Some(_))").is_none());
+
+        // 缺少逗号
+        assert!(parse_matches_macro("matches!(x Some(_))").is_none());
+    }
+
+    #[test]
+    fn parse_downcast_ref_edge_cases() {
+        // 基本用法
+        let result = parse_downcast_ref("e.downcast_ref::<String>()", "handle_err", 10);
+        assert!(result.is_some());
+        let guard = result.unwrap();
+        assert_eq!(guard.var, "e");
+        assert_eq!(guard.guarded_type, "String");
+        assert_eq!(guard.function, "handle_err");
+
+        // 泛型参数中带路径
+        let result = parse_downcast_ref("err.downcast_ref::<std::io::Error>()", "f", 1);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().guarded_type, "std::io::Error");
+
+        // 空变量
+        let result = parse_downcast_ref(".downcast_ref::<Foo>()", "f", 1);
+        assert!(result.is_none());
+
+        // 不包含 downcast_ref
+        let result = parse_downcast_ref("e.as_ref()", "f", 1);
+        assert!(result.is_none());
+    }
 }

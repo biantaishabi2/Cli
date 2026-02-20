@@ -77,7 +77,6 @@ fn extract_php_class_properties(
         if node.kind() == "property_declaration" {
             // property_declaration 包含 visibility + type? + property_element
             let mut prop_type = String::new();
-            let mut has_default = false;
 
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
@@ -91,10 +90,8 @@ fn extract_php_class_properties(
                             let name = common::node_text(name_node, source)
                                 .trim_start_matches('$')
                                 .to_string();
-                            // 检查是否有默认值
-                            if child.child_by_field_name("value").is_some() {
-                                has_default = true;
-                            }
+                            // 每个 property_element 独立检查是否有默认值
+                            let has_default = child.child_by_field_name("value").is_some();
                             let is_nullable = prop_type.starts_with('?');
                             if !name.is_empty() {
                                 schema_fields.push(SchemaField {
@@ -518,5 +515,23 @@ class X extends Base {
 
         let calls = testing::call_names(&record);
         testing::assert_contains(&calls, "E", "calls");
+    }
+
+    #[test]
+    fn multi_property_element_has_default_independent() {
+        // 同一 property_declaration 中多个 property_element，
+        // 每个的 has_default 应独立判定
+        let source = r#"<?php
+class Config {
+    public string $a = 'default', $b;
+}
+"#;
+        let record = extract(source, "app/Config.php");
+        let a = record.schema_fields.iter().find(|f| f.name == "a").expect("should find $a");
+        let b = record.schema_fields.iter().find(|f| f.name == "b").expect("should find $b");
+        // $a 有默认值 → required=false
+        assert!(!a.required, "$a has default, should not be required");
+        // $b 无默认值 → required=true
+        assert!(b.required, "$b has no default, should be required");
     }
 }

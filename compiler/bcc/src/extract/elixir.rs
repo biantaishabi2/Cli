@@ -1756,6 +1756,32 @@ end
         );
         assert!(parse_spec_params("baz() :: :ok").is_empty());
     }
+
+    #[test]
+    fn parse_spec_params_nested_generics() {
+        // 嵌套泛型：list(map()) 应作为单个参数
+        assert_eq!(
+            parse_spec_params("foo(list(map()), integer()) :: term()"),
+            vec!["list(map())", "integer()"]
+        );
+        // 深层嵌套
+        assert_eq!(
+            parse_spec_params("foo({atom(), list(tuple())}) :: :ok"),
+            vec!["{atom(), list(tuple())}"]
+        );
+    }
+
+    #[test]
+    fn parse_spec_params_no_parens() {
+        // 缺少括号的非法 spec 不应 panic
+        assert!(parse_spec_params("foo :: term()").is_empty());
+    }
+
+    #[test]
+    fn parse_spec_params_unmatched_parens() {
+        // 不匹配的括号应安全返回空
+        assert!(parse_spec_params("foo(map(").is_empty());
+    }
 }
 
 /// 基于全文关键词扫描的副作用分类标签（行为检测的分类维度）
