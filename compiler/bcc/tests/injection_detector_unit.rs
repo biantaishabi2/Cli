@@ -374,6 +374,9 @@ end
     assert!(cb_hints.iter().any(|h| h.target == "llm_backend"));
     assert!(cb_hints.iter().any(|h| h.target == "compaction_strategy"));
     assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+    // via 字段应包含 key 名
+    assert!(cb_hints.iter().any(|h| h.via.contains("llm_backend")));
+    assert!(cb_hints.iter().any(|h| h.via.contains("compaction_strategy")));
 }
 
 #[test]

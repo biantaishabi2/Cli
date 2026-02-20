@@ -449,9 +449,9 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
     // Detector 5: elixir.callback_injection — Keyword.get(opts, :key) 模式
     for key_name in detect_keyword_get_injections(content) {
         hints.push(RelationHintRecord {
-            target: key_name,
+            target: key_name.clone(),
             call_type_hint: "callback_injection".to_string(),
-            via: "Keyword.get opts".to_string(),
+            via: format!("Keyword.get :{}", key_name),
             confidence: 0.75,
             detector: "elixir.callback_injection".to_string(),
             reason: "Keyword.get opts 回调注入模式".to_string(),
@@ -658,7 +658,6 @@ fn collect_dot_calls_in_body(
             let module = common::node_text(left, source);
             if !module.is_empty()
                 && module.chars().next().map_or(false, |c| c.is_uppercase())
-                && module.contains('.')
             {
                 calls.push((module, handler_kind.to_string()));
             }
@@ -728,11 +727,12 @@ fn collect_keyword_get_injections(
     }
 }
 
-/// 从 Keyword.get 的参数文本中提取 :atom key
+/// 从 Keyword.get 的参数文本中提取第二个参数位置的 :atom key
 /// 例如 `(opts, :llm_backend)` → `llm_backend`
+/// 只匹配第一个逗号后紧跟的 :atom，避免把第三个参数（默认值）误识别为 key
 fn extract_keyword_atom_key(args_text: &str) -> Option<String> {
-    // 找第二个参数中的 :atom
-    let re = Regex::new(r",\s*:([a-z_][a-z0-9_]*)").ok()?;
+    // 从开头匹配：( + 第一个参数 + 第一个逗号 + :atom
+    let re = Regex::new(r"^\s*\(?\s*[^,]+,\s*:([a-z_][a-z0-9_]*)").ok()?;
     re.captures(args_text)
         .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
 }
@@ -1388,6 +1388,29 @@ end
         assert!(targets.contains(&"llm_backend"), "should contain llm_backend, got: {:?}", targets);
         assert!(targets.contains(&"compaction_strategy"), "should contain compaction_strategy, got: {:?}", targets);
         assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+        // via 字段应包含 key 名
+        assert!(cb_hints.iter().any(|h| h.via.contains("llm_backend")));
+        assert!(cb_hints.iter().any(|h| h.via.contains("compaction_strategy")));
+    }
+
+    #[test]
+    fn detect_keyword_get_ignores_default_value_atom() {
+        // Keyword.get(opts, key, :fallback) 的第三个参数不应被误识别为 key
+        let source = r#"
+defmodule MyApp.Session do
+  def start_link(opts) do
+    val = Keyword.get(opts, key, :fallback)
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/session.ex");
+        let cb_hints: Vec<_> = record
+            .relation_hints
+            .iter()
+            .filter(|h| h.call_type_hint == "callback_injection")
+            .collect();
+        // key 是变量而非 :atom，不应产生 hint；:fallback 是默认值，也不应产生 hint
+        assert!(cb_hints.is_empty(), "should not extract default value atom as key, got: {:?}", cb_hints);
     }
 
     #[test]
