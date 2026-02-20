@@ -722,24 +722,45 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	// ②.5 缓存全量 issues，供 hydrate 和 ⑦ 步复用。
-	allIssuesCache, err := c.github.ListIssuesByState(ctx, "all")
-	if err != nil {
-		return fmt.Errorf("扫描全量 issues 失败: %w", err)
-	}
+	// 当 hydrate 被禁用时，延迟到 ⑦ 步再调用，回退到原有执行时序。
+	hydrateDisabled := os.Getenv("NIUMA_DISABLE_HYDRATE") == "1"
+	var allIssuesCache []IssueInfo
+	var hydratedEntries []intakeIssueEntry
+	if !hydrateDisabled {
+		allIssuesCache, err = c.github.ListIssuesByState(ctx, "all")
+		if err != nil {
+			return fmt.Errorf("扫描全量 issues 失败: %w", err)
+		}
 
-	// ②.6 hydrate：从 GitHub 重建跨 workflow run 丢失的 task 状态。
-	hydratedIssues := c.hydrateTasksFromGitHub(ctx, allIssuesCache, activeIssueToTask, issueToTask)
+		// ②.6 hydrate：从 GitHub 重建跨 workflow run 丢失的 task 状态。
+		hydratedEntries = c.hydrateTasksFromGitHub(ctx, allIssuesCache, activeIssueToTask, issueToTask)
+	} else {
+		fmt.Println("[control][hydrate] disabled by NIUMA_DISABLE_HYDRATE=1, skipping early ListIssuesByState")
+	}
 
 	// ③ 统一依赖分析：显式 depends-on 优先，AI 仅补全未声明项。
 	// 注意：parent 仅表示结构归属/收口关系，不隐式注入执行依赖边。
-	// 将 hydrated issues 合并到依赖分析输入中。
-	allAnalysisIssues := make([]IssueInfo, 0, len(intakeIssues)+len(hydratedIssues))
-	allAnalysisIssues = append(allAnalysisIssues, intakeIssues...)
-	allAnalysisIssues = append(allAnalysisIssues, hydratedIssues...)
+	// 将 intake 和 hydrated issues 合并到依赖分析输入中，使用 intakeIssueEntry 标记来源。
+	intakeEntries := make([]intakeIssueEntry, 0, len(intakeIssues))
+	for _, issue := range intakeIssues {
+		intakeEntries = append(intakeEntries, intakeIssueEntry{IssueInfo: issue, FromIntake: true})
+	}
+	allEntries := make([]intakeIssueEntry, 0, len(intakeEntries)+len(hydratedEntries))
+	allEntries = append(allEntries, intakeEntries...)
+	allEntries = append(allEntries, hydratedEntries...)
+	allAnalysisIssues := make([]IssueInfo, 0, len(allEntries))
+	for _, e := range allEntries {
+		allAnalysisIssues = append(allAnalysisIssues, e.IssueInfo)
+	}
 	analysis := c.buildDependencyAnalysis(ctx, allAnalysisIssues)
 
 	// ④ intake 入队：原子去重创建 active task，并将 orchestrate 迁移为 queued。
-	for _, issue := range intakeIssues {
+	// 只处理 FromIntake==true 的 entries，hydrate 来源跳过 label 迁移。
+	for _, entry := range allEntries {
+		if !entry.FromIntake {
+			continue
+		}
+		issue := entry.IssueInfo
 		if _, ok := activeIssueToTask[issue.Number]; ok {
 			fmt.Printf("[control] action=intake_reused issue_num=%d task_id=%s reason=active_task_exists\n", issue.Number, activeIssueToTask[issue.Number])
 		}
@@ -803,6 +824,14 @@ func (c *Controller) Run(ctx context.Context) error {
 		allTasks, err := c.taskctl.List("")
 		if err != nil {
 			return fmt.Errorf("列出现有任务失败: %w", err)
+		}
+
+		// 延迟加载：hydrate 禁用时在此处才调用 ListIssuesByState
+		if allIssuesCache == nil {
+			allIssuesCache, err = c.github.ListIssuesByState(ctx, "all")
+			if err != nil {
+				return fmt.Errorf("扫描全量 issues 失败: %w", err)
+			}
 		}
 
 		issueByNumber := make(map[int]IssueInfo, len(allIssuesCache))
@@ -1057,13 +1086,8 @@ func (c *Controller) hydrateTasksFromGitHub(
 	allIssuesCache []IssueInfo,
 	activeIssueToTask map[int]string,
 	issueToTask map[int]string,
-) []IssueInfo {
-	if os.Getenv("NIUMA_DISABLE_HYDRATE") == "1" {
-		fmt.Println("[control][hydrate] disabled by NIUMA_DISABLE_HYDRATE=1")
-		return nil
-	}
-
-	var hydratedIssues []IssueInfo
+) []intakeIssueEntry {
+	var hydratedIssues []intakeIssueEntry
 
 	for _, issue := range allIssuesCache {
 		if !strings.EqualFold(issue.State, "open") {
@@ -1123,7 +1147,7 @@ func (c *Controller) hydrateTasksFromGitHub(
 			}
 		}
 
-		hydratedIssues = append(hydratedIssues, issue)
+		hydratedIssues = append(hydratedIssues, intakeIssueEntry{IssueInfo: issue, FromIntake: false})
 	}
 
 	if len(hydratedIssues) > 0 {
@@ -1144,7 +1168,7 @@ func (c *Controller) hydrateExistingTaskMetadata(ctx context.Context, issue Issu
 		return
 	}
 	for _, t := range tasks {
-		if t.ID == taskID && t.PRNum() == 0 {
+		if t.ID == taskID && (t.PRNum() == 0 || t.Branch() == "") {
 			resolved, err := c.github.ResolvePRMetadata(ctx, issue.Number)
 			if err != nil {
 				if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {

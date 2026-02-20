@@ -748,7 +748,7 @@ func (c *inMemController) hydrateInMem(
 			// 补全已有 task 的 PR metadata
 			if isPRStateLabel(issue.Labels) {
 				for i := range c.mockTaskCtl.tasks {
-					if c.mockTaskCtl.tasks[i].ID == taskID && c.mockTaskCtl.tasks[i].PRNum() == 0 {
+					if c.mockTaskCtl.tasks[i].ID == taskID && (c.mockTaskCtl.tasks[i].PRNum() == 0 || c.mockTaskCtl.tasks[i].Branch() == "") {
 						resolved, err := c.mockGitHub.ResolvePRMetadata(ctx, issue.Number)
 						if err == nil {
 							metaUpdate := map[string]string{
@@ -3293,6 +3293,43 @@ func TestHydrate_ExistingTask_MissingPRNum(t *testing.T) {
 	// PR metadata 应被补全
 	assert.Equal(t, "200", task.Metadata["pr_num"])
 	assert.Equal(t, "feat/100-add-feature", task.Metadata["branch"])
+}
+
+// TestHydrate_ExistingTask_MissingBranch 已有 task 有 pr_num 但缺 branch，补全
+func TestHydrate_ExistingTask_MissingBranch(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: add feature", Body: "some body", State: "open", Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+	// 已有 task 有 pr_num 但无 branch
+	ctrl.mockTaskCtl.tasks = []Task{
+		{
+			ID:       "existing-task-1",
+			Subject:  "feat: add feature",
+			Status:   TaskStatusPending,
+			Metadata: map[string]string{"issue_num": "100", "pr_num": "200"},
+		},
+	}
+	// 设置 PR metadata（ResolvePRMetadata 返回完整数据）
+	ctrl.mockGitHub.resolvePRMetadata[100] = PRMetadata{PRNum: 200, Branch: "feat/100-add-feature"}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 不应创建新 task
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	task := ctrl.mockTaskCtl.tasks[0]
+	assert.Equal(t, "existing-task-1", task.ID)
+	// branch 应被补全
+	assert.Equal(t, "200", task.Metadata["pr_num"])
+	assert.Equal(t, "feat/100-add-feature", task.Metadata["branch"])
+	// 应调用 ResolvePRMetadata
+	assert.Contains(t, ctrl.mockGitHub.resolvePRMetadataCall, 100)
 }
 
 // TestHydrate_NoDoubleProcessing intake 和 hydrate 不重复处理同一 issue
