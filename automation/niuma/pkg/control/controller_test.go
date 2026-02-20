@@ -3595,3 +3595,336 @@ func TestHydrate_PRApiOnlyForPRStateLabels(t *testing.T) {
 		}
 	}
 }
+
+// --- Integration conflict retry + needs-human recovery tests ---
+
+func TestParseIntegrationConflictRetryCount(t *testing.T) {
+	assert.Equal(t, 0, parseIntegrationConflictRetryCount(""))
+	assert.Equal(t, 0, parseIntegrationConflictRetryCount("no marker here"))
+	assert.Equal(t, 2, parseIntegrationConflictRetryCount("body\n\n<!-- INTEGRATION_CONFLICT_RETRY:2 -->"))
+	assert.Equal(t, 5, parseIntegrationConflictRetryCount("<!-- INTEGRATION_CONFLICT_RETRY:5 -->\nother"))
+}
+
+func TestUpsertIntegrationConflictRetryMarker(t *testing.T) {
+	body, changed := upsertIntegrationConflictRetryMarker("", 1)
+	assert.True(t, changed)
+	assert.Equal(t, "<!-- INTEGRATION_CONFLICT_RETRY:1 -->", body)
+
+	body, changed = upsertIntegrationConflictRetryMarker("existing body", 1)
+	assert.True(t, changed)
+	assert.Contains(t, body, "<!-- INTEGRATION_CONFLICT_RETRY:1 -->")
+	assert.Contains(t, body, "existing body")
+
+	body, changed = upsertIntegrationConflictRetryMarker("body\n\n<!-- INTEGRATION_CONFLICT_RETRY:1 -->", 2)
+	assert.True(t, changed)
+	assert.Contains(t, body, "<!-- INTEGRATION_CONFLICT_RETRY:2 -->")
+	assert.NotContains(t, body, "RETRY:1")
+
+	body, changed = upsertIntegrationConflictRetryMarker("body\n\n<!-- INTEGRATION_CONFLICT_RETRY:3 -->", 3)
+	assert.False(t, changed)
+}
+
+func TestHandleIntegrationConflictRetry_UnderThreshold(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 42,
+			Body:   "issue body\n\n<!-- INTEGRATION_CONFLICT_RETRY:1 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	task := Task{
+		ID:       "task-42",
+		Metadata: map[string]string{"issue_num": "42"},
+	}
+	outcome := MergeOutcome{
+		Status:            MergeStatusEscalated,
+		SourceBranch:      "feat/42-feature",
+		IntegrationBranch: "integration/main",
+	}
+
+	ctrl.handleIntegrationConflictRetry(context.Background(), task, outcome)
+
+	// retry count should be updated to 2
+	assert.Equal(t, 2, parseIntegrationConflictRetryCount(mockGH.issuesByNumber[42].Body))
+
+	// should have written a comment
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "Integration merge 冲突")
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "retry 2/3")
+
+	// should have transitioned to bot:pr-needs-fix
+	found := false
+	for _, call := range mockGH.replaceLabelCalls {
+		if call.issueNumber == 42 && call.newLabel == "bot:pr-needs-fix" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "should transition to bot:pr-needs-fix")
+}
+
+func TestHandleIntegrationConflictRetry_OverThreshold(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 43,
+			Body:   "issue body\n\n<!-- INTEGRATION_CONFLICT_RETRY:3 -->",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	task := Task{
+		ID:       "task-43",
+		Metadata: map[string]string{"issue_num": "43"},
+	}
+	outcome := MergeOutcome{
+		Status:            MergeStatusEscalated,
+		SourceBranch:      "feat/43-feature",
+		IntegrationBranch: "integration/main",
+		Conflict: &ConflictSummary{
+			Files:          []string{"pkg/service.go"},
+			TotalHunkCount: 1,
+			Reason:         "复杂冲突",
+		},
+	}
+
+	ctrl.handleIntegrationConflictRetry(context.Background(), task, outcome)
+
+	// should escalate (retryCount=4 > threshold=3)
+	labels, err := mockGH.ListLabels(context.Background(), 43)
+	require.NoError(t, err)
+	assert.Contains(t, labels, integrationConflictLabel)
+	assert.Contains(t, labels, needsHumanLabel)
+}
+
+func TestReconcileNeedsHumanRecovery_PRMergeable(t *testing.T) {
+	escalatedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 50,
+			Labels: []string{needsHumanLabel, integrationConflictLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[50] = PRReviewStatus{
+		PRNum:            200,
+		HeadSHA:          "abc123",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-50",
+			Metadata: map[string]string{
+				"issue_num":                           "50",
+				metaKeyIntegrationConflictLabelSynced: "true",
+				metaKeyEscalatedAt:                    escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+
+	// should have written a recovery comment
+	require.GreaterOrEqual(t, len(mockGH.addIssueCommentCalls), 1)
+	lastComment := mockGH.addIssueCommentCalls[len(mockGH.addIssueCommentCalls)-1]
+	assert.Contains(t, lastComment.body, "自动恢复")
+
+	// needs-human and integration-conflict should be removed
+	labels, _ := mockGH.ListLabels(context.Background(), 50)
+	assert.NotContains(t, labels, needsHumanLabel)
+	assert.NotContains(t, labels, integrationConflictLabel)
+}
+
+func TestReconcileNeedsHumanRecovery_PRConflicting(t *testing.T) {
+	escalatedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 51,
+			Labels: []string{needsHumanLabel, integrationConflictLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[51] = PRReviewStatus{
+		PRNum:            201,
+		HeadSHA:          "def456",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg:    DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-51",
+			Metadata: map[string]string{
+				"issue_num":                           "51",
+				metaKeyIntegrationConflictLabelSynced: "true",
+				metaKeyEscalatedAt:                    escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+
+	// no comment should be written
+	assert.Len(t, mockGH.addIssueCommentCalls, 0)
+
+	// labels should remain
+	labels, _ := mockGH.ListLabels(context.Background(), 51)
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Contains(t, labels, integrationConflictLabel)
+}
+
+func TestReconcileNeedsHumanRecovery_Cooldown(t *testing.T) {
+	// escalated_at 2 minutes ago - within cooldown (5 minutes)
+	escalatedAt := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 52,
+			Labels: []string{needsHumanLabel, integrationConflictLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[52] = PRReviewStatus{
+		PRNum:            202,
+		HeadSHA:          "ghi789",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg:    DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-52",
+			Metadata: map[string]string{
+				"issue_num":                           "52",
+				metaKeyIntegrationConflictLabelSynced: "true",
+				metaKeyEscalatedAt:                    escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+
+	// should skip due to cooldown - no comments, labels unchanged
+	assert.Len(t, mockGH.addIssueCommentCalls, 0)
+	labels, _ := mockGH.ListLabels(context.Background(), 52)
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Contains(t, labels, integrationConflictLabel)
+}
+
+func TestReconcileNeedsHumanRecovery_CooldownWithNowFn(t *testing.T) {
+	// escalated_at set to a fixed time
+	escalatedAt := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 53,
+			Labels: []string{needsHumanLabel, integrationConflictLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[53] = PRReviewStatus{
+		PRNum:            203,
+		HeadSHA:          "jkl012",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	// nowFn returns 10 minutes after escalation - past cooldown
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg:   DefaultControlConfig(),
+		nowFn: func() time.Time { return time.Date(2026, 2, 20, 10, 10, 0, 0, time.UTC) },
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-53",
+			Metadata: map[string]string{
+				"issue_num":                           "53",
+				metaKeyIntegrationConflictLabelSynced: "true",
+				metaKeyEscalatedAt:                    escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+
+	// should recover - past cooldown, PR is MERGEABLE
+	require.GreaterOrEqual(t, len(mockGH.addIssueCommentCalls), 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[len(mockGH.addIssueCommentCalls)-1].body, "自动恢复")
+}
+
+func TestHandleIntegrationConflictRetry_FirstRetry(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 44,
+			Body:   "issue body without marker",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	task := Task{
+		ID:       "task-44",
+		Metadata: map[string]string{"issue_num": "44"},
+	}
+	outcome := MergeOutcome{
+		Status:            MergeStatusEscalated,
+		SourceBranch:      "feat/44-feature",
+		IntegrationBranch: "integration/main",
+	}
+
+	ctrl.handleIntegrationConflictRetry(context.Background(), task, outcome)
+
+	// first retry: count should be 1
+	assert.Equal(t, 1, parseIntegrationConflictRetryCount(mockGH.issuesByNumber[44].Body))
+
+	// should write comment with retry 1/3
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "retry 1/3")
+}
