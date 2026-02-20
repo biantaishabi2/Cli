@@ -214,6 +214,7 @@ extract_summary_json() {
 @test "并发执行: 重叠触发时至少一次成功且仓库可用" {
   local branch="fix/G"
   create_feature_worktree "$branch" "g.txt"
+  local worktree_path="$LAST_WORKTREE_PATH"
 
   merge_branch_into_master "$branch"
   delete_remote_branch "$branch"
@@ -230,8 +231,33 @@ extract_summary_json() {
   wait "$pid1" || status1="$?"
   wait "$pid2" || status2="$?"
 
-  [[ "$status1" -eq 0 || "$status2" -eq 0 ]]
   [[ "$status1" -le 1 ]]
   [[ "$status2" -le 1 ]]
+  [[ ! -d "$worktree_path" ]]
+  ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch"
   git -C "$REPO_DIR" rev-parse --verify --quiet master
+
+  # 并发下允许两个进程都以 exit 1 结束，只要错误属于可接受竞态且最终状态正确。
+  if [[ "$status1" -eq 1 && "$status2" -eq 1 ]]; then
+    local summary1 summary2
+    summary1="$(extract_summary_json "$(cat "$out1")")"
+    summary2="$(extract_summary_json "$(cat "$out2")")"
+
+    while IFS= read -r reason; do
+      [[ -z "$reason" ]] && continue
+      case "$reason" in
+        remove_worktree_failed|delete_branch_failed|worktree_prune_failed)
+          ;;
+        *)
+          echo "unexpected concurrent error reason: $reason" >&2
+          return 1
+          ;;
+      esac
+    done < <(
+      {
+        jq -r '.errors[].reason? // empty' <<<"$summary1"
+        jq -r '.errors[].reason? // empty' <<<"$summary2"
+      } | sort -u
+    )
+  fi
 }
