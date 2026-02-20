@@ -68,8 +68,22 @@ impl SmellDetector for CommentDensityDetector {
         }
 
         // 废话注释检测：注释内容与下一行代码编辑距离过近
+        // 构建注释行集合，用于跳过非代码行
+        let comment_line_set: std::collections::HashSet<usize> = comment_nodes
+            .iter()
+            .flat_map(|(start, end)| *start..=*end)
+            .collect();
+
         for (comment_start_line, comment_end_line) in &comment_nodes {
-            let next_code_line = *comment_end_line + 1;
+            // 寻找下一行代码（跳过空行和注释行）
+            let mut next_code_line = *comment_end_line + 1;
+            while next_code_line < lines.len() {
+                let trimmed = lines[next_code_line].trim();
+                if !trimmed.is_empty() && !comment_line_set.contains(&next_code_line) {
+                    break;
+                }
+                next_code_line += 1;
+            }
             if next_code_line >= lines.len() {
                 continue;
             }
@@ -727,6 +741,34 @@ def bar():
         assert!(
             smells.iter().any(|s| s.rule == "unused_import"),
             "应检出 unused_import: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn elixir_use_behaviour_not_flagged_as_unused() {
+        // Elixir 的 use/behaviour import 有隐式副作用，不应被标记为 unused_import
+        let source = "use Phoenix.LiveView\n@behaviour GenServer\n";
+        let tree = {
+            let mut parser = tree_sitter::Parser::new();
+            let lang: tree_sitter::Language = tree_sitter_elixir::LANGUAGE.into();
+            parser.set_language(&lang).unwrap();
+            parser.parse(source, None).unwrap()
+        };
+        let mut record = make_record("elixir", "lib/foo.ex");
+        record.imports.push(ImportRecord {
+            specifier: "Phoenix.LiveView".to_string(),
+            kind: "use".to_string(),
+        });
+        record.imports.push(ImportRecord {
+            specifier: "GenServer".to_string(),
+            kind: "behaviour".to_string(),
+        });
+        let detector = LeftoverBoilerplateDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            !smells.iter().any(|s| s.rule == "unused_import"),
+            "Elixir use/behaviour 不应被标记为 unused_import: {:?}",
             smells
         );
     }

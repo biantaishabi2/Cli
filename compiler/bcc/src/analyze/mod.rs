@@ -120,10 +120,10 @@ pub fn run(
         .map(|d| d.as_ref())
         .collect();
 
-    let mut reports: Vec<SmellReport> = records
+    // 一次 parse：为每个文件读取源码并 parse，共享给单文件和跨文件检测器
+    let parsed_files: Vec<Option<(String, Option<tree_sitter::Tree>)>> = records
         .iter()
         .map(|record| {
-            // 读取源码：优先从 source_code 字段，否则从 file_path 读取
             let source_code = match &record.source_code {
                 Some(code) => code.clone(),
                 None => match fs::read_to_string(&record.file_path) {
@@ -133,30 +133,43 @@ pub fn run(
                             "[analyze] warning: cannot read source '{}': {}, skipping detectors",
                             record.file_path, e
                         );
-                        return SmellReport {
-                            file: record.file_path.clone(),
-                            summary: SmellSummary {
-                                total_smells: 0,
-                                by_severity: HashMap::new(),
-                                by_category: HashMap::new(),
-                            },
-                            smells: Vec::new(),
-                        };
+                        return None;
                     }
                 },
             };
-
-            // 尝试 tree-sitter parse（可能失败，如不支持的语言）
             let tree = get_language(&record.language).and_then(|lang| {
                 let mut parser = tree_sitter::Parser::new();
                 parser.set_language(&lang).ok()?;
                 parser.parse(&source_code, None)
             });
+            Some((source_code, tree))
+        })
+        .collect();
+
+    // 单文件检测
+    let mut reports: Vec<SmellReport> = records
+        .iter()
+        .zip(parsed_files.iter())
+        .map(|(record, parsed)| {
+            let (source_code, tree) = match parsed {
+                Some((src, t)) => (src.as_str(), t),
+                None => {
+                    return SmellReport {
+                        file: record.file_path.clone(),
+                        summary: SmellSummary {
+                            total_smells: 0,
+                            by_severity: HashMap::new(),
+                            by_category: HashMap::new(),
+                        },
+                        smells: Vec::new(),
+                    };
+                }
+            };
 
             let mut smells = Vec::new();
             if let Some(ref tree) = tree {
                 for detector in &detectors {
-                    let mut found = detector.detect(record, &source_code, tree);
+                    let mut found = detector.detect(record, source_code, tree);
                     smells.append(&mut found);
                 }
             }
@@ -181,8 +194,8 @@ pub fn run(
         })
         .collect();
 
-    // 跨文件重复检测
-    let cross_smells = run_cross_file_detectors(&records, &rule_filter);
+    // 跨文件重复检测（复用已 parse 的数据）
+    let cross_smells = run_cross_file_detectors(&records, &parsed_files, &rule_filter);
     if !cross_smells.is_empty() {
         // 将跨文件 smell 分配到对应文件的 report 中
         let report_map: HashMap<String, usize> = reports
@@ -230,9 +243,10 @@ pub fn run(
 }
 
 /// 提供给 duplication 检测器的跨文件检测入口
-/// 在所有单文件检测完成后，对整个 records 集合做跨文件重复检测
+/// 复用已 parse 的 (source_code, tree) 数据，不再重复 parse
 pub fn run_cross_file_detectors(
     records: &[FileRecord],
+    parsed_files: &[Option<(String, Option<tree_sitter::Tree>)>],
     rule_filter: &Option<Vec<String>>,
 ) -> Vec<SmellRecord> {
     let mut smells = Vec::new();
@@ -243,34 +257,15 @@ pub fn run_cross_file_detectors(
         .map_or(true, |f| f.iter().any(|c| c == "duplication"))
     {
         let mut all_functions = Vec::new();
-        for record in records {
-            let source_code = match &record.source_code {
-                Some(code) => code.clone(),
-                None => match fs::read_to_string(&record.file_path) {
-                    Ok(code) => code,
-                    Err(e) => {
-                        eprintln!(
-                            "[analyze] warning: cannot read source '{}': {}, skipping cross-file detection",
-                            record.file_path, e
-                        );
-                        continue;
-                    }
-                },
-            };
-
-            if let Some(lang) = get_language(&record.language) {
-                let mut parser = tree_sitter::Parser::new();
-                if parser.set_language(&lang).is_ok() {
-                    if let Some(tree) = parser.parse(&source_code, None) {
-                        let funcs = duplication::extract_functions(
-                            &record.file_path,
-                            &source_code,
-                            &tree,
-                            &record.language,
-                        );
-                        all_functions.extend(funcs);
-                    }
-                }
+        for (record, parsed) in records.iter().zip(parsed_files.iter()) {
+            if let Some((source_code, Some(tree))) = parsed {
+                let funcs = duplication::extract_functions(
+                    &record.file_path,
+                    source_code,
+                    tree,
+                    &record.language,
+                );
+                all_functions.extend(funcs);
             }
         }
         smells.extend(duplication::detect_structural_duplication(&all_functions));
