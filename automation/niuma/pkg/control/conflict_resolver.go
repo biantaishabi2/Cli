@@ -764,14 +764,13 @@ func (c *Controller) tryResolveConflictByAIOnce(
 			errMsg := trimPRConflictError(err)
 			if rollbackErr != nil {
 				errMsg = fmt.Sprintf("%s; rollback failed: %s", errMsg, trimPRConflictError(rollbackErr))
-				// 回滚失败会污染工作区，中止后续 group 处理
+				// 回滚失败会污染工作区，中止后续 group 处理并返回错误
 				groupResults = append(groupResults, groupResolutionResult{
 					Profile: group.Profile.Name(),
 					Status:  "failed",
 					Error:   errMsg,
 				})
-				failCount++
-				break
+				return nil, fmt.Errorf("group %s 回滚失败，工作区已污染: %s", group.Profile.Name(), errMsg)
 			}
 			groupResults = append(groupResults, groupResolutionResult{
 				Profile: group.Profile.Name(),

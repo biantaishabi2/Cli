@@ -282,7 +282,7 @@ func TestControlRunFlags_PRConflictLayeredOptionsExist(t *testing.T) {
 func TestControlRunFlags_ProfileExists(t *testing.T) {
 	f := controlRunCmd.Flags().Lookup("profile")
 	require.NotNil(t, f)
-	assert.Equal(t, "auto", f.DefValue)
+	assert.Equal(t, "", f.DefValue)
 }
 
 func TestResolveProfileFlag(t *testing.T) {
@@ -298,8 +298,8 @@ func TestResolveProfileFlag(t *testing.T) {
 		{"flag=none", "none", "auto", "none"},
 		{"空格 flag 忽略", "  ", "elixir", "elixir"},
 		{"空格 env 忽略", "", "  ", "auto"},
-		{"cobra 默认 auto 时 env 可覆盖", "auto", "go,rust", "go,rust"},
-		{"cobra 默认 auto 无 env", "auto", "", "auto"},
+		{"flag=auto 显式设置优先于 env", "auto", "go,rust", "auto"},
+		{"flag=auto 无 env", "auto", "", "auto"},
 	}
 
 	for _, tc := range cases {
