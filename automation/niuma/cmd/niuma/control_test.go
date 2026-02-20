@@ -279,6 +279,35 @@ func TestControlRunFlags_PRConflictLayeredOptionsExist(t *testing.T) {
 	assert.Equal(t, "", smoke.DefValue)
 }
 
+func TestControlRunFlags_ProfileExists(t *testing.T) {
+	f := controlRunCmd.Flags().Lookup("profile")
+	require.NotNil(t, f)
+	assert.Equal(t, "", f.DefValue)
+}
+
+func TestResolveProfileFlag(t *testing.T) {
+	cases := []struct {
+		name     string
+		flagVal  string
+		envVal   string
+		expected string
+	}{
+		{"默认 auto", "", "", "auto"},
+		{"flag 优先", "go,rust", "elixir", "go,rust"},
+		{"env 降级", "", "none", "none"},
+		{"flag=none", "none", "auto", "none"},
+		{"空格 flag 忽略", "  ", "elixir", "elixir"},
+		{"空格 env 忽略", "", "  ", "auto"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveProfileFlag(tc.flagVal, tc.envVal)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
 func TestWorkflowGateStatusJQ_ObjectTasksPending(t *testing.T) {
 	status := runWorkflowGateStatusJQ(t, `{"version":"1","tasks":{"a":{"metadata":{"integration_gate_status":"pending"}}}}`)
 	assert.Equal(t, "pending", status)

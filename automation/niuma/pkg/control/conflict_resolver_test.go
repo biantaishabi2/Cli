@@ -317,8 +317,9 @@ end
 
 	err := ctrl.tryResolveConflictByAIOnce(context.Background(), dir, conflictFiles, summaries, profileGroups)
 	require.Error(t, err)
+	// per-group 独立执行：elixir group 跨 profile 拒绝 + go group mock 响应耗尽，两个 group 均失败
 	assert.Contains(t, err.Error(), "AI 输出超出当前 profile 允许范围")
-	assert.Equal(t, 1, provider.CallCount())
+	assert.Equal(t, 2, provider.CallCount()) // 每个 group 独立调用
 
 	goCurrent, goReadErr := os.ReadFile(filepath.Join(dir, conflictGo))
 	require.NoError(t, goReadErr)

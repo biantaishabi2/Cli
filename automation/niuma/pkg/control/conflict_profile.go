@@ -146,6 +146,49 @@ func (p *suffixConflictProfile) Match(path string) bool {
 	return ok
 }
 
+// ParseProfileFlag 解析 --profile 标志值，返回 (mode, langs)。
+// mode 为 "auto"/"none"/"whitelist"；当 mode="whitelist" 时 langs 为非空语言列表。
+func ParseProfileFlag(raw string) (string, []string) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" || raw == "auto" {
+		return "auto", nil
+	}
+	if raw == "none" {
+		return "none", nil
+	}
+	parts := strings.Split(raw, ",")
+	langs := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			langs = append(langs, p)
+		}
+	}
+	if len(langs) == 0 {
+		return "auto", nil
+	}
+	return "whitelist", langs
+}
+
+// FilterConflictProfileGroups 根据白名单过滤 profile groups，
+// 仅保留 Profile.Name() 在 whitelist 中的 group。
+func FilterConflictProfileGroups(groups []ConflictProfileGroup, whitelist []string) []ConflictProfileGroup {
+	if len(whitelist) == 0 {
+		return groups
+	}
+	allowed := make(map[string]struct{}, len(whitelist))
+	for _, lang := range whitelist {
+		allowed[strings.TrimSpace(strings.ToLower(lang))] = struct{}{}
+	}
+	filtered := make([]ConflictProfileGroup, 0, len(groups))
+	for _, g := range groups {
+		if _, ok := allowed[strings.ToLower(g.Profile.Name())]; ok {
+			filtered = append(filtered, g)
+		}
+	}
+	return filtered
+}
+
 func (p *suffixConflictProfile) BuildPrompt(files []ConflictPromptFile) (string, error) {
 	if len(files) == 0 {
 		return "", fmt.Errorf("profile %s 没有可处理的冲突文件", p.name)

@@ -170,6 +170,28 @@ control:
 - `--pr-conflict-enable-ai`（默认 `true`）
 - `--pr-conflict-ai-max-attempts`（默认 `2`）
 - `--pr-conflict-smoke-test-cmd`（默认关闭）
+- `--profile`（默认 `auto`，env: `NIUMA_PR_CONFLICT_PROFILE`）
+
+### Profile 路由
+
+`--profile` 控制冲突修复的语言 profile 路由：
+
+| 值 | 语义 |
+|---|------|
+| `auto`（默认） | 使用所有已注册 profile，自动检测冲突文件语言 |
+| `<lang,...>`（如 `go,rust`） | 仅启用指定语言的 profile；未命中白名单的文件升级 human |
+| `none` | 禁用 Rule/AI 层自动修复，所有冲突直接升级 `needs-human` |
+
+**已注册 profile**：`go`、`elixir`、`rust`
+
+**混合批次分组逻辑**：
+- 按 profile 对冲突文件分组后，每个 group 独立执行 AI 修复 + 门禁
+- 单 group 失败：回滚该 group 文件，继续处理下一个 group
+- 全部成功返回成功；部分成功保留成功结果；全部失败升级 human
+
+**限制**：
+- 白名单模式下，非白名单 profile 的文件同时跳过 Rule 层和 AI 层
+- `none` 模式下，Rule 层仍然会先尝试，失败后不进入 AI 层直接升级 human
 
 ## 状态机（Labels）
 

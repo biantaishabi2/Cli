@@ -92,6 +92,11 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		}
 	}
 
+	// profile=none 时跳过 AI 层，直接升级 human
+	if c.prConflictProfileMode() == "none" {
+		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("profile=none，跳过 AI 层直接升级人工"))
+	}
+
 	if !c.prConflictAIEnabled() {
 		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("AI 层已禁用，Rule 层失败后升级人工"))
 	}
@@ -102,6 +107,15 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		}
 		return false, err
 	}
+
+	// 白名单过滤：仅保留 --profile 指定的语言 group
+	if mode := c.prConflictProfileMode(); mode == "whitelist" {
+		profileGroups = FilterConflictProfileGroups(profileGroups, c.prConflictProfileWhitelist())
+		if len(profileGroups) == 0 {
+			return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("白名单过滤后无可用 profile group，升级人工"))
+		}
+	}
+
 	if allowed, reason := c.allowAIConflictResolution(conflictFiles, summaries); !allowed {
 		return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("冲突超出 AI 安全边界: %s", reason))
 	}
@@ -179,10 +193,24 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 	}
 
 	if useProfileRuleResolver {
+		// 白名单过滤：非白名单内的文件跳过 Rule 层
+		profileMode := c.prConflictProfileMode()
+		profileWhitelist := c.prConflictProfileWhitelist()
+		whitelistSet := make(map[string]struct{}, len(profileWhitelist))
+		for _, lang := range profileWhitelist {
+			whitelistSet[strings.ToLower(lang)] = struct{}{}
+		}
+
 		for _, file := range conflictFiles {
 			profile, profErr := ResolveConflictProfile(file)
 			if profErr != nil {
 				return rollbackWithCause(fmt.Errorf("规则层未找到 profile: %s: %w", file, profErr))
+			}
+			// 白名单模式下，不在白名单内的 profile 跳过 Rule 层
+			if profileMode == "whitelist" {
+				if _, ok := whitelistSet[strings.ToLower(profile.Name())]; !ok {
+					return rollbackWithCause(fmt.Errorf("profile %s 不在白名单中，跳过 Rule 层: %s", profile.Name(), file))
+				}
 			}
 			rr, ok := profile.(RuleResolver)
 			if !ok {
@@ -634,10 +662,17 @@ func (c *Controller) allowAIConflictResolution(conflictFiles []string, summaries
 	return true, ""
 }
 
+// groupResolutionResult 记录单个 profile group 的修复结果。
+type groupResolutionResult struct {
+	Profile string `json:"profile"`
+	Status  string `json:"status"` // "success" / "failed"
+	Error   string `json:"error,omitempty"`
+}
+
 func (c *Controller) tryResolveConflictByAIOnce(
 	ctx context.Context,
 	repoDir string,
-	conflictFiles []string,
+	_ []string, // conflictFiles（由调用方用于 stageConflictFiles）
 	summaries map[string]ConflictFileSummary,
 	profileGroups []ConflictProfileGroup,
 ) error {
@@ -649,45 +684,89 @@ func (c *Controller) tryResolveConflictByAIOnce(
 		return fmt.Errorf("AI 层未找到可用冲突 profile")
 	}
 
-	attemptSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, conflictFiles, conflictFiles)
+	// 按 group 独立执行 AI 修复 + 门禁
+	var groupResults []groupResolutionResult
+	successCount := 0
+
+	for _, group := range profileGroups {
+		groupSnapshot, err := c.capturePRConflictAttemptSnapshot(ctx, repoDir, group.Files, group.Files)
+		if err != nil {
+			groupResults = append(groupResults, groupResolutionResult{
+				Profile: group.Profile.Name(),
+				Status:  "failed",
+				Error:   fmt.Sprintf("snapshot: %s", trimPRConflictError(err)),
+			})
+			continue
+		}
+
+		err = c.tryResolveGroupByAI(ctx, repoDir, group, summaries, provider)
+		if err != nil {
+			// 回滚该 group 的文件
+			_ = c.rollbackPRConflictAttempt(ctx, repoDir, groupSnapshot)
+			groupResults = append(groupResults, groupResolutionResult{
+				Profile: group.Profile.Name(),
+				Status:  "failed",
+				Error:   trimPRConflictError(err),
+			})
+			continue
+		}
+
+		groupResults = append(groupResults, groupResolutionResult{
+			Profile: group.Profile.Name(),
+			Status:  "success",
+		})
+		successCount++
+	}
+
+	if successCount == 0 {
+		// 收集所有错误
+		var errMsgs []string
+		for _, r := range groupResults {
+			if r.Error != "" {
+				errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", r.Profile, r.Error))
+			}
+		}
+		return fmt.Errorf("所有 profile group AI 修复失败: %s", strings.Join(errMsgs, "; "))
+	}
+
+	return nil
+}
+
+// tryResolveGroupByAI 对单个 profile group 执行 AI 修复 + 门禁。
+func (c *Controller) tryResolveGroupByAI(
+	ctx context.Context,
+	repoDir string,
+	group ConflictProfileGroup,
+	summaries map[string]ConflictFileSummary,
+	provider ai.Provider,
+) error {
+	prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, group.Profile, group.Files, summaries)
 	if err != nil {
 		return err
 	}
-	rollbackWithCause := func(cause error) error {
-		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
+
+	resp, err := provider.Complete(ctx, prompt, ai.WithWorkDir(repoDir))
+	if err != nil {
+		return fmt.Errorf("AI 冲突修复调用失败: %w", err)
 	}
 
-	edits := make([]prConflictAIEdit, 0, len(conflictFiles))
-	for _, group := range profileGroups {
-		prompt, err := c.buildPRConflictAIPrompt(ctx, repoDir, group.Profile, group.Files, summaries)
-		if err != nil {
-			return rollbackWithCause(err)
-		}
-
-		resp, err := provider.Complete(ctx, prompt, ai.WithWorkDir(repoDir))
-		if err != nil {
-			return rollbackWithCause(fmt.Errorf("AI 冲突修复调用失败: %w", err))
-		}
-
-		groupEdits, err := parsePRConflictAIEdits(resp)
-		if err != nil {
-			return rollbackWithCause(err)
-		}
-		if err := validatePRConflictAIEditsScope(groupEdits, group.Files); err != nil {
-			return rollbackWithCause(err)
-		}
-		edits = append(edits, groupEdits...)
+	groupEdits, err := parsePRConflictAIEdits(resp)
+	if err != nil {
+		return err
 	}
-	if len(edits) == 0 {
-		return rollbackWithCause(fmt.Errorf("AI 冲突修复响应为空"))
+	if err := validatePRConflictAIEditsScope(groupEdits, group.Files); err != nil {
+		return err
+	}
+	if len(groupEdits) == 0 {
+		return fmt.Errorf("AI 冲突修复响应为空")
 	}
 
-	if err := applyPRConflictAIEdits(repoDir, edits); err != nil {
-		return rollbackWithCause(err)
+	if err := applyPRConflictAIEdits(repoDir, groupEdits); err != nil {
+		return err
 	}
 
-	if err := c.runPRConflictGates(ctx, repoDir, conflictFiles); err != nil {
-		return rollbackWithCause(err)
+	if err := c.runPRConflictGates(ctx, repoDir, group.Files); err != nil {
+		return err
 	}
 	return nil
 }
