@@ -107,6 +107,8 @@ func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
 
 	assert.Contains(t, content, "id: pr_gate")
 	assert.Contains(t, content, "continue-on-error: true")
+	assert.Contains(t, content, "Restore Workspace After Gate")
+	assert.Contains(t, content, "git checkout --force \"$GITHUB_SHA\"")
 	assert.Contains(t, content, "steps.pr_gate.outcome == 'failure'")
 	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
 	assert.Contains(t, content, "--from bot:pr-created")

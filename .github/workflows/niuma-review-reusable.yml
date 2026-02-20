@@ -103,6 +103,11 @@ jobs:
         run: |
           ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
 
+      - name: Restore Workspace After Gate
+        if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != ''"
+        run: |
+          git checkout --force "$GITHUB_SHA"
+
       - name: Gate Failed -> Transition to PR Needs Fix
         if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'"
         env:
