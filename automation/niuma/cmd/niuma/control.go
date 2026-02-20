@@ -78,6 +78,7 @@ var flagPRConflictEnableAI bool
 var flagPRConflictAIMaxAttempts int
 var flagPRConflictSmokeTestCmd string
 var flagPRConflictElixirTestCmd string
+var flagPRConflictProfile string
 
 func init() {
 	controlCmd.AddCommand(controlRunCmd)
@@ -99,6 +100,7 @@ func init() {
 	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictElixirTestCmd, "pr-conflict-elixir-test-cmd", "mix test", "Elixir 冲突修复门禁测试命令，为空则跳过")
+	controlRunCmd.Flags().StringVar(&flagPRConflictProfile, "profile", "", "冲突修复 profile 路由（auto|<lang,...>|none，默认 auto）（env: NIUMA_PR_CONFLICT_PROFILE）")
 	controlCloseMergedCmd.Flags().BoolVar(&flagDispatchWakeup, "dispatch-wakeup", false, "close-merged 后发送 niuma.task.completed dispatch 事件")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
@@ -180,6 +182,7 @@ func buildController() (*control.Controller, error) {
 		PRConflictAIMaxAttempts:   flagPRConflictAIMaxAttempts,
 		PRConflictSmokeTestCmd:    flagPRConflictSmokeTestCmd,
 		PRConflictElixirTestCmd:   flagPRConflictElixirTestCmd,
+		PRConflictProfile:         resolveProfileFlag(flagPRConflictProfile, os.Getenv("NIUMA_PR_CONFLICT_PROFILE")),
 		RepoDir:                   repoDir,
 	}
 
@@ -260,6 +263,23 @@ func parseBackoffDurations(raw string) ([]time.Duration, error) {
 		return nil, fmt.Errorf("退避列表不能为空")
 	}
 	return backoffs, nil
+}
+
+// resolveProfileFlag 按 flag > env > default 分层解析 profile 配置。
+// flag 默认值为 ""（cobra 默认），非空时表示用户显式设置，优先级最高。
+func resolveProfileFlag(flagVal, envVal string) string {
+	flagVal = strings.TrimSpace(flagVal)
+	envVal = strings.TrimSpace(envVal)
+	// flag 显式设置时优先（cobra 默认为 ""，非空即用户显式传入）
+	if flagVal != "" {
+		return flagVal
+	}
+	// env 次之
+	if envVal != "" {
+		return envVal
+	}
+	// 默认 auto
+	return "auto"
 }
 
 // gitHubControlOps 适配 gh.Client 到 control.GitHubOps

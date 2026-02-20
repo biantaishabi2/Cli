@@ -13,6 +13,7 @@ const (
 	metaKeyConflictResolutionAttempts     = "conflict_resolution_attempts"
 	metaKeyConflictResolutionLastError    = "conflict_resolution_last_error"
 	metaKeyConflictResolutionLastFailedAt = "conflict_resolution_last_failed_at"
+	metaKeyConflictResolutionGroupResults = "conflict_resolution_group_results"
 )
 
 const (

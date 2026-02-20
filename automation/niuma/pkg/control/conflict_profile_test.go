@@ -265,6 +265,99 @@ use std::io;
 	assert.Contains(t, string(resolved), "use std::io;")
 }
 
+func TestParseProfileFlag(t *testing.T) {
+	cases := []struct {
+		input     string
+		wantMode  string
+		wantLangs []string
+	}{
+		{"", "auto", nil},
+		{"auto", "auto", nil},
+		{"AUTO", "auto", nil},
+		{"  auto  ", "auto", nil},
+		{"none", "none", nil},
+		{"NONE", "none", nil},
+		{"go", "whitelist", []string{"go"}},
+		{"go,rust", "whitelist", []string{"go", "rust"}},
+		{"Go, Elixir , Rust", "whitelist", []string{"go", "elixir", "rust"}},
+		{"  ,  ,  ", "auto", nil}, // 只有逗号和空格
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("input=%q", tc.input), func(t *testing.T) {
+			mode, langs := ParseProfileFlag(tc.input)
+			assert.Equal(t, tc.wantMode, mode)
+			assert.Equal(t, tc.wantLangs, langs)
+		})
+	}
+}
+
+func TestFilterConflictProfileGroups(t *testing.T) {
+	groups, err := ResolveConflictProfileGroups([]string{
+		"pkg/service.go",
+		"apps/web/lib/web.ex",
+		"crates/core/src/lib.rs",
+	})
+	require.NoError(t, err)
+	require.Len(t, groups, 3)
+
+	t.Run("空白名单返回全部", func(t *testing.T) {
+		filtered := FilterConflictProfileGroups(groups, nil)
+		assert.Len(t, filtered, 3)
+	})
+
+	t.Run("仅保留 go 和 rust", func(t *testing.T) {
+		filtered := FilterConflictProfileGroups(groups, []string{"go", "rust"})
+		assert.Len(t, filtered, 2)
+		names := []string{filtered[0].Profile.Name(), filtered[1].Profile.Name()}
+		assert.Contains(t, names, "go")
+		assert.Contains(t, names, "rust")
+	})
+
+	t.Run("不匹配任何 group 返回空", func(t *testing.T) {
+		filtered := FilterConflictProfileGroups(groups, []string{"python"})
+		assert.Empty(t, filtered)
+	})
+
+	t.Run("大小写不敏感", func(t *testing.T) {
+		filtered := FilterConflictProfileGroups(groups, []string{"GO", "Elixir"})
+		assert.Len(t, filtered, 2)
+	})
+}
+
+func TestFilterConflictProfileGroupsExcluded(t *testing.T) {
+	groups, err := ResolveConflictProfileGroups([]string{
+		"pkg/service.go",
+		"apps/web/lib/web.ex",
+		"crates/core/src/lib.rs",
+	})
+	require.NoError(t, err)
+	require.Len(t, groups, 3)
+
+	t.Run("空白名单返回空", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, nil)
+		assert.Empty(t, excluded)
+	})
+
+	t.Run("仅排除 elixir", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, []string{"go", "rust"})
+		require.Len(t, excluded, 1)
+		assert.Equal(t, "elixir", excluded[0].Profile.Name())
+	})
+
+	t.Run("全部排除", func(t *testing.T) {
+		excluded := FilterConflictProfileGroupsExcluded(groups, []string{"python"})
+		assert.Len(t, excluded, 3)
+	})
+
+	t.Run("与 Filter 互补", func(t *testing.T) {
+		whitelist := []string{"go", "rust"}
+		included := FilterConflictProfileGroups(groups, whitelist)
+		excluded := FilterConflictProfileGroupsExcluded(groups, whitelist)
+		assert.Equal(t, len(groups), len(included)+len(excluded))
+	})
+}
+
 func TestResolveConflictProfileGroups_MixedLanguagesStableGrouping(t *testing.T) {
 	groups, err := ResolveConflictProfileGroups([]string{
 		"pkg/service.go",

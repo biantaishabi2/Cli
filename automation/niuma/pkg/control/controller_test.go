@@ -2867,6 +2867,151 @@ func TestReconcilePRReviewableConflicts_AIDisabledEscalatesHuman(t *testing.T) {
 	assert.Contains(t, logText, "AI 层已禁用")
 }
 
+func TestReconcilePRReviewableConflicts_ProfileNone(t *testing.T) {
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "profile none body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-profile-none",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+			PRConflictProfile:         "none",
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+
+	rawLog, logErr := os.ReadFile(logPath)
+	require.NoError(t, logErr)
+	logText := string(rawLog)
+	assert.Contains(t, logText, conflictResolutionLayerHuman)
+	assert.Contains(t, logText, "profile=none，跳过 Rule/AI 层")
+}
+
+func TestReconcilePRReviewableConflicts_ProfileAutoDefault(t *testing.T) {
+	// profile=auto（默认）行为应等同于不设置 profile：AI 层正常执行。
+	// 由于 AI provider 为 nil 会升级 human（等同 AIDisabled），这里仅验证不会因 profile=auto 而 panic。
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "profile auto body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-profile-auto",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+			PRConflictProfile:         "auto",
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	// profile=auto 不改变默认行为，Rule 层会失败后进入 AI 层
+	// AI provider 为 nil 最终升级 human
+	rawLog, _ := os.ReadFile(logPath)
+	logText := string(rawLog)
+	assert.Contains(t, logText, metaKeyConflictResolutionLayer)
+}
+
+func TestReconcilePRReviewableConflicts_ProfileWhitelist(t *testing.T) {
+	// profile=rust 但冲突文件仅有 .go，白名单过滤后无可用 group，升级 human
+	dir, _ := setupPRConflictTestHelperRepo(t)
+	taskctlClient, logPath := newRecordingTaskCtlClient(t)
+
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 321,
+			Body:   "profile whitelist body",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.resolvePRReviewStatus[321] = PRReviewStatus{
+		PRNum:            123,
+		HeadSHA:          "sha-profile-whitelist",
+		Mergeable:        PRMergeableConflicting,
+		MergeStateStatus: "DIRTY",
+	}
+
+	ctrl := &Controller{
+		github:  mockGH,
+		taskctl: taskctlClient,
+		cfg: &ControlConfig{
+			RepoDir:                   dir,
+			PRConflictEnableAI:        true,
+			PRConflictAIMaxAttempts:   2,
+			PRConflictRetryThreshold:  3,
+			PRConflictUnknownBackoffs: []time.Duration{time.Millisecond},
+			PRConflictProfile:         "rust",
+		},
+	}
+	tasks := []Task{{ID: "task-321", Metadata: map[string]string{"issue_num": "321"}}}
+	issueByNumber := map[int]IssueInfo{
+		321: {Number: 321, Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	err := ctrl.reconcilePRReviewableConflicts(context.Background(), tasks, issueByNumber)
+	require.NoError(t, err)
+
+	labels, labelsErr := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, labelsErr)
+	assert.Contains(t, labels, needsHumanLabel)
+
+	rawLog, _ := os.ReadFile(logPath)
+	logText := string(rawLog)
+	assert.Contains(t, logText, conflictResolutionLayerHuman)
+	assert.Contains(t, logText, "白名单过滤后无可用")
+}
+
 func TestNewController_PRConflictAIMaxAttemptsDefaultsWhenNonPositive(t *testing.T) {
 	cfgZero := &ControlConfig{
 		RepoDir:                 ".",

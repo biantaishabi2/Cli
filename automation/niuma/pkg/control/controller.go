@@ -194,6 +194,7 @@ type ControlConfig struct {
 	PRConflictAIMaxAttempts    int
 	PRConflictSmokeTestCmd     string
 	PRConflictElixirTestCmd    string `yaml:"pr_conflict_elixir_test_cmd"`
+	PRConflictProfile          string
 	RepoDir                    string           `yaml:"-"`
 	IssueLockTTL               time.Duration    `yaml:"-"`
 	IssueLockHeartbeatInterval time.Duration    `yaml:"-"`
@@ -223,6 +224,7 @@ func DefaultControlConfig() *ControlConfig {
 		PRConflictEnableAI:         true,
 		PRConflictAIMaxAttempts:    prConflictAIDefaultMaxAttempts,
 		PRConflictElixirTestCmd:    "mix test",
+		PRConflictProfile:          "auto",
 		RepoDir:                    ".",
 		IssueLockTTL:               issueLockDefaultTTL,
 		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
@@ -1653,6 +1655,24 @@ func (c *Controller) prConflictElixirTestCmd() string {
 		return "mix test"
 	}
 	return c.cfg.PRConflictElixirTestCmd
+}
+
+// prConflictProfileMode 返回 profile 模式："auto"/"none"/"whitelist"。
+func (c *Controller) prConflictProfileMode() string {
+	if c.cfg == nil {
+		return "auto"
+	}
+	mode, _ := ParseProfileFlag(c.cfg.PRConflictProfile)
+	return mode
+}
+
+// prConflictProfileWhitelist 返回白名单语言列表（仅 mode=whitelist 时非空）。
+func (c *Controller) prConflictProfileWhitelist() []string {
+	if c.cfg == nil {
+		return nil
+	}
+	_, langs := ParseProfileFlag(c.cfg.PRConflictProfile)
+	return langs
 }
 
 func (c *Controller) logPRReviewableDecision(
