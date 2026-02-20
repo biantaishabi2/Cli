@@ -36,6 +36,11 @@ on:
         required: false
         default: "2"
         type: string
+      trigger_label:
+        description: "触发本次实现的标签名（用于 gate label 校验）"
+        required: false
+        default: "bot:plan-final"
+        type: string
 
 permissions:
   issues: write
@@ -95,7 +100,20 @@ jobs:
           fi
           echo "repo_dir=$resolved_repo_dir" >> "$GITHUB_OUTPUT"
 
+      - name: Gate label check
+        id: gate_label
+        continue-on-error: true
+        env:
+          TRIGGER_LABEL: ${{ inputs.trigger_label }}
+          WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
+        run: |
+          "$NIUMA_BIN" gate label \
+            --label "$TRIGGER_LABEL" \
+            --type implement \
+            --repo-dir "$WORKSPACE"
+
       - name: Implement Code
+        if: steps.gate_label.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
@@ -108,6 +126,7 @@ jobs:
             --repo-dir "$WORKSPACE"
 
       - name: Find PR Number
+        if: steps.gate_label.outcome == 'success'
         id: find_pr
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -123,7 +142,7 @@ jobs:
           fi
 
       - name: Run PR Gate
-        if: steps.find_pr.outputs.pr_number != ''
+        if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}

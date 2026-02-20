@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -67,6 +68,7 @@ var controlDagReconcileCmd = &cobra.Command{
 	RunE:  runControlDagReconcile,
 }
 
+var flagDispatchWakeup bool   // --dispatch-wakeup
 var flagControlIssues string // --issues "40,41,42"
 var flagIntegrationGateMaxRetries int
 var flagControlDagDryRun bool
@@ -97,6 +99,7 @@ func init() {
 	controlRunCmd.Flags().IntVar(&flagPRConflictAIMaxAttempts, "pr-conflict-ai-max-attempts", 2, "冲突 AI 修复最大尝试次数（默认 2）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictElixirTestCmd, "pr-conflict-elixir-test-cmd", "mix test", "Elixir 冲突修复门禁测试命令，为空则跳过")
+	controlCloseMergedCmd.Flags().BoolVar(&flagDispatchWakeup, "dispatch-wakeup", false, "close-merged 后发送 niuma.task.completed dispatch 事件")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
 
@@ -639,7 +642,60 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("PR #%d 收口完成，目标 issues: %v\n", flagPR, issueNums)
+
+	// dispatch-wakeup：发送 niuma.task.completed 事件
+	if flagDispatchWakeup && len(issueNums) > 0 {
+		if err := dispatchTaskCompleted(ctx, client, flagPR, issueNums); err != nil {
+			log.Printf("WARNING: dispatch niuma.task.completed 失败: %v", err)
+		}
+	}
+
 	return nil
+}
+
+func dispatchTaskCompleted(ctx context.Context, client *gh.Client, prNum int, issueNums []int) error {
+	completedAt := time.Now().UTC().Format(time.RFC3339)
+
+	// event_id 生成：优先 GITHUB_RUN_ID，降级 timestamp
+	eventID, eventIDSource := generateEventID(prNum)
+
+	// 构造 source_issues JSON 数组
+	sourceIssues := make([]int, len(issueNums))
+	copy(sourceIssues, issueNums)
+
+	var sourceIssue interface{}
+	if len(sourceIssues) > 0 {
+		sourceIssue = sourceIssues[0]
+	}
+
+	payload := map[string]interface{}{
+		"source_issue":    sourceIssue,
+		"source_issues":   sourceIssues,
+		"trigger_pr":      prNum,
+		"completed_at":    completedAt,
+		"event_source":    "close-after-integration-merge",
+		"event_id":        eventID,
+		"event_id_source": eventIDSource,
+	}
+
+	if err := client.CreateRepositoryDispatch(ctx, "niuma.task.completed", payload); err != nil {
+		return err
+	}
+
+	fmt.Printf("[orchestrate.dispatch] event_id=%s event_id_source=%s triggered_at=%s\n", eventID, eventIDSource, completedAt)
+	return nil
+}
+
+func generateEventID(prNum int) (string, string) {
+	runID := os.Getenv("GITHUB_RUN_ID")
+	runAttempt := os.Getenv("GITHUB_RUN_ATTEMPT")
+	if runID != "" {
+		if runAttempt == "" {
+			runAttempt = "1"
+		}
+		return fmt.Sprintf("pr-%d-run-%s-%s", prNum, runID, runAttempt), "run_id"
+	}
+	return fmt.Sprintf("pr-%d-ts-%d", prNum, time.Now().Unix()), "timestamp"
 }
 
 func runControlDagSync(cmd *cobra.Command, args []string) error {

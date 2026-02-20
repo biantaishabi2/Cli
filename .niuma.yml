@@ -35,3 +35,11 @@ workflow:
   max_iterate_rounds: 10
   allowed_prefixes:
     - "automation/"
+  implement_trigger_labels:
+    - "bot:plan-final"
+
+label_guard:
+  allowlist:
+    - "github-actions[bot]"
+    - "niuma-bot"
+  mode: "dry-run"
