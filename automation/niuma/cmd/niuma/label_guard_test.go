@@ -262,7 +262,6 @@ func TestValidateLabelGuardAction(t *testing.T) {
 func TestExecuteLabelGuard_EnvOverrideAllowlist(t *testing.T) {
 	// 设置环境变量 override allowlist
 	t.Setenv("NIUMA_LABEL_ALLOWLIST", "env-user,another-env-user")
-	defer t.Setenv("NIUMA_LABEL_ALLOWLIST", "")
 
 	overridden := splitAndTrim("env-user,another-env-user", ",")
 	if !isInAllowlist("env-user", overridden) {
@@ -276,7 +275,6 @@ func TestExecuteLabelGuard_EnvOverrideAllowlist(t *testing.T) {
 func TestExecuteLabelGuard_EnvOverrideMode(t *testing.T) {
 	// 测试 mode 环境变量 override
 	t.Setenv("NIUMA_LABEL_GUARD_MODE", "enforce")
-	defer t.Setenv("NIUMA_LABEL_GUARD_MODE", "")
 
 	mode := "enforce"
 	if err := validateLabelGuardMode(mode); err != nil {
@@ -286,6 +284,119 @@ func TestExecuteLabelGuard_EnvOverrideMode(t *testing.T) {
 	// 无效 mode 也能通过 validateLabelGuardMode 校验拦截
 	if err := validateLabelGuardMode("bad-mode"); err == nil {
 		t.Error("bad-mode should be rejected by validateLabelGuardMode")
+	}
+}
+
+// runLabelGuardWithFlags 通过设置全局 flag 变量和 mock client 调用真实 runLabelGuard
+func runLabelGuardWithFlags(t *testing.T, mock *mockLGClient, repo string, issue int, actor, action, label, repoDir string) error {
+	t.Helper()
+	// 保存并恢复全局状态
+	oldRepo := flagRepo
+	oldIssue := flagIssue
+	oldRepoDir := flagRepoDir
+	oldActor := flagLabelGuardActor
+	oldAction := flagLabelGuardAction
+	oldLabel := flagLabelGuardLabel
+	oldFactory := labelGuardClientFactory
+	t.Cleanup(func() {
+		flagRepo = oldRepo
+		flagIssue = oldIssue
+		flagRepoDir = oldRepoDir
+		flagLabelGuardActor = oldActor
+		flagLabelGuardAction = oldAction
+		flagLabelGuardLabel = oldLabel
+		labelGuardClientFactory = oldFactory
+	})
+
+	flagRepo = repo
+	flagIssue = issue
+	flagRepoDir = repoDir
+	flagLabelGuardActor = actor
+	flagLabelGuardAction = action
+	flagLabelGuardLabel = label
+	labelGuardClientFactory = func(_ string) (labelGuardGitHubClient, error) {
+		return mock, nil
+	}
+	return runLabelGuard(nil, nil)
+}
+
+// TestRunLabelGuard_EnvOverrideAllowlist 通过 runLabelGuard 完整路径测试 env override allowlist
+func TestRunLabelGuard_EnvOverrideAllowlist(t *testing.T) {
+	// 配置文件中 allowlist 不含 env-user
+	dir := t.TempDir()
+	writeNiumaYml(t, dir, `
+label_guard:
+  allowlist:
+    - github-actions[bot]
+  mode: dry-run
+`)
+
+	// env override 让 env-user 成为 allowlist 成员 → 应放行
+	t.Setenv("NIUMA_LABEL_ALLOWLIST", "env-user,another-env-user")
+
+	mock := &mockLGClient{}
+	err := runLabelGuardWithFlags(t, mock, "owner/repo", 1, "env-user", "labeled", "bot:fix", dir)
+	if err != nil {
+		t.Fatalf("expected no error when actor is in env-overridden allowlist, got: %v", err)
+	}
+	// 放行不应发评论或操作标签
+	if len(mock.addedComments) != 0 {
+		t.Errorf("allowlist pass should not post comments, got %d", len(mock.addedComments))
+	}
+}
+
+// TestRunLabelGuard_EnvOverrideMode 通过 runLabelGuard 完整路径测试 env override mode
+func TestRunLabelGuard_EnvOverrideMode(t *testing.T) {
+	// 配置文件中 mode=dry-run
+	dir := t.TempDir()
+	writeNiumaYml(t, dir, `
+label_guard:
+  allowlist:
+    - github-actions[bot]
+  mode: dry-run
+`)
+
+	// env override mode 为 enforce
+	t.Setenv("NIUMA_LABEL_GUARD_MODE", "enforce")
+
+	mock := &mockLGClient{
+		labels: []string{"bot:fix", "enhancement"},
+	}
+	err := runLabelGuardWithFlags(t, mock, "owner/repo", 1, "random-user", "labeled", "bot:fix", dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// env override 为 enforce 应触发回滚
+	if mock.replacedWith == nil {
+		t.Error("enforce mode (via env override) should trigger label rollback")
+	}
+	if len(mock.addedComments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(mock.addedComments))
+	}
+	if !strings.Contains(mock.addedComments[0], "已自动回滚") {
+		t.Error("enforce mode comment should mention 已自动回滚")
+	}
+}
+
+// TestRunLabelGuard_EnvOverrideInvalidMode 通过 runLabelGuard 测试无效 mode env override 被拦截
+func TestRunLabelGuard_EnvOverrideInvalidMode(t *testing.T) {
+	dir := t.TempDir()
+	writeNiumaYml(t, dir, `
+label_guard:
+  allowlist: []
+  mode: dry-run
+`)
+
+	t.Setenv("NIUMA_LABEL_GUARD_MODE", "bad-mode")
+
+	mock := &mockLGClient{}
+	err := runLabelGuardWithFlags(t, mock, "owner/repo", 1, "random-user", "labeled", "bot:fix", dir)
+	if err == nil {
+		t.Fatal("expected error for invalid mode from env override")
+	}
+	if !strings.Contains(err.Error(), "不支持的 label-guard mode") {
+		t.Errorf("error should mention invalid mode, got: %v", err)
 	}
 }
 

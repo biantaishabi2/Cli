@@ -45,6 +45,9 @@ type labelGuardGitHubClient interface {
 	ReplaceLabels(ctx context.Context, issueNumber int, labels []string) error
 }
 
+// labelGuardClientFactory 允许测试注入 mock client（默认使用真实 GitHub client）
+var labelGuardClientFactory func(repo string) (labelGuardGitHubClient, error)
+
 func runLabelGuard(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 {
 		return fmt.Errorf("必须指定 --repo 和 --issue")
@@ -79,7 +82,14 @@ func runLabelGuard(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	client, err := gh.NewClientFromEnv(flagRepo)
+
+	var client labelGuardGitHubClient
+	var err error
+	if labelGuardClientFactory != nil {
+		client, err = labelGuardClientFactory(flagRepo)
+	} else {
+		client, err = gh.NewClientFromEnv(flagRepo)
+	}
 	if err != nil {
 		return err
 	}

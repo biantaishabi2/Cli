@@ -653,7 +653,12 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func dispatchTaskCompleted(ctx context.Context, client *gh.Client, prNum int, issueNums []int) error {
+// dispatchSender 定义 dispatch 操作接口，方便测试注入
+type dispatchSender interface {
+	CreateRepositoryDispatch(ctx context.Context, eventType string, clientPayload map[string]interface{}) error
+}
+
+func dispatchTaskCompleted(ctx context.Context, client dispatchSender, prNum int, issueNums []int) error {
 	completedAt := time.Now().UTC().Format(time.RFC3339)
 
 	// event_id 生成：优先 GITHUB_RUN_ID，降级 timestamp

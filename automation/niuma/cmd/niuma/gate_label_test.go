@@ -2,12 +2,11 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/config"
-	"github.com/spf13/cobra"
 )
 
 func TestGateLabelDefaultConfig(t *testing.T) {
@@ -61,90 +60,90 @@ func TestGateLabelCustomConfig(t *testing.T) {
 	}
 }
 
-func TestGateLabelExitCode78OnReject(t *testing.T) {
-	// 模拟 gate label 的核心逻辑：标签不在列表中应返回 exit code 78
-	triggerLabels := []string{"bot:plan-final"}
-	label := "bot:plan-approved"
-
-	found := false
-	for _, allowed := range triggerLabels {
-		if allowed == label {
-			found = true
-			break
-		}
+// writeNiumaYml 在指定目录写入 .niuma.yml 配置
+func writeNiumaYml(t *testing.T, dir, content string) {
+	t.Helper()
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0o644)
+	if err != nil {
+		t.Fatalf("write .niuma.yml: %v", err)
 	}
-	if found {
-		t.Fatal("bot:plan-approved should NOT be in default trigger list")
-	}
+}
 
-	// 验证 withExitCode 生成正确的退出码
-	err := withExitCode(78, fmt.Errorf("label %s not in trigger list", label))
+// runGateLabelWithFlags 通过设置全局 flag 变量调用真实 runGateLabel
+func runGateLabelWithFlags(t *testing.T, repoDir, label, gateType string) error {
+	t.Helper()
+	// 保存并恢复全局状态
+	oldRepoDir := flagRepoDir
+	oldLabel := flagGateLabelLabel
+	oldType := flagGateLabelType
+	t.Cleanup(func() {
+		flagRepoDir = oldRepoDir
+		flagGateLabelLabel = oldLabel
+		flagGateLabelType = oldType
+	})
+
+	flagRepoDir = repoDir
+	flagGateLabelLabel = label
+	flagGateLabelType = gateType
+	return runGateLabel(nil, nil)
+}
+
+// 场景 8：默认配置下 bot:plan-final 通过（exit 0）
+func TestRunGateLabel_DefaultConfigPass(t *testing.T) {
+	// 无 .niuma.yml 时使用默认配置（implement_trigger_labels = ["bot:plan-final"]）
+	dir := t.TempDir()
+
+	err := runGateLabelWithFlags(t, dir, "bot:plan-final", "implement")
+	if err != nil {
+		t.Errorf("expected no error for bot:plan-final with default config, got: %v", err)
+	}
+}
+
+// 场景 9：默认配置下 bot:plan-approved 被拒（exit 78）
+func TestRunGateLabel_DefaultConfigReject(t *testing.T) {
+	dir := t.TempDir()
+
+	err := runGateLabelWithFlags(t, dir, "bot:plan-approved", "implement")
 	if err == nil {
-		t.Fatal("expected error for rejected label")
+		t.Fatal("expected error for bot:plan-approved with default config")
 	}
 
 	var ec interface{ ExitCode() int }
 	if !errors.As(err, &ec) {
-		t.Fatal("error should implement ExitCode()")
+		t.Fatalf("error should implement ExitCode(), got: %v", err)
 	}
 	if ec.ExitCode() != 78 {
 		t.Errorf("exit code = %d, want 78", ec.ExitCode())
 	}
 }
 
-func TestGateLabelExitCode0OnPass(t *testing.T) {
-	// 标签在列表中应通过（return nil，即 exit 0）
-	triggerLabels := []string{"bot:plan-final"}
-	label := "bot:plan-final"
+// 场景 10：自定义配置下 bot:plan-final 和 bot:plan-approved 都通过
+func TestRunGateLabel_CustomConfigBothPass(t *testing.T) {
+	dir := t.TempDir()
+	writeNiumaYml(t, dir, `
+workflow:
+  implement_trigger_labels:
+    - bot:plan-final
+    - bot:plan-approved
+`)
 
-	found := false
-	for _, allowed := range triggerLabels {
-		if allowed == label {
-			found = true
-			break
+	for _, label := range []string{"bot:plan-final", "bot:plan-approved"} {
+		err := runGateLabelWithFlags(t, dir, label, "implement")
+		if err != nil {
+			t.Errorf("expected no error for %s with custom config, got: %v", label, err)
 		}
-	}
-	if !found {
-		t.Error("bot:plan-final should be in default trigger list")
 	}
 }
 
-func TestGateLabelUnknownType(t *testing.T) {
-	// 使用 cobra 执行，验证未知 type 返回错误
-	cmd := &cobra.Command{Use: "test", RunE: func(cmd *cobra.Command, args []string) error {
-		gateType := "unknown"
-		if gateType != "implement" {
-			return fmt.Errorf("不支持的 gate 类型: %q（目前仅支持 implement）", gateType)
-		}
-		return nil
-	}}
-	err := cmd.Execute()
+// 未知 --type 报错
+func TestRunGateLabel_UnknownType(t *testing.T) {
+	dir := t.TempDir()
+
+	err := runGateLabelWithFlags(t, dir, "bot:plan-final", "unknown")
 	if err == nil {
 		t.Fatal("expected error for unknown gate type")
 	}
-	if !strings.Contains(err.Error(), "不支持的 gate 类型") {
-		t.Errorf("error should mention unsupported type, got: %v", err)
-	}
-}
-
-func TestGateLabelCustomConfigBothPass(t *testing.T) {
-	cfg := &config.Config{
-		Workflow: config.WorkflowConfig{
-			ImplementTriggerLabels: []string{"bot:plan-final", "bot:plan-approved"},
-		},
-	}
-	triggerLabels := cfg.Workflow.GetImplementTriggerLabels()
-
-	for _, label := range []string{"bot:plan-final", "bot:plan-approved"} {
-		found := false
-		for _, allowed := range triggerLabels {
-			if allowed == label {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("label %s should pass with custom config, trigger list: %v", label, triggerLabels)
-		}
+	if got := err.Error(); got != `不支持的 gate 类型: "unknown"（目前仅支持 implement）` {
+		t.Errorf("unexpected error message: %s", got)
 	}
 }
