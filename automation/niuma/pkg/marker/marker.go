@@ -19,6 +19,7 @@ const (
 	TypePRCreated                  Type = "BOT:PR_CREATED"
 	TypeConvergeWarning            Type = "BOT:CONVERGE_WARNING"
 	TypeDiscussionRoundLimitNotice Type = "BOT:DISCUSSION_ROUND_LIMIT_NOTICE"
+	TypeLabelGuard                 Type = "BOT:LABEL_GUARD"
 )
 
 // AllTypes 返回所有有效的 Marker 类型
@@ -29,6 +30,7 @@ var AllTypes = []Type{
 	TypePRCreated,
 	TypeConvergeWarning,
 	TypeDiscussionRoundLimitNotice,
+	TypeLabelGuard,
 }
 
 // Marker 表示一个嵌入在 GitHub 评论中的幂等标记
@@ -43,6 +45,9 @@ type Marker struct {
 	Risk          string // 仅 DISCUSSION_SUMMARY 使用：最高风险（low|medium|high）
 	DisagreeCount int    // 仅 DISCUSSION_SUMMARY 使用：分歧数量
 	Mode          string // 仅 DISCUSSION_SUMMARY 使用：讨论模式（当前固定 debate_ab）
+	Label         string // 仅 LABEL_GUARD 使用
+	Action        string // 仅 LABEL_GUARD 使用
+	Actor         string // 仅 LABEL_GUARD 使用
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->
@@ -100,6 +105,12 @@ func Parse(line string) *Marker {
 			}
 		case "mode":
 			m.Mode = val
+		case "label":
+			m.Label = val
+		case "action":
+			m.Action = val
+		case "actor":
+			m.Actor = val
 		}
 	}
 
@@ -159,6 +170,15 @@ func Render(m *Marker) string {
 	}
 	if m.Mode != "" {
 		parts = append(parts, fmt.Sprintf("mode=%s", m.Mode))
+	}
+	if m.Label != "" {
+		parts = append(parts, fmt.Sprintf("label=%s", m.Label))
+	}
+	if m.Action != "" {
+		parts = append(parts, fmt.Sprintf("action=%s", m.Action))
+	}
+	if m.Actor != "" {
+		parts = append(parts, fmt.Sprintf("actor=%s", m.Actor))
 	}
 
 	return strings.Join(parts, " ") + " -->"
