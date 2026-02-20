@@ -472,6 +472,26 @@ func TestRenderLabelGuardMarker(t *testing.T) {
 	}
 }
 
+// TestRunLabelGuard_AllowlistActorInvalidAction 验证 allowlisted actor + 非法 action 应报错（不应被 allowlist 短路放行）
+func TestRunLabelGuard_AllowlistActorInvalidAction(t *testing.T) {
+	dir := t.TempDir()
+	writeNiumaYml(t, dir, `
+label_guard:
+  allowlist:
+    - github-actions[bot]
+  mode: dry-run
+`)
+
+	mock := &mockLGClient{}
+	err := runLabelGuardWithFlags(t, mock, "owner/repo", 1, "github-actions[bot]", "reopened", "bot:fix", dir)
+	if err == nil {
+		t.Fatal("expected error for allowlisted actor with invalid action")
+	}
+	if !strings.Contains(err.Error(), "不支持的 label-guard action") {
+		t.Errorf("error should mention invalid action, got: %v", err)
+	}
+}
+
 // extractMarkerLine 从多行文本中提取包含 marker 的行
 func extractMarkerLine(text string) string {
 	for _, line := range strings.Split(text, "\n") {

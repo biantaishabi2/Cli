@@ -75,6 +75,11 @@ func runLabelGuard(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// 前置校验 action 合法性（在 allowlist 短路之前）
+	if err := validateLabelGuardAction(flagLabelGuardAction); err != nil {
+		return err
+	}
+
 	// 校验 actor 是否在 allowlist
 	if isInAllowlist(flagLabelGuardActor, allowlist) {
 		fmt.Printf("Actor %s is in allowlist, skipping\n", flagLabelGuardActor)
@@ -118,11 +123,6 @@ func validateLabelGuardAction(action string) error {
 }
 
 func executeLabelGuard(ctx context.Context, client labelGuardGitHubClient, mode string, issue int, actor, action, label string) error {
-	// 前置校验 action 合法性
-	if err := validateLabelGuardAction(action); err != nil {
-		return err
-	}
-
 	// 幂等评论去重：通过 pkg/marker 检查是否已有相同 key 的 marker
 	comments, err := client.ListComments(ctx, issue)
 	if err != nil {
