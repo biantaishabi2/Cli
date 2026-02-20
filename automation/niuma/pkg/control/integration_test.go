@@ -204,7 +204,7 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_AutoResolvedForWhitelistedFi
 		Branch:   "feat/40-doc-a",
 		IssueNum: 40,
 		PRNum:    400,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, MergeStatusMerged, first.Status)
 
@@ -212,7 +212,7 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_AutoResolvedForWhitelistedFi
 		Branch:   "feat/41-doc-b",
 		IssueNum: 41,
 		PRNum:    401,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, MergeStatusAutoResolved, second.Status)
 	assert.Contains(t, second.AutoResolvedFiles, "docs/guide.md")
@@ -240,7 +240,7 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConf
 		Branch:   "feat/40-core-a",
 		IssueNum: 40,
 		PRNum:    500,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, MergeStatusMerged, first.Status)
 
@@ -248,7 +248,7 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConf
 		Branch:   "feat/41-core-b",
 		IssueNum: 41,
 		PRNum:    501,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, MergeStatusEscalated, second.Status)
 	require.NotNil(t, second.Conflict)
@@ -512,6 +512,154 @@ func TestHasHighRiskConflict_RustUseNotHighRisk(t *testing.T) {
 	}
 	risky, _ := hasHighRiskConflict("src/lib.rs", fileSummary)
 	assert.False(t, risky)
+}
+
+func TestComputeOldestMergeBase(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	// master 有初始 commit (c0)
+	// 创建分支 A 基于 c0
+	createBranch(t, dir, "feat/50-a", "a.go", "package a\n")
+
+	// master 前进 (c1)
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.go"), []byte("package extra\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance c1")
+
+	// 创建分支 B 基于 c1
+	createBranch(t, dir, "feat/51-b", "b.go", "package b\n")
+
+	// master 再前进 (c2)
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra2.go"), []byte("package extra2\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance c2")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	// 分支 A 的 merge-base 是 c0，分支 B 的 merge-base 是 c1
+	// 最旧的应该是 c0
+	oldest, err := builder.ComputeOldestMergeBase([]string{"feat/50-a", "feat/51-b"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, oldest)
+
+	// 验证 oldest 是 feat/50-a 的 merge-base
+	mbA := runGitOutput(t, dir, "merge-base", "master", "feat/50-a")
+	assert.Equal(t, mbA, oldest)
+
+	// 且 oldest 是 feat/51-b merge-base 的祖先
+	mbB := runGitOutput(t, dir, "merge-base", "master", "feat/51-b")
+	assert.NotEqual(t, mbA, mbB, "两个 merge-base 应不同")
+
+	// 验证 oldest 是其他 merge-base 的祖先（关键断言）
+	isAncestorCmd := exec.Command("git", "merge-base", "--is-ancestor", oldest, mbB)
+	isAncestorCmd.Dir = dir
+	assert.NoError(t, isAncestorCmd.Run(), "oldest merge-base 应是其他 merge-base 的祖先")
+
+	// 空列表返回空
+	empty, err := builder.ComputeOldestMergeBase(nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func TestIntegrationBuilder_MasterAdvanced_NoFalseConflict(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	// master 有初始文件 (c0)
+	// 创建分支 A 基于 c0，修改不同文件
+	createBranch(t, dir, "feat/60-a", "a.go", "package a\n")
+	createBranch(t, dir, "feat/61-b", "b.go", "package b\n")
+
+	// master 前进：新增文件（不与 PR 分支冲突）
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "new_on_master.go"), []byte("package newmaster\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	branches := []BranchInfo{
+		{Branch: "feat/60-a", IssueNum: 60},
+		{Branch: "feat/61-b", IssueNum: 61},
+	}
+
+	// Build 应成功，两个分支都能 merge，不产生假冲突
+	result, err := builder.Build("integration/test-no-false-conflict", branches, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []int{60, 61}, result.Merged)
+	assert.Empty(t, result.Conflicts)
+
+	// integration 分支不应包含 master 新增的文件（因为起点是 c0）
+	cmd := exec.Command("git", "show", "integration/test-no-false-conflict:new_on_master.go")
+	cmd.Dir = dir
+	_, showErr := cmd.CombinedOutput()
+	assert.Error(t, showErr, "integration 分支不应包含 master 新增的文件")
+}
+
+func TestIntegrationBuilder_SinglePRBranch_MasterAdvanced(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	// 创建分支 A 基于 c0
+	createBranch(t, dir, "feat/80-single", "single.go", "package single\n")
+
+	// master 前进
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "master_new.go"), []byte("package masternew\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	branches := []BranchInfo{
+		{Branch: "feat/80-single", IssueNum: 80},
+	}
+
+	// Build 应成功，单个分支正常 merge
+	result, err := builder.Build("integration/test-single-pr", branches, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []int{80}, result.Merged)
+	assert.Empty(t, result.Conflicts)
+
+	// integration 分支应从该分支的 merge-base 创建，不包含 master 新增文件
+	cmd := exec.Command("git", "show", "integration/test-single-pr:master_new.go")
+	cmd.Dir = dir
+	_, showErr := cmd.CombinedOutput()
+	assert.Error(t, showErr, "integration 分支不应包含 master 新增的文件")
+
+	// 但应包含 PR 分支的文件
+	content := runGitOutput(t, dir, "show", "integration/test-single-pr:single.go")
+	assert.Contains(t, content, "package single")
+}
+
+func TestIntegrationBuilder_RealConflictStillDetected(t *testing.T) {
+	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "shared.go"), []byte("package pkg\n\nfunc Version() int { return 0 }\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add shared.go")
+
+	// 两个分支修改同文件同区域
+	createBranchModifyFile(t, dir, "feat/70-a", "pkg/shared.go", "package pkg\n\nfunc Version() int { return 1 }\n")
+	createBranchModifyFile(t, dir, "feat/71-b", "pkg/shared.go", "package pkg\n\nfunc Version() int { return 2 }\n")
+
+	// master 前进
+	runGit(t, dir, "checkout", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "unrelated.go"), []byte("package unrelated\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "master advance")
+
+	builder := NewIntegrationBuilder(dir, "master")
+
+	branches := []BranchInfo{
+		{Branch: "feat/70-a", IssueNum: 70},
+		{Branch: "feat/71-b", IssueNum: 71},
+	}
+
+	result, err := builder.Build("integration/test-real-conflict", branches, nil)
+	require.NoError(t, err)
+	assert.Contains(t, result.Merged, 70)
+	assert.Contains(t, result.Conflicts, 71)
 }
 
 func splitNonEmpty(s string) []string {

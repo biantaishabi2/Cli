@@ -122,6 +122,29 @@ func TestRender_WithPR(t *testing.T) {
 	assert.Equal(t, "<!-- BOT:PR_CREATED issue=10 rev=1 pr=55 -->", Render(m))
 }
 
+func TestParse_GateRetryWithAttemptKey(t *testing.T) {
+	m := Parse("<!-- BOT:GATE_RETRY issue=42 rev=2 akey=issue-42-pr-9-run-123-attempt-1 -->")
+	require.NotNil(t, m)
+	assert.Equal(t, TypeGateRetry, m.Type)
+	assert.Equal(t, 42, m.Issue)
+	assert.Equal(t, 2, m.Revision)
+	assert.Equal(t, "issue-42-pr-9-run-123-attempt-1", m.AttemptKey)
+}
+
+func TestRender_GateRetryWithAttemptKey(t *testing.T) {
+	m := &Marker{
+		Type:       TypeGateRetry,
+		Issue:      42,
+		Revision:   3,
+		AttemptKey: "issue-42-pr-9-run-777-attempt-2",
+	}
+	assert.Equal(
+		t,
+		"<!-- BOT:GATE_RETRY issue=42 rev=3 akey=issue-42-pr-9-run-777-attempt-2 -->",
+		Render(m),
+	)
+}
+
 func TestRoundTrip(t *testing.T) {
 	// 渲染后再解析，应该得到一致结果
 	original := &Marker{Type: TypePlanFinal, Issue: 7, Revision: 2}

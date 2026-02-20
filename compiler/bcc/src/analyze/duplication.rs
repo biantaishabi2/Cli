@@ -226,7 +226,7 @@ pub fn detect_structural_duplication(functions: &[FunctionInfo]) -> Vec<SmellRec
             smells.push(SmellRecord {
                 category: "duplication".to_string(),
                 rule: "structural_duplication".to_string(),
-                severity: "warning".to_string(),
+                severity: "medium".to_string(),
                 message: format!(
                     "函数 '{}' 与其他 {} 个函数结构相同（仅变量名/字面量不同），建议提取公共逻辑: {}",
                     func.name,
@@ -290,7 +290,7 @@ pub fn detect_boilerplate_skeleton(functions: &[FunctionInfo]) -> Vec<SmellRecor
             smells.push(SmellRecord {
                 category: "duplication".to_string(),
                 rule: "boilerplate_skeleton".to_string(),
-                severity: "warning".to_string(),
+                severity: "medium".to_string(),
                 message: format!(
                     "函数 '{}' 与其他 {} 个函数骨架结构相同（叶子节点不同），可能可以泛化: {}",
                     func.name,

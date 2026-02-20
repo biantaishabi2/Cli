@@ -27,8 +27,8 @@ type RunGateFunc func(ctx context.Context, repoDir string, pr int) (string, erro
 type MarkNeedsFixFunc func(ctx context.Context, repo string, issue int) error
 type AddLabelsFunc func(ctx context.Context, repo string, issue int, labels []string) error
 type AddCommentFunc func(ctx context.Context, repo string, issue int, body string) error
-type FindGateRetryCountFunc func(ctx context.Context, issue int) (int, error)
-type UpsertGateRetryCountFunc func(ctx context.Context, issue int, count int) error
+type FindGateRetryStateFunc func(ctx context.Context, issue int) (int, string, error)
+type UpsertGateRetryCountFunc func(ctx context.Context, issue int, count int, attemptKey string) error
 type HasLabelFunc func(ctx context.Context, issue int, label string) (bool, error)
 type AddPRReviewFunc func(ctx context.Context, repo string, pr int, body string) error
 
@@ -38,13 +38,15 @@ type Options struct {
 	PR         int
 	RepoDir    string
 	MaxRetries int
+	RunID      string
+	RunAttempt string
 
 	Now                  func() time.Time
 	RunGate              RunGateFunc
 	MarkNeedsFix         MarkNeedsFixFunc
 	AddLabels            AddLabelsFunc
 	AddComment           AddCommentFunc
-	FindGateRetryCount   FindGateRetryCountFunc
+	FindGateRetryState   FindGateRetryStateFunc
 	UpsertGateRetryCount UpsertGateRetryCountFunc
 	HasLabel             HasLabelFunc
 	AddPRReview          AddPRReviewFunc // 可选：gate 失败时将错误详情写到 PR review，供 iterate 读取
@@ -94,8 +96,8 @@ func NewRunner(opts Options) (*Runner, error) {
 	if opts.AddComment == nil {
 		return nil, fmt.Errorf("AddComment 未配置")
 	}
-	if opts.FindGateRetryCount == nil {
-		return nil, fmt.Errorf("FindGateRetryCount 未配置")
+	if opts.FindGateRetryState == nil {
+		return nil, fmt.Errorf("FindGateRetryState 未配置")
 	}
 	if opts.UpsertGateRetryCount == nil {
 		return nil, fmt.Errorf("UpsertGateRetryCount 未配置")
@@ -113,26 +115,29 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if gateErr == nil {
 		// gate 通过，重置计数
 		result.Passed = true
-		if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, 0); err != nil {
+		if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, 0, ""); err != nil {
 			return result, fmt.Errorf("gate 通过后重置 retry_count 失败: %w", err)
 		}
 		return result, nil
 	}
 
-	attemptKey := buildAttemptKey(r.opts.Issue, r.opts.PR, r.opts.Now())
+	attemptKey := buildAttemptKey(r.opts.Issue, r.opts.PR, r.opts.Now(), r.opts.RunID, r.opts.RunAttempt)
 	result.AttemptKey = attemptKey
 	gateFailure := trimGateError(gateOutput, gateErr)
 
-	// 从 marker 读取上次 retry_count
-	prevCount, err := r.opts.FindGateRetryCount(ctx, r.opts.Issue)
+	// 从 marker 读取上次 retry_count（仅同 attempt_key 延续；否则从 0 开始）
+	prevCount, prevAttemptKey, err := r.opts.FindGateRetryState(ctx, r.opts.Issue)
 	if err != nil {
 		return result, fmt.Errorf("读取 gate retry_count 失败: %w", err)
+	}
+	if prevAttemptKey != attemptKey {
+		prevCount = 0
 	}
 	retryCount := prevCount + 1
 	result.RetryCount = retryCount
 
 	// 写回新计数
-	if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, retryCount); err != nil {
+	if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, retryCount, attemptKey); err != nil {
 		return result, fmt.Errorf("写入 gate retry_count 失败: %w", err)
 	}
 
@@ -190,8 +195,16 @@ func runGateScript(ctx context.Context, repoDir string, pr int) (string, error) 
 	return strings.TrimSpace(string(out)), err
 }
 
-func buildAttemptKey(issue, pr int, now time.Time) string {
-	return fmt.Sprintf("issue-%d-pr-%d-%s", issue, pr, now.UTC().Format("20060102"))
+func buildAttemptKey(issue, pr int, now time.Time, runID, runAttempt string) string {
+	if strings.TrimSpace(runID) != "" {
+		attempt := strings.TrimSpace(runAttempt)
+		if attempt == "" {
+			attempt = "1"
+		}
+		return fmt.Sprintf("issue-%d-pr-%d-run-%s-attempt-%s", issue, pr, strings.TrimSpace(runID), attempt)
+	}
+	// 兼容本地/手工运行场景
+	return fmt.Sprintf("issue-%d-pr-%d-local-%s", issue, pr, now.UTC().Format("20060102150405"))
 }
 
 func trimGateError(output string, runErr error) string {

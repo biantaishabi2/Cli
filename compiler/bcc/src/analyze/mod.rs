@@ -1,15 +1,20 @@
 //! bcc analyze — AST 气味检测
 //!
-//! 读取 extract 产出的 FileRecord JSON，遍历每个文件生成 SmellReport。
-//! 检测器通过 SmellDetector trait 注册，支持 rules 参数按 category 过滤。
+//! 读取 extract 产出的 FileRecord JSON，遍历每个文件运行检测器生成 SmellReport。
+//! 检测器分两类：
+//! - `Detector`（正则/文本匹配）：security、error_handling
+//! - `SmellDetector`（tree-sitter AST）：noise、duplication
 
 pub mod duplication;
+pub mod error_handling;
 pub mod noise;
+pub mod security;
 
 use crate::extract::FileRecord;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 /// 单个文件的气味检测报告
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,13 +25,13 @@ pub struct SmellReport {
 }
 
 /// 单条气味记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SmellRecord {
     /// 检测类别：defensive / duplication / security / noise / error_handling
     pub category: String,
     /// 规则标识：redundant_type_check / hardcoded_credential / ...
     pub rule: String,
-    /// 严重级别：error / warning / info
+    /// 严重级别：high / medium / low
     pub severity: String,
     /// 人类可读描述
     pub message: String,
@@ -48,7 +53,17 @@ pub struct SmellSummary {
     pub by_category: HashMap<String, usize>,
 }
 
-/// 检测器 trait：每个检测器实现此接口
+/// 正则/文本匹配检测器 trait（security, error_handling）
+pub trait Detector {
+    /// 检测器名称（用于日志）
+    fn name(&self) -> &str;
+    /// 检测器所属类别（security / error_handling）
+    fn category(&self) -> &str;
+    /// 对源码运行检测，返回发现的 SmellRecord 列表
+    fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord>;
+}
+
+/// tree-sitter AST 检测器 trait（noise, duplication）
 pub trait SmellDetector {
     /// 检测器覆盖的 category（用于 rules 过滤）
     fn category(&self) -> &str;
@@ -60,6 +75,20 @@ pub trait SmellDetector {
         source: &str,
         tree: &tree_sitter::Tree,
     ) -> Vec<SmellRecord>;
+}
+
+/// 判断文件路径是否为测试文件（排除测试文件以减少误报）
+fn is_test_path(path: &str) -> bool {
+    let p = path.to_lowercase();
+    p.contains("/test/")
+        || p.contains("/tests/")
+        || p.contains("/spec/")
+        || p.contains("_test.")
+        || p.contains(".test.")
+        || p.contains("_spec.")
+        || p.contains(".spec.")
+        || p.starts_with("test/")
+        || p.starts_with("tests/")
 }
 
 /// 获取语言对应的 tree-sitter Language
@@ -75,8 +104,23 @@ fn get_language(lang: &str) -> Option<tree_sitter::Language> {
     }
 }
 
-/// 构建单文件检测器（不含 duplication，duplication 仅在跨文件阶段执行）
-fn build_detectors() -> Vec<Box<dyn SmellDetector>> {
+/// 构建正则/文本匹配检测器（security, error_handling）
+fn build_regex_detectors() -> Vec<Box<dyn Detector>> {
+    vec![
+        // 安全检测器
+        Box::new(security::HardcodedCredentialDetector),
+        Box::new(security::InjectionRiskDetector),
+        Box::new(security::UnsafeDeserializationDetector),
+        Box::new(security::WeakCryptoDetector),
+        Box::new(security::SensitiveDataLogDetector),
+        // 错误处理检测器
+        Box::new(error_handling::SwallowedErrorDetector),
+        Box::new(error_handling::BroadCatchDetector),
+    ]
+}
+
+/// 构建 tree-sitter AST 检测器（noise，不含 duplication——duplication 仅在跨文件阶段执行）
+fn build_ts_detectors() -> Vec<Box<dyn SmellDetector>> {
     vec![
         Box::new(noise::CommentDensityDetector::new(0.5)),
         Box::new(noise::LeftoverBoilerplateDetector),
@@ -88,12 +132,13 @@ fn build_detectors() -> Vec<Box<dyn SmellDetector>> {
 ///
 /// - ast_file: extract 输出的 JSON 文件路径（Vec<FileRecord> 或单个 FileRecord）
 /// - output: SmellReport JSON 输出路径
-/// - rules: 可选的逗号分隔规则类别过滤
+/// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling,noise,duplication）
 pub fn run(
     ast_file: &str,
     output: &str,
     rules: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // 解析 rules 参数
     let rule_filter: Option<Vec<String>> = rules.map(|r| {
         r.split(',')
             .map(|s| s.trim().to_string())
@@ -101,17 +146,18 @@ pub fn run(
             .collect()
     });
 
+    // 读取 AST JSON
     let content = fs::read_to_string(ast_file)
         .map_err(|e| format!("cannot read '{}': {}", ast_file, e))?;
 
+    // 支持 Vec<FileRecord> 和单个 FileRecord 两种输入格式
     let records: Vec<FileRecord> = serde_json::from_str::<Vec<FileRecord>>(&content)
         .or_else(|_| serde_json::from_str::<FileRecord>(&content).map(|r| vec![r]))
         .map_err(|e| format!("failed to parse '{}': {}", ast_file, e))?;
 
-    let all_detectors = build_detectors();
-
-    // 按 rules 过滤检测器
-    let detectors: Vec<&dyn SmellDetector> = all_detectors
+    // 构建两类检测器，按 rules 过滤
+    let all_regex = build_regex_detectors();
+    let regex_detectors: Vec<&dyn Detector> = all_regex
         .iter()
         .filter(|d| match &rule_filter {
             Some(filters) => filters.iter().any(|f| f == d.category()),
@@ -120,23 +166,50 @@ pub fn run(
         .map(|d| d.as_ref())
         .collect();
 
+    let all_ts = build_ts_detectors();
+    let ts_detectors: Vec<&dyn SmellDetector> = all_ts
+        .iter()
+        .filter(|d| match &rule_filter {
+            Some(filters) => filters.iter().any(|f| f == d.category()),
+            None => true,
+        })
+        .map(|d| d.as_ref())
+        .collect();
+
+    // 推断 AST JSON 所在目录，用于解析相对路径
+    let ast_dir = Path::new(ast_file)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+
+    // 收集源码读取失败的文件，最终作为错误返回
+    let mut read_failures: Vec<String> = Vec::new();
+
     // 一次 parse：为每个文件读取源码并 parse，共享给单文件和跨文件检测器
     let parsed_files: Vec<Option<(String, Option<tree_sitter::Tree>)>> = records
         .iter()
         .map(|record| {
+            let file_path = &record.file_path;
+
+            // 跳过测试文件
+            if is_test_path(file_path) {
+                return None;
+            }
+
+            // 读取源码：优先 source_code 字段，其次绝对路径，再次相对于 AST 文件目录
             let source_code = match &record.source_code {
-                Some(code) => code.clone(),
-                None => match fs::read_to_string(&record.file_path) {
-                    Ok(code) => code,
+                Some(code) if !code.is_empty() => code.clone(),
+                _ => match fs::read_to_string(file_path)
+                    .or_else(|_| fs::read_to_string(ast_dir.join(file_path)))
+                {
+                    Ok(s) if !s.is_empty() => s,
+                    Ok(_) => return None, // 空文件
                     Err(e) => {
-                        eprintln!(
-                            "[analyze] warning: cannot read source '{}': {}, skipping detectors",
-                            record.file_path, e
-                        );
+                        read_failures.push(format!("{}: {}", file_path, e));
                         return None;
                     }
                 },
             };
+
             let tree = get_language(&record.language).and_then(|lang| {
                 let mut parser = tree_sitter::Parser::new();
                 parser.set_language(&lang).ok()?;
@@ -146,50 +219,60 @@ pub fn run(
         })
         .collect();
 
-    // 单文件检测
+    // 单文件检测（同时运行两类检测器）
     let mut reports: Vec<SmellReport> = records
         .iter()
         .zip(parsed_files.iter())
         .map(|(record, parsed)| {
+            let file_path = &record.file_path;
+            let lang = &record.language;
+
             let (source_code, tree) = match parsed {
                 Some((src, t)) => (src.as_str(), t),
                 None => {
                     return SmellReport {
-                        file: record.file_path.clone(),
+                        file: file_path.clone(),
+                        smells: vec![],
                         summary: SmellSummary {
                             total_smells: 0,
                             by_severity: HashMap::new(),
                             by_category: HashMap::new(),
                         },
-                        smells: Vec::new(),
                     };
                 }
             };
 
             let mut smells = Vec::new();
+
+            // 正则/文本匹配检测器
+            for detector in &regex_detectors {
+                smells.extend(detector.detect(source_code, file_path, lang));
+            }
+
+            // tree-sitter AST 检测器
             if let Some(ref tree) = tree {
-                for detector in &detectors {
-                    let mut found = detector.detect(record, source_code, tree);
-                    smells.append(&mut found);
+                for detector in &ts_detectors {
+                    smells.extend(detector.detect(record, source_code, tree));
                 }
             }
 
-            // 构建 summary
+            // 构建汇总
+            let total_smells = smells.len();
             let mut by_severity: HashMap<String, usize> = HashMap::new();
             let mut by_category: HashMap<String, usize> = HashMap::new();
-            for smell in &smells {
-                *by_severity.entry(smell.severity.clone()).or_insert(0) += 1;
-                *by_category.entry(smell.category.clone()).or_insert(0) += 1;
+            for s in &smells {
+                *by_severity.entry(s.severity.clone()).or_insert(0) += 1;
+                *by_category.entry(s.category.clone()).or_insert(0) += 1;
             }
 
             SmellReport {
-                file: record.file_path.clone(),
+                file: file_path.clone(),
+                smells,
                 summary: SmellSummary {
-                    total_smells: smells.len(),
+                    total_smells,
                     by_severity,
                     by_category,
                 },
-                smells,
             }
         })
         .collect();
@@ -197,7 +280,6 @@ pub fn run(
     // 跨文件重复检测（复用已 parse 的数据）
     let cross_smells = run_cross_file_detectors(&records, &parsed_files, &rule_filter);
     if !cross_smells.is_empty() {
-        // 将跨文件 smell 分配到对应文件的 report 中
         let report_map: HashMap<String, usize> = reports
             .iter()
             .enumerate()
@@ -227,8 +309,19 @@ pub fn run(
         }
     }
 
+    // 源码读取失败视为错误，避免假阴性
+    if !read_failures.is_empty() {
+        return Err(format!(
+            "failed to read {} source file(s):\n  {}",
+            read_failures.len(),
+            read_failures.join("\n  ")
+        )
+        .into());
+    }
+
+    // 写出结果
     let json = serde_json::to_string_pretty(&reports)?;
-    if let Some(parent) = std::path::Path::new(output).parent() {
+    if let Some(parent) = Path::new(output).parent() {
         fs::create_dir_all(parent).ok();
     }
     fs::write(output, &json)?;
@@ -242,8 +335,7 @@ pub fn run(
     Ok(())
 }
 
-/// 提供给 duplication 检测器的跨文件检测入口
-/// 复用已 parse 的 (source_code, tree) 数据，不再重复 parse
+/// 跨文件重复检测入口（复用已 parse 的数据）
 pub fn run_cross_file_detectors(
     records: &[FileRecord],
     parsed_files: &[Option<(String, Option<tree_sitter::Tree>)>],
@@ -251,7 +343,6 @@ pub fn run_cross_file_detectors(
 ) -> Vec<SmellRecord> {
     let mut smells = Vec::new();
 
-    // StructuralDuplicationDetector 和 BoilerplateSkeletonDetector 需要跨文件比对
     if rule_filter
         .as_ref()
         .map_or(true, |f| f.iter().any(|c| c == "duplication"))
@@ -302,6 +393,10 @@ mod tests {
     #[test]
     fn valid_ast_with_rules_filter() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("lib");
+        fs::create_dir_all(&src_path).unwrap();
+        fs::write(src_path.join("foo.ex"), "defmodule Foo do\n  def bar, do: :ok\nend\n").unwrap();
+
         let ast_path = dir.path().join("valid.json");
         let out_path = dir.path().join("smells.json");
 
@@ -324,7 +419,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        // 过滤到 defensive 类别，noise/duplication 检测器不应运行
+        // 过滤到 defensive 类别，所有检测器都不匹配
         run(
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
@@ -343,6 +438,10 @@ mod tests {
     #[test]
     fn single_file_record_input() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("lib");
+        fs::create_dir_all(&src_path).unwrap();
+        fs::write(src_path.join("bar.ex"), "defmodule Bar do\nend\n").unwrap();
+
         let ast_path = dir.path().join("single.json");
         let out_path = dir.path().join("smells.json");
 
@@ -381,6 +480,10 @@ mod tests {
     #[test]
     fn old_format_ast_backward_compatible() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("src");
+        fs::create_dir_all(&src_path).unwrap();
+        fs::write(src_path.join("main.rs"), "fn main() {}\n").unwrap();
+
         let ast_path = dir.path().join("old.json");
         let out_path = dir.path().join("smells.json");
 
@@ -403,6 +506,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
+        // 不应 panic，新字段默认为空 Vec
         run(
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
@@ -413,5 +517,156 @@ mod tests {
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn is_test_path_excludes_test_files() {
+        assert!(is_test_path("test/foo_test.py"));
+        assert!(is_test_path("tests/unit/bar.py"));
+        assert!(is_test_path("src/foo_test.rs"));
+        assert!(is_test_path("lib/foo.spec.ts"));
+        assert!(!is_test_path("lib/foo.ex"));
+        assert!(!is_test_path("src/main.rs"));
+    }
+
+    #[test]
+    fn rules_filter_selects_category() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("vuln.py");
+        let ast_path = dir.path().join("ast.json");
+        let out_path = dir.path().join("smells.json");
+
+        fs::write(
+            &src_path,
+            "api_key = \"sk-proj-abc123\"\ntry:\n    risky()\nexcept:\n    pass\n",
+        )
+        .unwrap();
+
+        let ast_json = format!(
+            r#"[{{
+            "language": "python",
+            "file_path": "{}",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {{
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            }},
+            "loc_lines": 5,
+            "declarations": 0
+        }}]"#,
+            src_path.to_str().unwrap()
+        );
+        fs::write(&ast_path, &ast_json).unwrap();
+
+        // 只筛选 security 类别
+        run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            Some("security".to_string()),
+        )
+        .unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result.len(), 1);
+        for smell in &result[0].smells {
+            assert_eq!(smell.category, "security");
+        }
+    }
+
+    #[test]
+    fn empty_source_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("empty.py");
+        fs::write(&src_path, "").unwrap();
+
+        let ast_path = dir.path().join("ast.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = format!(
+            r#"[{{
+            "language": "python",
+            "file_path": "{}",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {{
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            }},
+            "loc_lines": 0,
+            "declarations": 0
+        }}]"#,
+            src_path.to_str().unwrap()
+        );
+        fs::write(&ast_path, &ast_json).unwrap();
+
+        let result = run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "Empty source file should not cause failure: {:?}",
+            result.err()
+        );
+
+        let reports: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].smells.is_empty());
+    }
+
+    #[test]
+    fn unreadable_source_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let ast_path = dir.path().join("missing_src.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "python",
+            "file_path": "/nonexistent/path/missing.py",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            },
+            "loc_lines": 5,
+            "declarations": 0
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        let result = run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "Should return error when source file is unreadable"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("failed to read"),
+            "Error should mention read failure: {}",
+            err_msg
+        );
     }
 }

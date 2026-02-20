@@ -86,7 +86,7 @@ impl SmellDetector for CommentDensityDetector {
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "excessive_comments".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "medium".to_string(),
                     message: format!(
                         "函数 '{}' 注释/代码比 {:.2} 超过阈值 {:.2}",
                         func_name, ratio, self.threshold
@@ -144,7 +144,7 @@ impl SmellDetector for CommentDensityDetector {
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "trivial_comment".to_string(),
-                    severity: "info".to_string(),
+                    severity: "low".to_string(),
                     message: format!(
                         "注释与代码高度相似（相似度 {:.2}），可能是废话注释",
                         distance
@@ -186,7 +186,7 @@ impl SmellDetector for LeftoverBoilerplateDetector {
                         smells.push(SmellRecord {
                             category: "noise".to_string(),
                             rule: "leftover_boilerplate".to_string(),
-                            severity: "info".to_string(),
+                            severity: "low".to_string(),
                             message: format!(
                                 "残留 {} 注释: {}",
                                 m.as_str().to_uppercase(),
@@ -241,7 +241,7 @@ fn detect_empty_python_functions(
                         smells.push(SmellRecord {
                             category: "noise".to_string(),
                             rule: "empty_function_body".to_string(),
-                            severity: "warning".to_string(),
+                            severity: "medium".to_string(),
                             message: format!("函数 '{}' 体为空（{}）", func_name, stmt_text),
                             file: record.file_path.clone(),
                             line: node.start_position().row + 1,
@@ -297,7 +297,7 @@ fn detect_unused_imports(record: &FileRecord, smells: &mut Vec<SmellRecord>) {
             smells.push(SmellRecord {
                 category: "noise".to_string(),
                 rule: "unused_import".to_string(),
-                severity: "info".to_string(),
+                severity: "low".to_string(),
                 message: format!("import '{}' 可能未使用", specifier),
                 file: record.file_path.clone(),
                 line: 1,
@@ -371,7 +371,7 @@ fn detect_commented_out_code(
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "commented_out_code".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "medium".to_string(),
                     message: format!(
                         "连续 {} 行注释内容为合法代码，可能是被注释掉的代码",
                         block_len
@@ -447,7 +447,7 @@ fn detect_dead_branches_recursive(
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "dead_branch".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "medium".to_string(),
                     message: format!("死分支: if {} 永远为假", trimmed),
                     file: record.file_path.clone(),
                     line: node.start_position().row + 1,
@@ -494,7 +494,7 @@ fn detect_unreachable_recursive(
                     smells.push(SmellRecord {
                         category: "noise".to_string(),
                         rule: "unreachable_code".to_string(),
-                        severity: "warning".to_string(),
+                        severity: "medium".to_string(),
                         message: format!(
                             "return/raise 后的不可达代码（return 在第 {} 行）",
                             return_line

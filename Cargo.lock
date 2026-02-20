@@ -95,6 +95,7 @@ dependencies = [
  "chrono",
  "clap",
  "md5",
+ "once_cell",
  "regex",
  "rusqlite",
  "serde",
