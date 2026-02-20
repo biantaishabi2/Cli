@@ -13,6 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func init() {
+	// 测试中禁用随机 jitter，避免延迟和非确定性
+	maxJitterMS = 0
+}
+
 // ===== WithRecovery 单元测试 =====
 
 func TestWithRecovery_ParseSuccess(t *testing.T) {

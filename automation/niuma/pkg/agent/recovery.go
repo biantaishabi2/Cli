@@ -36,14 +36,17 @@ func (e *AbortError) Unwrap() error {
 
 // RecoveryConfig 通用恢复配置（泛型）
 type RecoveryConfig[T any] struct {
-	Providers   []ai.Provider                                          // provider 列表（按优先级）
-	MaxRetries  int                                                    // 每个 provider 的最大重试次数（不含首次）
-	CallAI      func(ctx context.Context, provider ai.Provider) (string, error) // 调用 AI 并返回原始响应
-	Parse       func(raw string) (T, error)                            // 解析响应
-	BuildRepair func(raw string) string                                // 构造格式修复 prompt（nil 则跳过）
-	RepairParse func(originalRaw, repairRaw string) (T, error)         // 修复后解析（nil 则跳过）
-	OnAbort     func(err error, lastRaw string)                        // 中止回调（nil 则跳过）
+	Providers   []ai.Provider                                                      // provider 列表（按优先级）
+	MaxRetries  int                                                                // 每个 provider 的最大重试次数（不含首次）
+	CallAI      func(ctx context.Context, provider ai.Provider) (string, error)    // 调用 AI 并返回原始响应
+	Parse       func(raw string) (T, error)                                        // 解析响应
+	BuildRepair func(raw string) string                                            // 构造格式修复 prompt（nil 则跳过）
+	RepairParse func(originalRaw, repairRaw string) (T, error)                     // 修复后解析（nil 则跳过）
+	OnAbort     func(err error, lastRaw string)                                    // 中止回调（nil 则跳过）
 }
+
+// maxJitterMS 重试间隔的最大抖动毫秒数（测试可覆盖为 0）
+var maxJitterMS = 500
 
 // WithRecovery 通用的 AI 调用 + 解析 + 降级链路。
 // 三级降级：Level 1 格式修复重试 → Level 2 fallback provider → Level 3 中止上报。
@@ -104,8 +107,8 @@ func WithRecovery[T any](ctx context.Context, cfg RecoveryConfig[T]) (T, error) 
 			}
 
 			// 后续重试加随机 jitter
-			if attempt < maxAttempts {
-				jitter := time.Duration(rand.Intn(500)) * time.Millisecond
+			if attempt < maxAttempts && maxJitterMS > 0 {
+				jitter := time.Duration(rand.Intn(maxJitterMS)) * time.Millisecond
 				select {
 				case <-ctx.Done():
 					return zero, ctx.Err()
