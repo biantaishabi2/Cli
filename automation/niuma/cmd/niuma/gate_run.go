@@ -9,6 +9,7 @@ import (
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/gate"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/spf13/cobra"
 )
@@ -85,6 +86,23 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 			_, err := client.AddComment(ctx, issue, body)
 			return err
 		},
+		FindMarker: func(ctx context.Context, issue int, t marker.Type) (int, bool, error) {
+			mc, err := client.FindMarker(ctx, issue, t)
+			if err != nil {
+				return 0, false, err
+			}
+			if mc == nil {
+				return 0, false, nil
+			}
+			return mc.Marker.Revision, true, nil
+		},
+		UpdateMarker: func(ctx context.Context, issue int, m *marker.Marker, body string) error {
+			return client.CreateOrUpdateMarker(ctx, issue, m, body)
+		},
+		AddPRComment: func(ctx context.Context, repo string, pr int, body string) error {
+			_, err := client.CreatePRReview(ctx, pr, body, "COMMENT")
+			return err
+		},
 	})
 	if err != nil {
 		return err
@@ -98,14 +116,13 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 
 	if errors.Is(err, gate.ErrGateFailed) {
 		fmt.Printf(
-			"gate 未通过: issue=%d pr=%d retry_count=%d max_retries=%d attempt_key=%s escalated=%t dedup=%t\n",
+			"gate 未通过: issue=%d pr=%d retry_count=%d max_retries=%d attempt_key=%s escalated=%t\n",
 			flagIssue,
 			flagPR,
 			result.RetryCount,
 			result.MaxRetries,
 			result.AttemptKey,
 			result.Escalated,
-			result.EscalationCommentSkipped,
 		)
 		return withExitCode(1, err)
 	}

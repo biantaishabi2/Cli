@@ -19,6 +19,7 @@ const (
 	TypePRCreated                  Type = "BOT:PR_CREATED"
 	TypeConvergeWarning            Type = "BOT:CONVERGE_WARNING"
 	TypeDiscussionRoundLimitNotice Type = "BOT:DISCUSSION_ROUND_LIMIT_NOTICE"
+	TypeGateRetry                  Type = "BOT:GATE_RETRY"
 )
 
 // AllTypes 返回所有有效的 Marker 类型
@@ -29,6 +30,7 @@ var AllTypes = []Type{
 	TypePRCreated,
 	TypeConvergeWarning,
 	TypeDiscussionRoundLimitNotice,
+	TypeGateRetry,
 }
 
 // Marker 表示一个嵌入在 GitHub 评论中的幂等标记
