@@ -56,6 +56,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         type_annotations,
         type_guards,
         schema_fields,
+        source_code: Some(content.to_string()),
     }
 }
 

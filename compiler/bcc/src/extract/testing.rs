@@ -346,6 +346,7 @@ mod tests {
             type_guards: vec![],
             schema_fields: vec![],
             declarations: 0,
+            source_code: None,
         }
     }
 

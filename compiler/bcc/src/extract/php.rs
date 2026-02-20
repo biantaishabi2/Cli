@@ -63,6 +63,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         type_annotations: vec![],
         type_guards: vec![],
         schema_fields,
+        source_code: Some(content.to_string()),
     }
 }
 
