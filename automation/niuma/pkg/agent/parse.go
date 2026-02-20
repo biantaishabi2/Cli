@@ -10,6 +10,13 @@ import (
 	"strings"
 )
 
+const (
+	// reviewApprovedSentinelKey 是 review 结果的机器判定键（主键）。
+	reviewApprovedSentinelKey = "__niuma_review_approved_v1__"
+	// reviewApprovedLegacyKey 是历史兼容键（兜底读取）。
+	reviewApprovedLegacyKey = "approved"
+)
+
 // RecoverableErrorKind 可恢复错误的分类
 type RecoverableErrorKind string
 
@@ -140,6 +147,7 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 	}
 
 	type reviewJSON struct {
+		ApprovedV1    *bool    `json:"__niuma_review_approved_v1__"`
 		Approved      *bool    `json:"approved"`
 		Summary       string   `json:"summary"`
 		ResolvedItems []string `json:"resolved_items,omitempty"`
@@ -150,8 +158,12 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "审查结果 JSON 解析失败"}
 	}
-	if parsed.Approved == nil {
-		return nil, &RecoverableError{Kind: MissingField, Message: "审查结果缺少必填字段 approved"}
+	approved := parsed.ApprovedV1
+	if approved == nil {
+		approved = parsed.Approved
+	}
+	if approved == nil {
+		return nil, &RecoverableError{Kind: MissingField, Message: "审查结果缺少必填字段 __niuma_review_approved_v1__"}
 	}
 	summary := strings.TrimSpace(parsed.Summary)
 	if summary == "" {
@@ -159,7 +171,7 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 	}
 
 	return &ReviewResult{
-		Approved:      *parsed.Approved,
+		Approved:      *approved,
 		Summary:       summary,
 		ResolvedItems: parsed.ResolvedItems,
 		Issues:        parsed.Issues,
@@ -252,7 +264,7 @@ var (
 		{Name: "test_scenarios", Type: "array", Required: false, Desc: "测试场景"},
 	}
 	reviewFields = []FieldSpec{
-		{Name: "approved", Type: "bool", Required: true, Desc: "是否通过审查"},
+		{Name: reviewApprovedSentinelKey, Type: "bool", Required: true, Desc: "是否通过审查（机器判定键，必须输出）"},
 		{Name: "summary", Type: "string", Required: true, Desc: "审查总结"},
 		{Name: "resolved_items", Type: "array", Required: false, Desc: "已解决的问题列表"},
 		{Name: "issues", Type: "array", Required: false, Desc: "新发现的问题列表"},
@@ -309,6 +321,7 @@ func RepairAndParseReview(originalRaw, repairRaw string) (*ReviewResult, error) 
 		return nil, fmt.Errorf("修复回复中未找到 JSON 代码块")
 	}
 	type reviewJSON struct {
+		ApprovedV1    *bool    `json:"__niuma_review_approved_v1__"`
 		Approved      *bool    `json:"approved"`
 		Summary       string   `json:"summary"`
 		ResolvedItems []string `json:"resolved_items,omitempty"`
@@ -318,15 +331,19 @@ func RepairAndParseReview(originalRaw, repairRaw string) (*ReviewResult, error) 
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return nil, fmt.Errorf("修复回复 JSON 解析失败: %w", err)
 	}
-	if parsed.Approved == nil {
-		return nil, fmt.Errorf("修复回复缺少 approved 字段")
+	approved := parsed.ApprovedV1
+	if approved == nil {
+		approved = parsed.Approved
+	}
+	if approved == nil {
+		return nil, fmt.Errorf("修复回复缺少 %s 字段", reviewApprovedSentinelKey)
 	}
 	summary := strings.TrimSpace(parsed.Summary)
 	if summary == "" {
 		return nil, fmt.Errorf("修复回复缺少 summary 字段")
 	}
 	return &ReviewResult{
-		Approved:      *parsed.Approved,
+		Approved:      *approved,
 		Summary:       summary,
 		ResolvedItems: parsed.ResolvedItems,
 		Issues:        parsed.Issues,

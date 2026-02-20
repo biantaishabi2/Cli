@@ -148,6 +148,16 @@ func TestParseReviewResponse_Approved(t *testing.T) {
 	assert.Empty(t, result.Issues)
 }
 
+func TestParseReviewResponse_ApprovedWithSentinelKey(t *testing.T) {
+	raw := `{"__niuma_review_approved_v1__": true, "summary": "代码质量良好，符合方案要求", "issues": []}`
+
+	result, err := ParseReviewResponse(raw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "代码质量良好，符合方案要求", result.Summary)
+	assert.Empty(t, result.Issues)
+}
+
 func TestParseReviewResponse_NotApproved(t *testing.T) {
 	raw := `{"approved": false, "summary": "发现若干问题", "issues": ["缺少错误处理", "变量命名不规范"]}`
 
@@ -402,6 +412,14 @@ func TestRepairAndParseFinalPlan_NoJSON(t *testing.T) {
 
 func TestRepairAndParseReview_Success(t *testing.T) {
 	repairRaw := `{"approved":true,"summary":"代码质量良好"}`
+	result, err := RepairAndParseReview("原始文本", repairRaw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "代码质量良好", result.Summary)
+}
+
+func TestRepairAndParseReview_SuccessWithSentinelKey(t *testing.T) {
+	repairRaw := `{"__niuma_review_approved_v1__":true,"summary":"代码质量良好"}`
 	result, err := RepairAndParseReview("原始文本", repairRaw)
 	require.NoError(t, err)
 	assert.True(t, result.Approved)
