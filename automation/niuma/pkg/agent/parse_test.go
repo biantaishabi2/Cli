@@ -292,3 +292,138 @@ func TestParseDebateResponse_Success_Unchanged(t *testing.T) {
 	assert.NotContains(t, comment.Body, "should_finish")
 	assert.Contains(t, comment.Body, "本轮达成共识")
 }
+
+// ===== ParseReviewResponse RecoverableError 测试 =====
+
+func TestParseReviewResponse_EmptyResponse_RecoverableError(t *testing.T) {
+	_, err := ParseReviewResponse("")
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, EmptyResponse, recErr.Kind)
+}
+
+func TestParseReviewResponse_MissingJSON_RecoverableError(t *testing.T) {
+	_, err := ParseReviewResponse("代码有一些问题需要修复。")
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, MissingJSON, recErr.Kind)
+}
+
+func TestParseReviewResponse_JSONParseError_RecoverableError(t *testing.T) {
+	raw := "```json\n{approved: yes}\n```"
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, JSONParseError, recErr.Kind)
+	assert.NotNil(t, recErr.Unwrap())
+}
+
+func TestParseReviewResponse_MissingApproved_RecoverableError(t *testing.T) {
+	raw := `{"summary":"有结论但没有 approved", "issues":[]}`
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, MissingField, recErr.Kind)
+	assert.Contains(t, recErr.Message, "approved")
+}
+
+func TestParseReviewResponse_MissingSummary_RecoverableError(t *testing.T) {
+	raw := `{"approved":false, "issues":["P1 - 仍需修改"]}`
+	_, err := ParseReviewResponse(raw)
+	require.Error(t, err)
+	var recErr *RecoverableError
+	require.True(t, errors.As(err, &recErr))
+	assert.Equal(t, MissingField, recErr.Kind)
+	assert.Contains(t, recErr.Message, "summary")
+}
+
+// ===== BuildFormatRepairPromptFor 测试 =====
+
+func TestBuildFormatRepairPromptFor_DebateFields(t *testing.T) {
+	prompt := BuildFormatRepairPromptFor("原始内容", debateFields)
+	assert.Contains(t, prompt, "should_finish")
+	assert.Contains(t, prompt, "bool")
+	assert.Contains(t, prompt, "原始内容")
+	assert.Contains(t, prompt, "必填")
+}
+
+func TestBuildFormatRepairPromptFor_PlanFinalFields(t *testing.T) {
+	prompt := BuildFormatRepairPromptFor("纯文本方案", planFinalFields)
+	assert.Contains(t, prompt, "title")
+	assert.Contains(t, prompt, "approach")
+	assert.Contains(t, prompt, "file_changes")
+	assert.Contains(t, prompt, "test_scenarios")
+	assert.Contains(t, prompt, "纯文本方案")
+}
+
+func TestBuildFormatRepairPromptFor_ReviewFields(t *testing.T) {
+	prompt := BuildFormatRepairPromptFor("审查原文", reviewFields)
+	assert.Contains(t, prompt, "approved")
+	assert.Contains(t, prompt, "summary")
+	assert.Contains(t, prompt, "resolved_items")
+	assert.Contains(t, prompt, "issues")
+}
+
+// ===== RepairAndParseFinalPlan 测试 =====
+
+func TestRepairAndParseFinalPlan_Success(t *testing.T) {
+	repairRaw := "```json\n{\"title\":\"修复方案\",\"approach\":\"实现修复\"}\n```"
+	plan, err := RepairAndParseFinalPlan("原始文本", repairRaw)
+	require.NoError(t, err)
+	assert.Equal(t, "修复方案", plan.Title)
+	assert.Equal(t, "实现修复", plan.Approach)
+}
+
+func TestRepairAndParseFinalPlan_MissingTitle(t *testing.T) {
+	repairRaw := `{"approach":"有方案但没标题"}`
+	_, err := RepairAndParseFinalPlan("原始", repairRaw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "title")
+}
+
+func TestRepairAndParseFinalPlan_MissingApproach(t *testing.T) {
+	repairRaw := `{"title":"有标题但没方案"}`
+	_, err := RepairAndParseFinalPlan("原始", repairRaw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "approach")
+}
+
+func TestRepairAndParseFinalPlan_NoJSON(t *testing.T) {
+	_, err := RepairAndParseFinalPlan("原始", "依然是纯文本")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JSON")
+}
+
+// ===== RepairAndParseReview 测试 =====
+
+func TestRepairAndParseReview_Success(t *testing.T) {
+	repairRaw := `{"approved":true,"summary":"代码质量良好"}`
+	result, err := RepairAndParseReview("原始文本", repairRaw)
+	require.NoError(t, err)
+	assert.True(t, result.Approved)
+	assert.Equal(t, "代码质量良好", result.Summary)
+}
+
+func TestRepairAndParseReview_MissingApproved(t *testing.T) {
+	repairRaw := `{"summary":"有总结但没结论"}`
+	_, err := RepairAndParseReview("原始", repairRaw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "approved")
+}
+
+func TestRepairAndParseReview_MissingSummary(t *testing.T) {
+	repairRaw := `{"approved":false}`
+	_, err := RepairAndParseReview("原始", repairRaw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "summary")
+}
+
+func TestRepairAndParseReview_NoJSON(t *testing.T) {
+	_, err := RepairAndParseReview("原始", "没有JSON")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JSON")
+}

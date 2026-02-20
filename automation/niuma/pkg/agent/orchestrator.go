@@ -39,6 +39,10 @@ type OrchestratorConfig struct {
 	PlanFinalProviders []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
 	PlanFinalMaxRetries int          // 每个 provider 的重试次数（0=默认1）
 
+	// review 重试与降级
+	ReviewProviders  []ai.Provider // review 降级 provider 列表（为空则使用 ImplementProvider）
+	ReviewMaxRetries int           // review 每个 provider 的重试次数（0=默认1）
+
 	// discuss 评论裁剪
 	MaxHumanComments int // discuss 评论裁剪上限（0=默认10）
 }
@@ -752,6 +756,7 @@ func (o *Orchestrator) doIterateInner(ctx context.Context, input *PromptInput, p
 // DoReview AI 自审 PR
 // 前置：bot:pr-created 状态
 // 后置：通过 → bot:pr-reviewable；不通过 → bot:pr-needs-fix
+// 使用 WithRecovery 实现格式修复重试 + provider 降级 + 中止上报。
 func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 	currentState, err := o.currentState(ctx)
 	if err != nil {
@@ -799,16 +804,41 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return fmt.Errorf("构建 review prompt 失败: %w", err)
 	}
 
-	// AI 审查（使用实现 provider，不是讨论汇总用的 consolidator）
-	raw, err := o.getImplementProvider().Complete(ctx, reviewPrompt)
-	if err != nil {
-		return fmt.Errorf("AI 审查失败: %w", err)
+	// 构建 review provider 列表
+	reviewProviders := []ai.Provider{o.getImplementProvider()}
+	reviewMaxRetries := 1
+	if o.config != nil {
+		if len(o.config.ReviewProviders) > 0 {
+			reviewProviders = o.config.ReviewProviders
+		}
+		if o.config.ReviewMaxRetries > 0 {
+			reviewMaxRetries = o.config.ReviewMaxRetries
+		}
 	}
 
-	// 解析审查结果
-	result, err := ParseReviewResponse(raw)
+	// 使用 WithRecovery 统一降级链路
+	cfg := RecoveryConfig[*ReviewResult]{
+		Providers:  reviewProviders,
+		MaxRetries: reviewMaxRetries,
+		CallAI: func(ctx context.Context, provider ai.Provider) (string, error) {
+			return provider.Complete(ctx, reviewPrompt)
+		},
+		Parse:       ParseReviewResponse,
+		BuildRepair: func(raw string) string { return BuildFormatRepairPromptFor(raw, reviewFields) },
+		RepairParse: RepairAndParseReview,
+		OnAbort: func(abortErr error, lastRaw string) {
+			rawPrefix := truncatePrefix(lastRaw, 500)
+			abortBody := fmt.Sprintf("<!-- BOT:REVIEW_ABORT issue=%d pr=%d -->\n\n## ⛔ 审查中止\n\n"+
+				"AI 审查响应解析连续失败，已中止本次审查。\n\n"+
+				"**错误**: %s\n\n**raw_prefix**: %.500s\n\n请人工检查后重新触发审查。",
+				o.issueNumber, prNumber, abortErr.Error(), rawPrefix)
+			_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
+		},
+	}
+
+	result, err := WithRecovery(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("解析审查结果失败: %w", err)
+		return fmt.Errorf("AI 审查失败（3 级降级均失败）: %w", err)
 	}
 
 	// 发 PR review
@@ -959,7 +989,7 @@ func (o *Orchestrator) buildPromptInputWithFilter(ctx context.Context, maxHuman 
 }
 
 // doDebateABDiscussion 执行 AB 轮流评论模式。
-// 3 级降级：格式修复重试 → fallback provider → 中止上报。
+// 使用 WithRecovery 统一 3 级降级：格式修复重试 → fallback provider → 中止上报。
 func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
 	providers := o.discussionProviders()
 	if len(providers) == 0 {
@@ -991,60 +1021,44 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		return nil, fmt.Errorf("构建 debate_ab prompt 失败: %w", err)
 	}
 
-	// tryDebateRound 使用指定 provider 完成一次 AI 调用 + parse
-	tryDebateRound := func(provider ai.Provider) (raw string, comment *DebateComment, err error) {
-		raw, err = provider.Complete(ctx, prompt)
-		if err != nil {
-			return "", nil, fmt.Errorf("debate_%s 生成评论失败 (provider=%s): %w", strings.ToLower(speaker), provider.Name(), err)
-		}
-		comment, err = ParseDebateResponse(raw)
-		return raw, comment, err
-	}
-
+	// 构建 provider 列表：主 provider 在前，备选在后（若不同）
 	primaryProvider := providers[speakerIdx%len(providers)]
-	lastProvider := primaryProvider // 跟踪最终失败的 provider
-
-	// 第1次尝试：主 provider
-	raw, comment, parseErr := tryDebateRound(primaryProvider)
-
-	// 第1级降级：格式修复重试（同 provider）
-	if parseErr != nil {
-		errKind := recoverableKind(parseErr)
-		rawPrefix := truncatePrefix(raw, 500)
-		fmt.Fprintf(os.Stderr, "[WARN] debate_%s parse 失败 | provider=%s | round=%d/%d | kind=%s | raw_prefix=\"%s\" | err=%s\n",
-			strings.ToLower(speaker), primaryProvider.Name(), round, maxRounds, errKind, rawPrefix, parseErr.Error())
-		fmt.Fprintf(os.Stderr, "[INFO] debate_%s format-repair 尝试 | provider=%s | round=%d/%d\n",
-			strings.ToLower(speaker), primaryProvider.Name(), round, maxRounds)
-		repairPrompt := BuildFormatRepairPrompt(raw)
-		repairRaw, repairErr := primaryProvider.Complete(ctx, repairPrompt)
-		if repairErr == nil {
-			comment, parseErr = RepairAndParseDebate(raw, repairRaw)
-		} else {
-			fmt.Fprintf(os.Stderr, "[WARN] 格式修复重试 AI 调用失败: %v\n", repairErr)
+	debateProviders := []ai.Provider{primaryProvider}
+	if len(providers) > 1 {
+		fallbackIdx := (speakerIdx + 1) % len(providers)
+		if fallbackIdx != speakerIdx%len(providers) {
+			debateProviders = append(debateProviders, providers[fallbackIdx])
 		}
 	}
 
-	// 第2级降级：fallback provider（如果存在且不同于主 provider）
-	if parseErr != nil && len(providers) > 1 {
-		fallbackIdx := (speakerIdx + 1) % len(providers)
-		fallbackProvider := providers[fallbackIdx]
-		errKind := recoverableKind(parseErr)
-		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 降级到备选 provider | from=%s | to=%s | round=%d/%d | kind=%s\n",
-			strings.ToLower(speaker), primaryProvider.Name(), fallbackProvider.Name(), round, maxRounds, errKind)
-		raw, comment, parseErr = tryDebateRound(fallbackProvider)
-		lastProvider = fallbackProvider
+	cfg := RecoveryConfig[*DebateComment]{
+		Providers:  debateProviders,
+		MaxRetries: 0, // debate 每个 provider 只尝试一次（格式修复算额外）
+		CallAI: func(ctx context.Context, provider ai.Provider) (string, error) {
+			raw, err := provider.Complete(ctx, prompt)
+			if err != nil {
+				return "", fmt.Errorf("debate_%s 生成评论失败 (provider=%s): %w", strings.ToLower(speaker), provider.Name(), err)
+			}
+			return raw, nil
+		},
+		Parse:       ParseDebateResponse,
+		BuildRepair: func(raw string) string { return BuildFormatRepairPromptFor(raw, debateFields) },
+		RepairParse: RepairAndParseDebate,
+		OnAbort: func(err error, lastRaw string) {
+			rawPrefix := truncatePrefix(lastRaw, 500)
+			lastProviderName := debateProviders[len(debateProviders)-1].Name()
+			abortBody := fmt.Sprintf("<!-- BOT:DISCUSS_ABORT issue=%d round=%d -->\n\n## ⛔ 讨论中止\n\n"+
+				"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
+				"**错误**: %s\n\n**provider**: %s\n\n**raw_prefix**: %.500s\n\n请人工检查后重新触发讨论。",
+				o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
+				err.Error(), lastProviderName, rawPrefix)
+			_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
+		},
 	}
 
-	// 第3级：中止上报
-	if parseErr != nil {
-		rawPrefix := truncatePrefix(raw, 500)
-		abortBody := fmt.Sprintf("<!-- BOT:DISCUSS_ABORT issue=%d round=%d -->\n\n## ⛔ 讨论中止\n\n"+
-			"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
-			"**错误**: %s\n\n**provider**: %s\n\n**raw_prefix**: %.500s\n\n请人工检查后重新触发讨论。",
-			o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
-			parseErr.Error(), lastProvider.Name(), rawPrefix)
-		_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
-		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), parseErr)
+	comment, err := WithRecovery(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), err)
 	}
 
 	// debate_ab 下每轮直接对 issue 可见。
