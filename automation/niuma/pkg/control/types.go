@@ -176,6 +176,13 @@ type IssueInfo struct {
 	Labels []string `json:"labels"`
 }
 
+// intakeIssueEntry 包装 IssueInfo，区分 intake（①阶段）和 hydrate 来源。
+// ④ label 迁移阶段只处理 FromIntake==true 的 issues，hydrate 来源跳过迁移。
+type intakeIssueEntry struct {
+	IssueInfo
+	FromIntake bool
+}
+
 // AnalysisResult AI 依赖分析结果
 type AnalysisResult struct {
 	// Dependencies issue 间依赖：key 依赖 value 列表中的 issue
