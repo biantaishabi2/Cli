@@ -1,0 +1,304 @@
+version: 0.3.0
+source_of_truth: architecture_docs
+notes:
+  - "v3 更新：补充 Session/Hook/Tape/CLI/Stream/Runtime 等新模块"
+  - "覆盖 Session 四个子 issue (#8/#10/#11/#12) 新增的全部代码"
+  - "CLI 模块预留待建的交互层 (cli/*.ex)"
+
+modules:
+  - module_id: AGENT
+    display_name: Agent 运行时
+    domain_kind: business
+    layer: application
+    precedence: 10
+    path_rules:
+      include:
+        - "gong/agent.ex"
+        - "gong/agent_loop.ex"
+
+  - module_id: SESSION
+    display_name: 会话协调
+    domain_kind: business
+    layer: application
+    precedence: 15
+    path_rules:
+      include:
+        - "gong/session.ex"
+        - "gong/session/*.ex"
+        - "gong/command_registry.ex"
+
+  - module_id: PROMPT
+    display_name: Prompt 系统
+    domain_kind: business
+    layer: application
+    precedence: 20
+    path_rules:
+      include:
+        - "gong/prompt.ex"
+        - "gong/prompt_template.ex"
+
+  - module_id: HOOK
+    display_name: Hook 系统
+    domain_kind: business
+    layer: application
+    precedence: 25
+    path_rules:
+      include:
+        - "gong/hook.ex"
+        - "gong/hook_runner.ex"
+
+  - module_id: COMPACTION
+    display_name: 压缩系统
+    domain_kind: business
+    layer: application
+    precedence: 30
+    path_rules:
+      include:
+        - "gong/compaction.ex"
+        - "gong/compaction/*.ex"
+        - "gong/auto_compaction.ex"
+        - "gong/truncate.ex"
+
+  - module_id: PROVIDERS
+    display_name: LLM Providers
+    domain_kind: business
+    layer: application
+    precedence: 40
+    path_rules:
+      include:
+        - "gong/model_registry.ex"
+        - "gong/provider.ex"
+        - "gong/provider_registry.ex"
+        - "gong/cross_provider.ex"
+        - "gong/providers/*.ex"
+
+  - module_id: EXTENSIONS
+    display_name: 扩展系统
+    domain_kind: business
+    layer: application
+    precedence: 50
+    path_rules:
+      include:
+        - "gong/extension.ex"
+        - "gong/extension_integration.ex"
+        - "gong/extension/*.ex"
+
+  - module_id: TOOLS
+    display_name: 工具集
+    domain_kind: business
+    layer: application
+    precedence: 70
+    path_rules:
+      include:
+        - "gong/tools/*.ex"
+
+  - module_id: DATA
+    display_name: 数据层
+    domain_kind: business
+    layer: application
+    precedence: 80
+    path_rules:
+      include:
+        - "gong/tool_result.ex"
+        - "gong/tool_config.ex"
+
+  - module_id: STREAM
+    display_name: 流式输出
+    domain_kind: business
+    layer: application
+    precedence: 55
+    path_rules:
+      include:
+        - "gong/stream.ex"
+        - "gong/partial_json.ex"
+
+  - module_id: RUNTIME
+    display_name: 运行时支撑
+    domain_kind: business
+    layer: application
+    precedence: 60
+    path_rules:
+      include:
+        - "gong/retry.ex"
+        - "gong/steering.ex"
+        - "gong/cost_tracker.ex"
+        - "gong/auth.ex"
+        - "gong/thinking.ex"
+        - "gong/abort.ex"
+        - "gong/settings.ex"
+        - "gong/rpc.ex"
+        - "gong/path_utils.ex"
+        - "gong/resource_loader.ex"
+
+  - module_id: TAPE
+    display_name: 存储层
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 85
+    path_rules:
+      include:
+        - "gong/tape/*.ex"
+
+  - module_id: INFRA
+    display_name: 基础设施
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 90
+    path_rules:
+      include:
+        - "gong/application.ex"
+
+  - module_id: CLI
+    display_name: 命令行入口
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 95
+    path_rules:
+      include:
+        - "gong/cli.ex"
+        - "gong/cli/*.ex"
+
+  - module_id: BDD
+    display_name: BDD 测试基础设施
+    domain_kind: infrastructure
+    layer: infrastructure
+    precedence: 99
+    path_rules:
+      include:
+        - "gong/bdd/*.ex"
+        - "gong/bdd/**/*.ex"
+
+relations_expected:
+  # === AGENT 依赖 ===
+  - caller: AGENT
+    callee: PROMPT
+    allowed: true
+    rationale: "Agent 构建 system prompt"
+  - caller: AGENT
+    callee: DATA
+    allowed: true
+    rationale: "Agent 处理 tool_result 等数据"
+  - caller: AGENT
+    callee: TOOLS
+    allowed: true
+    rationale: "Agent 通过 Jido tools 参数注入工具"
+  - caller: AGENT
+    callee: HOOK
+    allowed: true
+    rationale: "AgentLoop 调用 HookRunner 执行 gate/pipe"
+  - caller: AGENT
+    callee: EXTENSIONS
+    allowed: true
+    rationale: "AgentLoop 调用 Extension setup/teardown"
+  - caller: AGENT
+    callee: RUNTIME
+    allowed: true
+    rationale: "AgentLoop 使用 retry/steering/abort"
+  - caller: AGENT
+    callee: STREAM
+    allowed: true
+    rationale: "AgentLoop 发射流式事件"
+  - caller: AGENT
+    callee: COMPACTION
+    allowed: true
+    rationale: "AgentLoop 触发上下文压缩"
+
+  # === SESSION 依赖 ===
+  - caller: SESSION
+    callee: AGENT
+    allowed: true
+    rationale: "Session 驱动 AgentLoop 执行"
+  - caller: SESSION
+    callee: STREAM
+    allowed: true
+    rationale: "Session 广播流式事件给订阅者"
+  - caller: SESSION
+    callee: RUNTIME
+    allowed: true
+    rationale: "Session 使用 steering/retry/settings"
+  - caller: SESSION
+    callee: TAPE
+    allowed: true
+    rationale: "Session 持久化到 Tape 存储"
+  - caller: SESSION
+    callee: COMPACTION
+    allowed: true
+    rationale: "Session 管理自动压缩"
+  - caller: SESSION
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Session 构建 LLM backend"
+
+  # === COMPACTION 依赖 ===
+  - caller: COMPACTION
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Compaction 调用 LLM 生成摘要"
+  - caller: COMPACTION
+    callee: PROMPT
+    allowed: true
+    rationale: "Summarizer 调用 Prompt.build_summarize_prompt 构建压缩 prompt"
+  - caller: COMPACTION
+    callee: TAPE
+    allowed: true
+    rationale: "Compaction 通过 Tape.Store.handoff/append 持久化压缩结果"
+
+  # === EXTENSIONS 依赖 ===
+  - caller: EXTENSIONS
+    callee: HOOK
+    allowed: true
+    rationale: "Extension 注册 hook"
+  - caller: EXTENSIONS
+    callee: SESSION
+    allowed: true
+    rationale: "ExtensionIntegration 使用 CommandRegistry 注册扩展命令"
+
+  # === TOOLS 依赖 ===
+  - caller: TOOLS
+    callee: DATA
+    allowed: true
+    rationale: "Tools 返回 ToolResult 数据"
+
+  # === RUNTIME 依赖 ===
+  - caller: RUNTIME
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Auth 模块查询 ModelRegistry 做认证校验"
+
+  # === INFRA 依赖 ===
+  - caller: INFRA
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Application 启动时注册 Provider"
+  - caller: INFRA
+    callee: PROMPT
+    allowed: true
+    rationale: "Application 启动时调用 PromptTemplate.init()"
+  - caller: INFRA
+    callee: SESSION
+    allowed: true
+    rationale: "Application 启动 SessionRegistry 和 SessionSupervisor"
+
+  # === CLI 依赖 ===
+  - caller: CLI
+    callee: SESSION
+    allowed: true
+    rationale: "CLI 创建/管理 Session"
+  - caller: CLI
+    callee: RUNTIME
+    allowed: true
+    rationale: "CLI 读取配置、校验运行时"
+
+  # === 禁止方向 ===
+  - caller: DATA
+    callee: AGENT
+    allowed: false
+    rationale: "数据层不能反向依赖 Agent"
+  - caller: TOOLS
+    callee: AGENT
+    allowed: false
+    rationale: "工具不能反向依赖 Agent"
+  - caller: TAPE
+    callee: SESSION
+    allowed: false
+    rationale: "存储层不能反向依赖 Session"

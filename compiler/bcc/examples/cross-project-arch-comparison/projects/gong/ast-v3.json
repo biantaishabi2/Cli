@@ -1,0 +1,2645 @@
+{
+  "source_count": 86,
+  "skipped_count": 0,
+  "records": [
+    {
+      "sourcePath": "gong/abort.ex",
+      "calls": [
+        {
+          "callee": "Process"
+        }
+      ],
+      "imports": [],
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 65,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/agent.ex",
+      "localDependencies": [
+        "gong/tools/bash.ex",
+        "gong/tools/edit.ex",
+        "gong/tools/find.ex",
+        "gong/tools/grep.ex",
+        "gong/tools/ls.ex",
+        "gong/tools/read.ex",
+        "gong/tools/write.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "gong/tools/bash.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/edit.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/find.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/grep.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/ls.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/read.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        },
+        {
+          "target": "gong/tools/write.ex",
+          "call_type_hint": "framework_injection",
+          "via": "use Jido.AI.ReActAgent",
+          "confidence": 0.92,
+          "detector": "elixir.use_macro",
+          "reason": "use 宏参数中的模块注入"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.AI.ReActAgent, name: \"gong\", description: \"Gong 通用编码 Agent\", tools: [ Gong.Tools.Read, Gong.Tools.Write, Gong.Tools.Edit, Gong.Tools.Bash, Gong.Tools.Grep, Gong.Tools.Find, Gong.Tools.Ls ], model: \"deepseek:deepseek-chat\", max_iterations: 25",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 23,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/agent_loop.ex",
+      "localDependencies": [
+        "gong/extension_integration.ex",
+        "gong/hook_runner.ex",
+        "gong/prompt.ex",
+        "gong/retry.ex",
+        "gong/steering.ex",
+        "gong/tool_result.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "Gong.ExtensionIntegration"
+        },
+        {
+          "callee": "Gong.HookRunner"
+        },
+        {
+          "callee": "Gong.Prompt"
+        },
+        {
+          "callee": "Gong.Retry"
+        },
+        {
+          "callee": "Gong.Steering"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "ReAct"
+        },
+        {
+          "callee": "StratState"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.AI.Directive",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Jido.AI.Strategies.ReAct",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Jido.Agent.Strategy.State, as: StratState",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Jido.Instruction",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 4,
+      "imports_count": 4,
+      "loc_lines": 456,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/application.ex",
+      "localDependencies": [
+        "gong/command_registry.ex",
+        "gong/model_registry.ex",
+        "gong/prompt_template.ex",
+        "gong/providers/deepseek.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "gong/providers/deepseek.ex",
+          "call_type_hint": "external_registration",
+          "via": "ReqLLM.Providers.register",
+          "confidence": 0.97,
+          "detector": "elixir.external_register",
+          "reason": "外部库 register 调用内部模块"
+        }
+      ],
+      "calls": [
+        {
+          "callee": "Gong.CommandRegistry"
+        },
+        {
+          "callee": "Gong.ModelRegistry"
+        },
+        {
+          "callee": "Gong.PromptTemplate"
+        },
+        {
+          "callee": "ReqLLM.Providers"
+        },
+        {
+          "callee": "Supervisor"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Application",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 28,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/auth.ex",
+      "localDependencies": [
+        "gong/model_registry.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ModelRegistry"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        },
+        {
+          "callee": "URI"
+        }
+      ],
+      "imports": [],
+      "exports_count": 11,
+      "imports_count": 0,
+      "loc_lines": 153,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/auto_compaction.ex",
+      "localDependencies": [
+        "gong/compaction.ex",
+        "gong/compaction/lock.ex",
+        "gong/compaction/summarizer.ex",
+        "gong/compaction/token_estimator.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Gong.Compaction"
+        },
+        {
+          "callee": "Gong.Compaction.Lock"
+        },
+        {
+          "callee": "Gong.Compaction.Summarizer"
+        },
+        {
+          "callee": "Gong.Compaction.TokenEstimator"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/abort.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 198,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/agent.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 308,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/agent_loop.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 432,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/application.ex",
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 271,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/auth.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 155,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/common.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 203,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/compaction.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 383,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/cost.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 86,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/cross_provider.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 250,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/extension.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 208,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/follow_up.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 76,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/generated.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 6,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/hook.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 142,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/model.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 248,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/partial_json.ex",
+      "calls": [
+        {
+          "callee": "Map"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 19,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/prompt.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 224,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/provider_registry.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 130,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/resource.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 123,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/rpc.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 81,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/settings.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 181,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/stream.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 130,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tape.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 629,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/template.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 77,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/thinking.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 82,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_config.ex",
+      "calls": [
+        {
+          "callee": "Map"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 31,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_extra.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tool_result.ex",
+      "calls": [
+        {
+          "callee": "Map"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 23,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registries/tools.ex",
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 427,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/bdd/instruction_registry.ex",
+      "localDependencies": [
+        "gong/bdd/instruction_registries/abort.ex",
+        "gong/bdd/instruction_registries/agent.ex",
+        "gong/bdd/instruction_registries/agent_loop.ex",
+        "gong/bdd/instruction_registries/application.ex",
+        "gong/bdd/instruction_registries/auth.ex",
+        "gong/bdd/instruction_registries/common.ex",
+        "gong/bdd/instruction_registries/compaction.ex",
+        "gong/bdd/instruction_registries/cost.ex",
+        "gong/bdd/instruction_registries/cross_provider.ex",
+        "gong/bdd/instruction_registries/extension.ex",
+        "gong/bdd/instruction_registries/follow_up.ex",
+        "gong/bdd/instruction_registries/generated.ex",
+        "gong/bdd/instruction_registries/hook.ex",
+        "gong/bdd/instruction_registries/model.ex",
+        "gong/bdd/instruction_registries/partial_json.ex",
+        "gong/bdd/instruction_registries/prompt.ex",
+        "gong/bdd/instruction_registries/provider_registry.ex",
+        "gong/bdd/instruction_registries/resource.ex",
+        "gong/bdd/instruction_registries/rpc.ex",
+        "gong/bdd/instruction_registries/settings.ex",
+        "gong/bdd/instruction_registries/stream.ex",
+        "gong/bdd/instruction_registries/tape.ex",
+        "gong/bdd/instruction_registries/template.ex",
+        "gong/bdd/instruction_registries/thinking.ex",
+        "gong/bdd/instruction_registries/tool_config.ex",
+        "gong/bdd/instruction_registries/tool_extra.ex",
+        "gong/bdd/instruction_registries/tool_result.ex",
+        "gong/bdd/instruction_registries/tools.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Abort"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Agent"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.AgentLoop"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Application"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Auth"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Common"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Compaction"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Cost"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.CrossProvider"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Extension"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.FollowUp"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Generated"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Hook"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Model"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.PartialJson"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Prompt"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.ProviderReg"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.RPC"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Resource"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Settings"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Stream"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Tape"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Template"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Thinking"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.ToolConfig"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.ToolExtra"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.ToolResult"
+        },
+        {
+          "callee": "Gong.BDD.InstructionRegistries.Tools"
+        },
+        {
+          "callee": "Map"
+        }
+      ],
+      "imports": [],
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 52,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/cli.ex",
+      "localDependencies": [
+        "gong/session.ex",
+        "gong/session/events.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Events"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Integer"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "OptionParser"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "Session"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        },
+        {
+          "callee": "Version"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Session",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.Session.Events",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 4,
+      "imports_count": 2,
+      "loc_lines": 405,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/command_registry.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 93,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction/lock.ex",
+      "calls": [
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction/summarizer.ex",
+      "localDependencies": [
+        "gong/model_registry.ex",
+        "gong/prompt.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "Gong.ModelRegistry"
+        },
+        {
+          "callee": "Gong.Prompt"
+        },
+        {
+          "callee": "ReqLLM"
+        },
+        {
+          "callee": "ReqLLM.Response"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction/token_estimator.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 83,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/compaction.ex",
+      "localDependencies": [
+        "gong/compaction/token_estimator.ex",
+        "gong/tape/store.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Gong.Tape.Store"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "TokenEstimator"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Compaction.TokenEstimator",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 7,
+      "imports_count": 1,
+      "loc_lines": 267,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/cost_tracker.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 120,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/cross_provider.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 111,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/context.ex",
+      "calls": [
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 63,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/loader.ex",
+      "localDependencies": [
+        "gong/extension.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Code"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "List"
+        },
+        {
+          "callee": "Logger"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 135,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/runner.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Logger"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 65,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension/source.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 85,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension.ex",
+      "calls": [
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Extension",
+          "kind": "behaviour"
+        }
+      ],
+      "exports_count": 5,
+      "imports_count": 1,
+      "loc_lines": 29,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/extension_integration.ex",
+      "localDependencies": [
+        "gong/command_registry.ex",
+        "gong/extension.ex",
+        "gong/extension/loader.ex",
+        "gong/extension/runner.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.CommandRegistry"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Loader"
+        },
+        {
+          "callee": "Logger"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Runner"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Extension.{Loader, Runner}",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 73,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/hook.ex",
+      "calls": [
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 54,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/hook_runner.ex",
+      "calls": [
+        {
+          "callee": "Code"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Logger"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "Task"
+        }
+      ],
+      "imports": [],
+      "exports_count": 9,
+      "imports_count": 0,
+      "loc_lines": 223,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/model_registry.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 191,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/partial_json.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 142,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/path_utils.ex",
+      "calls": [
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 34,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/prompt.ex",
+      "calls": [
+        {
+          "callee": "DateTime"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 144,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/prompt_template.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "List"
+        },
+        {
+          "callee": "Regex"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 126,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/provider.ex",
+      "calls": [
+        {
+          "callee": "Enumerable"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Provider",
+          "kind": "behaviour"
+        }
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/provider_registry.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 150,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/providers/deepseek.ex",
+      "imports": [
+        {
+          "specifier": "ReqLLM.Provider, id: :deepseek, default_base_url: \"https://api.deepseek.com\", default_env_key: \"DEEPSEEK_API_KEY\"",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 0,
+      "imports_count": 1,
+      "loc_lines": 13,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/resource_loader.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 1,
+      "imports_count": 0,
+      "loc_lines": 33,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/retry.ex",
+      "calls": [
+        {
+          "callee": "Atom"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Integer"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 6,
+      "imports_count": 0,
+      "loc_lines": 354,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/rpc.ex",
+      "calls": [
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 97,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/session/events.ex",
+      "calls": [
+        {
+          "callee": "Atom"
+        },
+        {
+          "callee": "Base"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "Regex"
+        },
+        {
+          "callee": "StreamEvent"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Stream.Event, as: StreamEvent",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Bitwise",
+          "kind": "import"
+        }
+      ],
+      "exports_count": 19,
+      "imports_count": 2,
+      "loc_lines": 346,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/session/state.ex",
+      "localDependencies": [
+        "gong/session/events.ex"
+      ],
+      "calls": [
+        {
+          "callee": "GenServer"
+        },
+        {
+          "callee": "Gong.Session.Events"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 57,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": true,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/session.ex",
+      "localDependencies": [
+        "gong/session/events.ex",
+        "gong/stream.ex",
+        "gong/thinking.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Atom"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Events"
+        },
+        {
+          "callee": "Exception"
+        },
+        {
+          "callee": "GenServer"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Integer"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Logger"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "Stream"
+        },
+        {
+          "callee": "StreamEvent"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        },
+        {
+          "callee": "Task"
+        },
+        {
+          "callee": "Thinking"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Session.Events",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.Stream",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.Stream.Event, as: StreamEvent",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.Thinking",
+          "kind": "alias"
+        },
+        {
+          "specifier": "GenServer",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 37,
+      "imports_count": 5,
+      "loc_lines": 1605,
+      "side_effects": {
+        "hasAsync": true,
+        "hasHttp": false,
+        "hasGenserver": true,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/settings.ex",
+      "calls": [
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 141,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/steering.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 10,
+      "imports_count": 0,
+      "loc_lines": 67,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/stream.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Event"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Process"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 223,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/entry.ex",
+      "calls": [
+        {
+          "callee": "Integer"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [],
+      "exports_count": 3,
+      "imports_count": 0,
+      "loc_lines": 56,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/file_store.ex",
+      "localDependencies": [
+        "gong/tape/entry.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Entry"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "Regex"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Tape.Entry",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 7,
+      "imports_count": 1,
+      "loc_lines": 89,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/index.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Exqlite.Sqlite3"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 16,
+      "imports_count": 0,
+      "loc_lines": 257,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tape/store.ex",
+      "localDependencies": [
+        "gong/tape/entry.ex",
+        "gong/tape/file_store.ex",
+        "gong/tape/index.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Entry"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "FileStore"
+        },
+        {
+          "callee": "Index"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Gong.Tape.{Entry, Index, FileStore}",
+          "kind": "alias"
+        }
+      ],
+      "exports_count": 24,
+      "imports_count": 1,
+      "loc_lines": 477,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/thinking.ex",
+      "calls": [
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 7,
+      "imports_count": 0,
+      "loc_lines": 140,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tool_config.ex",
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 104,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tool_result.ex",
+      "calls": [
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 5,
+      "imports_count": 0,
+      "loc_lines": 41,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/bash.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/utils/truncate.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "Gong.Utils.Truncate"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "Port"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"bash\", description: \"执行 shell 命令\", schema: [ command: [type: :string, required: true, doc: \"要执行的命令\"], timeout: [type: :non_neg_integer, default: 120, doc: \"超时秒数\"], cwd: [type: :string, doc: \"工作目录\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 280,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/edit.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Float"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Kernel"
+        },
+        {
+          "callee": "List"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "Regex"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"edit_file\", description: \"替换文件中的指定文本\", schema: [ file_path: [type: :string, required: true, doc: \"文件绝对路径\"], old_string: [type: :string, required: false, doc: \"要替换的文本\"], new_string: [type: :string, required: false, doc: \"替换后的文本\"], replace_all: [type: :boolean, default: false, doc: \"是否替换所有匹配\"], mode: [type: :string, default: \"replace\", doc: \"编辑模式: replace | diff\"], diff: [type: :string, required: false, doc: \"unified diff 内容（mode=diff 时使用）\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 2,
+      "imports_count": 1,
+      "loc_lines": 475,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/find.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "MapSet"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"find_files\", description: \"按 glob 模式查找文件\", schema: [ pattern: [type: :string, required: true, doc: \"glob 模式\"], path: [type: :string, default: \".\", doc: \"搜索根路径\"], exclude: [type: :string, doc: \"排除模式（glob）\"], limit: [type: :non_neg_integer, default: 500, doc: \"最大返回数\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 164,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/grep.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/utils/truncate.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "Gong.Utils.Truncate"
+        },
+        {
+          "callee": "Jason"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"grep\", description: \"搜索文件内容\", schema: [ pattern: [type: :string, required: true, doc: \"正则表达式模式\"], path: [type: :string, default: \".\", doc: \"搜索路径\"], glob: [type: :string, doc: \"文件 glob 过滤\"], context: [type: :non_neg_integer, default: 0, doc: \"上下文行数\"], ignore_case: [type: :boolean, default: false, doc: \"忽略大小写\"], fixed_strings: [type: :boolean, default: false, doc: \"字面匹配（非正则）\"], output_mode: [ type: :string, default: \"content\", doc: \"输出模式：content/files_with_matches/count\" ] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 216,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/ls.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"list_directory\", description: \"列出目录内容\", schema: [ path: [type: :string, required: true, doc: \"目录路径\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 126,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/read.ex",
+      "localDependencies": [
+        "gong/tool_result.ex",
+        "gong/utils/truncate.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Base"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "Gong.Utils.Truncate"
+        },
+        {
+          "callee": "IO"
+        },
+        {
+          "callee": "Integer"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "String"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"read_file\", description: \"读取文件内容，支持分页\", schema: [ file_path: [type: :string, required: true, doc: \"文件绝对路径\"], offset: [type: :non_neg_integer, default: 0, doc: \"起始行号（1-based，0 表示从头开始）\"], limit: [type: :non_neg_integer, default: 2000, doc: \"最多读取行数\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 253,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/truncate.ex",
+      "localDependencies": [
+        "gong/utils/truncate.ex"
+      ],
+      "calls": [
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.Utils.Truncate"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Path"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"truncate_file\", description: \"读取并截断文件内容\", schema: [ file_path: [type: :string, required: true, doc: \"文件路径\"], max_lines: [type: :integer, default: 100, doc: \"最大行数\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 37,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/tools/write.ex",
+      "localDependencies": [
+        "gong/tool_result.ex"
+      ],
+      "calls": [
+        {
+          "callee": "File"
+        },
+        {
+          "callee": "Gong.ToolResult"
+        },
+        {
+          "callee": "Path"
+        },
+        {
+          "callee": "System"
+        }
+      ],
+      "imports": [
+        {
+          "specifier": "Jido.Action, name: \"write_file\", description: \"写入文件内容（覆盖）\", schema: [ file_path: [type: :string, required: true, doc: \"文件绝对路径\"], content: [type: :string, required: true, doc: \"写入内容\"] ]",
+          "kind": "use"
+        }
+      ],
+      "exports_count": 1,
+      "imports_count": 1,
+      "loc_lines": 64,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": true,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/truncate.ex",
+      "localDependencies": [
+        "gong/utils/truncate.ex"
+      ],
+      "calls": [
+        {
+          "callee": "Gong.Utils.Truncate"
+        },
+        {
+          "callee": "Map"
+        },
+        {
+          "callee": "Result"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 2,
+      "imports_count": 0,
+      "loc_lines": 57,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong/utils/truncate.ex",
+      "calls": [
+        {
+          "callee": "Bitwise"
+        },
+        {
+          "callee": "Enum"
+        },
+        {
+          "callee": "Keyword"
+        },
+        {
+          "callee": "String"
+        }
+      ],
+      "imports": [],
+      "exports_count": 4,
+      "imports_count": 0,
+      "loc_lines": 299,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    },
+    {
+      "sourcePath": "gong.ex",
+      "imports": [],
+      "exports_count": 0,
+      "imports_count": 0,
+      "loc_lines": 16,
+      "side_effects": {
+        "hasAsync": false,
+        "hasHttp": false,
+        "hasGenserver": false,
+        "hasFileIo": false,
+        "hasPubsub": false
+      }
+    }
+  ]
+}

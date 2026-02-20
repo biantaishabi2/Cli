@@ -1,0 +1,182 @@
+[
+  {
+    "caller": "AGENT",
+    "callee": "DATA",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "AGENT",
+    "callee": "EXTENSIONS",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "AGENT",
+    "callee": "HOOK",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "AGENT",
+    "callee": "PROMPT",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "AGENT",
+    "callee": "RUNTIME",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "AGENT",
+    "callee": "TOOLS",
+    "call_type": "framework_injection",
+    "via": "use Jido.AI.ReActAgent",
+    "confidence": 0.92,
+    "source": "ast_hint",
+    "detector": "elixir.use_macro",
+    "reason": "use 宏参数中的模块注入"
+  },
+  {
+    "caller": "CLI",
+    "callee": "SESSION",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "COMPACTION",
+    "callee": "PROMPT",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "COMPACTION",
+    "callee": "PROVIDERS",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "COMPACTION",
+    "callee": "TAPE",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "EXTENSIONS",
+    "callee": "SESSION",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "INFRA",
+    "callee": "PROMPT",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "INFRA",
+    "callee": "PROVIDERS",
+    "call_type": "external_registration",
+    "via": "ReqLLM.Providers.register",
+    "confidence": 0.97,
+    "source": "ast_hint",
+    "detector": "elixir.external_register",
+    "reason": "外部库 register 调用内部模块"
+  },
+  {
+    "caller": "INFRA",
+    "callee": "SESSION",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "RUNTIME",
+    "callee": "PROVIDERS",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "SESSION",
+    "callee": "RUNTIME",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "SESSION",
+    "callee": "STREAM",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  },
+  {
+    "caller": "TOOLS",
+    "callee": "DATA",
+    "call_type": "direct_call",
+    "via": "",
+    "confidence": 1.0,
+    "source": "fallback",
+    "detector": "",
+    "reason": "no relation hint"
+  }
+]
