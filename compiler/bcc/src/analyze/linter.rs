@@ -4,7 +4,7 @@
 
 use super::SmellRecord;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Linter 配置（从 "name:command" 格式解析）
 pub struct LinterConfig {
@@ -39,19 +39,44 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
     let timeout = linter_timeout();
 
     // 用 sh -c 执行命令
-    let child = Command::new("sh")
+    let mut child = match Command::new("sh")
         .args(["-c", &config.command])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    let child = match child {
+        .spawn()
+    {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[linter] warn: linter '{}' failed to start: {}", config.name, e);
             return vec![];
         }
     };
+
+    // 超时轮询等待子进程完成
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(100);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    eprintln!(
+                        "[linter] warn: linter '{}' timed out after {}s",
+                        config.name,
+                        timeout.as_secs()
+                    );
+                    return vec![];
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                eprintln!("[linter] warn: linter '{}' failed: {}", config.name, e);
+                return vec![];
+            }
+        }
+    }
 
     let output = match child.wait_with_output() {
         Ok(o) => o,
@@ -77,6 +102,14 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
     let mut records = parse_ruff_json(&stdout, &config.name);
     if records.is_empty() {
         records = parse_credo_json(&stdout, &config.name);
+    }
+
+    // 非空输出但两种解析器都返回空：warn
+    if records.is_empty() && !stdout.trim().is_empty() {
+        eprintln!(
+            "[linter] warn: linter '{}' produced output but no results could be parsed",
+            config.name
+        );
     }
 
     records

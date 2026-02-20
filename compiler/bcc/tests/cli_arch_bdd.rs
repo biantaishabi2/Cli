@@ -2439,3 +2439,274 @@ fn analyze_missing_required_params_exits_nonzero() {
         stderr
     );
 }
+
+// ── smell-gate 集成测试 ──
+
+/// 辅助：写 SmellReport JSON 文件
+fn write_smell_report(path: &Path, smells: &[serde_json::Value]) {
+    let report = serde_json::json!([{
+        "file": "test.py",
+        "smells": smells,
+        "summary": { "total_smells": smells.len(), "by_severity": {}, "by_category": {} }
+    }]);
+    fs::write(path, serde_json::to_string_pretty(&report).unwrap()).expect("write smell report");
+}
+
+#[test]
+fn smell_gate_with_smells_exits_nonzero() {
+    let root = temp_dir("bcc_smell_gate_fail");
+    let (target, transition, gates, actual) = setup_validate_data(&root);
+    let out = root.join("out");
+    let smells_file = root.join("smells.json");
+
+    let smells = vec![
+        serde_json::json!({
+            "category": "security", "rule": "hardcoded_secret", "severity": "critical",
+            "message": "hardcoded secret found", "file": "app.py", "line": 10,
+            "source": "bcc", "confidence": 0.9,
+            "fix_hint": "Use environment variables", "code_snippet": "  10| SECRET = 'abc' ← HERE",
+            "offending_code": "SECRET = 'abc'"
+        }),
+        serde_json::json!({
+            "category": "error_handling", "rule": "swallowed_error", "severity": "warning",
+            "message": "error swallowed", "file": "handler.py", "line": 20,
+            "source": "bcc", "confidence": 0.8
+        }),
+        serde_json::json!({
+            "category": "security", "rule": "sql_injection", "severity": "critical",
+            "message": "SQL injection risk", "file": "db.py", "line": 5,
+            "source": "bcc", "confidence": 0.95
+        }),
+    ];
+    write_smell_report(&smells_file, &smells);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--smell-gate", &smells_file.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate with smell-gate");
+
+    assert_eq!(output.status.code(), Some(1), "should exit 1 with smells");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Smell Gate Report"), "should contain report header");
+    assert!(stderr.contains("CRITICAL"), "should show CRITICAL severity");
+    assert!(stderr.contains("hardcoded secret found"), "should show smell message");
+    assert!(stderr.contains("fix:"), "should show fix_hint");
+    assert!(stderr.contains("offending:"), "should show offending_code");
+    assert!(stderr.contains("smell_gate=FAIL"), "should contain FAIL marker");
+    assert!(stderr.contains("Total: 3"), "should show total count");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn smell_gate_empty_smells_passes() {
+    let root = temp_dir("bcc_smell_gate_pass");
+    let (target, transition, gates, actual) = setup_validate_data(&root);
+    let out = root.join("out");
+    let smells_file = root.join("smells.json");
+
+    write_smell_report(&smells_file, &[]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--smell-gate", &smells_file.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate with empty smell-gate");
+
+    assert_eq!(status.code(), Some(0), "should pass with no smells");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn smell_gate_old_severity_alias_maps_correctly() {
+    let root = temp_dir("bcc_smell_gate_alias");
+    let (target, transition, gates, actual) = setup_validate_data(&root);
+    let out = root.join("out");
+    let smells_file = root.join("smells.json");
+
+    // 使用旧 severity 值 "high"
+    let smells = vec![serde_json::json!({
+        "category": "security", "rule": "test_rule", "severity": "high",
+        "message": "old severity format", "file": "old.py", "line": 1,
+        "source": "bcc", "confidence": 1.0
+    })];
+    write_smell_report(&smells_file, &smells);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--smell-gate", &smells_file.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate with old severity");
+
+    assert_eq!(output.status.code(), Some(1), "should exit 1 with smells");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // high 应映射为 critical
+    assert!(
+        stderr.contains("CRITICAL"),
+        "old 'high' severity should map to CRITICAL, stderr: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn validate_without_smell_gate_backward_compatible() {
+    // 不带 --smell-gate 参数时行为与改动前完全一致
+    let root = temp_dir("bcc_smell_gate_compat");
+    let (target, transition, gates, actual) = setup_validate_data(&root);
+    let out = root.join("out");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate without smell-gate");
+
+    assert!(status.success(), "should pass without smell-gate");
+    assert!(out.join("summary.json").exists());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn linter_timeout_kills_slow_command() {
+    let root = temp_dir("bcc_linter_timeout");
+    let ast = root.join("ast.json");
+    let out = root.join("out.json");
+
+    // 创建最简 ast 文件
+    write(&ast, r#"{"source_count":0,"records":[]}"#);
+
+    // 设置 1 秒超时，运行 sleep 60 的 linter
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", &ast.to_string_lossy(),
+            "-o", &out.to_string_lossy(),
+            "--linter", "slow:sleep 60",
+        ])
+        .env("BCC_LINTER_TIMEOUT", "1")
+        .output()
+        .expect("run analyze with slow linter");
+
+    assert!(output.status.success(), "should still succeed despite linter timeout");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("timed out"),
+        "should contain timeout warning, stderr: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn critical_smell_triggers_blocking_fail_in_score() {
+    let root = temp_dir("bcc_score_critical_blocking");
+    let input = root.join("input");
+    let smells_file = root.join("smells.json");
+    fs::create_dir_all(&input).expect("create input dir");
+
+    // 创建最简评分输入（scenario-validation.tsv + gate-evaluation.tsv + summary.json）
+    write(
+        &input.join("scenario-validation.tsv"),
+        "category\tscenario\tcaller\tcallee\tstatus\n",
+    );
+    write(
+        &input.join("gate-evaluation.tsv"),
+        "profile\tgate\tvalue\tthreshold\tstatus\n",
+    );
+    write(
+        &input.join("summary.json"),
+        r#"{"target_gate_pass":true,"transition_gate_pass":true,"forbidden_edges_count":0,"unexpected_edges_count":0,"missing_edges_count":0,"total_edges":0,"directed_density_pct":0,"bidirectional_pair_count":0,"matched_edges_count":0}"#,
+    );
+
+    // 1 critical + 2 warning → score 76 (>= 60) 但 critical 存在 → blocking fail
+    let smells = vec![
+        serde_json::json!({
+            "category": "security", "rule": "hardcoded_secret", "severity": "critical",
+            "message": "critical smell", "file": "app.py", "line": 1,
+            "source": "bcc", "confidence": 1.0
+        }),
+        serde_json::json!({
+            "category": "error_handling", "rule": "broad_catch", "severity": "warning",
+            "message": "warning smell 1", "file": "app.py", "line": 10,
+            "source": "bcc", "confidence": 0.8
+        }),
+        serde_json::json!({
+            "category": "error_handling", "rule": "broad_catch", "severity": "warning",
+            "message": "warning smell 2", "file": "app.py", "line": 20,
+            "source": "bcc", "confidence": 0.8
+        }),
+    ];
+    write_smell_report(&smells_file, &smells);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "score", "score",
+            "--input", &input.to_string_lossy(),
+            "--smell-report", &smells_file.to_string_lossy(),
+            "--mode", "strict",
+        ])
+        .output()
+        .expect("run arch score with critical smells");
+
+    // strict 模式下，blocking 维度 passed=false → 整体 fail (exit 2)
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "strict mode + critical smell should fail, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("code_quality") || stdout.contains("Code Quality"),
+        "output should include code_quality dimension, stdout: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}

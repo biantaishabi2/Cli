@@ -1431,6 +1431,9 @@ fn validate_impl(
                     smell.message,
                     smell.rule
                 );
+                if !smell.offending_code.is_empty() {
+                    eprintln!("  offending: {}", smell.offending_code);
+                }
                 if !smell.fix_hint.is_empty() {
                     eprintln!("  fix: {}", smell.fix_hint);
                 }

@@ -75,12 +75,13 @@ fn score_impl(
     let ctx = ScoringContext::from_input_dir(input)?;
 
     // 创建评分器（若传了 smell_report，追加 code_quality 维度）
-    let mut calculator = ScoreCalculator::new(config, scoring_mode);
+    let mut calculator = ScoreCalculator::new(config.clone(), scoring_mode);
     if let Some(path) = smell_report {
+        let cq = &config.dimensions.code_quality;
         calculator.add_dimension(Box::new(
             dimensions::code_quality::CodeQualityDimension::new(
-                0.10,
-                true,
+                cq.weight,
+                cq.blocking,
                 Some(path.to_string()),
             ),
         ));

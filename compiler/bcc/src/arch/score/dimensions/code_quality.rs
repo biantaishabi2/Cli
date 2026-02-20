@@ -83,7 +83,8 @@ impl ScoringDimension for CodeQualityDimension {
             + (warning as f64 * 2.0);
 
         let score = (100.0 - penalty).max(0.0);
-        let passed = score >= 60.0;
+        // critical smell 存在时直接判定为不通过（blocking 语义）
+        let passed = score >= 60.0 && critical == 0;
 
         let mut result = DimensionResult {
             score,
@@ -218,7 +219,7 @@ mod tests {
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 76.0);
-        assert!(result.passed); // >= 60
+        assert!(!result.passed); // score >= 60 但有 critical，仍不通过
     }
 
     #[test]
