@@ -59,6 +59,7 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         type_annotations: vec![],
         type_guards: vec![],
         schema_fields: vec![],
+        source_code: None,
     }
 }
 
