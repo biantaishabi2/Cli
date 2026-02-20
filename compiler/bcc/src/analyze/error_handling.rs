@@ -44,7 +44,7 @@ impl Detector for SwallowedErrorDetector {
 
             // Python: except ... : \n pass/...
             // 跳过空行找到第一个非空行来判断
-            if trimmed.starts_with("except") && trimmed.ends_with(':') {
+            if lang == "python" && trimmed.starts_with("except") && trimmed.ends_with(':') {
                 let mut next_idx = i + 1;
                 while next_idx < lines.len() && lines[next_idx].trim().is_empty() {
                     next_idx += 1;
@@ -67,7 +67,7 @@ impl Detector for SwallowedErrorDetector {
             }
 
             // Elixir: rescue _ -> :ok / rescue _ -> nil
-            if trimmed.starts_with("rescue") {
+            if lang == "elixir" && trimmed.starts_with("rescue") {
                 let rescue_body = trimmed.trim_start_matches("rescue").trim();
                 // 单行 rescue _ -> :ok
                 if elixir_trivial_re.is_match(rescue_body) {
@@ -103,7 +103,7 @@ impl Detector for SwallowedErrorDetector {
             }
 
             // TypeScript/JavaScript: catch (e) { } 或 catch (e) { /* empty */ }
-            if js_empty_catch_re.is_match(trimmed) {
+            if (lang == "typescript" || lang == "javascript") && js_empty_catch_re.is_match(trimmed) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
@@ -135,11 +135,6 @@ impl Detector for BroadCatchDetector {
     fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
 
-        // Rust 无异常捕获机制（使用 Result 类型），broad_catch 不适用
-        if lang == "rust" {
-            return results;
-        }
-
         // 预编译正则，避免在循环中重复创建
         let bare_except_re = Regex::new(r#"^\s*except\s*:\s*$"#).unwrap();
         let broad_except_re = Regex::new(r#"(?i)^\s*except\s+(Exception|BaseException)\b"#).unwrap();
@@ -152,7 +147,7 @@ impl Detector for BroadCatchDetector {
 
         for (i, line) in lines.iter().enumerate() {
             // Python: 裸 except: 或 except Exception
-            if bare_except_re.is_match(line) {
+            if lang == "python" && bare_except_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
@@ -163,7 +158,7 @@ impl Detector for BroadCatchDetector {
                     source: "bcc".to_string(),
                     confidence: 0.9,
                 });
-            } else if broad_except_re.is_match(line) {
+            } else if lang == "python" && broad_except_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
@@ -177,7 +172,7 @@ impl Detector for BroadCatchDetector {
             }
 
             // Elixir: rescue _ -> (单行或多行)
-            if elixir_rescue_inline_re.is_match(line) {
+            if lang == "elixir" && elixir_rescue_inline_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
@@ -188,7 +183,7 @@ impl Detector for BroadCatchDetector {
                     source: "bcc".to_string(),
                     confidence: 0.9,
                 });
-            } else if elixir_rescue_alone_re.is_match(line) {
+            } else if lang == "elixir" && elixir_rescue_alone_re.is_match(line) {
                 // 多行写法: rescue\n  _ -> ...
                 if let Some(next) = lines.get(i + 1) {
                     if elixir_wildcard_clause_re.is_match(next) {
@@ -207,7 +202,7 @@ impl Detector for BroadCatchDetector {
             }
 
             // TypeScript/JavaScript: catch { } 无参数的 catch（省略异常变量）
-            if js_catch_no_param_re.is_match(line) {
+            if (lang == "typescript" || lang == "javascript") && js_catch_no_param_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
