@@ -37,6 +37,9 @@ pub struct FileRecord {
     /// Schema 字段信息（analyze 检测器使用）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schema_fields: Vec<SchemaField>,
+    /// 源码内容（内存流水线传递，不序列化到 JSON）
+    #[serde(skip)]
+    pub source_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
