@@ -201,8 +201,11 @@ func TestDoPlanFinal_RetryOnNonJSON(t *testing.T) {
 
 func TestDoPlanFinal_FallbackProvider(t *testing.T) {
 	// 主 provider 全部失败，fallback provider 成功
+	// WithRecovery 在首次 parse 失败后尝试 repair（消耗 1 次额外调用），
+	// 因此 primary 需要 3 个响应：原始调用 + repair + 重试。
 	primary := ai.NewMockProvider(
 		"not json 1",
+		"repair also bad",
 		"not json 2",
 	)
 	fallback := ai.NewMockProvider(
@@ -224,7 +227,7 @@ func TestDoPlanFinal_FallbackProvider(t *testing.T) {
 	finalMC := mockGH.GetMarker(1, marker.TypePlanFinal)
 	require.NotNil(t, finalMC)
 	assert.Contains(t, finalMC.Comment.GetBody(), "方案B")
-	assert.Equal(t, 2, primary.CallCount())
+	assert.Equal(t, 3, primary.CallCount()) // 原始调用 + repair + 重试
 	assert.Equal(t, 1, fallback.CallCount())
 }
 
