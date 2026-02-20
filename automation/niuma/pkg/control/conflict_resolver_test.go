@@ -582,6 +582,88 @@ func helperValue() int {
 	return dir, conflictFile
 }
 
+func TestProfileRule_GoImportConflictViaProfileDispatch(t *testing.T) {
+	// 验证 useProfileRuleResolver=true 时，tryResolveConflictByRule 通过 profile 派发
+	// 正确解析 Go import 冲突（与既有直接调用行为一致）。
+	// 注：编译期常量 useProfileRuleResolver 无法运行时切换，fallback switch 分支为编译期死代码。
+	// fallback 路径中调用的底层函数（resolveGoImportConflictFile 等）由各自独立的单元测试覆盖。
+	dir := setupGitRepo(t)
+	relPath := "pkg.go"
+	content := `package main
+
+import (
+<<<<<<< HEAD
+	"os"
+	_ "fmt"
+=======
+	"os"
+	_ "strings"
+>>>>>>> feature
+)
+
+func Env() string {
+	return os.Getenv("X")
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/profiletest\n\ngo 1.22\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, relPath), []byte(content), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	// 重新写入冲突内容（commit 后）
+	require.NoError(t, os.WriteFile(filepath.Join(dir, relPath), []byte(content), 0o644))
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{RepoDir: dir},
+	}
+
+	err := ctrl.tryResolveConflictByRule(context.Background(), dir, []string{relPath})
+	require.NoError(t, err)
+
+	resolved, readErr := os.ReadFile(filepath.Join(dir, relPath))
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(resolved), "<<<<<<<")
+	assert.NotContains(t, string(resolved), "=======")
+	assert.NotContains(t, string(resolved), ">>>>>>>")
+	assert.Contains(t, string(resolved), "\t\"os\"")
+	assert.Contains(t, string(resolved), "\t_ \"fmt\"")
+	assert.Contains(t, string(resolved), "\t_ \"strings\"")
+}
+
+func TestProfileRule_ElixirFileRejectedByRule(t *testing.T) {
+	// 验证 Elixir 文件无 RuleResolver，tryResolveConflictByRule 返回错误。
+	dir := setupGitRepo(t)
+	relPath := "lib/app.ex"
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lib"), 0o755))
+	conflictContent := `defmodule App do
+<<<<<<< HEAD
+  alias MyApp.Repo
+=======
+  alias MyApp.Schema
+>>>>>>> feature
+end
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, relPath), []byte(conflictContent), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	// 重新写入冲突内容
+	require.NoError(t, os.WriteFile(filepath.Join(dir, relPath), []byte(conflictContent), 0o644))
+
+	ctrl := &Controller{
+		cfg: &ControlConfig{RepoDir: dir},
+	}
+
+	err := ctrl.tryResolveConflictByRule(context.Background(), dir, []string{relPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "未实现 RuleResolver，无法通过规则层处理")
+
+	// 验证回滚：文件恢复原始冲突内容
+	current, readErr := os.ReadFile(filepath.Join(dir, relPath))
+	require.NoError(t, readErr)
+	assert.Equal(t, conflictContent, string(current))
+}
+
 func TestGateConflictElixirTests_SkipWhenNoElixirFiles(t *testing.T) {
 	dir := setupGitRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package main\n"), 0o644))

@@ -17,7 +17,11 @@ import (
 )
 
 const (
-	prConflictLayerCommentMarkerFmt  = "<!-- BOT:CONFLICT_LAYER_SWITCH sha:%s step:%s -->"
+	// useProfileRuleResolver 控制 tryResolveConflictByRule 是否通过 profile 派发。
+	// 设为 false 并重编译即可回退到硬编码 switch 路径。
+	useProfileRuleResolver = true
+
+	prConflictLayerCommentMarkerFmt = "<!-- BOT:CONFLICT_LAYER_SWITCH sha:%s step:%s -->"
 	prConflictLayerStepRuleFail      = "rule-fail"
 	prConflictLayerStepAITry         = "ai-try"
 	prConflictLayerStepHumanEscalate = "human-escalate"
@@ -174,19 +178,35 @@ func (c *Controller) tryResolveConflictByRule(ctx context.Context, repoDir strin
 		return wrapConflictAttemptRollbackError(cause, c.rollbackPRConflictAttempt(ctx, repoDir, attemptSnapshot))
 	}
 
-	for _, file := range conflictFiles {
-		ext := strings.ToLower(filepath.Ext(file))
-		switch ext {
-		case ".go":
-			if err := resolveGoImportConflictFile(repoDir, file); err != nil {
+	if useProfileRuleResolver {
+		for _, file := range conflictFiles {
+			profile, profErr := ResolveConflictProfile(file)
+			if profErr != nil {
+				return rollbackWithCause(fmt.Errorf("规则层未找到 profile: %s: %w", file, profErr))
+			}
+			rr, ok := profile.(RuleResolver)
+			if !ok {
+				return rollbackWithCause(fmt.Errorf("profile %s 未实现 RuleResolver，无法通过规则层处理: %s", profile.Name(), file))
+			}
+			if err := rr.TryResolveByRule(repoDir, file); err != nil {
 				return rollbackWithCause(err)
 			}
-		case ".rs":
-			if err := resolveRustUseConflictFile(repoDir, file); err != nil {
-				return rollbackWithCause(err)
+		}
+	} else {
+		for _, file := range conflictFiles {
+			ext := strings.ToLower(filepath.Ext(file))
+			switch ext {
+			case ".go":
+				if err := resolveGoImportConflictFile(repoDir, file); err != nil {
+					return rollbackWithCause(err)
+				}
+			case ".rs":
+				if err := resolveRustUseConflictFile(repoDir, file); err != nil {
+					return rollbackWithCause(err)
+				}
+			default:
+				return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import / Rust use 冲突，发现不支持的文件: %s", file))
 			}
-		default:
-			return rollbackWithCause(fmt.Errorf("规则层仅支持 Go import / Rust use 冲突，发现不支持的文件: %s", file))
 		}
 	}
 

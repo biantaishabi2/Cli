@@ -13,9 +13,9 @@ var (
 	ErrUnknownProfile = errors.New("unknown conflict profile")
 
 	defaultConflictProfiles = []ConflictProfile{
-		newSuffixConflictProfile("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。"),
+		newSuffixConflictProfileWithRule("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。", resolveGoImportConflictFile),
 		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。"),
-		newSuffixConflictProfile("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。"),
+		newSuffixConflictProfileWithRule("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。", resolveRustUseConflictFile),
 	}
 )
 
@@ -32,6 +32,11 @@ type ConflictProfile interface {
 	Name() string
 	Match(path string) bool
 	BuildPrompt(files []ConflictPromptFile) (string, error)
+}
+
+// RuleResolver 表示 profile 可选的 Rule 层冲突修复能力。
+type RuleResolver interface {
+	TryResolveByRule(repoDir string, relPath string) error
 }
 
 // ConflictProfileGroup 表示同一 profile 命中的冲突文件集合。
@@ -105,6 +110,30 @@ func newSuffixConflictProfile(name string, suffixes []string, profileHint string
 		suffixes:    normalized,
 		profileHint: strings.TrimSpace(profileHint),
 	}
+}
+
+// suffixRuleResolverProfile 包装 suffixConflictProfile 并添加 RuleResolver 能力。
+// 仅 Go/Rust 等注册了 ruleResolverFn 的 profile 使用此包装，
+// Elixir 等不注册的 profile 不实现 RuleResolver 接口。
+type suffixRuleResolverProfile struct {
+	*suffixConflictProfile
+	resolverFn func(repoDir, relPath string) error
+}
+
+func newSuffixConflictProfileWithRule(name string, suffixes []string, profileHint string, resolverFn func(repoDir, relPath string) error) ConflictProfile {
+	base := newSuffixConflictProfile(name, suffixes, profileHint).(*suffixConflictProfile)
+	return &suffixRuleResolverProfile{
+		suffixConflictProfile: base,
+		resolverFn:            resolverFn,
+	}
+}
+
+// TryResolveByRule 通过注册的 resolverFn 执行 Rule 层冲突修复。
+func (p *suffixRuleResolverProfile) TryResolveByRule(repoDir string, relPath string) error {
+	if p.resolverFn == nil {
+		return fmt.Errorf("profile %s: no rule resolver registered", p.Name())
+	}
+	return p.resolverFn(repoDir, relPath)
 }
 
 func (p *suffixConflictProfile) Name() string {
