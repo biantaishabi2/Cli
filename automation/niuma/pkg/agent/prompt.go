@@ -368,9 +368,9 @@ const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR �
 - 确认问题确实存在（不要猜测 build tag 或 API 行为）
 - 如果涉及外部系统行为（如 GitHub API），标明"需确认"
 
-**approved 判定规则（必须严格遵守）：**
-**- 存在任何 P0 或 P1 问题 → 必须设 approved=false**
-**- 只有 P2 问题或无问题 → 设 approved=true**
+**判定字段规则（必须严格遵守）：**
+**- 存在任何 P0 或 P1 问题 → 必须设 ` + "`__niuma_review_approved_v1__=false`" + `**
+**- 只有 P2 问题或无问题 → 设 ` + "`__niuma_review_approved_v1__=true`" + `**
 
 {{- if .ReviewComment}}
 
@@ -380,16 +380,16 @@ PR 历史中包含之前的 review 和回复。你必须：
 1. 逐条检查之前提出的每个问题，确认是否已修复
 2. 对于 implementer 反驳的问题（认为不是 bug），明确表态你是否接受其解释
 3. **resolved_items 是必填字段，不能为空数组**——必须逐条列出每个历史问题的结论
-4. 当 resolved_items 中有"仍需修改"的条目 → 也必须设 approved=false
+4. 当 resolved_items 中有"仍需修改"的条目 → 也必须设 ` + "`__niuma_review_approved_v1__=false`" + `
 {{- end}}
 
 **最终输出格式（必须严格遵守）：**
 
 在你的回复最末尾，必须输出一个 ` + "```json```" + ` 代码块，不要在 JSON 后面再写任何文字。
-如果无法给出明确结论，必须返回 ` + "`approved=false`" + `，禁止用自然语言替代 JSON：
+如果无法给出明确结论，必须返回 ` + "`__niuma_review_approved_v1__=false`" + `，禁止用自然语言替代 JSON：
 ` + "```json" + `
 {
-  "approved": true或false,
+  "__niuma_review_approved_v1__": true或false,
   "summary": "一句话审查总结",
   "resolved_items": ["之前的问题X：已修复/接受解释/仍需修改"],
   "issues": ["P0/P1/P2 - 具体问题描述（仅新发现的问题）"]
