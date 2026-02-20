@@ -3001,14 +3001,12 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
     let report: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
 
     // 验证输出中包含来自 good linter 的 smell 记录
-    let smells = report.get("smells").and_then(|v| v.as_array());
-    assert!(
-        smells.is_some(),
-        "output should contain smells array, raw: {}",
-        raw
-    );
-    let smells = smells.unwrap();
-    let good_smells: Vec<_> = smells.iter().filter(|s| {
+    // 输出格式为 Vec<SmellReport>，每个 report 有 file + smells + summary
+    let reports = report.as_array().expect("output should be an array of SmellReport");
+    let all_smells: Vec<serde_json::Value> = reports.iter()
+        .flat_map(|r| r.get("smells").and_then(|v| v.as_array()).cloned().unwrap_or_default())
+        .collect();
+    let good_smells: Vec<_> = all_smells.iter().filter(|s| {
         s.get("source").and_then(|v| v.as_str()) == Some("good")
     }).collect();
     assert_eq!(
