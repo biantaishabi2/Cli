@@ -1,5 +1,6 @@
 use super::common;
 use super::*;
+use crate::arch::injection::CallType;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -396,7 +397,7 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
         for target in extract_use_injected_modules(&imp.specifier) {
             hints.push(RelationHintRecord {
                 target,
-                call_type_hint: "framework_injection".to_string(),
+                call_type_hint: CallType::FrameworkInjection,
                 via: via.clone(),
                 confidence: 0.92,
                 detector: "elixir.use_macro".to_string(),
@@ -414,13 +415,19 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
         }
         hints.push(RelationHintRecord {
             target: target_module,
-            call_type_hint: "external_registration".to_string(),
+            call_type_hint: CallType::ExternalRegistration,
             via: format!("{}.register", lib_chain),
             confidence: 0.97,
             detector: "elixir.external_register".to_string(),
             reason: "外部库 register 调用内部模块".to_string(),
         });
     }
+
+    // supervisor children = [...] 中的模块引用
+    hints.extend(detect_supervisor_children(content));
+
+    // Keyword.get/fetch!/opts[:key] 配置注入
+    hints.extend(detect_opts_injection(content));
 
     hints.sort_by(|a, b| {
         a.target
@@ -434,6 +441,188 @@ fn detect_relation_hints(imports: &[ImportRecord], content: &str) -> Vec<Relatio
             && a.via == b.via
             && a.detector == b.detector
     });
+    hints
+}
+
+/// OTP 标准库模块，supervisor children 中出现时不产出 hint
+const OTP_STDLIB_MODULES: &[&str] = &[
+    "Registry",
+    "DynamicSupervisor",
+    "Task.Supervisor",
+    "Supervisor",
+    "Agent",
+    "GenServer",
+    "Task",
+    "Telemetry",
+    "Phoenix.PubSub",
+];
+
+/// 检测 supervisor children = [...] 中的模块引用
+/// 识别 {Module, opts} 元组和裸 Module 两种形式
+fn detect_supervisor_children(content: &str) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+    // 匹配 children = [...] 赋值（包括跨行）
+    let children_re = Regex::new(r"(?s)children\s*=\s*\[([^\]]*)\]").expect("valid children regex");
+
+    for cap in children_re.captures_iter(content) {
+        let Some(body) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        if body.trim().is_empty() {
+            continue;
+        }
+
+        // 匹配 {Module.Name, ...} 元组形式
+        let tuple_re =
+            Regex::new(r"\{\s*([A-Z][A-Za-z0-9_.]+)").expect("valid tuple module regex");
+        for tuple_cap in tuple_re.captures_iter(body) {
+            let Some(module) = tuple_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            if !is_otp_stdlib(module) {
+                hints.push(RelationHintRecord {
+                    target: module.to_string(),
+                    call_type_hint: CallType::FrameworkInjection,
+                    via: "children supervisor spec".to_string(),
+                    confidence: 0.90,
+                    detector: "elixir.supervisor".to_string(),
+                    reason: "Supervisor child spec 中的模块引用".to_string(),
+                });
+            }
+        }
+
+        // 匹配裸模块引用（不在 {} 内的独立模块名）
+        // 先去掉已匹配的 {Module, ...} 部分，再扫描剩余的裸模块名
+        let cleaned = tuple_re.replace_all(body, " ");
+        let bare_re =
+            Regex::new(r"(?:^|[,\s])([A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9_]*)*)(?:[,\s\]]|$)")
+                .expect("valid bare module regex");
+        for bare_cap in bare_re.captures_iter(&cleaned) {
+            let Some(module) = bare_cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            // 裸模块至少两段才有意义（单段如 Registry 是 OTP）
+            if module.contains('.') && !is_otp_stdlib(module) {
+                hints.push(RelationHintRecord {
+                    target: module.to_string(),
+                    call_type_hint: CallType::FrameworkInjection,
+                    via: "children supervisor spec".to_string(),
+                    confidence: 0.90,
+                    detector: "elixir.supervisor".to_string(),
+                    reason: "Supervisor child spec 中的模块引用".to_string(),
+                });
+            }
+        }
+    }
+
+    hints
+}
+
+fn is_otp_stdlib(module: &str) -> bool {
+    OTP_STDLIB_MODULES.iter().any(|&m| m == module)
+}
+
+/// 检测 Keyword.get/fetch!/opts[:key] 配置注入模式
+/// 高置信度：同函数体内 Keyword.get 返回值被用于 Module.function() 调用
+/// 低置信度：仅标记存在 opts 注入点
+fn detect_opts_injection(content: &str) -> Vec<RelationHintRecord> {
+    let mut hints = Vec::new();
+    // 匹配函数体（def ... do ... end 块）
+    let func_re = Regex::new(
+        r"(?s)def\s+\w+\s*\([^)]*opts[^)]*\)\s+do\s+(.*?)(?:\n\s*end\b)",
+    )
+    .expect("valid func regex");
+
+    // 匹配 Keyword.get(opts, :key) / Keyword.fetch!(opts, :key)
+    let keyword_re = Regex::new(
+        r"(\w+)\s*=\s*Keyword\.(?:get|fetch!)\s*\(\s*opts\s*,\s*:(\w+)",
+    )
+    .expect("valid keyword regex");
+
+    // 匹配 opts[:key] 形式
+    let opts_bracket_re =
+        Regex::new(r"(\w+)\s*=\s*opts\s*\[\s*:(\w+)\s*\]").expect("valid opts bracket regex");
+
+    // 匹配 Module.function(...) 调用（大写开头模块）
+    let module_call_re = Regex::new(r"([A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9_]*)*)\.\w+\(")
+        .expect("valid module call regex");
+
+    for func_cap in func_re.captures_iter(content) {
+        let Some(body) = func_cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+
+        // 收集该函数体内所有 opts 注入的变量名
+        let mut injected_vars: Vec<(String, String)> = Vec::new(); // (var_name, via_text)
+        for kw_cap in keyword_re.captures_iter(body) {
+            let var = kw_cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let key = kw_cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+            let via = format!("Keyword.get(opts, :{})", key);
+            injected_vars.push((var, via));
+        }
+        for ob_cap in opts_bracket_re.captures_iter(body) {
+            let var = ob_cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let key = ob_cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+            let via = format!("opts[:{}]", key);
+            injected_vars.push((var, via));
+        }
+
+        if injected_vars.is_empty() {
+            continue;
+        }
+
+        // 收集函数体内的模块调用
+        let module_calls: Vec<String> = module_call_re
+            .captures_iter(body)
+            .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+            .collect();
+
+        for (var, via) in &injected_vars {
+            // 高置信度：变量被用作模块调用的参数，或同体内有相关模块调用
+            let mut matched_module = false;
+            for module in &module_calls {
+                // 检查变量是否出现在该模块调用附近（简单启发式：同函数体内有 module 调用且变量被使用）
+                let call_pattern = format!("{}.", module);
+                if body.contains(&call_pattern) && body.contains(var.as_str()) {
+                    // 检查变量是否出现在模块调用参数中
+                    let usage_re = Regex::new(&format!(
+                        r"{}\.\w+\([^)]*{}[^)]*\)",
+                        regex::escape(module),
+                        regex::escape(var)
+                    ));
+                    if let Ok(re) = usage_re {
+                        if re.is_match(body) {
+                            hints.push(RelationHintRecord {
+                                target: module.clone(),
+                                call_type_hint: CallType::FrameworkInjection,
+                                via: via.clone(),
+                                confidence: 0.80,
+                                detector: "elixir.opts_injection".to_string(),
+                                reason: format!(
+                                    "opts 注入变量 {} 被传入 {} 模块调用",
+                                    var, module
+                                ),
+                            });
+                            matched_module = true;
+                        }
+                    }
+                }
+            }
+
+            if !matched_module {
+                // 低置信度：仅标记存在注入点
+                hints.push(RelationHintRecord {
+                    target: "unknown".to_string(),
+                    call_type_hint: CallType::FrameworkInjection,
+                    via: via.clone(),
+                    confidence: 0.50,
+                    detector: "elixir.opts_injection".to_string(),
+                    reason: format!("opts 注入变量 {} 无法追踪目标模块", var),
+                });
+            }
+        }
+    }
+
     hints
 }
 
@@ -921,7 +1110,7 @@ end
         assert!(record
             .relation_hints
             .iter()
-            .all(|h| h.call_type_hint == "framework_injection"));
+            .all(|h| h.call_type_hint == CallType::FrameworkInjection));
     }
 
     #[test]
@@ -939,7 +1128,7 @@ end
             .iter()
             .find(|h| h.target == "Gong.Provider.Anthropic")
             .expect("external register hint should exist");
-        assert_eq!(hit.call_type_hint, "external_registration");
+        assert_eq!(hit.call_type_hint, CallType::ExternalRegistration);
         assert!(hit.via.contains("ReqLLM.Providers.register"));
     }
 
@@ -956,7 +1145,7 @@ end
         assert!(record
             .relation_hints
             .iter()
-            .all(|h| h.call_type_hint != "external_registration"));
+            .all(|h| h.call_type_hint != CallType::ExternalRegistration));
     }
 
     #[test]
@@ -972,7 +1161,7 @@ end
         assert!(record
             .relation_hints
             .iter()
-            .all(|h| h.call_type_hint != "external_registration"));
+            .all(|h| h.call_type_hint != CallType::ExternalRegistration));
     }
 }
 

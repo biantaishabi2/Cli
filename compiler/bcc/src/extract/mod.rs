@@ -1,3 +1,4 @@
+use crate::arch::injection::CallType;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -54,7 +55,7 @@ pub struct CallRecord {
 pub struct RelationHintRecord {
     pub target: String,
     #[serde(default)]
-    pub call_type_hint: String,
+    pub call_type_hint: CallType,
     #[serde(default)]
     pub via: String,
     #[serde(default)]

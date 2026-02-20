@@ -1,5 +1,6 @@
 use super::common;
 use super::*;
+use crate::arch::injection::CallType;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -624,7 +625,7 @@ fn detect_relation_hints(
                 };
                 hints.push(RelationHintRecord {
                     target: specifier,
-                    call_type_hint: "framework_injection".to_string(),
+                    call_type_hint: CallType::FrameworkInjection,
                     via: format!("@Module.{}", field),
                     confidence,
                     detector: "typescript.nest.module".to_string(),
@@ -664,7 +665,7 @@ fn detect_relation_hints(
             };
             hints.push(RelationHintRecord {
                 target: specifier,
-                call_type_hint: "framework_injection".to_string(),
+                call_type_hint: CallType::FrameworkInjection,
                 via: format!("@{} constructor", decorator),
                 confidence: 0.86,
                 detector: "typescript.nest.constructor".to_string(),
@@ -878,7 +879,7 @@ export class AppModule {}
         assert!(record
             .relation_hints
             .iter()
-            .all(|h| h.call_type_hint == "framework_injection"));
+            .all(|h| h.call_type_hint == CallType::FrameworkInjection));
     }
 
     #[test]
@@ -895,7 +896,7 @@ export class AppService {
         let record = extract(source, "apps/api/src/app.service.ts", "typescript");
         assert!(record.relation_hints.iter().any(|h| {
             h.target == "@app/user"
-                && h.call_type_hint == "framework_injection"
+                && h.call_type_hint == CallType::FrameworkInjection
                 && h.via.contains("@Injectable")
         }));
     }

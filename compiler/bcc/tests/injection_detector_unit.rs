@@ -122,10 +122,10 @@ end
     assert!(record
         .relation_hints
         .iter()
-        .any(|h| h.target == "Gong.Tools.Read" && h.call_type_hint == "framework_injection"));
+        .any(|h| h.target == "Gong.Tools.Read" && h.call_type_hint == CallType::FrameworkInjection));
     assert!(record.relation_hints.iter().any(|h| {
         h.target == "Gong.Provider.Anthropic"
-            && h.call_type_hint == "external_registration"
+            && h.call_type_hint == CallType::ExternalRegistration
             && h.via.contains("ReqLLM.Providers.register")
     }));
 }
@@ -144,7 +144,7 @@ end
     assert!(record
         .relation_hints
         .iter()
-        .all(|h| h.call_type_hint != "external_registration"));
+        .all(|h| h.call_type_hint != CallType::ExternalRegistration));
 }
 
 #[test]
@@ -163,7 +163,7 @@ end
     assert!(record
         .relation_hints
         .iter()
-        .all(|h| h.call_type_hint != "external_registration"));
+        .all(|h| h.call_type_hint != CallType::ExternalRegistration));
 }
 
 #[test]

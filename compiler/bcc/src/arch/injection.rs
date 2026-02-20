@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 /// 注入提示最小置信度，低于阈值统一降级为 direct_call。
 pub const MIN_HINT_CONFIDENCE: f64 = 0.75;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallType {
     DirectCall,
