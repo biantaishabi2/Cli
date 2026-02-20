@@ -43,6 +43,7 @@ type mockGitHubOps struct {
 	addLabelError             map[string]error
 	addLabelFails             map[string]int
 	updateIssueBodyCalls      []updateIssueBodyCall
+	updateIssueBodyError      map[int]error
 	listCommentBodies         map[int][]string
 	addIssueCommentCalls      []addIssueCommentCall
 	closeIssueCalls           []int
@@ -151,6 +152,11 @@ func (m *mockGitHubOps) UpdateIssueBody(_ context.Context, issueNumber int, body
 		issueNumber: issueNumber,
 		body:        body,
 	})
+	if m.updateIssueBodyError != nil {
+		if err, ok := m.updateIssueBodyError[issueNumber]; ok {
+			return err
+		}
+	}
 	issue, ok := m.issuesByNumber[issueNumber]
 	if ok {
 		issue.Body = body
@@ -4117,6 +4123,9 @@ func TestReconcileNeedsHumanRecovery_LabelCleanupFailRetainsMetadata(t *testing.
 		assert.NotContains(t, logText, metaKeyIntegrationConflictLabelSynced,
 			"标签清理失败时不应清除 escalation metadata")
 	}
+
+	// 标签清理失败时，不应写恢复 comment（避免评论与真实标签状态不一致）
+	assert.Empty(t, mockGH.addIssueCommentCalls, "标签清理失败时不应写恢复 comment")
 }
 
 func TestHandleIntegrationConflictRetry_FirstRetry(t *testing.T) {
@@ -4155,4 +4164,51 @@ func TestHandleIntegrationConflictRetry_FirstRetry(t *testing.T) {
 	// should write comment with retry 1/3
 	require.Len(t, mockGH.addIssueCommentCalls, 1)
 	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "retry 1/3")
+}
+
+func TestHandleIntegrationConflictRetry_MarkerWriteFailEscalates(t *testing.T) {
+	// 验证 retry marker 写入失败时直接 escalate，避免 retryCount 无法递增导致无限重试
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 45,
+			Body:   "issue body without marker",
+			Labels: []string{"bot:pr-reviewable"},
+		},
+	)
+	mockGH.updateIssueBodyError = map[int]error{
+		45: fmt.Errorf("simulated UpdateIssueBody failure"),
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	task := Task{
+		ID:       "task-45",
+		Metadata: map[string]string{"issue_num": "45"},
+	}
+	outcome := MergeOutcome{
+		Status:            MergeStatusEscalated,
+		SourceBranch:      "feat/45-feature",
+		IntegrationBranch: "integration/main",
+	}
+
+	ctrl.handleIntegrationConflictRetry(context.Background(), task, outcome)
+
+	// retry marker 写入失败，不应回退到 bot:pr-needs-fix（应走 escalate）
+	for _, call := range mockGH.replaceLabelCalls {
+		assert.NotEqual(t, "bot:pr-needs-fix", call.newLabel,
+			"retry marker 写入失败时不应回退到 bot:pr-needs-fix")
+	}
+
+	// 不应写 retry comment（因为直接 escalate 了）
+	for _, call := range mockGH.addIssueCommentCalls {
+		assert.NotContains(t, call.body, "retry 1/3",
+			"retry marker 写入失败时不应写 retry comment")
+	}
 }

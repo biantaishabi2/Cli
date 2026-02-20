@@ -2682,8 +2682,9 @@ func (c *Controller) tryResolveIntegrationConflictWithAI(ctx context.Context, ta
 		return false
 	}
 
-	// AI 解冲突成功，git add 并 commit
-	if _, err := c.runCommand(ctx, repoDir, "git", "add", "."); err != nil {
+	// AI 解冲突成功，只 git add 冲突文件（避免将无关变更带入 merge commit）
+	gitAddArgs := append([]string{"add", "--"}, conflictFiles...)
+	if _, err := c.runCommand(ctx, repoDir, "git", gitAddArgs...); err != nil {
 		fmt.Printf("[control] AI 解冲突后 git add 失败: %v\n", err)
 		c.runCommand(ctx, repoDir, "git", "merge", "--abort")
 		return false
@@ -2725,9 +2726,11 @@ func (c *Controller) handleIntegrationConflictRetry(ctx context.Context, task Ta
 		return
 	}
 
-	// 更新 retry marker
+	// 更新 retry marker（失败则 escalate，避免 retryCount 无法递增导致无限重试）
 	if err := c.persistIntegrationConflictRetryCount(ctx, issue, retryCount); err != nil {
-		fmt.Printf("[control] 写入 integration retry marker 失败 (issue #%d): %v\n", issueNum, err)
+		fmt.Printf("[control] 写入 integration retry marker 失败 (issue #%d)，escalate: %v\n", issueNum, err)
+		c.escalateIntegrationConflict(ctx, task, outcome)
+		return
 	}
 
 	// 写 comment 标注来源
@@ -2860,7 +2863,7 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			}
 		}
 
-		// 只有标签清理成功才清除 metadata，否则保留以便下次 reconcile 重试
+		// 只有标签清理成功才清除 metadata 和写恢复 comment，否则保留以便下次 reconcile 重试
 		if labelsCleaned {
 			clearMeta := map[string]string{
 				metaKeyIntegrationConflictLabelSynced: "",
@@ -2869,16 +2872,15 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
 				fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
 			}
-		}
 
-		// 写恢复日志 comment
-		recoveryComment := fmt.Sprintf(
-			"<!-- BOT:NEEDS_HUMAN_RECOVERY -->\n\n"+
-				"**自动恢复**: issue #%d PR 已恢复 MERGEABLE 状态，从 `needs-human` + `integration-conflict` 恢复到 `bot:pr-reviewable`。",
-			issueNum,
-		)
-		if err := c.github.AddIssueComment(ctx, issueNum, recoveryComment); err != nil {
-			fmt.Printf("[control] issue #%d 写恢复 comment 失败: %v\n", issueNum, err)
+			recoveryComment := fmt.Sprintf(
+				"<!-- BOT:NEEDS_HUMAN_RECOVERY -->\n\n"+
+					"**自动恢复**: issue #%d PR 已恢复 MERGEABLE 状态，从 `needs-human` + `integration-conflict` 恢复到 `bot:pr-reviewable`。",
+				issueNum,
+			)
+			if err := c.github.AddIssueComment(ctx, issueNum, recoveryComment); err != nil {
+				fmt.Printf("[control] issue #%d 写恢复 comment 失败: %v\n", issueNum, err)
+			}
 		}
 	}
 }
