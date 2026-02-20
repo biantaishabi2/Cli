@@ -424,6 +424,119 @@ fn e2e_unreadable_source_fails() {
         String::from_utf8_lossy(&output.stderr));
 }
 
+// --- 并发访问同一资源测试 ---
+
+#[test]
+fn e2e_concurrent_analyze_same_source() {
+    use std::thread;
+
+    let dir = temp_dir("analyze_bdd_concurrent");
+    let src_path = dir.join("vuln.py");
+    let ast_path = dir.join("ast.json");
+
+    // 构造含多种气味的源码
+    let source = r#"api_key = "sk-proj-abc123def456"
+h = hashlib.md5(data)
+try:
+    risky()
+except:
+    pass
+"#;
+    fs::write(&src_path, source).unwrap();
+
+    let ast_json = format!(r#"[{{
+        "language": "python",
+        "file_path": "{}",
+        "module_doc": null,
+        "exports": [],
+        "imports": [],
+        "calls": [],
+        "side_effects": {{
+            "hasAsync": false,
+            "hasHttp": false,
+            "hasGenserver": false,
+            "hasFileIo": false,
+            "hasPubsub": false
+        }},
+        "loc_lines": 10,
+        "declarations": 1
+    }}]"#, src_path.to_str().unwrap());
+    fs::write(&ast_path, &ast_json).unwrap();
+
+    // 多线程同时对同一输入运行 analyze，验证无竞态
+    let handles: Vec<_> = (0..4)
+        .map(|i| {
+            let ast = ast_path.clone();
+            let out = dir.join(format!("smells_{}.json", i));
+            thread::spawn(move || {
+                let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+                    .args([
+                        "analyze",
+                        "--ast-file", ast.to_str().unwrap(),
+                        "-o", out.to_str().unwrap(),
+                    ])
+                    .output()
+                    .expect("run bcc analyze");
+                assert!(output.status.success(),
+                    "Concurrent run {} failed: {}", i, String::from_utf8_lossy(&output.stderr));
+                let raw = fs::read_to_string(&out).unwrap();
+                let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                result
+            })
+        })
+        .collect();
+
+    // 所有线程结果应一致
+    let results: Vec<serde_json::Value> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let baseline_smells = results[0][0]["smells"].as_array().unwrap().len();
+    assert!(baseline_smells > 0, "Should detect smells in concurrent test");
+    for (i, r) in results.iter().enumerate().skip(1) {
+        let count = r[0]["smells"].as_array().unwrap().len();
+        assert_eq!(count, baseline_smells,
+            "Concurrent run {} produced {} smells, expected {} (same as run 0)", i, count, baseline_smells);
+    }
+}
+
+// --- 深度/大文件限制测试 ---
+
+#[test]
+fn e2e_deeply_nested_source_no_stack_overflow() {
+    // 构造深度嵌套的 try/except（200 层）+ 大量重复行，验证不会栈溢出或超时
+    let mut source = String::new();
+    for i in 0..200 {
+        let indent = "    ".repeat(i);
+        source.push_str(&format!("{}try:\n{}    risky{}()\n{}except:\n{}    pass\n",
+            indent, indent, i, indent, indent));
+    }
+
+    let result = run_analyze(&source, "deep_nested.py", "python", None);
+    let smells = result[0]["smells"].as_array().unwrap();
+    // 应能正常完成分析，且检出多条 swallowed_error
+    assert!(smells.iter().filter(|s| s["rule"] == "swallowed_error").count() >= 100,
+        "Deep nesting should still detect swallowed_error, got {} total smells", smells.len());
+}
+
+#[test]
+fn e2e_large_file_many_lines() {
+    // 构造含 5000 行的大文件，每 100 行插入一个气味
+    let mut lines: Vec<String> = Vec::new();
+    for i in 0..5000 {
+        if i % 100 == 0 {
+            lines.push(format!(r#"secret_{} = "sk-proj-{}""#, i, i));
+        } else {
+            lines.push(format!("x_{} = {}", i, i));
+        }
+    }
+    let source = lines.join("\n");
+
+    let result = run_analyze(&source, "large.py", "python", Some("security"));
+    let smells = result[0]["smells"].as_array().unwrap();
+    let cred_count = smells.iter().filter(|s| s["rule"] == "hardcoded_credential").count();
+    // 5000 行 / 100 = 50 个凭证
+    assert_eq!(cred_count, 50,
+        "Large file should detect all 50 hardcoded credentials, got {}", cred_count);
+}
+
 // --- 过滤功能端到端测试 ---
 
 #[test]
