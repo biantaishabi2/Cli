@@ -566,7 +566,7 @@ fn extract_modules_from_list(
 }
 
 /// 获取节点的第一个非标点符号子节点
-fn first_non_paren_child<'a>(node: &tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+fn first_non_paren_child<'a>(node: &'a tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             let kind = child.kind();
