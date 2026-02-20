@@ -13,9 +13,9 @@ var (
 	ErrUnknownProfile = errors.New("unknown conflict profile")
 
 	defaultConflictProfiles = []ConflictProfile{
-		newSuffixConflictProfile("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。"),
-		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。"),
-		newSuffixConflictProfile("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。"),
+		newSuffixConflictProfile("go", []string{".go"}, "仅处理 Go 语法，优先最小化语义改动并保持 import 结构稳定。", resolveGoImportConflictFile),
+		newSuffixConflictProfile("elixir", []string{".ex", ".exs"}, "仅处理 Elixir 语法，保持 module/do-end 结构及模式匹配语义。", nil),
+		newSuffixConflictProfile("rust", []string{".rs"}, "仅处理 Rust 语法，保持 ownership/borrow 语义与类型约束。", resolveRustUseConflictFile),
 	}
 )
 
@@ -32,6 +32,11 @@ type ConflictProfile interface {
 	Name() string
 	Match(path string) bool
 	BuildPrompt(files []ConflictPromptFile) (string, error)
+}
+
+// RuleResolver 表示 profile 可选的 Rule 层冲突修复能力。
+type RuleResolver interface {
+	TryResolveByRule(repoDir string, relPath string) error
 }
 
 // ConflictProfileGroup 表示同一 profile 命中的冲突文件集合。
@@ -90,21 +95,32 @@ func ResolveConflictProfileGroups(conflictFiles []string) ([]ConflictProfileGrou
 }
 
 type suffixConflictProfile struct {
-	name        string
-	suffixes    map[string]struct{}
-	profileHint string
+	name           string
+	suffixes       map[string]struct{}
+	profileHint    string
+	ruleResolverFn func(repoDir, relPath string) error
 }
 
-func newSuffixConflictProfile(name string, suffixes []string, profileHint string) ConflictProfile {
+func newSuffixConflictProfile(name string, suffixes []string, profileHint string, ruleResolverFn func(repoDir, relPath string) error) ConflictProfile {
 	normalized := make(map[string]struct{}, len(suffixes))
 	for _, suffix := range suffixes {
 		normalized[strings.ToLower(strings.TrimSpace(suffix))] = struct{}{}
 	}
 	return &suffixConflictProfile{
-		name:        strings.TrimSpace(name),
-		suffixes:    normalized,
-		profileHint: strings.TrimSpace(profileHint),
+		name:           strings.TrimSpace(name),
+		suffixes:       normalized,
+		profileHint:    strings.TrimSpace(profileHint),
+		ruleResolverFn: ruleResolverFn,
 	}
+}
+
+// TryResolveByRule 通过注册的 ruleResolverFn 执行 Rule 层冲突修复。
+// 未注册 ruleResolverFn 的 profile 返回错误。
+func (p *suffixConflictProfile) TryResolveByRule(repoDir string, relPath string) error {
+	if p.ruleResolverFn == nil {
+		return fmt.Errorf("profile %s 未实现 RuleResolver", p.name)
+	}
+	return p.ruleResolverFn(repoDir, relPath)
 }
 
 func (p *suffixConflictProfile) Name() string {

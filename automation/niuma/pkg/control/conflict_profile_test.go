@@ -3,6 +3,8 @@ package control
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -188,6 +190,82 @@ func TestIsElixirLightweightConflict(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestGoProfile_TryResolveByRule(t *testing.T) {
+	dir := t.TempDir()
+	relPath := "pkg.go"
+	content := `package main
+
+import (
+<<<<<<< HEAD
+	"fmt"
+=======
+	"os"
+>>>>>>> feature
+)
+`
+	absPath := filepath.Join(dir, relPath)
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+
+	profile, err := ResolveConflictProfile(relPath)
+	require.NoError(t, err)
+	assert.Equal(t, "go", profile.Name())
+
+	rr, ok := profile.(RuleResolver)
+	require.True(t, ok, "Go profile 应实现 RuleResolver 接口")
+
+	err = rr.TryResolveByRule(dir, relPath)
+	require.NoError(t, err)
+
+	resolved, readErr := os.ReadFile(absPath)
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(resolved), "<<<<<<<")
+	assert.Contains(t, string(resolved), "\"fmt\"")
+	assert.Contains(t, string(resolved), "\"os\"")
+}
+
+func TestElixirProfile_NoRuleResolver(t *testing.T) {
+	profile, err := ResolveConflictProfile("lib/app.ex")
+	require.NoError(t, err)
+	assert.Equal(t, "elixir", profile.Name())
+
+	// suffixConflictProfile 统一实现了 RuleResolver 接口，
+	// 但 Elixir 未注册 ruleResolverFn，调用应返回错误。
+	rr, ok := profile.(RuleResolver)
+	require.True(t, ok)
+	err = rr.TryResolveByRule("/tmp", "lib/app.ex")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "未实现 RuleResolver")
+}
+
+func TestRustProfile_TryResolveByRule(t *testing.T) {
+	dir := t.TempDir()
+	relPath := "lib.rs"
+	content := `<<<<<<< HEAD
+use std::fmt;
+=======
+use std::io;
+>>>>>>> feature
+`
+	absPath := filepath.Join(dir, relPath)
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+
+	profile, err := ResolveConflictProfile(relPath)
+	require.NoError(t, err)
+	assert.Equal(t, "rust", profile.Name())
+
+	rr, ok := profile.(RuleResolver)
+	require.True(t, ok, "Rust profile 应实现 RuleResolver 接口")
+
+	err = rr.TryResolveByRule(dir, relPath)
+	require.NoError(t, err)
+
+	resolved, readErr := os.ReadFile(absPath)
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(resolved), "<<<<<<<")
+	assert.Contains(t, string(resolved), "use std::fmt;")
+	assert.Contains(t, string(resolved), "use std::io;")
 }
 
 func TestResolveConflictProfileGroups_MixedLanguagesStableGrouping(t *testing.T) {
