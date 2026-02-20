@@ -118,7 +118,7 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 			return false, nil
 		},
 		AddPRReview: func(ctx context.Context, repo string, pr int, body string) error {
-			_, err := client.CreatePRReview(ctx, pr, body, "REQUEST_CHANGES")
+			_, err := client.CreatePRReview(ctx, pr, body, "COMMENT")
 			return err
 		},
 	})
