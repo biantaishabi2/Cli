@@ -59,11 +59,22 @@ impl SmellDetector for CommentDensityDetector {
                 .map(|(start, end)| end - start + 1)
                 .sum();
 
-            // 计算非嵌套区域的总行数
-            let nested_total_lines: usize = nested_ranges
-                .iter()
-                .map(|(ns, ne)| ne - ns + 1)
-                .sum();
+            // 合并重叠的嵌套区间后再计算总行数，避免多级嵌套时双重扣减
+            let nested_total_lines: usize = {
+                let mut sorted = nested_ranges.clone();
+                sorted.sort_by_key(|(s, _)| *s);
+                let mut merged: Vec<(usize, usize)> = Vec::new();
+                for (s, e) in &sorted {
+                    if let Some(last) = merged.last_mut() {
+                        if *s <= last.1 {
+                            last.1 = last.1.max(*e);
+                            continue;
+                        }
+                    }
+                    merged.push((*s, *e));
+                }
+                merged.iter().map(|(s, e)| e - s + 1).sum()
+            };
             let own_lines = func_lines.saturating_sub(nested_total_lines);
             let code_lines = own_lines.saturating_sub(func_comment_lines);
             if code_lines == 0 {

@@ -229,6 +229,48 @@ def foo():
     );
 }
 
+/// 三级嵌套函数：外层注释应归属外层，嵌套行数不应被双重扣减
+#[test]
+fn nested_functions_no_double_counting() {
+    // 外层 outer 包含 middle，middle 包含 inner
+    // 注释只在外层范围、嵌套范围之外，不应触发 excessive_comments 误报
+    let source = r#"
+def outer():
+    x = 1
+    y = 2
+    z = 3
+    w = 4
+    a = 5
+    b = 6
+    c = 7
+    d = 8
+    def middle():
+        m1 = 1
+        m2 = 2
+        m3 = 3
+        def inner():
+            i1 = 1
+            i2 = 2
+            i3 = 3
+            return i1
+        return m1
+    return x
+"#;
+    let result = run_analyze_with_python_source(source, "nested_no_double", &[], &[]);
+    let reports: Vec<serde_json::Value> = serde_json::from_value(result).unwrap();
+    let smells = reports[0]["smells"].as_array().unwrap();
+    // 外层函数几乎没有注释，不应被误报 excessive_comments
+    let excessive = smells.iter().filter(|s| {
+        s["rule"] == "excessive_comments"
+            && s["message"].as_str().unwrap_or("").contains("outer")
+    }).count();
+    assert_eq!(
+        excessive, 0,
+        "三级嵌套不应对 outer 触发 excessive_comments 误报, got: {:?}",
+        smells
+    );
+}
+
 #[test]
 fn rules_filter_excludes_noise() {
     // 使用 defensive 过滤，noise 检测器不应运行
