@@ -9,8 +9,8 @@ ai:
 
     # OpenAI Codex（需要 OPENAI_API_KEY）
     codex:
-      cmd: "codex exec --sandbox workspace-write -a never -C {workdir} - < {prompt_file}"
-      cmd_agent: "codex exec --sandbox workspace-write -a never -C {workdir} - < {prompt_file}"
+      cmd: "codex exec --sandbox workspace-write --full-auto -C {workdir} - < {prompt_file}"
+      cmd_agent: "codex exec --sandbox workspace-write --full-auto -C {workdir} - < {prompt_file}"
 
     # Kimi（Moonshot AI）
     kimi:
