@@ -89,6 +89,11 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         has_pubsub: content.contains("EventEmitter") || content.contains(".emit("),
     };
 
+    // 提取 TypeAnnotation 和 TypeGuard
+    let mut type_annotations = Vec::new();
+    let mut type_guards = Vec::new();
+    extract_ts_type_info(root, source, &mut type_annotations, &mut type_guards);
+
     FileRecord {
         language: lang.to_string(),
         file_path: path.to_string(),
@@ -101,8 +106,8 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
-        type_annotations: vec![],
-        type_guards: vec![],
+        type_annotations,
+        type_guards,
         schema_fields: vec![],
     }
 }
@@ -587,6 +592,189 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
+// === TypeAnnotation / TypeGuard 提取 ===
+
+/// 从 TypeScript AST 中提取类型标注和类型守卫
+fn extract_ts_type_info(
+    root: tree_sitter::Node,
+    source: &[u8],
+    type_annotations: &mut Vec<TypeAnnotation>,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            // 函数声明/方法声明：提取参数类型标注
+            "function_declaration" | "method_definition" | "arrow_function" => {
+                let func_name = node
+                    .child_by_field_name("name")
+                    .map(|n| common::node_text(n, source))
+                    .unwrap_or_default();
+                // 提取参数的类型标注
+                if let Some(params) = node.child_by_field_name("parameters") {
+                    extract_ts_param_annotations(params, source, &func_name, type_annotations);
+                }
+                // 提取函数体内的 typeof 检查
+                if let Some(body) = node.child_by_field_name("body") {
+                    extract_ts_type_guards(body, source, &func_name, type_guards);
+                }
+            }
+            _ => {}
+        }
+        // 压栈子节点（逆序以保持遍历顺序）
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// 提取函数参数的类型标注
+fn extract_ts_param_annotations(
+    params: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_annotations: &mut Vec<TypeAnnotation>,
+) {
+    for i in 0..params.child_count() {
+        let Some(child) = params.child(i) else { continue };
+        // required_parameter 或 optional_parameter
+        if !matches!(child.kind(), "required_parameter" | "optional_parameter") {
+            continue;
+        }
+        let param_name = child
+            .child_by_field_name("pattern")
+            .map(|n| common::node_text(n, source))
+            .unwrap_or_default();
+        if param_name.is_empty() {
+            continue;
+        }
+        // 类型标注节点
+        if let Some(type_ann) = child.child_by_field_name("type") {
+            let type_text = common::node_text(type_ann, source);
+            if !type_text.is_empty() {
+                type_annotations.push(TypeAnnotation {
+                    name: format!("param:{}", param_name),
+                    type_expr: type_text,
+                    line: child.start_position().row + 1,
+                    func_name: func_name.to_string(),
+                    param: param_name,
+                });
+            }
+        }
+    }
+}
+
+/// 从函数体中提取 typeof/Array.isArray 类型守卫
+fn extract_ts_type_guards(
+    body: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![body];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "binary_expression" {
+            // 匹配 typeof x === 'string' 或 typeof x === "string"
+            if let Some(guard) = parse_typeof_guard(node, source, func_name) {
+                type_guards.push(guard);
+                continue;
+            }
+        }
+        if node.kind() == "call_expression" {
+            // 匹配 Array.isArray(x)
+            if let Some(guard) = parse_array_is_array_guard(node, source, func_name) {
+                type_guards.push(guard);
+                continue;
+            }
+        }
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// 解析 typeof x === 'string' 形式的类型守卫
+fn parse_typeof_guard(
+    node: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+) -> Option<TypeGuard> {
+    let op = node.child_by_field_name("operator")?;
+    let op_text = common::node_text(op, source);
+    if op_text != "===" && op_text != "==" {
+        return None;
+    }
+    let left = node.child_by_field_name("left")?;
+    let right = node.child_by_field_name("right")?;
+
+    // typeof x === 'type'
+    let (typeof_node, type_literal) = if left.kind() == "typeof_expression" {
+        (left, right)
+    } else if right.kind() == "typeof_expression" {
+        (right, left)
+    } else {
+        return None;
+    };
+
+    // 提取 typeof 的操作数（变量名）
+    let var_node = typeof_node.child(1)?; // typeof <operand>
+    let var = common::node_text(var_node, source);
+
+    // 提取类型字符串
+    let type_text = common::node_text(type_literal, source);
+    let guarded_type = type_text
+        .trim_matches(|c: char| c == '\'' || c == '"')
+        .to_string();
+
+    if var.is_empty() || guarded_type.is_empty() {
+        return None;
+    }
+
+    Some(TypeGuard {
+        function: func_name.to_string(),
+        guarded_type,
+        line: node.start_position().row + 1,
+        var,
+    })
+}
+
+/// 解析 Array.isArray(x) 形式的类型守卫
+fn parse_array_is_array_guard(
+    node: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+) -> Option<TypeGuard> {
+    let func_node = node.child_by_field_name("function")?;
+    let func_text = common::node_text(func_node, source);
+    if func_text != "Array.isArray" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    // 提取第一个参数
+    for i in 0..args.child_count() {
+        if let Some(arg) = args.child(i) {
+            if arg.kind() == "identifier" {
+                let var = common::node_text(arg, source);
+                return Some(TypeGuard {
+                    function: func_name.to_string(),
+                    guarded_type: "Array".to_string(),
+                    line: node.start_position().row + 1,
+                    var,
+                });
+            }
+        }
+    }
+    None
+}
+
 fn detect_relation_hints(
     root: tree_sitter::Node,
     source: &[u8],
@@ -901,6 +1089,71 @@ export class AppService {
                 && h.call_type_hint == "framework_injection"
                 && h.via.contains("@Injectable")
         }));
+    }
+
+    // === TypeAnnotation / TypeGuard 提取测试 ===
+
+    #[test]
+    fn extract_ts_typed_param_annotations() {
+        let source = r#"
+function foo(x: string, y: number) {
+  return x;
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_annotations.len(), 2);
+        assert_eq!(record.type_annotations[0].func_name, "foo");
+        assert_eq!(record.type_annotations[0].param, "x");
+        assert_eq!(record.type_annotations[0].type_expr, "string");
+        assert_eq!(record.type_annotations[1].param, "y");
+        assert_eq!(record.type_annotations[1].type_expr, "number");
+    }
+
+    #[test]
+    fn extract_ts_typeof_type_guard() {
+        let source = r#"
+function foo(x: string) {
+  if (typeof x === 'string') {
+    return x;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_guards.len(), 1);
+        assert_eq!(record.type_guards[0].function, "foo");
+        assert_eq!(record.type_guards[0].var, "x");
+        assert_eq!(record.type_guards[0].guarded_type, "string");
+    }
+
+    #[test]
+    fn extract_ts_array_is_array_guard() {
+        let source = r#"
+function bar(items: string[]) {
+  if (Array.isArray(items)) {
+    return items.length;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_guards.len(), 1);
+        assert_eq!(record.type_guards[0].var, "items");
+        assert_eq!(record.type_guards[0].guarded_type, "Array");
+    }
+
+    #[test]
+    fn no_type_annotation_no_guard() {
+        let source = r#"
+function foo(x) {
+  if (typeof x === 'string') {
+    return x;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        // 无类型标注
+        assert!(record.type_annotations.is_empty());
+        // 有 type guard（typeof 检查确实存在）
+        assert_eq!(record.type_guards.len(), 1);
     }
 
     #[test]
