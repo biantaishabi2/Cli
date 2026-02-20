@@ -1457,7 +1457,8 @@ fn validate_impl(
             );
             eprintln!("smell_gate=FAIL\n");
 
-            code = 1;
+            // 保留已有的更高失败码（如 code=2 来自 forbidden/gate 失败）
+            code = code.max(1);
         } else {
             eprintln!("[smell-gate] no smells found, gate passed");
         }

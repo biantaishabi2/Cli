@@ -52,6 +52,29 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
         }
     };
 
+    // 先取出 stdout/stderr handle，在独立线程中并发读取，
+    // 避免管道缓冲区满导致子进程写端阻塞而被误判超时
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
+
+    let stdout_thread = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        if let Some(mut out) = child_stdout {
+            let _ = out.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let stderr_thread = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        if let Some(mut err) = child_stderr {
+            let _ = err.read_to_end(&mut buf);
+        }
+        buf
+    });
+
     // 超时轮询等待子进程完成
     let start = Instant::now();
     let poll_interval = Duration::from_millis(100);
@@ -78,8 +101,8 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
         }
     }
 
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
+    let status = match child.wait() {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("[linter] warn: linter '{}' failed: {}", config.name, e);
             return vec![];
@@ -87,16 +110,17 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
     };
 
     // 命令失败时 warn 并返回空
-    if !output.status.success() {
+    if !status.success() {
         eprintln!(
             "[linter] warn: linter '{}' failed with exit code {:?}",
             config.name,
-            output.status.code()
+            status.code()
         );
         return vec![];
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout_bytes = stdout_thread.join().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
 
     // 尝试按不同格式解析
     let mut records = parse_ruff_json(&stdout, &config.name);

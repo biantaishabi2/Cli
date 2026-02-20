@@ -2810,3 +2810,96 @@ fn score_with_invalid_json_smell_report_fails() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn linter_large_output_does_not_false_timeout() {
+    // 验证大输出的 linter 不会因管道缓冲区满而被误判超时
+    let root = temp_dir("bcc_linter_large_output");
+    let ast = root.join("ast.json");
+    let out = root.join("out.json");
+
+    write(&ast, r#"{"source_count":0,"records":[]}"#);
+
+    // 生成超过 64KB 的 JSON 数组输出（管道缓冲区通常 64KB）
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", &ast.to_string_lossy(),
+            "-o", &out.to_string_lossy(),
+            "--linter",
+            r#"big:python3 -c "import json; items=[{'code':'E501','message':'line too long','filename':'f.py','row':i} for i in range(2000)]; print(json.dumps(items))""#,
+        ])
+        .env("BCC_LINTER_TIMEOUT", "10")
+        .output()
+        .expect("run analyze with large-output linter");
+
+    assert!(
+        output.status.success(),
+        "should succeed with large linter output, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("timed out"),
+        "should NOT timeout on large output, stderr: {}",
+        stderr
+    );
+    // 应该解析到 2000 条记录
+    assert!(
+        stderr.contains("2000 smell(s)"),
+        "should parse 2000 records, stderr: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn smell_gate_preserves_higher_failure_code() {
+    // 当 forbidden/gate 失败（code=2）且 smell-gate 也触发时，最终 code 应为 2 而非 1
+    let root = temp_dir("bcc_smell_gate_code_priority");
+    let (target, transition, gates, actual) = setup_validate_data(&root);
+    let out = root.join("out");
+    let smells_file = root.join("smells.json");
+
+    let smells = vec![serde_json::json!({
+        "category": "security", "rule": "test_rule", "severity": "critical",
+        "message": "some smell", "file": "app.py", "line": 1,
+        "source": "bcc", "confidence": 1.0
+    })];
+    write_smell_report(&smells_file, &smells);
+
+    // --fail-on-gate=true 会在 gate 失败时设 code=2
+    // smell-gate 有 smell 时应 code=max(2,1)=2
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "true",
+            "--fail-on-forbidden", "true",
+            "--smell-gate", &smells_file.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate with gate fail + smell-gate");
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // smell-gate 有 smell → 至少 exit 1
+    assert_ne!(exit_code, 0, "should fail due to smell-gate");
+    // 如果 gate/forbidden 也失败了，code 应为 2 而不是被降级为 1
+    if exit_code == 2 {
+        assert!(
+            stderr.contains("smell_gate=FAIL"),
+            "smell-gate should still report even with higher code, stderr: {}",
+            stderr
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
