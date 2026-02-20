@@ -238,3 +238,137 @@ func newRunnerForTest(t *testing.T, opts Options) *Runner {
 func fixedNow() time.Time {
 	return time.Date(2026, 2, 19, 12, 0, 0, 0, time.UTC)
 }
+
+func TestRunner_FailurePostsPRReview(t *testing.T) {
+	prReviewCalled := 0
+	var prReviewBody string
+	var prReviewPR int
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9030,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "go test failed: expected foo got bar", errors.New("exit status 1")
+		},
+		MarkNeedsFix:         func(context.Context, string, int) error { return nil },
+		AddLabels:            func(context.Context, string, int, []string) error { return nil },
+		AddComment:           func(context.Context, string, int, string) error { return nil },
+		FindGateRetryCount:   func(context.Context, int) (int, error) { return 0, nil },
+		UpsertGateRetryCount: func(context.Context, int, int) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+		AddPRReview: func(_ context.Context, _ string, pr int, body string) error {
+			prReviewCalled++
+			prReviewPR = pr
+			prReviewBody = body
+			return nil
+		},
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.False(t, result.Escalated)
+	assert.Equal(t, 1, prReviewCalled, "gate 失败应发 PR review")
+	assert.Equal(t, 9030, prReviewPR)
+	assert.Contains(t, prReviewBody, "Gate 测试失败详情")
+	assert.Contains(t, prReviewBody, "go test failed")
+}
+
+func TestRunner_PassDoesNotPostPRReview(t *testing.T) {
+	prReviewCalled := 0
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9031,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "ok", nil
+		},
+		MarkNeedsFix:         func(context.Context, string, int) error { return nil },
+		AddLabels:            func(context.Context, string, int, []string) error { return nil },
+		AddComment:           func(context.Context, string, int, string) error { return nil },
+		FindGateRetryCount:   func(context.Context, int) (int, error) { return 0, nil },
+		UpsertGateRetryCount: func(context.Context, int, int) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+		AddPRReview: func(context.Context, string, int, string) error {
+			prReviewCalled++
+			return nil
+		},
+	})
+
+	result, err := runner.Run(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Equal(t, 0, prReviewCalled, "gate 通过不应发 PR review")
+}
+
+func TestRunner_NilAddPRReviewBackwardCompatible(t *testing.T) {
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9032,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "go test failed", errors.New("exit status 1")
+		},
+		MarkNeedsFix:         func(context.Context, string, int) error { return nil },
+		AddLabels:            func(context.Context, string, int, []string) error { return nil },
+		AddComment:           func(context.Context, string, int, string) error { return nil },
+		FindGateRetryCount:   func(context.Context, int) (int, error) { return 0, nil },
+		UpsertGateRetryCount: func(context.Context, int, int) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+		// AddPRReview 不设置（nil），不应 panic
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.False(t, result.Passed)
+}
+
+func TestRunner_AddPRReviewFailureDoesNotBlock(t *testing.T) {
+	markCalled := 0
+	commentCalled := 0
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9033,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "go test failed", errors.New("exit status 1")
+		},
+		MarkNeedsFix: func(context.Context, string, int) error {
+			markCalled++
+			return nil
+		},
+		AddLabels: func(context.Context, string, int, []string) error { return nil },
+		AddComment: func(context.Context, string, int, string) error {
+			commentCalled++
+			return nil
+		},
+		FindGateRetryCount:   func(context.Context, int) (int, error) { return 0, nil },
+		UpsertGateRetryCount: func(context.Context, int, int) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+		AddPRReview: func(context.Context, string, int, string) error {
+			return errors.New("API timeout")
+		},
+	})
+
+	_, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.Equal(t, 1, markCalled, "PR review 失败不应阻塞主流程")
+	assert.Equal(t, 1, commentCalled)
+}

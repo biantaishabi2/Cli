@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,7 @@ type AddCommentFunc func(ctx context.Context, repo string, issue int, body strin
 type FindGateRetryCountFunc func(ctx context.Context, issue int) (int, error)
 type UpsertGateRetryCountFunc func(ctx context.Context, issue int, count int) error
 type HasLabelFunc func(ctx context.Context, issue int, label string) (bool, error)
+type AddPRReviewFunc func(ctx context.Context, repo string, pr int, body string) error
 
 type Options struct {
 	Repo       string
@@ -45,6 +47,7 @@ type Options struct {
 	FindGateRetryCount   FindGateRetryCountFunc
 	UpsertGateRetryCount UpsertGateRetryCountFunc
 	HasLabel             HasLabelFunc
+	AddPRReview          AddPRReviewFunc // 可选：gate 失败时将错误详情写到 PR review，供 iterate 读取
 }
 
 type Runner struct {
@@ -141,6 +144,13 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
 		if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
 			return result, fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
+		}
+		// 将错误详情写到 PR review，供 iterate 的 ListPRReviews 读取
+		if r.opts.AddPRReview != nil {
+			reviewBody := fmt.Sprintf("## ❌ Gate 测试失败详情\n\n```\n%s\n```\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`", gateFailure, retryCount, r.opts.MaxRetries, attemptKey)
+			if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: gate 失败信息写入 PR review 失败: %v\n", err)
+			}
 		}
 		return result, fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
 	}
