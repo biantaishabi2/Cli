@@ -176,7 +176,7 @@ impl SmellDetector for LeftoverBoilerplateDetector {
         }
 
         // 3. 未使用的 import
-        detect_unused_imports(record, source, &mut smells);
+        detect_unused_imports(record, &mut smells);
 
         smells
     }
@@ -191,26 +191,33 @@ fn detect_empty_python_functions(
 ) {
     if node.kind() == "function_definition" {
         if let Some(body) = node.child_by_field_name("body") {
-            let body_text = &source[body.byte_range()];
-            let trimmed = body_text.trim();
-            if trimmed == "pass"
-                || trimmed == "..."
-                || trimmed.starts_with("raise NotImplementedError")
-            {
-                let func_name = node
-                    .child_by_field_name("name")
-                    .map(|n| &source[n.byte_range()])
-                    .unwrap_or("<anonymous>");
-                smells.push(SmellRecord {
-                    category: "noise".to_string(),
-                    rule: "empty_function_body".to_string(),
-                    severity: "warning".to_string(),
-                    message: format!("函数 '{}' 体为空（{}）", func_name, trimmed),
-                    file: record.file_path.clone(),
-                    line: node.start_position().row + 1,
-                    source: "bcc".to_string(),
-                    confidence: 0.9,
-                });
+            // 仅当函数体只有一条语句时才判定为空函数体
+            if body.named_child_count() == 1 {
+                if let Some(stmt) = body.named_child(0) {
+                    let stmt_text = source[stmt.byte_range()].trim();
+                    let is_empty_body = match stmt.kind() {
+                        "pass_statement" => true,
+                        "expression_statement" => stmt_text == "...",
+                        "raise_statement" => stmt_text.starts_with("raise NotImplementedError"),
+                        _ => false,
+                    };
+                    if is_empty_body {
+                        let func_name = node
+                            .child_by_field_name("name")
+                            .map(|n| &source[n.byte_range()])
+                            .unwrap_or("<anonymous>");
+                        smells.push(SmellRecord {
+                            category: "noise".to_string(),
+                            rule: "empty_function_body".to_string(),
+                            severity: "warning".to_string(),
+                            message: format!("函数 '{}' 体为空（{}）", func_name, stmt_text),
+                            file: record.file_path.clone(),
+                            line: node.start_position().row + 1,
+                            source: "bcc".to_string(),
+                            confidence: 0.9,
+                        });
+                    }
+                }
             }
         }
     }
@@ -223,7 +230,7 @@ fn detect_empty_python_functions(
 }
 
 /// 未使用 import 检测：import 的 specifier 不在 calls 和 local_call_targets 中出现
-fn detect_unused_imports(record: &FileRecord, source: &str, smells: &mut Vec<SmellRecord>) {
+fn detect_unused_imports(record: &FileRecord, smells: &mut Vec<SmellRecord>) {
     // Elixir 的 use/behaviour 类型 import 有隐式副作用，跳过
     let skip_kinds = ["use", "behaviour"];
 
@@ -251,11 +258,10 @@ fn detect_unused_imports(record: &FileRecord, source: &str, smells: &mut Vec<Sme
             .unwrap_or(specifier)
             .trim();
 
-        // 检查 specifier 或短名是否出现在 calls 或源码中
+        // 交叉比对 imports specifier 与 calls + local_call_targets
         let used = call_names.contains(specifier)
             || call_names.contains(short_name)
-            || call_names.iter().any(|c| c.contains(specifier))
-            || source.matches(short_name).count() > 1; // 至少在 import 之外再出现一次
+            || call_names.iter().any(|c| c.contains(specifier) || c.contains(short_name));
 
         if !used {
             smells.push(SmellRecord {
@@ -518,7 +524,12 @@ fn collect_function_ranges_recursive(
         "python" => node.kind() == "function_definition",
         "elixir" => node.kind() == "call" && {
             node.child(0)
-                .map(|c| c.kind() == "identifier")
+                .map(|c| {
+                    c.kind() == "identifier" && {
+                        let name = &source[c.byte_range()];
+                        matches!(name, "def" | "defp" | "defmacro" | "defmacrop")
+                    }
+                })
                 .unwrap_or(false)
         },
         "rust" => node.kind() == "function_item",
