@@ -89,6 +89,15 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         has_pubsub: content.contains("EventEmitter") || content.contains(".emit("),
     };
 
+    // 提取 TypeAnnotation 和 TypeGuard
+    let mut type_annotations = Vec::new();
+    let mut type_guards = Vec::new();
+    extract_ts_type_info(root, source, &mut type_annotations, &mut type_guards);
+
+    // 提取 interface 属性 → SchemaField
+    let mut schema_fields = Vec::new();
+    extract_ts_interface_fields(root, source, &mut schema_fields);
+
     FileRecord {
         language: lang.to_string(),
         file_path: path.to_string(),
@@ -101,9 +110,9 @@ pub fn extract(content: &str, path: &str, lang: &str) -> FileRecord {
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
-        type_annotations: vec![],
-        type_guards: vec![],
-        schema_fields: vec![],
+        type_annotations,
+        type_guards,
+        schema_fields,
         source_code: Some(content.to_string()),
     }
 }
@@ -273,11 +282,13 @@ fn extract_ts_recursive(
                 if let Some(func_node) = node.child_by_field_name("function") {
                     // 提取各种调用类型
                     let callees = extract_call_targets(func_node, source);
+                    let args = extract_call_args(node, source);
                     for callee in callees {
                         local_call_symbols.insert(callee.clone());
                         calls.push(CallRecord {
                             callee,
                             line: node.start_position().row + 1,
+                            args: args.clone(),
                         });
                     }
                 }
@@ -322,11 +333,13 @@ fn collect_ts_calls_in_subtree(
     if node.kind() == "call_expression" {
         if let Some(func_node) = node.child_by_field_name("function") {
             let callees = extract_call_targets(func_node, source);
+            let args = extract_call_args(node, source);
             for callee in callees {
                 local_call_symbols.insert(callee.clone());
                 calls.push(CallRecord {
                     callee,
                     line: node.start_position().row + 1,
+                    args: args.clone(),
                 });
             }
         }
@@ -489,6 +502,26 @@ fn extract_named_binding_alias(item: &str) -> Option<String> {
     }
 }
 
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+fn extract_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号（保留空字符串，它是合法的默认值参数）
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                args.push(cleaned.to_string());
+            }
+        }
+    }
+    args
+}
+
 /// 提取所有调用目标（包括方法调用、属性访问等）
 fn extract_call_targets(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut targets = Vec::new();
@@ -586,6 +619,370 @@ fn extract_call_root(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+// === SchemaField 提取（interface 属性） ===
+
+/// 从 TypeScript interface 声明中提取属性 → SchemaField
+fn extract_ts_interface_fields(
+    root: tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "interface_declaration" {
+            // 查找 object_type（interface body）
+            if let Some(body) = node.child_by_field_name("body") {
+                for i in 0..body.child_count() {
+                    if let Some(prop) = body.child(i) {
+                        if prop.kind() == "property_signature" {
+                            let mut prop_name = String::new();
+                            let mut prop_type = String::new();
+                            let mut is_optional = false;
+
+                            if let Some(name_node) = prop.child_by_field_name("name") {
+                                prop_name = common::node_text(name_node, source);
+                            }
+                            // 检查 `?` 标记（optional property）
+                            for j in 0..prop.child_count() {
+                                if let Some(child) = prop.child(j) {
+                                    if child.kind() == "?" {
+                                        is_optional = true;
+                                    }
+                                    if child.kind() == "type_annotation" {
+                                        // 提取类型
+                                        for k in 0..child.child_count() {
+                                            if let Some(type_node) = child.child(k) {
+                                                if type_node.kind() != ":" {
+                                                    prop_type = common::node_text(type_node, source);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !prop_name.is_empty() {
+                                schema_fields.push(SchemaField {
+                                    name: prop_name,
+                                    field_type: prop_type,
+                                    line: prop.start_position().row + 1,
+                                    required: !is_optional,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 继续遍历子树
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+// === TypeAnnotation / TypeGuard 提取 ===
+
+/// 从匿名函数的父节点推导函数名
+/// - `const foo = (x) => ...` → "foo"
+/// - `let bar = function(x) { ... }` → "bar"
+/// - 无法推导时生成合成名 `<anon:L{line}>`，确保不与其他函数误配
+fn derive_func_name_from_parent(node: tree_sitter::Node, source: &[u8]) -> String {
+    if let Some(parent) = node.parent() {
+        // 赋值场景：const/let/var foo = arrow_function / function_expression
+        if parent.kind() == "variable_declarator" {
+            if let Some(name_node) = parent.child_by_field_name("name") {
+                let name = common::node_text(name_node, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+        // 对象属性赋值：{ foo: (x) => ... }
+        if parent.kind() == "pair" {
+            if let Some(key_node) = parent.child_by_field_name("key") {
+                let name = common::node_text(key_node, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+        // 属性赋值：obj.foo = (x) => ...
+        if parent.kind() == "assignment_expression" {
+            if let Some(left) = parent.child_by_field_name("left") {
+                let name = common::node_text(left, source);
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+    }
+    // 无法推导：生成基于行号的唯一合成名
+    format!("<anon:L{}>", node.start_position().row + 1)
+}
+
+/// 从 TypeScript AST 中提取类型标注和类型守卫
+fn extract_ts_type_info(
+    root: tree_sitter::Node,
+    source: &[u8],
+    type_annotations: &mut Vec<TypeAnnotation>,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let is_func_node = matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        );
+        if is_func_node {
+            let func_name = node
+                .child_by_field_name("name")
+                .map(|n| common::node_text(n, source))
+                .unwrap_or_default();
+            // 匿名函数：尝试从父节点推导名称（如 const foo = () => ...），
+            // 否则生成唯一合成名称，避免跨函数误配
+            let effective_name = if func_name.is_empty() {
+                derive_func_name_from_parent(node, source)
+            } else {
+                func_name
+            };
+            // 提取参数的类型标注
+            if let Some(params) = node.child_by_field_name("parameters") {
+                extract_ts_param_annotations(params, source, &effective_name, type_annotations);
+            }
+            // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
+            if let Some(body) = node.child_by_field_name("body") {
+                extract_ts_type_guards(body, source, &effective_name, type_guards);
+            }
+        }
+        // 压栈子节点（逆序以保持遍历顺序）
+        // 对函数节点：跳过 body 子节点，避免嵌套函数的 guard 被外层函数错误归属
+        let body_node = if is_func_node {
+            node.child_by_field_name("body")
+        } else {
+            None
+        };
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                if body_node.map_or(false, |b| b.id() == child.id()) {
+                    // 跳过函数体（statement_block 或 expression body），
+                    // 但扫描其中的嵌套函数定义
+                    push_nested_functions(&child, &mut stack);
+                } else {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+}
+
+/// 扫描 statement_block 内的嵌套函数定义，压入栈以便后续单独处理
+fn push_nested_functions<'a>(
+    body: &tree_sitter::Node<'a>,
+    stack: &mut Vec<tree_sitter::Node<'a>>,
+) {
+    let mut inner_stack = vec![*body];
+    while let Some(node) = inner_stack.pop() {
+        if matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        ) {
+            stack.push(node);
+            // 不再递归进入此函数内部（由主循环处理）
+            continue;
+        }
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                inner_stack.push(child);
+            }
+        }
+    }
+}
+
+/// 提取函数参数的类型标注
+fn extract_ts_param_annotations(
+    params: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_annotations: &mut Vec<TypeAnnotation>,
+) {
+    for i in 0..params.child_count() {
+        let Some(child) = params.child(i) else { continue };
+        // required_parameter 或 optional_parameter
+        if !matches!(child.kind(), "required_parameter" | "optional_parameter") {
+            continue;
+        }
+        let param_name = child
+            .child_by_field_name("pattern")
+            .map(|n| common::node_text(n, source))
+            .unwrap_or_default();
+        if param_name.is_empty() {
+            continue;
+        }
+        // 类型标注节点（type_annotation 包含 ":" 前缀，需要跳过）
+        if let Some(type_ann) = child.child_by_field_name("type") {
+            let type_text = {
+                let mut t = String::new();
+                for k in 0..type_ann.child_count() {
+                    if let Some(tn) = type_ann.child(k) {
+                        if tn.kind() != ":" {
+                            t = common::node_text(tn, source);
+                            break;
+                        }
+                    }
+                }
+                if t.is_empty() {
+                    common::node_text(type_ann, source)
+                        .trim_start_matches(':')
+                        .trim()
+                        .to_string()
+                } else {
+                    t
+                }
+            };
+            if !type_text.is_empty() {
+                type_annotations.push(TypeAnnotation {
+                    name: format!("param:{}", param_name),
+                    type_expr: type_text,
+                    line: child.start_position().row + 1,
+                    func_name: func_name.to_string(),
+                    param: param_name,
+                });
+            }
+        }
+    }
+}
+
+/// 从函数体中提取 typeof/Array.isArray 类型守卫
+fn extract_ts_type_guards(
+    body: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![body];
+    while let Some(node) = stack.pop() {
+        // 跳过嵌套函数定义，避免其 type guard 被错误归属到外层函数
+        if matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        ) {
+            continue;
+        }
+        if node.kind() == "binary_expression" {
+            // 匹配 typeof x === 'string' 或 typeof x === "string"
+            if let Some(guard) = parse_typeof_guard(node, source, func_name) {
+                type_guards.push(guard);
+                continue;
+            }
+        }
+        if node.kind() == "call_expression" {
+            // 匹配 Array.isArray(x)
+            if let Some(guard) = parse_array_is_array_guard(node, source, func_name) {
+                type_guards.push(guard);
+                continue;
+            }
+        }
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// 解析 typeof x === 'string' 形式的类型守卫
+fn parse_typeof_guard(
+    node: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+) -> Option<TypeGuard> {
+    let op = node.child_by_field_name("operator")?;
+    let op_text = common::node_text(op, source);
+    if op_text != "===" && op_text != "==" {
+        return None;
+    }
+    let left = node.child_by_field_name("left")?;
+    let right = node.child_by_field_name("right")?;
+
+    // tree-sitter-typescript 将 typeof x 解析为 unary_expression（operator="typeof"）
+    let is_typeof = |n: tree_sitter::Node| -> bool {
+        n.kind() == "typeof_expression"
+            || (n.kind() == "unary_expression"
+                && n.child_by_field_name("operator")
+                    .map(|o| common::node_text(o, source) == "typeof")
+                    .unwrap_or(false))
+    };
+
+    // typeof x === 'type'
+    let (typeof_node, type_literal) = if is_typeof(left) {
+        (left, right)
+    } else if is_typeof(right) {
+        (right, left)
+    } else {
+        return None;
+    };
+
+    // 提取 typeof 的操作数（变量名）：unary_expression 用 argument field
+    let var_node = typeof_node
+        .child_by_field_name("argument")
+        .or_else(|| typeof_node.child(1))?;
+    let var = common::node_text(var_node, source);
+
+    // 提取类型字符串
+    let type_text = common::node_text(type_literal, source);
+    let guarded_type = type_text
+        .trim_matches(|c: char| c == '\'' || c == '"')
+        .to_string();
+
+    if var.is_empty() || guarded_type.is_empty() {
+        return None;
+    }
+
+    Some(TypeGuard {
+        function: func_name.to_string(),
+        guarded_type,
+        line: node.start_position().row + 1,
+        var,
+    })
+}
+
+/// 解析 Array.isArray(x) 形式的类型守卫
+fn parse_array_is_array_guard(
+    node: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+) -> Option<TypeGuard> {
+    let func_node = node.child_by_field_name("function")?;
+    let func_text = common::node_text(func_node, source);
+    if func_text != "Array.isArray" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    // 提取第一个参数
+    for i in 0..args.child_count() {
+        if let Some(arg) = args.child(i) {
+            if arg.kind() == "identifier" {
+                let var = common::node_text(arg, source);
+                return Some(TypeGuard {
+                    function: func_name.to_string(),
+                    guarded_type: "Array".to_string(),
+                    line: node.start_position().row + 1,
+                    var,
+                });
+            }
+        }
+    }
+    None
 }
 
 fn detect_relation_hints(
@@ -902,6 +1299,71 @@ export class AppService {
                 && h.call_type_hint == "framework_injection"
                 && h.via.contains("@Injectable")
         }));
+    }
+
+    // === TypeAnnotation / TypeGuard 提取测试 ===
+
+    #[test]
+    fn extract_ts_typed_param_annotations() {
+        let source = r#"
+function foo(x: string, y: number) {
+  return x;
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_annotations.len(), 2);
+        assert_eq!(record.type_annotations[0].func_name, "foo");
+        assert_eq!(record.type_annotations[0].param, "x");
+        assert_eq!(record.type_annotations[0].type_expr, "string");
+        assert_eq!(record.type_annotations[1].param, "y");
+        assert_eq!(record.type_annotations[1].type_expr, "number");
+    }
+
+    #[test]
+    fn extract_ts_typeof_type_guard() {
+        let source = r#"
+function foo(x: string) {
+  if (typeof x === 'string') {
+    return x;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_guards.len(), 1);
+        assert_eq!(record.type_guards[0].function, "foo");
+        assert_eq!(record.type_guards[0].var, "x");
+        assert_eq!(record.type_guards[0].guarded_type, "string");
+    }
+
+    #[test]
+    fn extract_ts_array_is_array_guard() {
+        let source = r#"
+function bar(items: string[]) {
+  if (Array.isArray(items)) {
+    return items.length;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        assert_eq!(record.type_guards.len(), 1);
+        assert_eq!(record.type_guards[0].var, "items");
+        assert_eq!(record.type_guards[0].guarded_type, "Array");
+    }
+
+    #[test]
+    fn no_type_annotation_no_guard() {
+        let source = r#"
+function foo(x) {
+  if (typeof x === 'string') {
+    return x;
+  }
+}
+"#;
+        let record = extract(source, "src/sample.ts", "typescript");
+        // 无类型标注
+        assert!(record.type_annotations.is_empty());
+        // 有 type guard（typeof 检查确实存在）
+        assert_eq!(record.type_guards.len(), 1);
     }
 
     #[test]

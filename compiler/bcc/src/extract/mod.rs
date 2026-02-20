@@ -47,6 +47,12 @@ pub struct TypeAnnotation {
     pub name: String,
     pub type_expr: String,
     pub line: usize,
+    /// 所属函数名（用于同函数内交叉匹配）
+    #[serde(default)]
+    pub func_name: String,
+    /// 参数名（用于与 TypeGuard.var 匹配）
+    #[serde(default)]
+    pub param: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +60,9 @@ pub struct TypeGuard {
     pub function: String,
     pub guarded_type: String,
     pub line: usize,
+    /// 被检查的变量名（用于与 TypeAnnotation.param 匹配）
+    #[serde(default)]
+    pub var: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +70,9 @@ pub struct SchemaField {
     pub name: String,
     pub field_type: String,
     pub line: usize,
+    /// 是否必填（用于检测 required 字段的不必要默认值）
+    #[serde(default)]
+    pub required: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,6 +93,9 @@ pub struct ImportRecord {
 pub struct CallRecord {
     pub callee: String,
     pub line: usize,
+    /// 调用参数（用于 detect_unnecessary_default 等规则匹配）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

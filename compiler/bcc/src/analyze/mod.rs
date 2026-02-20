@@ -16,6 +16,152 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+// === 类型兼容映射表 ===
+
+/// 检查 annotation 类型和 guard 类型是否兼容（同一类型的不同表示）
+fn type_compatible(ann_type: &str, guard_type: &str, lang: &str) -> bool {
+    let ann = ann_type.trim();
+    let guard = guard_type.trim();
+
+    // 完全相同
+    if ann == guard {
+        return true;
+    }
+
+    match lang {
+        "elixir" => {
+            matches!(
+                (ann, guard),
+                ("map()", "map()") | ("integer()", "integer()") | ("binary()", "binary()")
+                | ("atom()", "atom()") | ("list()", "list()") | ("float()", "float()")
+                | ("number()", "number()") | ("boolean()", "boolean()")
+                | ("tuple()", "tuple()") | ("pid()", "pid()")
+                | ("reference()", "reference()") | ("function()", "function()")
+                | ("bitstring()", "bitstring()")
+            )
+        }
+        "typescript" | "tsx" => {
+            matches!(
+                (ann, guard),
+                ("string", "string") | ("number", "number") | ("boolean", "boolean")
+                | ("bigint", "bigint") | ("symbol", "symbol") | ("object", "object")
+                | ("undefined", "undefined")
+            ) || {
+                if guard == "Array" {
+                    ann.ends_with("[]") || ann.starts_with("Array")
+                } else {
+                    false
+                }
+            }
+        }
+        "rust" => {
+            if guard == "Some"
+                && (ann.starts_with("Option") || ann.starts_with("&Option"))
+            {
+                return true;
+            }
+            if (guard == "Ok" || guard == "Err")
+                && (ann.starts_with("Result") || ann.starts_with("&Result"))
+            {
+                return true;
+            }
+            matches!(
+                (ann, guard),
+                ("&str", "str") | ("String", "String") | ("Vec", "Vec")
+            )
+        }
+        _ => false,
+    }
+}
+
+/// 检测冗余类型检查：同函数内 TypeAnnotation × TypeGuard 交叉匹配
+fn detect_redundant_type_check(record: &FileRecord) -> Vec<SmellRecord> {
+    let mut smells = Vec::new();
+    let lang = record.language.as_str();
+
+    for guard in &record.type_guards {
+        for ann in &record.type_annotations {
+            if ann.func_name == guard.function
+                && ann.param == guard.var
+                && type_compatible(&ann.type_expr, &guard.guarded_type, lang)
+            {
+                let (severity, confidence, extra_msg) = match lang {
+                    "elixir" => (
+                        "medium",
+                        0.7,
+                        " (guard may serve as pattern dispatch)",
+                    ),
+                    _ => ("high", 0.9, ""),
+                };
+                smells.push(SmellRecord {
+                    category: "defensive".to_string(),
+                    rule: "redundant_type_check".to_string(),
+                    severity: severity.to_string(),
+                    message: format!(
+                        "Parameter '{}' in '{}' is annotated as '{}' but also checked with '{}'{}",
+                        guard.var, guard.function, ann.type_expr, guard.guarded_type, extra_msg
+                    ),
+                    file: record.file_path.clone(),
+                    line: guard.line,
+                    source: "bcc".to_string(),
+                    confidence,
+                });
+            }
+        }
+    }
+    smells
+}
+
+/// 检测不必要的默认值：required SchemaField 使用 .get(key, default)
+fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
+    let mut smells = Vec::new();
+
+    let required_fields: Vec<&str> = record
+        .schema_fields
+        .iter()
+        .filter(|f| f.required)
+        .map(|f| f.name.as_str())
+        .collect();
+
+    if required_fields.is_empty() {
+        return smells;
+    }
+
+    let mut seen: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
+
+    for call in &record.calls {
+        if !(call.callee.ends_with(".get") || call.callee == "get") {
+            continue;
+        }
+        if call.args.len() < 2 {
+            continue;
+        }
+        for field_name in &required_fields {
+            if call.args[0] == *field_name {
+                let key = (call.line, field_name.to_string());
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
+                smells.push(SmellRecord {
+                    category: "defensive".to_string(),
+                    rule: "unnecessary_default".to_string(),
+                    severity: "medium".to_string(),
+                    message: format!(
+                        "Field '{}' is required but accessed with default value",
+                        field_name
+                    ),
+                    file: record.file_path.clone(),
+                    line: call.line,
+                    source: "bcc".to_string(),
+                    confidence: 0.8,
+                });
+            }
+        }
+    }
+    smells
+}
+
 /// 单个文件的气味检测报告
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SmellReport {
@@ -132,7 +278,7 @@ fn build_ts_detectors() -> Vec<Box<dyn SmellDetector>> {
 ///
 /// - ast_file: extract 输出的 JSON 文件路径（Vec<FileRecord> 或单个 FileRecord）
 /// - output: SmellReport JSON 输出路径
-/// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling,noise,duplication）
+/// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling,noise,duplication,defensive）
 pub fn run(
     ast_file: &str,
     output: &str,
@@ -175,6 +321,11 @@ pub fn run(
         })
         .map(|d| d.as_ref())
         .collect();
+
+    // defensive 检测器是否启用
+    let defensive_enabled = rule_filter
+        .as_ref()
+        .map_or(true, |f| f.iter().any(|c| c == "defensive"));
 
     // 推断 AST JSON 所在目录，用于解析相对路径
     let ast_dir = Path::new(ast_file)
@@ -219,7 +370,7 @@ pub fn run(
         })
         .collect();
 
-    // 单文件检测（同时运行两类检测器）
+    // 单文件检测（同时运行三类检测器）
     let mut reports: Vec<SmellReport> = records
         .iter()
         .zip(parsed_files.iter())
@@ -227,22 +378,47 @@ pub fn run(
             let file_path = &record.file_path;
             let lang = &record.language;
 
+            // defensive 检测器先跑（基于 FileRecord 数据，不需要源码）
+            let mut smells = Vec::new();
+            if defensive_enabled {
+                smells.extend(detect_redundant_type_check(record));
+                smells.extend(detect_unnecessary_default(record));
+            }
+
             let (source_code, tree) = match parsed {
                 Some((src, t)) => (src.as_str(), t),
                 None => {
-                    return SmellReport {
-                        file: file_path.clone(),
-                        smells: vec![],
-                        summary: SmellSummary {
-                            total_smells: 0,
-                            by_severity: HashMap::new(),
-                            by_category: HashMap::new(),
-                        },
-                    };
+                    if smells.is_empty() {
+                        return SmellReport {
+                            file: file_path.clone(),
+                            smells: vec![],
+                            summary: SmellSummary {
+                                total_smells: 0,
+                                by_severity: HashMap::new(),
+                                by_category: HashMap::new(),
+                            },
+                        };
+                    } else {
+                        // defensive smells 存在但没有源码，直接用 defensive 结果
+                        let total_smells = smells.len();
+                        let mut by_severity: HashMap<String, usize> = HashMap::new();
+                        let mut by_category: HashMap<String, usize> = HashMap::new();
+                        for s in &smells {
+                            *by_severity.entry(s.severity.clone()).or_insert(0) += 1;
+                            *by_category.entry(s.category.clone()).or_insert(0) += 1;
+                        }
+                        return SmellReport {
+                            file: file_path.clone(),
+                            smells,
+                            summary: SmellSummary {
+                                total_smells,
+                                by_severity,
+                                by_category,
+                            },
+                        };
+                    }
                 }
             };
-
-            let mut smells = Vec::new();
 
             // 正则/文本匹配检测器
             for detector in &regex_detectors {
@@ -668,5 +844,296 @@ mod tests {
             "Error should mention read failure: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn detect_redundant_type_check_elixir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("lib")).unwrap();
+        fs::write(dir.path().join("lib/foo.ex"), "defmodule Foo do\nend\n").unwrap();
+        let ast_path = dir.path().join("elixir_guard.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "elixir",
+            "file_path": "lib/foo.ex",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 10,
+            "declarations": 1,
+            "type_annotations": [
+                { "name": "@spec process", "type_expr": "map()", "line": 2, "func_name": "process", "param": "data" }
+            ],
+            "type_guards": [
+                { "function": "process", "guarded_type": "map()", "line": 3, "var": "data" }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].smells.len(), 1);
+        let smell = &result[0].smells[0];
+        assert_eq!(smell.rule, "redundant_type_check");
+        assert_eq!(smell.severity, "medium");
+        assert!((smell.confidence - 0.7).abs() < f64::EPSILON);
+        assert!(smell.message.contains("pattern dispatch"));
+    }
+
+    #[test]
+    fn detect_redundant_type_check_typescript() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/foo.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("ts_guard.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/foo.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 10,
+            "declarations": 1,
+            "type_annotations": [
+                { "name": "param:x", "type_expr": "string", "line": 1, "func_name": "foo", "param": "x" }
+            ],
+            "type_guards": [
+                { "function": "foo", "guarded_type": "string", "line": 2, "var": "x" }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result[0].smells.len(), 1);
+        let smell = &result[0].smells[0];
+        assert_eq!(smell.rule, "redundant_type_check");
+        assert_eq!(smell.severity, "high");
+        assert!((smell.confidence - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn no_annotation_no_false_positive() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/foo.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("no_ann.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/foo.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 10,
+            "declarations": 1,
+            "type_annotations": [],
+            "type_guards": [
+                { "function": "foo", "guarded_type": "string", "line": 2, "var": "x" }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn different_type_no_false_positive() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/foo.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("diff_type.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/foo.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 10,
+            "declarations": 1,
+            "type_annotations": [
+                { "name": "param:x", "type_expr": "number", "line": 1, "func_name": "foo", "param": "x" }
+            ],
+            "type_guards": [
+                { "function": "foo", "guarded_type": "string", "line": 2, "var": "x" }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn rule_filter_works() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/foo.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("filter.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/foo.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 10,
+            "declarations": 1,
+            "type_annotations": [
+                { "name": "param:x", "type_expr": "string", "line": 1, "func_name": "foo", "param": "x" }
+            ],
+            "type_guards": [
+                { "function": "foo", "guarded_type": "string", "line": 2, "var": "x" }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        // 过滤只保留 security → defensive 的结果不应出现
+        run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            Some("security".to_string()),
+        )
+        .unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn detect_unnecessary_default_required_field() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/user.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("required.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/user.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [
+                { "callee": "data.get", "line": 10, "args": ["email", ""] }
+            ],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 20,
+            "declarations": 1,
+            "schema_fields": [
+                { "name": "email", "field_type": "string", "line": 3, "required": true }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result[0].smells.len(), 1);
+        let smell = &result[0].smells[0];
+        assert_eq!(smell.rule, "unnecessary_default");
+        assert_eq!(smell.severity, "medium");
+        assert!((smell.confidence - 0.8).abs() < f64::EPSILON);
+        assert!(smell.message.contains("email"));
+    }
+
+    #[test]
+    fn detect_unnecessary_default_optional_field_no_report() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/user.ts"), "// dummy\n").unwrap();
+        let ast_path = dir.path().join("optional.json");
+        let out_path = dir.path().join("smells.json");
+
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/user.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [
+                { "callee": "data.get", "line": 10, "args": ["nickname", ""] }
+            ],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 20,
+            "declarations": 1,
+            "schema_fields": [
+                { "name": "nickname", "field_type": "string", "line": 5, "required": false }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn detect_unnecessary_default_e2e_typescript_no_duplicate() {
+        let ts_src = r#"
+interface UserSchema {
+    email: string;
+    nickname?: string;
+}
+
+function process(data: Map<string, string>) {
+    const email = data.get("email", "");
+    const nick = data.get("nickname", "anon");
+}
+"#;
+        let record = crate::extract::typescript::extract(ts_src, "test.ts", "typescript");
+
+        assert!(
+            record.schema_fields.iter().any(|f| f.name == "email" && f.required),
+            "should extract required field 'email'"
+        );
+        assert!(
+            record.schema_fields.iter().any(|f| f.name == "nickname" && !f.required),
+            "should extract optional field 'nickname'"
+        );
+
+        let get_calls: Vec<_> = record.calls.iter().filter(|c| c.callee.ends_with(".get") || c.callee == "get").collect();
+        assert!(!get_calls.is_empty(), "should have .get calls extracted");
+
+        let smells = detect_unnecessary_default(&record);
+
+        let email_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("email")).collect();
+        assert_eq!(email_smells.len(), 1, "required field 'email' should produce exactly 1 smell, got {}", email_smells.len());
+
+        let nick_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("nickname")).collect();
+        assert_eq!(nick_smells.len(), 0, "optional field 'nickname' should produce 0 smells");
     }
 }
