@@ -178,7 +178,7 @@ func TestParseReviewResponse_RejectsNonJSON(t *testing.T) {
 func TestParseReviewResponse_Empty(t *testing.T) {
 	_, err := ParseReviewResponse("")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "空响应")
+	assert.Contains(t, err.Error(), "审查响应为空")
 }
 
 func TestParseReviewResponse_JSONBuriedInMarkdown(t *testing.T) {
