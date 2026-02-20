@@ -42,4 +42,5 @@ label_guard:
   allowlist:
     - "github-actions[bot]"
     - "niuma-bot"
+    - "biantaishabi2"
   mode: "dry-run"
