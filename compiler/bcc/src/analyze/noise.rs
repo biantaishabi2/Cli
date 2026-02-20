@@ -30,21 +30,42 @@ impl SmellDetector for CommentDensityDetector {
         let mut comment_nodes = Vec::new();
         collect_comments(tree.root_node(), &mut comment_nodes);
 
-        // 按函数粒度分析注释密度
+        // 按 enclosing function 分组分析注释密度（嵌套函数注释只归属最内层函数）
         let functions = collect_function_ranges(tree.root_node(), &record.language, source);
-        for (func_name, start_line, end_line) in &functions {
+        for (func_idx, (func_name, start_line, end_line)) in functions.iter().enumerate() {
             let func_lines = end_line.saturating_sub(*start_line) + 1;
             if func_lines < 3 {
                 continue;
             }
 
+            // 收集当前函数内的嵌套函数范围，用于排除
+            let nested_ranges: Vec<(usize, usize)> = functions
+                .iter()
+                .enumerate()
+                .filter(|(i, (_, ns, ne))| {
+                    *i != func_idx && *ns > *start_line && *ne <= *end_line
+                })
+                .map(|(_, (_, ns, ne))| (*ns, *ne))
+                .collect();
+
+            // 判断行是否在某个嵌套函数范围内
+            let in_nested = |line: usize| -> bool {
+                nested_ranges.iter().any(|(ns, ne)| line >= *ns && line <= *ne)
+            };
+
             let func_comment_lines: usize = comment_nodes
                 .iter()
-                .filter(|(line, _)| *line >= *start_line && *line <= *end_line)
+                .filter(|(line, _)| *line >= *start_line && *line <= *end_line && !in_nested(*line))
                 .map(|(start, end)| end - start + 1)
                 .sum();
 
-            let code_lines = func_lines.saturating_sub(func_comment_lines);
+            // 计算非嵌套区域的总行数
+            let nested_total_lines: usize = nested_ranges
+                .iter()
+                .map(|(ns, ne)| ne - ns + 1)
+                .sum();
+            let own_lines = func_lines.saturating_sub(nested_total_lines);
+            let code_lines = own_lines.saturating_sub(func_comment_lines);
             if code_lines == 0 {
                 continue;
             }
@@ -258,10 +279,8 @@ fn detect_unused_imports(record: &FileRecord, smells: &mut Vec<SmellRecord>) {
             .unwrap_or(specifier)
             .trim();
 
-        // 交叉比对 imports specifier 与 calls + local_call_targets
-        let used = call_names.contains(specifier)
-            || call_names.contains(short_name)
-            || call_names.iter().any(|c| c.contains(specifier) || c.contains(short_name));
+        // 交叉比对 imports specifier 与 calls + local_call_targets（精确匹配）
+        let used = call_names.contains(specifier) || call_names.contains(short_name);
 
         if !used {
             smells.push(SmellRecord {
