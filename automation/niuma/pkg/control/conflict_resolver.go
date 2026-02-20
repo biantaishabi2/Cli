@@ -109,6 +109,7 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 	}
 
 	// 白名单过滤：仅保留 --profile 指定的语言 group
+	var hasFilteredFiles bool
 	if mode := c.prConflictProfileMode(); mode == "whitelist" {
 		whitelist := c.prConflictProfileWhitelist()
 		filteredOut := FilterConflictProfileGroupsExcluded(profileGroups, whitelist)
@@ -116,8 +117,9 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		if len(profileGroups) == 0 {
 			return c.escalateConflictToHuman(ctx, task, reviewStatus, 0, fmt.Errorf("白名单过滤后无可用 profile group，升级人工"))
 		}
-		// 被过滤的文件升级 human
+		// 被过滤的文件需要升级 human
 		if len(filteredOut) > 0 {
+			hasFilteredFiles = true
 			var filteredFiles []string
 			var filteredProfiles []string
 			for _, g := range filteredOut {
@@ -176,6 +178,10 @@ func (c *Controller) resolvePRConflictWithLayers(ctx context.Context, task Task,
 		// 持久化 group results 到 metadata
 		if err := c.persistGroupResultsMetadata(task, result); err != nil {
 			return false, err
+		}
+		// 白名单过滤掉的文件需要升级 human 处理
+		if hasFilteredFiles {
+			return c.escalateConflictToHuman(ctx, task, reviewStatus, attempt, fmt.Errorf("白名单过滤文件需人工处理，已解决的 group 文件已 stage"))
 		}
 		return true, nil
 	}

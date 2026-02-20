@@ -282,7 +282,7 @@ func TestControlRunFlags_PRConflictLayeredOptionsExist(t *testing.T) {
 func TestControlRunFlags_ProfileExists(t *testing.T) {
 	f := controlRunCmd.Flags().Lookup("profile")
 	require.NotNil(t, f)
-	assert.Equal(t, "", f.DefValue)
+	assert.Equal(t, "auto", f.DefValue)
 }
 
 func TestResolveProfileFlag(t *testing.T) {
