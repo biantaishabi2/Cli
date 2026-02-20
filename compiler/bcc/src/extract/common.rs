@@ -70,6 +70,7 @@ mod tests {
             calls.push(CallRecord {
                 callee: format!("Mod{}.run", depth % 64),
                 line: depth + 1,
+                args: vec![],
             });
         }
 

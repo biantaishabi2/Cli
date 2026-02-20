@@ -44,6 +44,10 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     // module_doc: 用 class 名标识
     let module_doc = class_name.clone();
 
+    // 提取 class 属性 → SchemaField
+    let mut schema_fields = Vec::new();
+    extract_php_class_properties(root, source, &mut schema_fields);
+
     FileRecord {
         language: "php".into(),
         file_path: path.to_string(),
@@ -58,7 +62,61 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         declarations,
         type_annotations: vec![],
         type_guards: vec![],
-        schema_fields: vec![],
+        schema_fields,
+        source_code: Some(content.to_string()),
+    }
+}
+
+/// 从 PHP class 中提取属性 → SchemaField
+fn extract_php_class_properties(
+    root: tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "property_declaration" {
+            // property_declaration 包含 visibility + type? + property_element
+            let mut prop_type = String::new();
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    // 类型标注（如 ?string, int 等）
+                    if matches!(child.kind(), "union_type" | "named_type" | "primitive_type" | "nullable_type" | "optional_type") {
+                        prop_type = common::node_text(child, source);
+                    }
+                    if child.kind() == "property_element" {
+                        // 提取属性名
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            let name = common::node_text(name_node, source)
+                                .trim_start_matches('$')
+                                .to_string();
+                            // 每个 property_element 独立检查是否有默认值
+                            // tree-sitter-php 可能用 default_value field 或 "=" 后跟值
+                            // tree-sitter-php 中 property_element 的默认值可能通过 value/default_value field 或 "=" 子节点表示
+                            let has_default = child.child_by_field_name("value").is_some()
+                                || child.child_by_field_name("default_value").is_some()
+                                || (0..child.child_count()).any(|k| {
+                                    child.child(k).map_or(false, |c| c.kind() == "=")
+                                });
+                            let is_nullable = prop_type.starts_with('?');
+                            if !name.is_empty() {
+                                schema_fields.push(SchemaField {
+                                    name,
+                                    field_type: prop_type.clone(),
+                                    line: child.start_position().row + 1,
+                                    required: !has_default && !is_nullable,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
     }
 }
 
@@ -199,7 +257,8 @@ fn extract_php_recursive(
                         && callee != "static"
                     {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line });
+                        let args = extract_php_call_args(node, source);
+                        calls.push(CallRecord { callee, line, args });
                     }
                 }
                 // 继续递归
@@ -238,7 +297,8 @@ fn extract_php_recursive(
                     let callee = common::node_text(class_node, source);
                     if callee.chars().next().map_or(false, |c| c.is_uppercase()) {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line });
+                        let args = extract_php_call_args(node, source);
+                        calls.push(CallRecord { callee, line, args });
                     }
                 }
                 if cursor.goto_first_child() {
@@ -276,6 +336,28 @@ fn extract_php_recursive(
             break;
         }
     }
+}
+
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+fn extract_php_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
 }
 
 /// 获取方法的可见性修饰符
@@ -463,5 +545,23 @@ class X extends Base {
 
         let calls = testing::call_names(&record);
         testing::assert_contains(&calls, "E", "calls");
+    }
+
+    #[test]
+    fn multi_property_element_has_default_independent() {
+        // 同一 property_declaration 中多个 property_element，
+        // 每个的 has_default 应独立判定
+        let source = r#"<?php
+class Config {
+    public string $a = 'default', $b;
+}
+"#;
+        let record = extract(source, "app/Config.php");
+        let a = record.schema_fields.iter().find(|f| f.name == "a").expect("should find $a");
+        let b = record.schema_fields.iter().find(|f| f.name == "b").expect("should find $b");
+        // $a 有默认值 → required=false
+        assert!(!a.required, "$a has default, should not be required");
+        // $b 无默认值 → required=true
+        assert!(b.required, "$b has no default, should be required");
     }
 }

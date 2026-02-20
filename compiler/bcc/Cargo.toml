@@ -29,6 +29,9 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 md5 = "0.7"
 thiserror = "1"
+tree-sitter-python = "0.23"
+blake3 = "1"
+strsim = "0.11"
 
 [features]
 default = []

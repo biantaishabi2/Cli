@@ -16,6 +16,9 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     let mut declarations: usize = 0;
     let mut side_effects = common::empty_side_effects();
     let mut pending_spec: Option<String> = None;
+    let mut type_annotations = Vec::new();
+    let mut type_guards = Vec::new();
+    let mut schema_fields = Vec::new();
 
     let mut cursor = root.walk();
     extract_recursive(
@@ -28,6 +31,9 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         &mut declarations,
         &mut side_effects,
         &mut pending_spec,
+        &mut type_annotations,
+        &mut type_guards,
+        &mut schema_fields,
     );
 
     detect_side_effects(content, &mut side_effects);
@@ -47,9 +53,10 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
-        type_annotations: vec![],
-        type_guards: vec![],
-        schema_fields: vec![],
+        type_annotations,
+        type_guards,
+        schema_fields,
+        source_code: Some(content.to_string()),
     }
 }
 
@@ -79,6 +86,9 @@ fn extract_recursive(
     declarations: &mut usize,
     side_effects: &mut SideEffects,
     pending_spec: &mut Option<String>,
+    type_annotations: &mut Vec<TypeAnnotation>,
+    type_guards: &mut Vec<TypeGuard>,
+    schema_fields: &mut Vec<SchemaField>,
 ) {
     loop {
         let node = cursor.node();
@@ -108,15 +118,37 @@ fn extract_recursive(
                     match target_text.as_str() {
                         "def" => {
                             *declarations += 1;
+                            let spec_text = pending_spec.take();
                             if let Some((name, line)) = extract_def_name(&node, source) {
+                                // 从 @spec 提取参数类型标注 → TypeAnnotation
+                                if let Some(ref spec) = spec_text {
+                                    let params = parse_spec_params(spec);
+                                    let param_names = extract_def_param_names(&node, source);
+                                    for (i, type_expr) in params.iter().enumerate() {
+                                        let param = param_names
+                                            .get(i)
+                                            .cloned()
+                                            .unwrap_or_else(|| format!("arg{}", i));
+                                        type_annotations.push(TypeAnnotation {
+                                            name: format!("@spec {}", name),
+                                            type_expr: type_expr.clone(),
+                                            line,
+                                            func_name: name.clone(),
+                                            param,
+                                        });
+                                    }
+                                }
+                                // 从 when 子句提取 guard → TypeGuard
+                                let guards = extract_when_guards(&node, source, &name);
+                                type_guards.extend(guards);
+
                                 exports.push(ExportRecord {
                                     name,
                                     kind: "function".into(),
-                                    signature: pending_spec.take(),
+                                    signature: spec_text,
                                     line,
                                 });
                             }
-                            *pending_spec = None;
                         }
                         "defp" => {
                             *declarations += 1;
@@ -129,6 +161,10 @@ fn extract_recursive(
                         }
                         "defmodule" => {
                             *declarations += 1;
+                        }
+                        // Ecto schema / embedded_schema：提取 field 定义 → SchemaField
+                        "schema" | "embedded_schema" => {
+                            extract_ecto_schema_fields(&node, source, schema_fields);
                         }
                         "alias" => {
                             if let Some(args) = find_child_by_kind(&node, "arguments") {
@@ -182,9 +218,15 @@ fn extract_recursive(
                         if !module.is_empty()
                             && module.chars().next().map_or(false, |c| c.is_uppercase())
                         {
+                            // dot 节点的 parent 是 call 节点，从 call 节点提取参数
+                            let args = node
+                                .parent()
+                                .map(|p| extract_elixir_call_args(p, source))
+                                .unwrap_or_default();
                             calls.push(CallRecord {
                                 callee: module,
                                 line: node.start_position().row + 1,
+                                args,
                             });
                         }
                     }
@@ -206,6 +248,9 @@ fn extract_recursive(
                 declarations,
                 side_effects,
                 pending_spec,
+                type_annotations,
+                type_guards,
+                schema_fields,
             );
             cursor.goto_parent();
         }
@@ -214,6 +259,29 @@ fn extract_recursive(
             break;
         }
     }
+}
+
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+/// Elixir 的 dot 节点位于 call 节点内部，arguments 是 call 的子节点。
+fn extract_elixir_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = find_child_by_kind(&call_node, "arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
 }
 
 /// 判断 dot 是否位于 alias/import/use/require 声明语境中。
@@ -300,7 +368,8 @@ fn extract_def_name(call_node: &tree_sitter::Node, source: &[u8]) -> Option<(Str
             }
             match child.kind() {
                 "arguments" => {
-                    // arguments 内含函数签名 call 节点
+                    // arguments 内含函数签名 call 节点，
+                    // 或 binary_operator[when]（def foo(x) when is_map(x)）
                     for j in 0..child.child_count() {
                         if let Some(sub) = child.child(j) {
                             match sub.kind() {
@@ -310,6 +379,19 @@ fn extract_def_name(call_node: &tree_sitter::Node, source: &[u8]) -> Option<(Str
                                             common::node_text(t, source),
                                             sub.start_position().row + 1,
                                         ));
+                                    }
+                                }
+                                "binary_operator" => {
+                                    // when 子句：左侧是函数签名 call
+                                    if let Some(left) = sub.child_by_field_name("left") {
+                                        if left.kind() == "call" {
+                                            if let Some(t) = left.child_by_field_name("target") {
+                                                return Some((
+                                                    common::node_text(t, source),
+                                                    left.start_position().row + 1,
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                                 "identifier" => {
@@ -380,6 +462,292 @@ fn extract_string_content(node: tree_sitter::Node, source: &[u8]) -> String {
         text[1..text.len() - 1].to_string()
     } else {
         text.to_string()
+    }
+}
+
+// === @spec 参数类型解析 + when guard 提取 ===
+
+/// 从 @spec 文本中提取参数类型列表
+/// 例如 `foo(map(), integer()) :: term()` → ["map()", "integer()"]
+/// 例如 `bar(binary()) :: atom()` → ["binary()"]
+fn parse_spec_params(spec_text: &str) -> Vec<String> {
+    // 找到第一个 ( 和对应的 )
+    let Some(paren_start) = spec_text.find('(') else {
+        return vec![];
+    };
+    let mut depth = 0;
+    let mut paren_end = None;
+    for (i, ch) in spec_text[paren_start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    paren_end = Some(paren_start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(paren_end) = paren_end else {
+        return vec![];
+    };
+    let params_text = &spec_text[paren_start + 1..paren_end];
+    if params_text.trim().is_empty() {
+        return vec![];
+    }
+    // 按顶层逗号分割（跳过括号内的逗号）
+    let mut params = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for ch in params_text.chars() {
+        match ch {
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    params.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        params.push(trimmed);
+    }
+    params
+}
+
+/// 从 def 节点提取参数名列表
+/// 例如 `def foo(data, count)` → ["data", "count"]
+fn extract_def_param_names(call_node: &tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    // 找 def 的 arguments 子节点
+    let Some(args) = find_child_by_kind(call_node, "arguments") else {
+        return names;
+    };
+    // arguments 内有一个 call 节点（函数签名）
+    for i in 0..args.child_count() {
+        let Some(child) = args.child(i) else { continue };
+        match child.kind() {
+            "call" => {
+                // call 的 arguments 包含函数参数
+                if let Some(fn_args) = find_child_by_kind(&child, "arguments") {
+                    collect_param_names(fn_args, source, &mut names);
+                }
+            }
+            "binary_operator" => {
+                // def foo(data) when is_map(data) — binary_operator with 'when'
+                if let Some(left) = child.child_by_field_name("left") {
+                    if left.kind() == "call" {
+                        if let Some(fn_args) = find_child_by_kind(&left, "arguments") {
+                            collect_param_names(fn_args, source, &mut names);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// 从参数列表节点中收集参数名
+fn collect_param_names(args_node: tree_sitter::Node, source: &[u8], names: &mut Vec<String>) {
+    for i in 0..args_node.child_count() {
+        let Some(child) = args_node.child(i) else { continue };
+        let kind = child.kind();
+        if kind == "identifier" {
+            let text = common::node_text(child, source);
+            if !text.starts_with('_') {
+                names.push(text);
+            } else {
+                // _var 形式，保留变量名但去掉前缀下划线
+                names.push(text.trim_start_matches('_').to_string());
+            }
+        } else if kind == "unary_operator" {
+            // 匹配模式如 %{} = data 或 pin 操作
+            // 尝试提取内部标识符
+            let text = common::node_text(child, source);
+            // 简单情况：取最后的标识符
+            if let Some(last) = text.split_whitespace().last() {
+                let clean = last.trim_start_matches('_');
+                if !clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    names.push(clean.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// 从 Ecto schema/embedded_schema 的 do 块中提取 field 定义
+fn extract_ecto_schema_fields(
+    schema_call: &tree_sitter::Node,
+    source: &[u8],
+    schema_fields: &mut Vec<SchemaField>,
+) {
+    // 查找 do_block 子节点
+    let mut do_block = None;
+    for i in 0..schema_call.child_count() {
+        if let Some(child) = schema_call.child(i) {
+            if child.kind() == "do_block" {
+                do_block = Some(child);
+                break;
+            }
+        }
+    }
+    let Some(block) = do_block else { return };
+
+    // 遍历 do_block 内的节点，查找 field 调用
+    let mut stack = vec![block];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call" {
+            if let Some(target) = node.child_by_field_name("target") {
+                let target_text = common::node_text(target, source);
+                if target_text == "field" {
+                    if let Some(args) = find_child_by_kind(&node, "arguments") {
+                        let mut field_name = String::new();
+                        let mut field_type = String::new();
+                        let mut has_default = false;
+                        let mut arg_idx = 0;
+                        for j in 0..args.child_count() {
+                            if let Some(arg) = args.child(j) {
+                                // 跳过分隔符
+                                if arg.kind() == "," { continue; }
+                                let text = common::node_text(arg, source);
+                                if arg_idx == 0 {
+                                    // 第一个参数：字段名（atom）
+                                    field_name = text.trim_start_matches(':').to_string();
+                                } else if arg_idx == 1 {
+                                    // 第二个参数：类型
+                                    field_type = text.trim_start_matches(':').to_string();
+                                } else {
+                                    // 后续参数：keyword args（检查 default）
+                                    if text.contains("default") {
+                                        has_default = true;
+                                    }
+                                }
+                                arg_idx += 1;
+                            }
+                        }
+                        if !field_name.is_empty() {
+                            schema_fields.push(SchemaField {
+                                name: field_name,
+                                field_type,
+                                line: node.start_position().row + 1,
+                                // Ecto field 默认 required，有 default 值则视为 optional
+                                required: !has_default,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// Elixir guard 函数名 → 类型映射
+fn guard_to_type(guard_func: &str) -> Option<&'static str> {
+    match guard_func {
+        "is_map" => Some("map()"),
+        "is_integer" => Some("integer()"),
+        "is_binary" => Some("binary()"),
+        "is_atom" => Some("atom()"),
+        "is_list" => Some("list()"),
+        "is_float" => Some("float()"),
+        "is_number" => Some("number()"),
+        "is_boolean" => Some("boolean()"),
+        "is_tuple" => Some("tuple()"),
+        "is_pid" => Some("pid()"),
+        "is_reference" => Some("reference()"),
+        "is_function" => Some("function()"),
+        "is_bitstring" => Some("bitstring()"),
+        "is_nil" => Some("nil"),
+        _ => None,
+    }
+}
+
+/// 从 def 节点提取 when guard 信息
+/// 例如 `def foo(data) when is_map(data)` → TypeGuard { function: "foo", var: "data", guarded_type: "map()", line }
+fn extract_when_guards(
+    call_node: &tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+) -> Vec<TypeGuard> {
+    let mut guards = Vec::new();
+    let Some(args) = find_child_by_kind(call_node, "arguments") else {
+        return guards;
+    };
+    // 查找 binary_operator[operator=when]
+    for i in 0..args.child_count() {
+        let Some(child) = args.child(i) else { continue };
+        if child.kind() == "binary_operator" {
+            if let Some(op) = child.child_by_field_name("operator") {
+                if common::node_text(op, source) == "when" {
+                    if let Some(right) = child.child_by_field_name("right") {
+                        collect_guard_calls(right, source, func_name, &mut guards);
+                    }
+                }
+            }
+        }
+    }
+    guards
+}
+
+/// 递归收集 guard 表达式中的 is_* 调用
+fn collect_guard_calls(
+    node: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    guards: &mut Vec<TypeGuard>,
+) {
+    if node.kind() == "call" {
+        if let Some(target) = node.child_by_field_name("target") {
+            let target_text = common::node_text(target, source);
+            if let Some(guarded_type) = guard_to_type(&target_text) {
+                // 提取 guard 调用的第一个参数（变量名）
+                if let Some(args) = find_child_by_kind(&node, "arguments") {
+                    for j in 0..args.child_count() {
+                        if let Some(arg) = args.child(j) {
+                            if arg.kind() == "identifier" {
+                                let var = common::node_text(arg, source);
+                                guards.push(TypeGuard {
+                                    function: func_name.to_string(),
+                                    guarded_type: guarded_type.to_string(),
+                                    line: node.start_position().row + 1,
+                                    var,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 递归处理 and/or 组合 guard（binary_operator with 'and'/'or'）
+    // 注意：不跳过 call 子节点，因为组合 guard 如 `when is_integer(x) and is_binary(y)` 中，
+    // binary_operator[and] 的子节点直接是 call 节点，跳过会导致漏提取。
+    // 已提取的 call 节点在递归时不会重复匹配（guard_to_type 只匹配 is_* 函数）。
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_guard_calls(child, source, func_name, guards);
+        }
     }
 }
 
@@ -1334,6 +1702,128 @@ end
         assert!(targets.contains(&"MyApp.Notifier"), "missing MyApp.Notifier in nested case, got: {:?}", targets);
         assert!(targets.contains(&"MyApp.ErrorHandler"), "missing MyApp.ErrorHandler in nested case, got: {:?}", targets);
         assert!(gs_hints.iter().all(|h| h.via == "handle_call"));
+    }
+
+    // === TypeAnnotation / TypeGuard 提取测试 ===
+
+    #[test]
+    fn extract_spec_type_annotations() {
+        let source = r#"
+defmodule MyApp.Foo do
+  @spec process(map()) :: term()
+  def process(data) do
+    data
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        assert_eq!(record.type_annotations.len(), 1);
+        let ann = &record.type_annotations[0];
+        assert_eq!(ann.func_name, "process");
+        assert_eq!(ann.param, "data");
+        assert_eq!(ann.type_expr, "map()");
+    }
+
+    #[test]
+    fn extract_spec_multiple_params() {
+        let source = r#"
+defmodule MyApp.Foo do
+  @spec convert(integer(), binary()) :: atom()
+  def convert(num, text) do
+    :ok
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        assert_eq!(record.type_annotations.len(), 2);
+        assert_eq!(record.type_annotations[0].param, "num");
+        assert_eq!(record.type_annotations[0].type_expr, "integer()");
+        assert_eq!(record.type_annotations[1].param, "text");
+        assert_eq!(record.type_annotations[1].type_expr, "binary()");
+    }
+
+    #[test]
+    fn extract_when_guard_type_guard() {
+        let source = r#"
+defmodule MyApp.Foo do
+  @spec process(map()) :: term()
+  def process(data) when is_map(data) do
+    data
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        assert_eq!(record.type_guards.len(), 1);
+        let guard = &record.type_guards[0];
+        assert_eq!(guard.function, "process");
+        assert_eq!(guard.var, "data");
+        assert_eq!(guard.guarded_type, "map()");
+    }
+
+    #[test]
+    fn extract_multiple_when_guards() {
+        let source = r#"
+defmodule MyApp.Foo do
+  def check(x, y) when is_integer(x) and is_binary(y) do
+    :ok
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        assert_eq!(record.type_guards.len(), 2, "got: {:?}", record.type_guards);
+        let vars: Vec<&str> = record.type_guards.iter().map(|g| g.var.as_str()).collect();
+        assert!(vars.contains(&"x"));
+        assert!(vars.contains(&"y"));
+    }
+
+    #[test]
+    fn no_spec_no_guard_no_extraction() {
+        let source = r#"
+defmodule MyApp.Foo do
+  def run do
+    :ok
+  end
+end
+"#;
+        let record = extract(source, "lib/my_app/foo.ex");
+        assert!(record.type_annotations.is_empty());
+        assert!(record.type_guards.is_empty());
+    }
+
+    #[test]
+    fn parse_spec_params_basic() {
+        assert_eq!(parse_spec_params("foo(map()) :: term()"), vec!["map()"]);
+        assert_eq!(
+            parse_spec_params("bar(integer(), binary()) :: atom()"),
+            vec!["integer()", "binary()"]
+        );
+        assert!(parse_spec_params("baz() :: :ok").is_empty());
+    }
+
+    #[test]
+    fn parse_spec_params_nested_generics() {
+        // 嵌套泛型：list(map()) 应作为单个参数
+        assert_eq!(
+            parse_spec_params("foo(list(map()), integer()) :: term()"),
+            vec!["list(map())", "integer()"]
+        );
+        // 深层嵌套
+        assert_eq!(
+            parse_spec_params("foo({atom(), list(tuple())}) :: :ok"),
+            vec!["{atom(), list(tuple())}"]
+        );
+    }
+
+    #[test]
+    fn parse_spec_params_no_parens() {
+        // 缺少括号的非法 spec 不应 panic
+        assert!(parse_spec_params("foo :: term()").is_empty());
+    }
+
+    #[test]
+    fn parse_spec_params_unmatched_parens() {
+        // 不匹配的括号应安全返回空
+        assert!(parse_spec_params("foo(map(").is_empty());
     }
 }
 
