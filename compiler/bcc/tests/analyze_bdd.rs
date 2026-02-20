@@ -233,6 +233,64 @@ fn e2e_specific_exception_no_false_positive() {
     assert!(smells.is_empty(), "Expected no smells for specific exception, got: {:?}", smells);
 }
 
+// --- 边界回归测试 ---
+
+#[test]
+fn e2e_swallowed_error_no_false_positive_on_empty_line() {
+    // except: 后跟空行再跟有意义代码 → 不应误报 swallowed_error
+    let result = run_analyze(
+        "try:\n    risky()\nexcept:\n\n    log(e)\n",
+        "main.py",
+        "python",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().all(|s| s["rule"] != "swallowed_error"),
+        "Empty line after except should not trigger swallowed_error, got: {:?}", smells);
+}
+
+#[test]
+fn e2e_broad_catch_multiline_elixir_rescue() {
+    // 多行 rescue\n  _ -> :ok 应检出 broad_catch
+    let result = run_analyze(
+        "try do\n  risky()\nrescue\n  _ -> :ok\nend\n",
+        "main.ex",
+        "elixir",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().any(|s| s["rule"] == "broad_catch"),
+        "Multi-line Elixir rescue _ should trigger broad_catch, got: {:?}", smells);
+}
+
+#[test]
+fn e2e_broad_catch_js_catch_no_param() {
+    // JS/TS catch {} 无参数应检出 broad_catch
+    let result = run_analyze(
+        "try { risky() } catch { handleError() }",
+        "main.ts",
+        "typescript",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().any(|s| s["rule"] == "broad_catch"),
+        "JS catch without parameter should trigger broad_catch, got: {:?}", smells);
+}
+
+#[test]
+fn e2e_js_catch_with_param_no_broad_catch() {
+    // JS/TS catch (e) 有参数不应检出 broad_catch
+    let result = run_analyze(
+        "try { risky() } catch (e) { handleError(e) }",
+        "main.ts",
+        "typescript",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().all(|s| s["rule"] != "broad_catch"),
+        "JS catch with parameter should not trigger broad_catch, got: {:?}", smells);
+}
+
 // --- 过滤功能端到端测试 ---
 
 #[test]
