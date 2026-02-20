@@ -18,6 +18,10 @@ impl Detector for SwallowedErrorDetector {
         let mut results = Vec::new();
         let lines: Vec<&str> = source.lines().collect();
 
+        // 预编译正则，避免在循环中重复创建
+        let elixir_trivial_re = Regex::new(r#"^_\s*->\s*(:ok|nil|:error)\s*$"#).unwrap();
+        let js_empty_catch_re = Regex::new(r#"catch\s*\([^)]*\)\s*\{\s*\}"#).unwrap();
+
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
 
@@ -29,7 +33,7 @@ impl Detector for SwallowedErrorDetector {
                         results.push(SmellRecord {
                             category: "error_handling".to_string(),
                             rule: "swallowed_error".to_string(),
-                            severity: "info".to_string(),
+                            severity: "low".to_string(),
                             message: "Exception caught but swallowed (empty handler or pass)".to_string(),
                             file: file_path.to_string(),
                             line: i + 1,
@@ -44,11 +48,11 @@ impl Detector for SwallowedErrorDetector {
             if trimmed.starts_with("rescue") {
                 let rescue_body = trimmed.trim_start_matches("rescue").trim();
                 // 单行 rescue _ -> :ok
-                if Regex::new(r#"^_\s*->\s*(:ok|nil|:error)\s*$"#).unwrap().is_match(rescue_body) {
+                if elixir_trivial_re.is_match(rescue_body) {
                     results.push(SmellRecord {
                         category: "error_handling".to_string(),
                         rule: "swallowed_error".to_string(),
-                        severity: "info".to_string(),
+                        severity: "low".to_string(),
                         message: "Exception caught but swallowed (trivial return)".to_string(),
                         file: file_path.to_string(),
                         line: i + 1,
@@ -60,11 +64,11 @@ impl Detector for SwallowedErrorDetector {
                 if rescue_body.is_empty() {
                     if let Some(next) = lines.get(i + 1) {
                         let next_trimmed = next.trim();
-                        if Regex::new(r#"^_\s*->\s*(:ok|nil|:error)\s*$"#).unwrap().is_match(next_trimmed) {
+                        if elixir_trivial_re.is_match(next_trimmed) {
                             results.push(SmellRecord {
                                 category: "error_handling".to_string(),
                                 rule: "swallowed_error".to_string(),
-                                severity: "info".to_string(),
+                                severity: "low".to_string(),
                                 message: "Exception caught but swallowed (trivial return)".to_string(),
                                 file: file_path.to_string(),
                                 line: i + 1,
@@ -77,11 +81,11 @@ impl Detector for SwallowedErrorDetector {
             }
 
             // TypeScript/JavaScript: catch (e) { } 或 catch (e) { /* empty */ }
-            if Regex::new(r#"catch\s*\([^)]*\)\s*\{\s*\}"#).unwrap().is_match(trimmed) {
+            if js_empty_catch_re.is_match(trimmed) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
-                    severity: "info".to_string(),
+                    severity: "low".to_string(),
                     message: "Exception caught but swallowed (empty catch block)".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
@@ -109,26 +113,29 @@ impl Detector for BroadCatchDetector {
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
 
-        for (i, line) in source.lines().enumerate() {
-            let trimmed = line.trim();
+        // 预编译正则，避免在循环中重复创建
+        let bare_except_re = Regex::new(r#"^\s*except\s*:\s*$"#).unwrap();
+        let broad_except_re = Regex::new(r#"(?i)^\s*except\s+(Exception|BaseException)\b"#).unwrap();
+        let elixir_rescue_re = Regex::new(r#"^\s*rescue\s+_\s*->"#).unwrap();
 
+        for (i, line) in source.lines().enumerate() {
             // Python: 裸 except: 或 except Exception
-            if Regex::new(r#"^\s*except\s*:\s*$"#).unwrap().is_match(line) {
+            if bare_except_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "info".to_string(),
+                    severity: "low".to_string(),
                     message: "Bare except clause catches all exceptions including SystemExit and KeyboardInterrupt".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
                 });
-            } else if Regex::new(r#"(?i)^\s*except\s+(Exception|BaseException)\b"#).unwrap().is_match(line) {
+            } else if broad_except_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "info".to_string(),
+                    severity: "low".to_string(),
                     message: "Overly broad exception catch (Exception/BaseException)".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
@@ -138,11 +145,11 @@ impl Detector for BroadCatchDetector {
             }
 
             // Elixir: rescue _ -> (无类型限定)
-            if Regex::new(r#"^\s*rescue\s+_\s*->"#).unwrap().is_match(line) {
+            if elixir_rescue_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "info".to_string(),
+                    severity: "low".to_string(),
                     message: "Broad rescue clause catches all exceptions".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,

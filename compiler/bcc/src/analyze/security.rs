@@ -31,7 +31,7 @@ impl Detector for HardcodedCredentialDetector {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "hardcoded_credential".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "high".to_string(),
                     message: format!("Hardcoded credential detected"),
                     file: file_path.to_string(),
                     line: line_num + 1,
@@ -65,7 +65,7 @@ impl Detector for InjectionRiskDetector {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "injection_risk".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "high".to_string(),
                     message: format!("Potential injection risk: string concatenation/interpolation in dangerous function"),
                     file: file_path.to_string(),
                     line: line_num + 1,
@@ -90,7 +90,7 @@ impl Detector for UnsafeDeserializationDetector {
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         // 黑名单模式：pickle.load(s)? / yaml.load(非safe) / marshal.load / eval(
         let re = Regex::new(
-            r#"(?i)\b(pickle\.loads?\s*\(|yaml\.load\s*\(|marshal\.loads?\s*\(|shelve\.open\s*\(|jsonpickle\.decode\s*\()"#
+            r#"(?i)\b(pickle\.loads?\s*\(|yaml\.load\s*\(|marshal\.loads?\s*\(|shelve\.open\s*\(|jsonpickle\.decode\s*\(|eval\s*\()"#
         ).unwrap();
 
         // 安全版本排除
@@ -102,7 +102,7 @@ impl Detector for UnsafeDeserializationDetector {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "unsafe_deserialization".to_string(),
-                    severity: "warning".to_string(),
+                    severity: "high".to_string(),
                     message: format!("Unsafe deserialization detected"),
                     file: file_path.to_string(),
                     line: line_num + 1,
@@ -135,7 +135,7 @@ impl Detector for WeakCryptoDetector {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "weak_crypto".to_string(),
-                    severity: "info".to_string(),
+                    severity: "medium".to_string(),
                     message: format!("Weak cryptographic algorithm detected (MD5/SHA1/DES/RC4)"),
                     file: file_path.to_string(),
                     line: line_num + 1,
@@ -173,7 +173,7 @@ impl Detector for SensitiveDataLogDetector {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "sensitive_data_log".to_string(),
-                    severity: "info".to_string(),
+                    severity: "medium".to_string(),
                     message: format!("Potentially sensitive data in log output"),
                     file: file_path.to_string(),
                     line: line_num + 1,

@@ -26,7 +26,7 @@ pub struct SmellRecord {
     pub category: String,
     /// 规则标识：redundant_type_check / hardcoded_credential / ...
     pub rule: String,
-    /// 严重级别：error / warning / info
+    /// 严重级别：high / medium / low
     pub severity: String,
     /// 人类可读描述
     pub message: String,
@@ -150,22 +150,35 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
             }
 
             // 尝试从磁盘读取源码（先尝试绝对路径，再尝试相对于 AST 文件目录）
-            let source = fs::read_to_string(file_path)
+            let source = match fs::read_to_string(file_path)
                 .or_else(|_| fs::read_to_string(ast_dir.join(file_path)))
-                .unwrap_or_default();
-
-            // 如果读不到源码，跳过检测
-            if source.is_empty() {
-                return SmellReport {
-                    file: file_path.clone(),
-                    smells: vec![],
-                    summary: SmellSummary {
-                        total_smells: 0,
-                        by_severity: HashMap::new(),
-                        by_category: HashMap::new(),
-                    },
-                };
-            }
+            {
+                Ok(s) if !s.is_empty() => s,
+                Ok(_) => {
+                    eprintln!("[analyze] WARNING: source file is empty, skipping: {}", file_path);
+                    return SmellReport {
+                        file: file_path.clone(),
+                        smells: vec![],
+                        summary: SmellSummary {
+                            total_smells: 0,
+                            by_severity: HashMap::new(),
+                            by_category: HashMap::new(),
+                        },
+                    };
+                }
+                Err(e) => {
+                    eprintln!("[analyze] WARNING: cannot read source file '{}': {}", file_path, e);
+                    return SmellReport {
+                        file: file_path.clone(),
+                        smells: vec![],
+                        summary: SmellSummary {
+                            total_smells: 0,
+                            by_severity: HashMap::new(),
+                            by_category: HashMap::new(),
+                        },
+                    };
+                }
+            };
 
             // 遍历所有检测器收集结果
             let mut smells = Vec::new();
