@@ -958,6 +958,13 @@ func (c *Controller) Run(ctx context.Context) error {
 		return nil
 	}
 
+	// 延迟加载：当 hydrate 禁用且 builder==nil 时，此处仍需全量 issues 供 checkParentProgress 使用
+	if allIssuesCache == nil {
+		allIssuesCache, err = c.github.ListIssuesByState(ctx, "all")
+		if err != nil {
+			return fmt.Errorf("扫描全量 issues 失败: %w", err)
+		}
+	}
 	c.checkParentProgress(ctx, allIssuesCache)
 
 	// ⑨ 定时巡检纠偏：即使 hash 未变化也会做轻量对账，失败不阻塞主流程。
