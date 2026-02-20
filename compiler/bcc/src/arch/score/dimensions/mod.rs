@@ -1,6 +1,7 @@
 //! 评分维度实现
 
 pub mod acyclic;
+pub mod code_quality;
 pub mod compliance;
 pub mod coverage;
 pub mod density;

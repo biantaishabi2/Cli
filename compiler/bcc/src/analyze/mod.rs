@@ -3,10 +3,11 @@
 //! 读取 extract 产出的 FileRecord JSON，遍历每个文件运行检测器生成 SmellReport。
 
 pub mod error_handling;
+pub mod linter;
 pub mod security;
 
 use crate::extract::FileRecord;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -26,7 +27,8 @@ pub struct SmellRecord {
     pub category: String,
     /// 规则标识：redundant_type_check / hardcoded_credential / ...
     pub rule: String,
-    /// 严重级别：high / medium / low
+    /// 严重级别：critical / warning / info（兼容旧值 high→critical, medium→warning, low→info）
+    #[serde(deserialize_with = "deserialize_severity")]
     pub severity: String,
     /// 人类可读描述
     pub message: String,
@@ -38,6 +40,70 @@ pub struct SmellRecord {
     pub source: String,
     /// 置信度 0.0 - 1.0
     pub confidence: f64,
+    /// 修复提示
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix_hint: String,
+    /// 代码片段（含上下文行 + ← HERE 标记）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code_snippet: String,
+    /// 问题代码行
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub offending_code: String,
+    /// 建议修复代码
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suggested_fix: String,
+    /// 证据链
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<SmellEvidence>,
+}
+
+/// 气味证据
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SmellEvidence {
+    /// 证据类型：regex_match / ast_pattern / linter_output
+    pub kind: String,
+    /// 证据描述
+    pub detail: String,
+}
+
+/// severity 反序列化：将旧值 high→critical, medium→warning, low→info 映射到新值
+fn deserialize_severity<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(normalize_severity(&s))
+}
+
+/// 将 severity 旧值映射到新值
+pub fn normalize_severity(s: &str) -> String {
+    match s {
+        "high" => "critical".to_string(),
+        "medium" => "warning".to_string(),
+        "low" => "info".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 从源码中提取代码片段（目标行 + 前后 context_lines 行），在目标行末尾加 ← HERE 标记
+pub fn extract_code_snippet(source: &str, line: usize, context_lines: usize) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    if line == 0 || line > lines.len() {
+        return String::new();
+    }
+    let idx = line - 1;
+    let start = idx.saturating_sub(context_lines);
+    let end = (idx + context_lines + 1).min(lines.len());
+    let mut snippet = String::new();
+    for i in start..end {
+        let line_num = i + 1;
+        if i == idx {
+            snippet.push_str(&format!("{:>4} | {}  ← HERE\n", line_num, lines[i]));
+        } else {
+            snippet.push_str(&format!("{:>4} | {}\n", line_num, lines[i]));
+        }
+    }
+    snippet
 }
 
 /// 汇总统计
@@ -92,7 +158,7 @@ fn build_detectors() -> Vec<Box<dyn Detector>> {
 /// - ast_file: extract 输出的 JSON 文件路径（Vec<FileRecord> 或单个 FileRecord）
 /// - output: SmellReport JSON 输出路径
 /// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling）
-pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(ast_file: &str, output: &str, rules: Option<String>, linters: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     // 解析 rules 参数
     let rule_filter: Option<Vec<String>> = rules.map(|r| {
         r.split(',')
@@ -219,6 +285,39 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
         ).into());
     }
 
+    // 合并外部 linter 结果
+    let mut reports = reports;
+    if !linters.is_empty() {
+        let external_smells = linter::run_linters(&linters);
+        if !external_smells.is_empty() {
+            // 按文件分组合并到对应的 SmellReport
+            for smell in external_smells {
+                if let Some(report) = reports.iter_mut().find(|r| r.file == smell.file) {
+                    *report.summary.by_severity.entry(smell.severity.clone()).or_insert(0) += 1;
+                    *report.summary.by_category.entry(smell.category.clone()).or_insert(0) += 1;
+                    report.summary.total_smells += 1;
+                    report.smells.push(smell);
+                } else {
+                    // 外部 linter 报告了不在 AST 中的文件，创建新 report
+                    let mut by_severity = HashMap::new();
+                    by_severity.insert(smell.severity.clone(), 1);
+                    let mut by_category = HashMap::new();
+                    by_category.insert(smell.category.clone(), 1);
+                    let file = smell.file.clone();
+                    reports.push(SmellReport {
+                        file,
+                        smells: vec![smell],
+                        summary: SmellSummary {
+                            total_smells: 1,
+                            by_severity,
+                            by_category,
+                        },
+                    });
+                }
+            }
+        }
+    }
+
     // 写出结果
     let json = serde_json::to_string_pretty(&reports)?;
     if let Some(parent) = Path::new(output).parent() {
@@ -250,6 +349,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -293,6 +393,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             Some("defensive".to_string()),
+            vec![],
         )
         .unwrap();
 
@@ -338,6 +439,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -382,6 +484,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -434,6 +537,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             Some("security".to_string()),
+            vec![],
         )
         .unwrap();
 
@@ -479,6 +583,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         );
         assert!(result.is_ok(), "Empty source file should not cause failure: {:?}", result.err());
 
@@ -518,6 +623,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         );
         assert!(result.is_err(), "Should return error when source file is unreadable");
         let err_msg = result.unwrap_err().to_string();

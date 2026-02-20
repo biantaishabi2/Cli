@@ -206,6 +206,10 @@ enum Commands {
         /// 逗号分隔的规则类别过滤（如 defensive,security）
         #[arg(long)]
         rules: Option<String>,
+
+        /// 外部 linter（格式 "name:command"，可多次指定）
+        #[arg(long, action = clap::ArgAction::Append)]
+        linter: Vec<String>,
     },
 }
 
@@ -291,6 +295,10 @@ enum ArchAction {
         /// 导出 bdd seed 可消费的 YAML source 文件到指定目录
         #[arg(long)]
         export_bdd_source: Option<String>,
+
+        /// SmellReport JSON 路径，有 smell 则 validate 失败（exit 1）
+        #[arg(long)]
+        smell_gate: Option<String>,
     },
 
     /// 导出 bugfix 可消费的 module_map.json
@@ -637,6 +645,7 @@ fn main() {
                 fail_on_gate,
                 fail_on_forbidden,
                 export_bdd_source,
+                smell_gate,
             } => {
                 arch::validate(
                     &target,
@@ -648,6 +657,7 @@ fn main() {
                     fail_on_gate,
                     fail_on_forbidden,
                     export_bdd_source.as_deref(),
+                    smell_gate.as_deref(),
                 );
             }
             ArchAction::ExportModuleMap {
@@ -797,8 +807,9 @@ fn main() {
             ast_file,
             output,
             rules,
+            linter,
         }) => {
-            if let Err(e) = bcc::analyze::run(&ast_file, &output, rules) {
+            if let Err(e) = bcc::analyze::run(&ast_file, &output, rules, linter) {
                 eprintln!("[analyze] Error: {}", e);
                 std::process::exit(1);
             }

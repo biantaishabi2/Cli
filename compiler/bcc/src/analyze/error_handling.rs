@@ -2,7 +2,7 @@
 //!
 //! 对源码做 regex 模式匹配，检测吞掉异常和宽泛异常捕获。
 
-use super::{Detector, SmellRecord};
+use super::{extract_code_snippet, Detector, SmellRecord};
 use regex::Regex;
 
 /// 吞掉异常检测器
@@ -32,12 +32,17 @@ impl Detector for SwallowedErrorDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
-                    severity: "low".to_string(),
+                    severity: "info".to_string(),
                     message: "Discarding Result/Error with `let _ =` silently swallows errors".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Handle the error explicitly or use .ok() with a comment explaining why".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: line.trim().to_string(),
+                    suggested_fix: "match expr { Ok(_) => {}, Err(e) => log::warn!(\"{}\", e) }".to_string(),
+                    evidence: vec![],
                 });
                 continue;
             }
@@ -60,12 +65,17 @@ impl Detector for SwallowedErrorDetector {
                         results.push(SmellRecord {
                             category: "error_handling".to_string(),
                             rule: "swallowed_error".to_string(),
-                            severity: "low".to_string(),
+                            severity: "info".to_string(),
                             message: "Exception caught but swallowed (empty handler or pass)".to_string(),
                             file: file_path.to_string(),
                             line: i + 1,
                             source: "bcc".to_string(),
                             confidence: 0.9,
+                            fix_hint: "Log the exception or re-raise it".to_string(),
+                            code_snippet: extract_code_snippet(source, i + 1, 2),
+                            offending_code: trimmed.to_string(),
+                            suggested_fix: "except ValueError as e:\n    logger.error(e)".to_string(),
+                            evidence: vec![],
                         });
                     }
                 }
@@ -79,12 +89,17 @@ impl Detector for SwallowedErrorDetector {
                     results.push(SmellRecord {
                         category: "error_handling".to_string(),
                         rule: "swallowed_error".to_string(),
-                        severity: "low".to_string(),
+                        severity: "info".to_string(),
                         message: "Exception caught but swallowed (trivial return)".to_string(),
                         file: file_path.to_string(),
                         line: i + 1,
                         source: "bcc".to_string(),
                         confidence: 0.9,
+                        fix_hint: "Log the exception or handle it meaningfully".to_string(),
+                        code_snippet: extract_code_snippet(source, i + 1, 2),
+                        offending_code: trimmed.to_string(),
+                        suggested_fix: "rescue e -> Logger.error(Exception.message(e))".to_string(),
+                        evidence: vec![],
                     });
                 }
                 // 多行 rescue\n _ -> :ok
@@ -95,12 +110,17 @@ impl Detector for SwallowedErrorDetector {
                             results.push(SmellRecord {
                                 category: "error_handling".to_string(),
                                 rule: "swallowed_error".to_string(),
-                                severity: "low".to_string(),
+                                severity: "info".to_string(),
                                 message: "Exception caught but swallowed (trivial return)".to_string(),
                                 file: file_path.to_string(),
                                 line: i + 1,
                                 source: "bcc".to_string(),
                                 confidence: 0.9,
+                                fix_hint: "Log the exception or handle it meaningfully".to_string(),
+                                code_snippet: extract_code_snippet(source, i + 1, 2),
+                                offending_code: trimmed.to_string(),
+                                suggested_fix: "rescue e -> Logger.error(Exception.message(e))".to_string(),
+                                evidence: vec![],
                             });
                         }
                     }
@@ -112,12 +132,17 @@ impl Detector for SwallowedErrorDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
-                    severity: "low".to_string(),
+                    severity: "info".to_string(),
                     message: "Exception caught but swallowed (empty catch block)".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Handle the error or add a comment explaining why it is ignored".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: trimmed.to_string(),
+                    suggested_fix: "catch (e) { console.error(e); }".to_string(),
+                    evidence: vec![],
                 });
             }
 
@@ -156,23 +181,33 @@ impl Detector for BroadCatchDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "low".to_string(),
+                    severity: "warning".to_string(),
                     message: "Bare except clause catches all exceptions including SystemExit and KeyboardInterrupt".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Catch specific exception types instead of using bare except".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: line.trim().to_string(),
+                    suggested_fix: "except ValueError as e:".to_string(),
+                    evidence: vec![],
                 });
             } else if lang == "python" && broad_except_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "low".to_string(),
+                    severity: "warning".to_string(),
                     message: "Overly broad exception catch (Exception/BaseException)".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Catch specific exception types instead of Exception/BaseException".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: line.trim().to_string(),
+                    suggested_fix: "except (ValueError, KeyError) as e:".to_string(),
+                    evidence: vec![],
                 });
             }
 
@@ -181,12 +216,17 @@ impl Detector for BroadCatchDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "low".to_string(),
+                    severity: "warning".to_string(),
                     message: "Broad rescue clause catches all exceptions".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Rescue specific exception types instead of wildcard _".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: line.trim().to_string(),
+                    suggested_fix: "rescue e in ArgumentError -> handle(e)".to_string(),
+                    evidence: vec![],
                 });
             } else if lang == "elixir" && elixir_rescue_alone_re.is_match(line) {
                 // 多行写法: rescue\n  _ -> ...
@@ -195,12 +235,17 @@ impl Detector for BroadCatchDetector {
                         results.push(SmellRecord {
                             category: "error_handling".to_string(),
                             rule: "broad_catch".to_string(),
-                            severity: "low".to_string(),
+                            severity: "warning".to_string(),
                             message: "Broad rescue clause catches all exceptions".to_string(),
                             file: file_path.to_string(),
                             line: i + 1,
                             source: "bcc".to_string(),
                             confidence: 0.9,
+                            fix_hint: "Rescue specific exception types instead of wildcard _".to_string(),
+                            code_snippet: extract_code_snippet(source, i + 1, 2),
+                            offending_code: line.trim().to_string(),
+                            suggested_fix: "rescue e in ArgumentError -> handle(e)".to_string(),
+                            evidence: vec![],
                         });
                     }
                 }
@@ -211,12 +256,17 @@ impl Detector for BroadCatchDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
-                    severity: "low".to_string(),
+                    severity: "warning".to_string(),
                     message: "Catch block without exception parameter".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
+                    fix_hint: "Add an exception parameter to the catch block".to_string(),
+                    code_snippet: extract_code_snippet(source, i + 1, 2),
+                    offending_code: line.trim().to_string(),
+                    suggested_fix: "catch (e) { handleError(e); }".to_string(),
+                    evidence: vec![],
                 });
             }
         }
