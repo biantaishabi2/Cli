@@ -194,6 +194,7 @@ fn extract_recursive(
                         calls.push(CallRecord {
                             callee: format!("{}!", macro_name),
                             line: node.start_position().row + 1,
+                            args: vec![],
                         });
                     }
                 }

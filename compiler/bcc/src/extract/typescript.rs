@@ -649,12 +649,18 @@ fn extract_ts_type_info(
         }
         // 压栈子节点（逆序以保持遍历顺序）
         // 对函数节点：跳过 body 子节点，避免嵌套函数的 guard 被外层函数错误归属
+        let body_node = if is_func_node {
+            node.child_by_field_name("body")
+        } else {
+            None
+        };
         let mut idx = node.child_count();
         while idx > 0 {
             idx -= 1;
             if let Some(child) = node.child(idx) {
-                if is_func_node && child.kind() == "statement_block" {
-                    // 跳过函数体，但扫描其中的嵌套函数定义
+                if body_node.map_or(false, |b| b.id() == child.id()) {
+                    // 跳过函数体（statement_block 或 expression body），
+                    // 但扫描其中的嵌套函数定义
                     push_nested_functions(&child, &mut stack);
                 } else {
                     stack.push(child);
