@@ -213,6 +213,7 @@ fn extract_recursive(
                             calls.push(CallRecord {
                                 callee: module,
                                 line: node.start_position().row + 1,
+                                args: vec![],
                             });
                         }
                     }

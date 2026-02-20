@@ -329,6 +329,7 @@ mod tests {
                 .map(|(idx, name)| CallRecord {
                     callee: (*name).to_string(),
                     line: idx + 1,
+                    args: vec![],
                 })
                 .collect(),
             local_call_targets: Vec::new(),

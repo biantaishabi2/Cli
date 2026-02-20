@@ -199,7 +199,7 @@ fn extract_php_recursive(
                         && callee != "static"
                     {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line });
+                        calls.push(CallRecord { callee, line, args: vec![] });
                     }
                 }
                 // 继续递归
@@ -238,7 +238,7 @@ fn extract_php_recursive(
                     let callee = common::node_text(class_node, source);
                     if callee.chars().next().map_or(false, |c| c.is_uppercase()) {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line });
+                        calls.push(CallRecord { callee, line, args: vec![] });
                     }
                 }
                 if cursor.goto_first_child() {

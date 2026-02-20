@@ -277,11 +277,13 @@ fn extract_ts_recursive(
                 if let Some(func_node) = node.child_by_field_name("function") {
                     // 提取各种调用类型
                     let callees = extract_call_targets(func_node, source);
+                    let args = extract_call_args(node, source);
                     for callee in callees {
                         local_call_symbols.insert(callee.clone());
                         calls.push(CallRecord {
                             callee,
                             line: node.start_position().row + 1,
+                            args: args.clone(),
                         });
                     }
                 }
@@ -326,11 +328,13 @@ fn collect_ts_calls_in_subtree(
     if node.kind() == "call_expression" {
         if let Some(func_node) = node.child_by_field_name("function") {
             let callees = extract_call_targets(func_node, source);
+            let args = extract_call_args(node, source);
             for callee in callees {
                 local_call_symbols.insert(callee.clone());
                 calls.push(CallRecord {
                     callee,
                     line: node.start_position().row + 1,
+                    args: args.clone(),
                 });
             }
         }
@@ -493,6 +497,28 @@ fn extract_named_binding_alias(item: &str) -> Option<String> {
     }
 }
 
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+fn extract_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
+}
+
 /// 提取所有调用目标（包括方法调用、属性访问等）
 fn extract_call_targets(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut targets = Vec::new();
@@ -603,30 +629,61 @@ fn extract_ts_type_info(
 ) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        match node.kind() {
-            // 函数声明/方法声明：提取参数类型标注
-            "function_declaration" | "method_definition" | "arrow_function" => {
-                let func_name = node
-                    .child_by_field_name("name")
-                    .map(|n| common::node_text(n, source))
-                    .unwrap_or_default();
-                // 提取参数的类型标注
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    extract_ts_param_annotations(params, source, &func_name, type_annotations);
-                }
-                // 提取函数体内的 typeof 检查
-                if let Some(body) = node.child_by_field_name("body") {
-                    extract_ts_type_guards(body, source, &func_name, type_guards);
-                }
+        let is_func_node = matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        );
+        if is_func_node {
+            let func_name = node
+                .child_by_field_name("name")
+                .map(|n| common::node_text(n, source))
+                .unwrap_or_default();
+            // 提取参数的类型标注
+            if let Some(params) = node.child_by_field_name("parameters") {
+                extract_ts_param_annotations(params, source, &func_name, type_annotations);
             }
-            _ => {}
+            // 提取函数体内的 typeof 检查（不递归进入嵌套函数）
+            if let Some(body) = node.child_by_field_name("body") {
+                extract_ts_type_guards(body, source, &func_name, type_guards);
+            }
         }
         // 压栈子节点（逆序以保持遍历顺序）
+        // 对函数节点：跳过 body 子节点，避免嵌套函数的 guard 被外层函数错误归属
         let mut idx = node.child_count();
         while idx > 0 {
             idx -= 1;
             if let Some(child) = node.child(idx) {
-                stack.push(child);
+                if is_func_node && child.kind() == "statement_block" {
+                    // 跳过函数体，但扫描其中的嵌套函数定义
+                    push_nested_functions(&child, &mut stack);
+                } else {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+}
+
+/// 扫描 statement_block 内的嵌套函数定义，压入栈以便后续单独处理
+fn push_nested_functions<'a>(
+    body: &tree_sitter::Node<'a>,
+    stack: &mut Vec<tree_sitter::Node<'a>>,
+) {
+    let mut inner_stack = vec![*body];
+    while let Some(node) = inner_stack.pop() {
+        if matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        ) {
+            stack.push(node);
+            // 不再递归进入此函数内部（由主循环处理）
+            continue;
+        }
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                inner_stack.push(child);
             }
         }
     }
@@ -677,6 +734,13 @@ fn extract_ts_type_guards(
 ) {
     let mut stack = vec![body];
     while let Some(node) = stack.pop() {
+        // 跳过嵌套函数定义，避免其 type guard 被错误归属到外层函数
+        if matches!(
+            node.kind(),
+            "function_declaration" | "method_definition" | "arrow_function"
+        ) {
+            continue;
+        }
         if node.kind() == "binary_expression" {
             // 匹配 typeof x === 'string' 或 typeof x === "string"
             if let Some(guard) = parse_typeof_guard(node, source, func_name) {

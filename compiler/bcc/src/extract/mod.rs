@@ -90,6 +90,9 @@ pub struct ImportRecord {
 pub struct CallRecord {
     pub callee: String,
     pub line: usize,
+    /// 调用参数（用于 detect_unnecessary_default 等规则匹配）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

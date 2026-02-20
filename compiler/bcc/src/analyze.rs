@@ -116,12 +116,17 @@ fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
 
     // 检查 calls 中是否有 .get(field_name, default) 模式
     for call in &record.calls {
+        // 匹配 callee 为 .get / get 等访问器
+        if !(call.callee.ends_with(".get") || call.callee == "get") {
+            continue;
+        }
+        // 需要至少 2 个参数：key + default
+        if call.args.len() < 2 {
+            continue;
+        }
         for field_name in &required_fields {
-            // 匹配 callee 包含 .get 且行附近有字段名的模式
-            // 简化实现：检查 callee 是否是 get/fetch 相关
-            if (call.callee.ends_with(".get") || call.callee == "get")
-                && call.callee.contains(field_name)
-            {
+            // 第一个参数匹配字段名
+            if call.args[0] == *field_name {
                 smells.push(SmellRecord {
                     category: "defensive".to_string(),
                     rule: "unnecessary_default".to_string(),
@@ -532,6 +537,75 @@ mod tests {
             Some("security".to_string()),
         )
         .unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert!(result[0].smells.is_empty());
+    }
+
+    #[test]
+    fn detect_unnecessary_default_required_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let ast_path = dir.path().join("required.json");
+        let out_path = dir.path().join("smells.json");
+
+        // 测试场景 5：required SchemaField + .get(key, default) → 应检出
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/user.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [
+                { "callee": "data.get", "line": 10, "args": ["email", ""] }
+            ],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 20,
+            "declarations": 1,
+            "schema_fields": [
+                { "name": "email", "field_type": "string", "line": 3, "required": true }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result[0].smells.len(), 1);
+        let smell = &result[0].smells[0];
+        assert_eq!(smell.rule, "unnecessary_default");
+        assert_eq!(smell.severity, "warning");
+        assert!((smell.confidence - 0.8).abs() < f64::EPSILON);
+        assert!(smell.message.contains("email"));
+    }
+
+    #[test]
+    fn detect_unnecessary_default_optional_field_no_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let ast_path = dir.path().join("optional.json");
+        let out_path = dir.path().join("smells.json");
+
+        // 测试场景 6：optional SchemaField + .get(key, default) → 不应报
+        let ast_json = r#"[{
+            "language": "typescript",
+            "file_path": "src/user.ts",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [
+                { "callee": "data.get", "line": 10, "args": ["nickname", ""] }
+            ],
+            "side_effects": { "hasAsync": false, "hasHttp": false, "hasGenserver": false, "hasFileIo": false, "hasPubsub": false },
+            "loc_lines": 20,
+            "declarations": 1,
+            "schema_fields": [
+                { "name": "nickname", "field_type": "string", "line": 5, "required": false }
+            ]
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();

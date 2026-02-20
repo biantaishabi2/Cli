@@ -30,6 +30,11 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
     // 提取模块文档（首行 //! 或 /*! 注释）
     let module_doc = extract_module_doc(content);
 
+    // 提取 TypeAnnotation 和 TypeGuard
+    let mut type_annotations = Vec::new();
+    let mut type_guards = Vec::new();
+    extract_rust_type_info(root, source, &mut type_annotations, &mut type_guards);
+
     FileRecord {
         language: "rust".into(),
         file_path: path.to_string(),
@@ -42,8 +47,8 @@ pub fn extract(content: &str, path: &str) -> FileRecord {
         side_effects,
         loc_lines: content.lines().count(),
         declarations,
-        type_annotations: vec![],
-        type_guards: vec![],
+        type_annotations,
+        type_guards,
         schema_fields: vec![],
     }
 }
@@ -176,6 +181,7 @@ fn extract_recursive(
                         calls.push(CallRecord {
                             callee,
                             line: node.start_position().row + 1,
+                            args: vec![],
                         });
                     }
                 }
@@ -330,6 +336,182 @@ fn detect_side_effects(content: &str) -> SideEffects {
             || content.contains("mpsc::")
             || content.contains("broadcast::"),
     }
+}
+
+// === TypeAnnotation / TypeGuard 提取 ===
+
+/// 从 Rust AST 中提取函数参数类型标注和类型守卫模式
+fn extract_rust_type_info(
+    root: tree_sitter::Node,
+    source: &[u8],
+    type_annotations: &mut Vec<TypeAnnotation>,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "function_item" {
+            let func_name = node
+                .child_by_field_name("name")
+                .map(|n| common::node_text(n, source))
+                .unwrap_or_default();
+            // 提取参数类型标注
+            if let Some(params) = node.child_by_field_name("parameters") {
+                extract_rust_param_annotations(params, source, &func_name, type_annotations);
+            }
+            // 提取函数体中的类型守卫（if let, matches!）
+            if let Some(body) = node.child_by_field_name("body") {
+                extract_rust_type_guards(body, source, &func_name, type_guards);
+            }
+        }
+        // 压栈子节点
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                // 跳过已处理的函数体（避免嵌套函数重复归属）
+                if node.kind() == "function_item" && child.kind() == "block" {
+                    continue;
+                }
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// 提取 Rust 函数参数的类型标注
+fn extract_rust_param_annotations(
+    params: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_annotations: &mut Vec<TypeAnnotation>,
+) {
+    for i in 0..params.child_count() {
+        let Some(child) = params.child(i) else { continue };
+        if child.kind() != "parameter" {
+            continue;
+        }
+        let param_name = child
+            .child_by_field_name("pattern")
+            .map(|n| common::node_text(n, source))
+            .unwrap_or_default();
+        if param_name.is_empty() {
+            continue;
+        }
+        if let Some(type_node) = child.child_by_field_name("type") {
+            let type_text = common::node_text(type_node, source);
+            if !type_text.is_empty() {
+                type_annotations.push(TypeAnnotation {
+                    name: format!("param:{}", param_name),
+                    type_expr: type_text,
+                    line: child.start_position().row + 1,
+                    func_name: func_name.to_string(),
+                    param: param_name,
+                });
+            }
+        }
+    }
+}
+
+/// 从 Rust 函数体中提取类型守卫模式（if let Some/Err, matches!）
+fn extract_rust_type_guards(
+    body: tree_sitter::Node,
+    source: &[u8],
+    func_name: &str,
+    type_guards: &mut Vec<TypeGuard>,
+) {
+    let mut stack = vec![body];
+    while let Some(node) = stack.pop() {
+        // 跳过嵌套函数
+        if node.kind() == "function_item" {
+            continue;
+        }
+        // if let Some(x) = expr / if let Err(e) = expr
+        if node.kind() == "if_expression" || node.kind() == "if_let_expression" {
+            let node_text = common::node_text(node, source);
+            if node_text.starts_with("if let Some(") {
+                if let Some(var) = extract_if_let_var(&node_text, "Some") {
+                    type_guards.push(TypeGuard {
+                        function: func_name.to_string(),
+                        guarded_type: "Some".to_string(),
+                        line: node.start_position().row + 1,
+                        var,
+                    });
+                }
+            } else if node_text.starts_with("if let Err(") {
+                if let Some(var) = extract_if_let_var(&node_text, "Err") {
+                    type_guards.push(TypeGuard {
+                        function: func_name.to_string(),
+                        guarded_type: "Err".to_string(),
+                        line: node.start_position().row + 1,
+                        var,
+                    });
+                }
+            } else if node_text.starts_with("if let Ok(") {
+                if let Some(var) = extract_if_let_var(&node_text, "Ok") {
+                    type_guards.push(TypeGuard {
+                        function: func_name.to_string(),
+                        guarded_type: "Ok".to_string(),
+                        line: node.start_position().row + 1,
+                        var,
+                    });
+                }
+            }
+        }
+        // matches! 宏
+        if node.kind() == "macro_invocation" {
+            let macro_text = common::node_text(node, source);
+            if macro_text.starts_with("matches!") {
+                // matches!(x, Some(_)) → var=x, guarded_type=Some
+                if let Some((var, guarded)) = parse_matches_macro(&macro_text) {
+                    type_guards.push(TypeGuard {
+                        function: func_name.to_string(),
+                        guarded_type: guarded,
+                        line: node.start_position().row + 1,
+                        var,
+                    });
+                }
+            }
+        }
+        let mut idx = node.child_count();
+        while idx > 0 {
+            idx -= 1;
+            if let Some(child) = node.child(idx) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// 从 "if let Some(x) = expr" 提取变量名
+fn extract_if_let_var(text: &str, variant: &str) -> Option<String> {
+    // "if let Some(x) = expr" → 提取 "x"
+    let pattern = format!("if let {}(", variant);
+    let rest = text.strip_prefix(&pattern)?;
+    let close = rest.find(')')?;
+    let var = rest[..close].trim().to_string();
+    if var.is_empty() || var == "_" {
+        return None;
+    }
+    Some(var)
+}
+
+/// 从 "matches!(x, Some(_))" 提取变量名和守卫类型
+fn parse_matches_macro(text: &str) -> Option<(String, String)> {
+    let inner = text.strip_prefix("matches!")?.trim();
+    let inner = inner.strip_prefix('(')?.strip_suffix(')')?;
+    let comma_pos = inner.find(',')?;
+    let var = inner[..comma_pos].trim().to_string();
+    let pattern = inner[comma_pos + 1..].trim();
+    // 提取模式的第一个标识符（如 Some, Err, Ok）
+    let guarded = pattern
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if var.is_empty() || guarded.is_empty() {
+        return None;
+    }
+    Some((var, guarded))
 }
 
 #[cfg(test)]
