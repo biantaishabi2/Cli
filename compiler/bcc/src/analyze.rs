@@ -63,7 +63,11 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
     let content = fs::read_to_string(ast_file)
         .map_err(|e| format!("cannot read '{}': {}", ast_file, e))?;
 
-    let records: Vec<FileRecord> = serde_json::from_str(&content)
+    // 支持 Vec<FileRecord> 和单个 FileRecord 两种输入格式
+    let records: Vec<FileRecord> = serde_json::from_str::<Vec<FileRecord>>(&content)
+        .or_else(|_| {
+            serde_json::from_str::<FileRecord>(&content).map(|r| vec![r])
+        })
         .map_err(|e| format!("failed to parse '{}': {}", ast_file, e))?;
 
     // 骨架：为每个 FileRecord 生成空的 SmellReport
@@ -160,6 +164,45 @@ mod tests {
         assert_eq!(result[0].file, "lib/foo.ex");
         assert!(result[0].smells.is_empty());
         assert_eq!(result[0].summary.total_smells, 0);
+    }
+
+    #[test]
+    fn single_file_record_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let ast_path = dir.path().join("single.json");
+        let out_path = dir.path().join("smells.json");
+
+        // extract 默认输出的单个 FileRecord（非数组）
+        let ast_json = r#"{
+            "language": "elixir",
+            "file_path": "lib/bar.ex",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            },
+            "loc_lines": 20,
+            "declarations": 3
+        }"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            None,
+        )
+        .unwrap();
+
+        let result: Vec<SmellReport> =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file, "lib/bar.ex");
     }
 
     #[test]

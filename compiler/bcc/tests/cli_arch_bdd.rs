@@ -2391,3 +2391,51 @@ fn bdd_injection_pipeline_handles_deep_module_imports() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// ── analyze CLI 集成测试 ──
+
+#[test]
+fn analyze_help_shows_expected_params() {
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args(["analyze", "--help"])
+        .output()
+        .expect("run analyze --help");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--ast-file"),
+        "help should mention --ast-file, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("--output"),
+        "help should mention --output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("--rules"),
+        "help should mention --rules, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn analyze_missing_required_params_exits_nonzero() {
+    let result = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args(["analyze"])
+        .output()
+        .expect("run analyze without params");
+    assert!(
+        !result.status.success(),
+        "analyze without --ast-file should fail, exit code: {:?}",
+        result.status.code()
+    );
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("--ast-file") || stderr.contains("ast-file") || stderr.contains("required"),
+        "stderr should mention missing --ast-file, got: {}",
+        stderr
+    );
+}
