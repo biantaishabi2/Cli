@@ -128,14 +128,15 @@ func ParseFinalPlanResponse(raw string) (*FinalPlan, error) {
 
 // ParseReviewResponse 解析 AI 返回的审查结果
 // 审查结果必须是结构化 JSON，禁止纯文本兜底推断。
+// 所有解析错误均返回 *RecoverableError，对齐 ParseDebateResponse / ParseFinalPlanResponse 模式。
 func ParseReviewResponse(raw string) (*ReviewResult, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("空响应")
+		return nil, &RecoverableError{Kind: EmptyResponse, Message: "审查响应为空"}
 	}
 
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
-		return nil, fmt.Errorf("无法解析审查结果：缺少 JSON 代码块或裸 JSON 对象")
+		return nil, &RecoverableError{Kind: MissingJSON, Message: "无法解析审查结果：缺少 JSON 代码块或裸 JSON 对象"}
 	}
 
 	type reviewJSON struct {
@@ -147,14 +148,14 @@ func ParseReviewResponse(raw string) (*ReviewResult, error) {
 
 	var parsed reviewJSON
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-		return nil, fmt.Errorf("无法解析审查结果 JSON: %w", err)
+		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "审查结果 JSON 解析失败"}
 	}
 	if parsed.Approved == nil {
-		return nil, fmt.Errorf("审查结果缺少必填字段 approved")
+		return nil, &RecoverableError{Kind: MissingField, Message: "审查结果缺少必填字段 approved"}
 	}
 	summary := strings.TrimSpace(parsed.Summary)
 	if summary == "" {
-		return nil, fmt.Errorf("审查结果缺少必填字段 summary")
+		return nil, &RecoverableError{Kind: MissingField, Message: "审查结果缺少必填字段 summary"}
 	}
 
 	return &ReviewResult{
@@ -231,15 +232,105 @@ func isJSONNull(raw json.RawMessage) bool {
 	return strings.TrimSpace(string(raw)) == "null"
 }
 
+// FieldSpec 描述 JSON 响应中一个字段的规格，用于构造泛化的格式修复 prompt。
+type FieldSpec struct {
+	Name     string // 字段名
+	Type     string // 字段类型："string", "bool", "array", "object"
+	Required bool   // 是否必填
+	Desc     string // 字段描述
+}
+
+// 各阶段的字段规格定义
+var (
+	debateFields = []FieldSpec{
+		{Name: "should_finish", Type: "bool", Required: true, Desc: "是否认为讨论已经可以结束"},
+	}
+	planFinalFields = []FieldSpec{
+		{Name: "title", Type: "string", Required: true, Desc: "方案标题"},
+		{Name: "approach", Type: "string", Required: true, Desc: "实现方案"},
+		{Name: "file_changes", Type: "array", Required: false, Desc: "文件变更列表"},
+		{Name: "test_scenarios", Type: "array", Required: false, Desc: "测试场景"},
+	}
+	reviewFields = []FieldSpec{
+		{Name: "approved", Type: "bool", Required: true, Desc: "是否通过审查"},
+		{Name: "summary", Type: "string", Required: true, Desc: "审查总结"},
+		{Name: "resolved_items", Type: "array", Required: false, Desc: "已解决的问题列表"},
+		{Name: "issues", Type: "array", Required: false, Desc: "新发现的问题列表"},
+	}
+)
+
+// BuildFormatRepairPromptFor 生成泛化的格式修复 prompt，根据 FieldSpec 描述目标 JSON 格式。
+func BuildFormatRepairPromptFor(rawText string, fields []FieldSpec) string {
+	var sb strings.Builder
+	sb.WriteString("以下是你刚才生成的内容，但无法从中提取到有效的 JSON，导致解析失败。\n\n")
+	sb.WriteString("请**仅**输出一个 JSON 代码块（使用 markdown ```json ... ``` 格式），包含以下字段：\n")
+	for _, f := range fields {
+		req := ""
+		if f.Required {
+			req = "（必填）"
+		}
+		sb.WriteString(fmt.Sprintf("- %s: %s类型，%s%s\n", f.Name, f.Type, f.Desc, req))
+	}
+	sb.WriteString("\n不要重复原始内容，不要添加任何其他文字，只输出 JSON 代码块。\n\n")
+	sb.WriteString("---\n\n")
+	sb.WriteString(fmt.Sprintf("原始内容：\n%s", rawText))
+	return sb.String()
+}
+
 // BuildFormatRepairPrompt 生成格式修复 prompt，要求 AI 仅输出缺失的 JSON 代码块。
-// 用于 debate parse 失败后的第1级降级重试。
+// 用于 debate parse 失败后的第1级降级重试。保留向后兼容。
 func BuildFormatRepairPrompt(rawText string) string {
-	return fmt.Sprintf("以下是你刚才生成的评论内容，但缺少结尾的 JSON 代码块，导致解析失败。\n\n"+
-		"请**仅**输出一个 JSON 代码块（使用 markdown ```json ... ``` 格式），包含以下字段：\n"+
-		"- should_finish: 布尔值，表示你是否认为讨论已经可以结束\n\n"+
-		"不要重复评论正文，不要添加任何其他内容，只输出 JSON 代码块。\n\n"+
-		"---\n\n"+
-		"原始评论内容：\n%s", rawText)
+	return BuildFormatRepairPromptFor(rawText, debateFields)
+}
+
+// RepairAndParseFinalPlan 从修复回复中提取 JSON，解析为 FinalPlan。
+func RepairAndParseFinalPlan(originalRaw, repairRaw string) (*FinalPlan, error) {
+	jsonStr := extractJSON(repairRaw)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("修复回复中未找到 JSON 代码块")
+	}
+	var plan FinalPlan
+	if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
+		return nil, fmt.Errorf("修复回复 JSON 解析失败: %w", err)
+	}
+	if plan.Title == "" {
+		return nil, fmt.Errorf("修复回复缺少 title 字段")
+	}
+	if plan.Approach == "" {
+		return nil, fmt.Errorf("修复回复缺少 approach 字段")
+	}
+	return &plan, nil
+}
+
+// RepairAndParseReview 从修复回复中提取 JSON，解析为 ReviewResult。
+func RepairAndParseReview(originalRaw, repairRaw string) (*ReviewResult, error) {
+	jsonStr := extractJSON(repairRaw)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("修复回复中未找到 JSON 代码块")
+	}
+	type reviewJSON struct {
+		Approved      *bool    `json:"approved"`
+		Summary       string   `json:"summary"`
+		ResolvedItems []string `json:"resolved_items,omitempty"`
+		Issues        []string `json:"issues,omitempty"`
+	}
+	var parsed reviewJSON
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil, fmt.Errorf("修复回复 JSON 解析失败: %w", err)
+	}
+	if parsed.Approved == nil {
+		return nil, fmt.Errorf("修复回复缺少 approved 字段")
+	}
+	summary := strings.TrimSpace(parsed.Summary)
+	if summary == "" {
+		return nil, fmt.Errorf("修复回复缺少 summary 字段")
+	}
+	return &ReviewResult{
+		Approved:      *parsed.Approved,
+		Summary:       summary,
+		ResolvedItems: parsed.ResolvedItems,
+		Issues:        parsed.Issues,
+	}, nil
 }
 
 // RepairAndParseDebate 尝试用修复后的 JSON 拼接原始 body 构造 DebateComment。

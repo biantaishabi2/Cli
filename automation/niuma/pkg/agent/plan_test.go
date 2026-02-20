@@ -103,8 +103,11 @@ func TestFinalWithRetry_RetrySuccess(t *testing.T) {
 
 func TestFinalWithRetry_FallbackSuccess(t *testing.T) {
 	// 主 provider 持续返回非 JSON，fallback provider 首次返回有效 JSON
+	// WithRecovery 会在首次 parse 失败后尝试 repair（消耗 1 次额外调用），
+	// 因此 primary 需要 3 个响应：原始调用 + repair + 重试。
 	primary := ai.NewMockProvider(
 		"not json 1",
+		"repair also bad",
 		"not json 2",
 	)
 	fallback := ai.NewMockProvider(
@@ -120,14 +123,16 @@ func TestFinalWithRetry_FallbackSuccess(t *testing.T) {
 	plan, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{primary, fallback}, 1)
 	require.NoError(t, err)
 	assert.Equal(t, "方案B", plan.Title)
-	assert.Equal(t, 2, primary.CallCount())
+	assert.Equal(t, 3, primary.CallCount()) // 原始调用 + repair + 重试
 	assert.Equal(t, 1, fallback.CallCount())
 }
 
 func TestFinalWithRetry_AllParseFail_FallbackRawText(t *testing.T) {
 	// 两个 provider 均返回非 JSON，降级为原文
-	p1 := ai.NewMockProvider("not json", "not json")
-	p2 := ai.NewMockProvider("still not json", "still not json")
+	// WithRecovery 在首次 parse 失败后尝试 repair（消耗 1 次额外调用），
+	// 因此每个 provider 需要 3 个响应：原始调用 + repair + 重试。
+	p1 := ai.NewMockProvider("not json", "repair also bad", "not json retry")
+	p2 := ai.NewMockProvider("still not json", "repair also bad", "still not json retry")
 	engine := NewPlanEngine(p1)
 
 	input := &PromptInput{
@@ -137,8 +142,8 @@ func TestFinalWithRetry_AllParseFail_FallbackRawText(t *testing.T) {
 
 	plan, err := engine.FinalWithRetry(context.Background(), input, []ai.Provider{p1, p2}, 1)
 	require.NoError(t, err)
-	assert.Equal(t, "still not json", plan.Approach) // 最后一次的原文
-	assert.Equal(t, "", plan.Title)                   // title 为空，由调用方兜底
+	assert.Equal(t, "still not json retry", plan.Approach) // 最后一次的原文
+	assert.Equal(t, "", plan.Title)                         // title 为空，由调用方兜底
 }
 
 func TestFinalWithRetry_AllProviderError(t *testing.T) {

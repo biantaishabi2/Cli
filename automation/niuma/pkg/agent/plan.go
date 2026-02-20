@@ -6,9 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
-	"strings"
-	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 )
@@ -63,72 +60,39 @@ type retryAttempt struct {
 
 // FinalWithRetry 带受控重试和 provider 降级的最终方案生成。
 // providers 列表按优先级排列，对每个 provider 最多尝试 maxRetries+1 次。
-// 可恢复错误（RecoverableError）触发同 provider 重试，其他错误直接切下一个 provider。
+// 内部使用 WithRecovery 统一降级链路，新增格式修复重试能力。
 func (e *PlanEngine) FinalWithRetry(ctx context.Context, input *PromptInput, providers []ai.Provider, maxRetries int) (*FinalPlan, error) {
 	prompt, err := BuildFinalPlanPrompt(input)
 	if err != nil {
 		return nil, fmt.Errorf("构建 final plan prompt 失败: %w", err)
 	}
 
-	var attempts []retryAttempt
-	var lastRaw string
+	cfg := RecoveryConfig[*FinalPlan]{
+		Providers:  providers,
+		MaxRetries: maxRetries,
+		CallAI: func(ctx context.Context, provider ai.Provider) (string, error) {
+			return provider.Complete(ctx, prompt)
+		},
+		Parse:       ParseFinalPlanResponse,
+		BuildRepair: func(raw string) string { return BuildFormatRepairPromptFor(raw, planFinalFields) },
+		RepairParse: RepairAndParseFinalPlan,
+		OnAbort:     nil, // FinalWithRetry 自己处理软降级
+	}
 
-	for _, p := range providers {
-		maxAttempts := maxRetries + 1
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			raw, completeErr := p.Complete(ctx, prompt)
-			if completeErr != nil {
-				// provider.Complete 错误（网络/限流等），不做同 provider 重试
-				attempts = append(attempts, retryAttempt{
-					Provider: p.Name(),
-					Attempt:  attempt,
-					Error:    completeErr.Error(),
-					Kind:     "ProviderError",
-				})
-				break // 切下一个 provider
-			}
-
-			plan, parseErr := ParseFinalPlanResponse(raw)
-			if parseErr == nil {
-				return plan, nil
-			}
-
-			kind := "ParseError"
-			var re *RecoverableError
-			if errors.As(parseErr, &re) {
-				kind = string(re.Kind)
-			}
-			attempts = append(attempts, retryAttempt{
-				Provider: p.Name(),
-				Attempt:  attempt,
-				Error:    parseErr.Error(),
-				Kind:     kind,
-			})
-			lastRaw = raw
-			if attempt < maxAttempts {
-				// 格式错误：短随机抖动后重试
-				jitter := time.Duration(rand.Intn(500)) * time.Millisecond
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(jitter):
-				}
-			}
+	plan, err := WithRecovery(ctx, cfg)
+	if err != nil {
+		// 从 AbortError 提取 LastRaw 做软降级（保留原有行为）
+		var abortErr *AbortError
+		if errors.As(err, &abortErr) && abortErr.LastRaw != "" {
+			return &FinalPlan{Approach: abortErr.LastRaw}, nil
 		}
+		// 连一次有效响应都没拿到
+		if errors.As(err, &abortErr) {
+			return nil, &AggregateRetryError{Message: abortErr.Error(), Attempts: abortErr.Attempts}
+		}
+		return nil, err
 	}
-
-	// 全部 provider 耗尽，降级：原文作为 approach，流程继续
-	if lastRaw != "" {
-		return &FinalPlan{Approach: lastRaw}, nil
-	}
-
-	// 连一次有效响应都没拿到
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("所有 provider 均失败（共 %d 次尝试）:\n", len(attempts)))
-	for _, a := range attempts {
-		sb.WriteString(fmt.Sprintf("  - %s (attempt %d) [%s]: %s\n", a.Provider, a.Attempt, a.Kind, a.Error))
-	}
-	return nil, &AggregateRetryError{Message: sb.String(), Attempts: attempts}
+	return plan, nil
 }
 
 // AggregateRetryError 聚合所有重试尝试的错误
