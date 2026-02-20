@@ -918,6 +918,17 @@ func (c *Controller) Run(ctx context.Context) error {
 
 			fmt.Printf("[control] Integration 分支 %s: 有 %d 个 PR 待合入\n", branchName, len(tasks))
 
+			// 收集所有 PR 分支名，计算最旧 merge-base 作为 integration 分支起点
+			var prBranches []string
+			for _, task := range tasks {
+				prBranches = append(prBranches, task.Branch())
+			}
+			startPoint, err := c.builder.ComputeOldestMergeBase(prBranches)
+			if err != nil {
+				fmt.Printf("[control] 计算 merge-base 失败，fallback 到 baseBranch: %v\n", err)
+				startPoint = ""
+			}
+
 			for _, task := range tasks {
 				bi := BranchInfo{
 					Branch:   task.Branch(),
@@ -926,7 +937,7 @@ func (c *Controller) Run(ctx context.Context) error {
 					TaskID:   task.ID,
 				}
 
-				outcome, err := c.builder.ExecuteIntegrationMerge(branchName, bi)
+				outcome, err := c.builder.ExecuteIntegrationMerge(branchName, bi, startPoint)
 				if err != nil {
 					fmt.Printf("[control] 合入 %s 失败: %v\n", bi.Branch, err)
 					continue
