@@ -291,6 +291,76 @@ fn e2e_js_catch_with_param_no_broad_catch() {
         "JS catch with parameter should not trigger broad_catch, got: {:?}", smells);
 }
 
+// --- Rust 错误处理端到端测试 ---
+
+#[test]
+fn e2e_rust_swallowed_error_let_discard() {
+    let result = run_analyze(
+        "fn main() {\n    let _ = fs::remove_file(\"tmp.txt\");\n}\n",
+        "main.rs",
+        "rust",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().any(|s| s["rule"] == "swallowed_error"),
+        "Expected swallowed_error for Rust let _ =, got: {:?}", smells);
+}
+
+#[test]
+fn e2e_rust_no_broad_catch() {
+    // Rust 无异常捕获机制，broad_catch 不适用
+    let result = run_analyze(
+        "fn main() {\n    match result {\n        Err(_) => {}\n        _ => {}\n    }\n}\n",
+        "main.rs",
+        "rust",
+        Some("error_handling"),
+    );
+    let smells = result[0]["smells"].as_array().unwrap();
+    assert!(smells.iter().all(|s| s["rule"] != "broad_catch"),
+        "Rust should not trigger broad_catch, got: {:?}", smells);
+}
+
+// --- 源码读取失败应返回非零退出码 ---
+
+#[test]
+fn e2e_unreadable_source_fails() {
+    let dir = temp_dir("analyze_bdd_unreadable");
+    let ast_path = dir.join("ast.json");
+    let out_path = dir.join("smells.json");
+
+    // file_path 指向不存在的文件
+    let ast_json = r#"[{
+        "language": "python",
+        "file_path": "/nonexistent/path/missing.py",
+        "module_doc": null,
+        "exports": [],
+        "imports": [],
+        "calls": [],
+        "side_effects": {
+            "hasAsync": false,
+            "hasHttp": false,
+            "hasGenserver": false,
+            "hasFileIo": false,
+            "hasPubsub": false
+        },
+        "loc_lines": 5,
+        "declarations": 0
+    }]"#;
+    fs::write(&ast_path, &ast_json).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "analyze",
+            "--ast-file", ast_path.to_str().unwrap(),
+            "-o", out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run bcc analyze");
+    assert!(!output.status.success(),
+        "bcc analyze should fail when source file is unreadable, stderr: {}",
+        String::from_utf8_lossy(&output.stderr));
+}
+
 // --- 过滤功能端到端测试 ---
 
 #[test]

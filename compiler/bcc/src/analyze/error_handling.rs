@@ -14,16 +14,33 @@ impl Detector for SwallowedErrorDetector {
     fn name(&self) -> &str { "swallowed_error" }
     fn category(&self) -> &str { "error_handling" }
 
-    fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
+    fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
         let lines: Vec<&str> = source.lines().collect();
 
         // 预编译正则，避免在循环中重复创建
         let elixir_trivial_re = Regex::new(r#"^_\s*->\s*(:ok|nil|:error)\s*$"#).unwrap();
         let js_empty_catch_re = Regex::new(r#"catch\s*\([^)]*\)\s*\{\s*\}"#).unwrap();
+        // Rust: let _ = expr; 丢弃 Result（常见的静默吞掉错误模式）
+        let rust_let_discard_re = Regex::new(r#"^\s*let\s+_\s*=\s*.+"#).unwrap();
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
+
+            // Rust: let _ = expr; 丢弃返回值（静默吞掉错误）
+            if lang == "rust" && rust_let_discard_re.is_match(line) {
+                results.push(SmellRecord {
+                    category: "error_handling".to_string(),
+                    rule: "swallowed_error".to_string(),
+                    severity: "low".to_string(),
+                    message: "Discarding Result/Error with `let _ =` silently swallows errors".to_string(),
+                    file: file_path.to_string(),
+                    line: i + 1,
+                    source: "bcc".to_string(),
+                    confidence: 0.9,
+                });
+                continue;
+            }
 
             // Python: except ... : \n pass/...
             // 跳过空行找到第一个非空行来判断
@@ -115,8 +132,13 @@ impl Detector for BroadCatchDetector {
     fn name(&self) -> &str { "broad_catch" }
     fn category(&self) -> &str { "error_handling" }
 
-    fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
+    fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
+
+        // Rust 无异常捕获机制（使用 Result 类型），broad_catch 不适用
+        if lang == "rust" {
+            return results;
+        }
 
         // 预编译正则，避免在循环中重复创建
         let bare_except_re = Regex::new(r#"^\s*except\s*:\s*$"#).unwrap();
@@ -327,5 +349,34 @@ mod tests {
         let source = "try:\n    risky()\nexcept:\n\n    log(e)\n";
         let results = d.detect(source, "main.py", "python");
         assert!(results.is_empty(), "Empty line after except should not trigger false positive, got: {:?}", results);
+    }
+
+    // --- Rust 支持测试 ---
+
+    #[test]
+    fn swallowed_error_detects_rust_let_discard() {
+        let d = SwallowedErrorDetector;
+        let source = "fn main() {\n    let _ = fs::remove_file(\"tmp.txt\");\n}\n";
+        let results = d.detect(source, "main.rs", "rust");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].rule, "swallowed_error");
+        assert_eq!(results[0].line, 2);
+    }
+
+    #[test]
+    fn swallowed_error_ignores_rust_normal_let() {
+        let d = SwallowedErrorDetector;
+        let source = "fn main() {\n    let result = fs::read_to_string(\"f.txt\");\n}\n";
+        let results = d.detect(source, "main.rs", "rust");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn broad_catch_not_applicable_for_rust() {
+        let d = BroadCatchDetector;
+        // Rust 无异常捕获，broad_catch 不适用
+        let source = "fn main() {\n    match result {\n        Err(_) => {}\n        _ => {}\n    }\n}\n";
+        let results = d.detect(source, "main.rs", "rust");
+        assert!(results.is_empty());
     }
 }

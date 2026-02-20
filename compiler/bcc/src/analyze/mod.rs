@@ -130,6 +130,9 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
         .parent()
         .unwrap_or_else(|| Path::new("."));
 
+    // 收集源码读取失败的文件，最终作为错误返回
+    let mut read_failures: Vec<String> = Vec::new();
+
     let reports: Vec<SmellReport> = records
         .iter()
         .map(|record| {
@@ -155,7 +158,7 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
             {
                 Ok(s) if !s.is_empty() => s,
                 Ok(_) => {
-                    eprintln!("[analyze] WARNING: source file is empty, skipping: {}", file_path);
+                    read_failures.push(format!("{}: file is empty", file_path));
                     return SmellReport {
                         file: file_path.clone(),
                         smells: vec![],
@@ -167,7 +170,7 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
                     };
                 }
                 Err(e) => {
-                    eprintln!("[analyze] WARNING: cannot read source file '{}': {}", file_path, e);
+                    read_failures.push(format!("{}: {}", file_path, e));
                     return SmellReport {
                         file: file_path.clone(),
                         smells: vec![],
@@ -206,6 +209,15 @@ pub fn run(ast_file: &str, output: &str, rules: Option<String>) -> Result<(), Bo
             }
         })
         .collect();
+
+    // 源码读取失败视为错误，避免假阴性
+    if !read_failures.is_empty() {
+        return Err(format!(
+            "failed to read {} source file(s):\n  {}",
+            read_failures.len(),
+            read_failures.join("\n  ")
+        ).into());
+    }
 
     // 写出结果
     let json = serde_json::to_string_pretty(&reports)?;
@@ -249,10 +261,15 @@ mod tests {
     #[test]
     fn valid_ast_with_rules_filter() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("lib");
+        fs::create_dir_all(&src_path).unwrap();
+        let src_file = src_path.join("foo.ex");
+        fs::write(&src_file, "defmodule Foo do\n  def bar, do: :ok\nend\n").unwrap();
+
         let ast_path = dir.path().join("valid.json");
         let out_path = dir.path().join("smells.json");
 
-        // 最小 FileRecord JSON
+        // 最小 FileRecord JSON，file_path 使用相对于 AST 文件的路径
         let ast_json = r#"[{
             "language": "elixir",
             "file_path": "lib/foo.ex",
@@ -290,6 +307,10 @@ mod tests {
     #[test]
     fn single_file_record_input() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("lib");
+        fs::create_dir_all(&src_path).unwrap();
+        fs::write(src_path.join("bar.ex"), "defmodule Bar do\nend\n").unwrap();
+
         let ast_path = dir.path().join("single.json");
         let out_path = dir.path().join("smells.json");
 
@@ -329,6 +350,10 @@ mod tests {
     #[test]
     fn old_format_ast_backward_compatible() {
         let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("src");
+        fs::create_dir_all(&src_path).unwrap();
+        fs::write(src_path.join("main.rs"), "fn main() {}\n").unwrap();
+
         let ast_path = dir.path().join("old.json");
         let out_path = dir.path().join("smells.json");
 
@@ -419,5 +444,41 @@ mod tests {
         for smell in &result[0].smells {
             assert_eq!(smell.category, "security");
         }
+    }
+
+    #[test]
+    fn unreadable_source_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let ast_path = dir.path().join("missing_src.json");
+        let out_path = dir.path().join("smells.json");
+
+        // file_path 指向不存在的源码文件
+        let ast_json = r#"[{
+            "language": "python",
+            "file_path": "/nonexistent/path/missing.py",
+            "module_doc": null,
+            "exports": [],
+            "imports": [],
+            "calls": [],
+            "side_effects": {
+                "hasAsync": false,
+                "hasHttp": false,
+                "hasGenserver": false,
+                "hasFileIo": false,
+                "hasPubsub": false
+            },
+            "loc_lines": 5,
+            "declarations": 0
+        }]"#;
+        fs::write(&ast_path, ast_json).unwrap();
+
+        let result = run(
+            ast_path.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            None,
+        );
+        assert!(result.is_err(), "Should return error when source file is unreadable");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("failed to read"), "Error should mention read failure: {}", err_msg);
     }
 }
