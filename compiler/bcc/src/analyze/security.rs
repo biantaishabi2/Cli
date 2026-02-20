@@ -3,7 +3,33 @@
 //! 对源码做 regex 模式匹配，检测常见安全问题。
 
 use super::{Detector, SmellRecord};
+use once_cell::sync::Lazy;
 use regex::Regex;
+
+// 预编译正则，避免每次 detect() 调用重复编译
+static CREDENTIAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|password|access[_-]?token|private[_-]?key|client[_-]?secret)\s*[=:]\s*["'][^"']{8,}["']"#
+).unwrap());
+static CREDENTIAL_ENV_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)(environ|getenv|env\[|env\.get|ENV\[|System\.get_env|std::env)"#
+).unwrap());
+static INJECTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)\b(cursor\.execute|db\.query|conn\.execute|session\.execute|\.raw_query|\.run_query|os\.system|subprocess\.call|Runtime\.exec)\s*\([^)]*(\+|\.format\(|f["']|\$\{|#\{)"#
+).unwrap());
+static DESER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)\b(pickle\.loads?\s*\(|yaml\.load\s*\(|marshal\.loads?\s*\(|shelve\.open\s*\(|jsonpickle\.decode\s*\()"#
+).unwrap());
+static DESER_SAFE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)yaml\.safe_load"#).unwrap());
+static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)\beval\s*\("#).unwrap());
+static WEAK_CRYPTO_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)\b(hashlib\.md5|hashlib\.sha1|MD5\.new|SHA1\.new|DES\.new|RC4\.new|Digest::MD5|Digest::SHA1|md5\(|sha1\(|createHash\s*\(\s*['"](?:md5|sha1)['"])"#
+).unwrap());
+static LOG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)\b(logger\.\w+|log\.\w+|console\.log|IO\.inspect|Logger\.\w+|logging\.\w+)\s*\("#
+).unwrap());
+static SENSITIVE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)(password|passwd|secret|api_key|api_token|auth_token|access_token|private_key|credential)"#
+).unwrap());
 
 /// 硬编码凭证检测器
 ///
@@ -15,17 +41,11 @@ impl Detector for HardcodedCredentialDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
-        // 匹配：变量名含敏感词 + 赋值为非空字符串字面量
-        let re = Regex::new(
-            r#"(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|password|access[_-]?token|private[_-]?key|client[_-]?secret)\s*[=:]\s*["'][^"']{8,}["']"#
-        ).unwrap();
-
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
-            if re.is_match(line) {
+            if CREDENTIAL_RE.is_match(line) {
                 // 排除从环境变量读取的模式
-                let env_re = Regex::new(r#"(?i)(environ|getenv|env\[|env\.get|ENV\[|System\.get_env|std::env)"#).unwrap();
-                if env_re.is_match(line) {
+                if CREDENTIAL_ENV_RE.is_match(line) {
                     continue;
                 }
                 results.push(SmellRecord {
@@ -54,14 +74,9 @@ impl Detector for InjectionRiskDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
-        // 匹配危险函数 + 字符串拼接（+）或 f-string 插值
-        let re = Regex::new(
-            r#"(?i)\b(execute|query|system|exec|eval|raw_query|run_query)\s*\([^)]*(\+|\.format\(|f["']|\$\{|#\{)"#
-        ).unwrap();
-
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
-            if re.is_match(line) {
+            if INJECTION_RE.is_match(line) {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "injection_risk".to_string(),
@@ -88,22 +103,28 @@ impl Detector for UnsafeDeserializationDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
-        // 黑名单模式：pickle.load(s)? / yaml.load(非safe) / marshal.load / eval(
-        let re = Regex::new(
-            r#"(?i)\b(pickle\.loads?\s*\(|yaml\.load\s*\(|marshal\.loads?\s*\(|shelve\.open\s*\(|jsonpickle\.decode\s*\(|eval\s*\()"#
-        ).unwrap();
-
-        // 安全版本排除
-        let safe_re = Regex::new(r#"(?i)yaml\.safe_load"#).unwrap();
-
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
-            if re.is_match(line) && !safe_re.is_match(line) {
+            // 不安全反序列化（pickle/yaml/marshal 等）
+            if DESER_RE.is_match(line) && !DESER_SAFE_RE.is_match(line) {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "unsafe_deserialization".to_string(),
                     severity: "high".to_string(),
                     message: format!("Unsafe deserialization detected"),
+                    file: file_path.to_string(),
+                    line: line_num + 1,
+                    source: "bcc".to_string(),
+                    confidence: 0.9,
+                });
+            }
+            // eval() 单独归类为代码注入（不属于反序列化）
+            if EVAL_RE.is_match(line) && !DESER_RE.is_match(line) {
+                results.push(SmellRecord {
+                    category: "security".to_string(),
+                    rule: "injection_risk".to_string(),
+                    severity: "high".to_string(),
+                    message: format!("Dangerous eval() call detected"),
                     file: file_path.to_string(),
                     line: line_num + 1,
                     source: "bcc".to_string(),
@@ -125,13 +146,9 @@ impl Detector for WeakCryptoDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
-        let re = Regex::new(
-            r#"(?i)\b(hashlib\.md5|hashlib\.sha1|MD5\.new|SHA1\.new|DES\.new|RC4\.new|Digest::MD5|Digest::SHA1|md5\(|sha1\(|createHash\s*\(\s*['"](?:md5|sha1)['"])"#
-        ).unwrap();
-
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
-            if re.is_match(line) {
+            if WEAK_CRYPTO_RE.is_match(line) {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "weak_crypto".to_string(),
@@ -158,18 +175,10 @@ impl Detector for SensitiveDataLogDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
-        // 匹配日志函数调用
-        let log_re = Regex::new(
-            r#"(?i)\b(logger\.\w+|log\.\w+|console\.log|IO\.inspect|Logger\.\w+|logging\.\w+|print|println!?)\s*\("#
-        ).unwrap();
-        // 匹配敏感变量名出现在插值中
-        let sensitive_re = Regex::new(
-            r#"(?i)(password|passwd|secret|token|api_key|api_token|auth_token|access_token|private_key|credential)"#
-        ).unwrap();
-
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
-            if log_re.is_match(line) && sensitive_re.is_match(line) {
+            // 收紧：只匹配明确的日志函数（去掉 print/println 避免误报）
+            if LOG_RE.is_match(line) && SENSITIVE_RE.is_match(line) {
                 results.push(SmellRecord {
                     category: "security".to_string(),
                     rule: "sensitive_data_log".to_string(),

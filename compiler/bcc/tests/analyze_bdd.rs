@@ -522,7 +522,7 @@ fn e2e_large_file_many_lines() {
     let mut lines: Vec<String> = Vec::new();
     for i in 0..5000 {
         if i % 100 == 0 {
-            lines.push(format!(r#"api_key_{} = "sk-proj-abcdef{}""#, i, i));
+            lines.push(format!(r#"api_key = "sk-proj-abcdef{:04}xx""#, i));
         } else {
             lines.push(format!("x_{} = {}", i, i));
         }
