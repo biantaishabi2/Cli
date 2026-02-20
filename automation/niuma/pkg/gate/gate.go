@@ -38,6 +38,7 @@ type RunGateFunc func(ctx context.Context, repoDir string, pr int) (string, erro
 type MarkNeedsFixFunc func(ctx context.Context, repo string, issue int) error
 type AddLabelsFunc func(ctx context.Context, repo string, issue int, labels []string) error
 type AddCommentFunc func(ctx context.Context, repo string, issue int, body string) error
+type AddPRReviewFunc func(ctx context.Context, repo string, pr int, body string) error
 
 type Options struct {
 	Repo       string
@@ -51,6 +52,7 @@ type Options struct {
 	MarkNeedsFix MarkNeedsFixFunc
 	AddLabels    AddLabelsFunc
 	AddComment   AddCommentFunc
+	AddPRReview  AddPRReviewFunc // 可选：gate 失败时将错误信息写到 PR review，供 iterate 读取
 }
 
 type Runner struct {
@@ -155,6 +157,12 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
 			if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
 				return fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
+			}
+			if r.opts.AddPRReview != nil {
+				reviewBody := formatGateFailureReview(gateFailure)
+				if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: gate 失败信息写入 PR review 失败: %v\n", err)
+				}
 			}
 			return fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
 		}
@@ -418,6 +426,10 @@ func parseString(v any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+}
+
+func formatGateFailureReview(gateFailure string) string {
+	return fmt.Sprintf("## ❌ Gate 测试失败详情\n\n```\n%s\n```", gateFailure)
 }
 
 func writeAtomicJSON(path string, payload []byte) error {
