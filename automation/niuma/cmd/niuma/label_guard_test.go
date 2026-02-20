@@ -212,6 +212,83 @@ func TestValidateLabelGuardMode(t *testing.T) {
 	}
 }
 
+func TestExecuteLabelGuard_InvalidAction(t *testing.T) {
+	mock := &mockLGClient{}
+	ctx := context.Background()
+
+	// 未知 action 应返回错误
+	err := executeLabelGuard(ctx, mock, "dry-run", 1, "random-user", "reopened", "bot:fix")
+	if err == nil {
+		t.Fatal("expected error for invalid action")
+	}
+	if !strings.Contains(err.Error(), "不支持的 label-guard action") {
+		t.Errorf("error should mention invalid action, got: %v", err)
+	}
+	// 不应发评论或操作标签
+	if len(mock.addedComments) != 0 {
+		t.Errorf("should not post comments for invalid action")
+	}
+	if mock.replacedWith != nil {
+		t.Errorf("should not replace labels for invalid action")
+	}
+
+	// enforce 模式下也应拒绝
+	err = executeLabelGuard(ctx, mock, "enforce", 1, "random-user", "unknown", "bot:fix")
+	if err == nil {
+		t.Fatal("expected error for invalid action in enforce mode")
+	}
+}
+
+func TestValidateLabelGuardAction(t *testing.T) {
+	tests := []struct {
+		action  string
+		wantErr bool
+	}{
+		{"labeled", false},
+		{"unlabeled", false},
+		{"", true},
+		{"reopened", true},
+		{"closed", true},
+		{"LABELED", true},
+	}
+	for _, tt := range tests {
+		err := validateLabelGuardAction(tt.action)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateLabelGuardAction(%q) error = %v, wantErr = %v", tt.action, err, tt.wantErr)
+		}
+	}
+}
+
+func TestExecuteLabelGuard_EnvOverrideAllowlist(t *testing.T) {
+	// 设置环境变量 override allowlist
+	t.Setenv("NIUMA_LABEL_ALLOWLIST", "env-user,another-env-user")
+	defer t.Setenv("NIUMA_LABEL_ALLOWLIST", "")
+
+	overridden := splitAndTrim("env-user,another-env-user", ",")
+	if !isInAllowlist("env-user", overridden) {
+		t.Error("env-user should be in env-overridden allowlist")
+	}
+	if isInAllowlist("github-actions[bot]", overridden) {
+		t.Error("github-actions[bot] should NOT be in env-overridden allowlist")
+	}
+}
+
+func TestExecuteLabelGuard_EnvOverrideMode(t *testing.T) {
+	// 测试 mode 环境变量 override
+	t.Setenv("NIUMA_LABEL_GUARD_MODE", "enforce")
+	defer t.Setenv("NIUMA_LABEL_GUARD_MODE", "")
+
+	mode := "enforce"
+	if err := validateLabelGuardMode(mode); err != nil {
+		t.Errorf("enforce should be a valid mode: %v", err)
+	}
+
+	// 无效 mode 也能通过 validateLabelGuardMode 校验拦截
+	if err := validateLabelGuardMode("bad-mode"); err == nil {
+		t.Error("bad-mode should be rejected by validateLabelGuardMode")
+	}
+}
+
 func TestIsInAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string

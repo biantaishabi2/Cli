@@ -322,6 +322,39 @@ func runWorkflowGateStatusJQ(t *testing.T, tasksJSON string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestGenerateEventID_WithRunID(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "12345")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+
+	eventID, source := generateEventID(50)
+	assert.Equal(t, "pr-50-run-12345-2", eventID)
+	assert.Equal(t, "run_id", source)
+}
+
+func TestGenerateEventID_WithRunIDDefaultAttempt(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "99999")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "")
+
+	eventID, source := generateEventID(42)
+	assert.Equal(t, "pr-42-run-99999-1", eventID)
+	assert.Equal(t, "run_id", source)
+}
+
+func TestGenerateEventID_FallbackTimestamp(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "")
+
+	eventID, source := generateEventID(50)
+	assert.True(t, strings.HasPrefix(eventID, "pr-50-ts-"), "event_id should start with pr-50-ts-, got: %s", eventID)
+	assert.Equal(t, "timestamp", source)
+}
+
+func TestDispatchWakeupFlag_Exists(t *testing.T) {
+	f := controlCloseMergedCmd.Flags().Lookup("dispatch-wakeup")
+	require.NotNil(t, f)
+	assert.Equal(t, "false", f.DefValue)
+}
+
 type stubGitHubControlClient struct {
 	findMarkerResp *gh.MarkerComment
 	findMarkerErr  error

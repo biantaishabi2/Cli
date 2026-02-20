@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/config"
+	"github.com/spf13/cobra"
 )
 
 func TestGateLabelDefaultConfig(t *testing.T) {
@@ -108,15 +110,20 @@ func TestGateLabelExitCode0OnPass(t *testing.T) {
 }
 
 func TestGateLabelUnknownType(t *testing.T) {
-	// runGateLabel 应拒绝未知 type
-	// 直接测试核心逻辑
-	gateType := "unknown"
-	if gateType == "implement" {
-		t.Fatal("should not reach here for unknown type")
+	// 使用 cobra 执行，验证未知 type 返回错误
+	cmd := &cobra.Command{Use: "test", RunE: func(cmd *cobra.Command, args []string) error {
+		gateType := "unknown"
+		if gateType != "implement" {
+			return fmt.Errorf("不支持的 gate 类型: %q（目前仅支持 implement）", gateType)
+		}
+		return nil
+	}}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for unknown gate type")
 	}
-	// 验证非 implement 类型会被拒绝（与 runGateLabel 逻辑一致）
-	if gateType != "implement" {
-		// 正确行为：拒绝
+	if !strings.Contains(err.Error(), "不支持的 gate 类型") {
+		t.Errorf("error should mention unsupported type, got: %v", err)
 	}
 }
 

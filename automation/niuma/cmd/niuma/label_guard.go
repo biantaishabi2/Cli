@@ -97,7 +97,22 @@ func validateLabelGuardMode(mode string) error {
 	}
 }
 
+// validateLabelGuardAction 校验 action 值合法性
+func validateLabelGuardAction(action string) error {
+	switch action {
+	case "labeled", "unlabeled":
+		return nil
+	default:
+		return fmt.Errorf("不支持的 label-guard action: %q（仅支持 labeled/unlabeled）", action)
+	}
+}
+
 func executeLabelGuard(ctx context.Context, client labelGuardGitHubClient, mode string, issue int, actor, action, label string) error {
+	// 前置校验 action 合法性
+	if err := validateLabelGuardAction(action); err != nil {
+		return err
+	}
+
 	// 幂等评论去重：通过 pkg/marker 检查是否已有相同 key 的 marker
 	comments, err := client.ListComments(ctx, issue)
 	if err != nil {
