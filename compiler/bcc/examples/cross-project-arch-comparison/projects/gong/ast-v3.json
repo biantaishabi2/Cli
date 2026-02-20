@@ -110,12 +110,56 @@
     {
       "sourcePath": "gong/agent_loop.ex",
       "localDependencies": [
+        "gong/agent.ex",
         "gong/extension_integration.ex",
         "gong/hook_runner.ex",
         "gong/prompt.ex",
         "gong/retry.ex",
         "gong/steering.ex",
+        "gong/stream.ex",
         "gong/tool_result.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "hooks",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :hooks",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "llm_backend",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :llm_backend",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "max_turns",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :max_turns",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "retry_attempt",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :retry_attempt",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "steering_config",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :steering_config",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
       ],
       "calls": [
         {
@@ -123,6 +167,9 @@
         },
         {
           "callee": "Exception"
+        },
+        {
+          "callee": "Gong.Agent"
         },
         {
           "callee": "Gong.ExtensionIntegration"
@@ -146,16 +193,42 @@
           "callee": "Map"
         },
         {
+          "callee": "Process"
+        },
+        {
           "callee": "ReAct"
         },
         {
+          "callee": "ReqLLM"
+        },
+        {
+          "callee": "ReqLLM.Response"
+        },
+        {
+          "callee": "ReqLLM.ToolCall"
+        },
+        {
           "callee": "StratState"
+        },
+        {
+          "callee": "Stream.Event"
+        },
+        {
+          "callee": "StreamEvent"
         },
         {
           "callee": "String"
         }
       ],
       "imports": [
+        {
+          "specifier": "Gong.Stream",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.Stream.Event, as: StreamEvent",
+          "kind": "alias"
+        },
         {
           "specifier": "Jido.AI.Directive",
           "kind": "alias"
@@ -173,9 +246,9 @@
           "kind": "alias"
         }
       ],
-      "exports_count": 4,
-      "imports_count": 4,
-      "loc_lines": 456,
+      "exports_count": 6,
+      "imports_count": 6,
+      "loc_lines": 551,
       "side_effects": {
         "hasAsync": false,
         "hasHttp": false,
@@ -193,6 +266,22 @@
         "gong/providers/deepseek.ex"
       ],
       "relationHints": [
+        {
+          "target": "DynamicSupervisor",
+          "call_type_hint": "supervisor_child",
+          "via": "children list",
+          "confidence": 0.9,
+          "detector": "elixir.supervisor_children",
+          "reason": "Supervisor children 列表中的模块引用"
+        },
+        {
+          "target": "Registry",
+          "call_type_hint": "supervisor_child",
+          "via": "children list",
+          "confidence": 0.9,
+          "detector": "elixir.supervisor_children",
+          "reason": "Supervisor children 列表中的模块引用"
+        },
         {
           "target": "gong/providers/deepseek.ex",
           "call_type_hint": "external_registration",
@@ -289,6 +378,32 @@
         "gong/compaction/lock.ex",
         "gong/compaction/summarizer.ex",
         "gong/compaction/token_estimator.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "context_window",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :context_window",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "reserve_tokens",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :reserve_tokens",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "session_id",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :session_id",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
       ],
       "calls": [
         {
@@ -871,6 +986,56 @@
         "gong/session.ex",
         "gong/session/events.ex"
       ],
+      "relationHints": [
+        {
+          "target": "command_id",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :command_id",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "cwd",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :cwd",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "entry",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :entry",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "legacy_entry",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :legacy_entry",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "runtime",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :runtime",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "timestamp",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :timestamp",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -938,6 +1103,24 @@
     },
     {
       "sourcePath": "gong/command_registry.ex",
+      "relationHints": [
+        {
+          "target": "description",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :description",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "extension",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :extension",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -1051,6 +1234,48 @@
       "localDependencies": [
         "gong/compaction/token_estimator.ex",
         "gong/tape/store.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "context_window",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :context_window",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "max_tokens",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :max_tokens",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "reserve_tokens",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :reserve_tokens",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "summarize_fn",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :summarize_fn",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "window_size",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :window_size",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
       ],
       "calls": [
         {
@@ -1175,6 +1400,16 @@
       "localDependencies": [
         "gong/extension.ex"
       ],
+      "relationHints": [
+        {
+          "target": "no_extensions",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :no_extensions",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Code"
@@ -1288,6 +1523,16 @@
         "gong/extension.ex",
         "gong/extension/loader.ex",
         "gong/extension/runner.ex"
+      ],
+      "relationHints": [
+        {
+          "target": "extension_paths",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :extension_paths",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
       ],
       "calls": [
         {
@@ -1407,7 +1652,7 @@
       "imports": [],
       "exports_count": 6,
       "imports_count": 0,
-      "loc_lines": 191,
+      "loc_lines": 233,
       "side_effects": {
         "hasAsync": false,
         "hasHttp": false,
@@ -1468,6 +1713,32 @@
     },
     {
       "sourcePath": "gong/prompt.ex",
+      "relationHints": [
+        {
+          "target": "context",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :context",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "skills",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :skills",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "workspace",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :workspace",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "DateTime"
@@ -1499,6 +1770,16 @@
     },
     {
       "sourcePath": "gong/prompt_template.ex",
+      "relationHints": [
+        {
+          "target": "description",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :description",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -1557,6 +1838,24 @@
     },
     {
       "sourcePath": "gong/provider_registry.ex",
+      "relationHints": [
+        {
+          "target": "priority",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :priority",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "timeout",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :timeout",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -1775,11 +2074,106 @@
     {
       "sourcePath": "gong/session.ex",
       "localDependencies": [
+        "gong/agent_loop.ex",
+        "gong/model_registry.ex",
         "gong/session/events.ex",
         "gong/stream.ex",
         "gong/thinking.ex"
       ],
+      "relationHints": [
+        {
+          "target": "Events",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "Keyword",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "Map",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "MapSet",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "Process",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "System",
+          "call_type_hint": "genserver_runtime_dep",
+          "via": "handle_call",
+          "confidence": 0.8,
+          "detector": "elixir.genserver_call",
+          "reason": "GenServer handler 内的外部模块调用"
+        },
+        {
+          "target": "backend",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :backend",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "model",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :model",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "name",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :name",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "restore_fun",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :restore_fun",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "session_id",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :session_id",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
+        {
+          "callee": "AgentLoop"
+        },
         {
           "callee": "Atom"
         },
@@ -1814,6 +2208,9 @@
           "callee": "MapSet"
         },
         {
+          "callee": "ModelRegistry"
+        },
+        {
           "callee": "Process"
         },
         {
@@ -1837,6 +2234,14 @@
       ],
       "imports": [
         {
+          "specifier": "Gong.AgentLoop",
+          "kind": "alias"
+        },
+        {
+          "specifier": "Gong.ModelRegistry",
+          "kind": "alias"
+        },
+        {
           "specifier": "Gong.Session.Events",
           "kind": "alias"
         },
@@ -1858,8 +2263,8 @@
         }
       ],
       "exports_count": 37,
-      "imports_count": 5,
-      "loc_lines": 1605,
+      "imports_count": 7,
+      "loc_lines": 1638,
       "side_effects": {
         "hasAsync": true,
         "hasHttp": false,
@@ -1923,6 +2328,32 @@
     },
     {
       "sourcePath": "gong/stream.ex",
+      "relationHints": [
+        {
+          "target": "content",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :content",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "tool_args",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :tool_args",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "tool_name",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :tool_name",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -2145,6 +2576,16 @@
     },
     {
       "sourcePath": "gong/tool_config.ex",
+      "relationHints": [
+        {
+          "target": "preset",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :preset",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Enum"
@@ -2601,6 +3042,24 @@
     },
     {
       "sourcePath": "gong/utils/truncate.ex",
+      "relationHints": [
+        {
+          "target": "max_bytes",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :max_bytes",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        },
+        {
+          "target": "max_lines",
+          "call_type_hint": "callback_injection",
+          "via": "Keyword.get :max_lines",
+          "confidence": 0.75,
+          "detector": "elixir.callback_injection",
+          "reason": "Keyword.get opts 回调注入模式"
+        }
+      ],
       "calls": [
         {
           "callee": "Bitwise"

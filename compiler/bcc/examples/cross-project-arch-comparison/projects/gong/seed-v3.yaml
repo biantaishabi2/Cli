@@ -201,10 +201,10 @@ relations_expected:
     allowed: true
     rationale: "AgentLoop 使用 retry/steering/abort"
   # [Step1] AGENT→STREAM — AgentLoop 发射流式事件
-  # - caller: AGENT
-  #   callee: STREAM
-  #   allowed: true
-  #   rationale: "AgentLoop 发射流式事件"
+  - caller: AGENT
+    callee: STREAM
+    allowed: true
+    rationale: "AgentLoop 发射流式事件"
   # [Step4] AGENT→COMPACTION — AgentLoop 触发上下文压缩
   # - caller: AGENT
   #   callee: COMPACTION
@@ -213,10 +213,10 @@ relations_expected:
 
   # === SESSION 依赖 ===
   # [Step1] SESSION→AGENT — Session 驱动 AgentLoop（当前通过 backend 闭包，需改为直接调用）
-  # - caller: SESSION
-  #   callee: AGENT
-  #   allowed: true
-  #   rationale: "Session 驱动 AgentLoop 执行"
+  - caller: SESSION
+    callee: AGENT
+    allowed: true
+    rationale: "Session 驱动 AgentLoop 执行"
   - caller: SESSION
     callee: STREAM
     allowed: true
@@ -236,10 +236,10 @@ relations_expected:
   #   allowed: true
   #   rationale: "Session 管理自动压缩"
   # [Step1] SESSION→PROVIDERS — Session 解析 model 参数构建 LLM backend
-  # - caller: SESSION
-  #   callee: PROVIDERS
-  #   allowed: true
-  #   rationale: "Session 构建 LLM backend"
+  - caller: SESSION
+    callee: PROVIDERS
+    allowed: true
+    rationale: "Session 构建 LLM backend"
 
   # === COMPACTION 依赖 ===
   - caller: COMPACTION
