@@ -2998,19 +2998,16 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
     // 输出文件应存在且可解析
     assert!(out.exists(), "output file should exist");
     let raw = fs::read_to_string(&out).expect("read output");
-    let report: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
+    let reports: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
 
-    // 验证输出中包含来自 good linter 的 smell 记录
-    let smells = report.get("smells").and_then(|v| v.as_array());
-    assert!(
-        smells.is_some(),
-        "output should contain smells array, raw: {}",
-        raw
-    );
-    let smells = smells.unwrap();
-    let good_smells: Vec<_> = smells.iter().filter(|s| {
-        s.get("source").and_then(|v| v.as_str()) == Some("good")
-    }).collect();
+    // analyze 输出是 Vec<SmellReport> 数组，遍历所有 report 的 smells
+    let reports_arr = reports.as_array().expect(&format!(
+        "output should be a JSON array (Vec<SmellReport>), raw: {}", raw
+    ));
+    let good_smells: Vec<_> = reports_arr.iter()
+        .flat_map(|r| r.get("smells").and_then(|v| v.as_array()).into_iter().flatten())
+        .filter(|s| s.get("source").and_then(|v| v.as_str()) == Some("good"))
+        .collect();
     assert_eq!(
         good_smells.len(), 2,
         "should have 2 smells from 'good' linter, got {}: {:?}",
