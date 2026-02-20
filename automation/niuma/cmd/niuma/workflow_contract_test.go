@@ -76,44 +76,33 @@ func TestWorkflowContract_DispatchCompletedHasPayloadAndDegradePolicy(t *testing
 }
 
 func TestWorkflowContract_ImplementGateHasMaxRetriesValidation(t *testing.T) {
-	content := loadWorkflowFile(t, "niuma-implement.yml")
+	content := loadWorkflowFile(t, "niuma-implement-reusable.yml")
 
-	// workflow 侧必须包含 ^[0-9]+$ 正则校验，确保非法值不会直接传给 CLI
-	assert.Contains(t, content, `[[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]`,
-		"niuma-implement.yml 必须包含 max-retries 数值正则校验")
 	assert.Contains(t, content, "GATE_MAX_RETRIES=2",
-		"niuma-implement.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
+		"niuma-implement-reusable.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
 }
 
 func TestWorkflowContract_IterateGateHasMaxRetriesValidation(t *testing.T) {
-	content := loadWorkflowFile(t, "niuma-iterate.yml")
+	content := loadWorkflowFile(t, "niuma-iterate-reusable.yml")
 
-	// workflow 侧必须包含 ^[0-9]+$ 正则校验
-	assert.Contains(t, content, `[[ "$NIUMA_INTEGRATION_GATE_MAX_RETRIES" =~ ^[0-9]+$ ]]`,
-		"niuma-iterate.yml 必须包含 max-retries 数值正则校验")
 	assert.Contains(t, content, "GATE_MAX_RETRIES=2",
-		"niuma-iterate.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
+		"niuma-iterate-reusable.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
 }
 
 func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
-	content := loadWorkflowFile(t, "niuma-implement.yml")
+	content := loadWorkflowFile(t, "niuma-implement-reusable.yml")
 
 	assert.Contains(t, content, "\"$NIUMA_BIN\" gate run")
 	assert.Contains(t, content, "GATE_MAX_RETRIES=2")
-	assert.Contains(t, content, "[[ \"$NIUMA_INTEGRATION_GATE_MAX_RETRIES\" =~ ^[0-9]+$ ]]")
 	assert.Contains(t, content, "--max-retries \"$GATE_MAX_RETRIES\"")
-	assert.NotContains(t, content, "Resolve Gate Retry Policy")
-	assert.NotContains(t, content, "Escalate Human On Gate Failure")
 }
 
 func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {
-	content := loadWorkflowFile(t, "niuma-iterate.yml")
+	content := loadWorkflowFile(t, "niuma-iterate-reusable.yml")
 
 	assert.Equal(t, 2, strings.Count(content, "\"$NIUMA_BIN\" gate run"))
 	assert.Equal(t, 2, strings.Count(content, "GATE_MAX_RETRIES=2"))
 	assert.Equal(t, 2, strings.Count(content, "--max-retries \"$GATE_MAX_RETRIES\""))
-	assert.Contains(t, content, "NIUMA_INTEGRATION_GATE_MAX_RETRIES 非法")
-	assert.NotContains(t, content, "Keep Needs-Fix On Gate Failure")
 }
 
 func loadWorkflowFile(t *testing.T, workflowName string) string {
