@@ -721,9 +721,22 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 	}
 
+	// ②.5 缓存全量 issues，供 hydrate 和 ⑦ 步复用。
+	allIssuesCache, err := c.github.ListIssuesByState(ctx, "all")
+	if err != nil {
+		return fmt.Errorf("扫描全量 issues 失败: %w", err)
+	}
+
+	// ②.6 hydrate：从 GitHub 重建跨 workflow run 丢失的 task 状态。
+	hydratedIssues := c.hydrateTasksFromGitHub(ctx, allIssuesCache, activeIssueToTask, issueToTask)
+
 	// ③ 统一依赖分析：显式 depends-on 优先，AI 仅补全未声明项。
 	// 注意：parent 仅表示结构归属/收口关系，不隐式注入执行依赖边。
-	analysis := c.buildDependencyAnalysis(ctx, intakeIssues)
+	// 将 hydrated issues 合并到依赖分析输入中。
+	allAnalysisIssues := make([]IssueInfo, 0, len(intakeIssues)+len(hydratedIssues))
+	allAnalysisIssues = append(allAnalysisIssues, intakeIssues...)
+	allAnalysisIssues = append(allAnalysisIssues, hydratedIssues...)
+	analysis := c.buildDependencyAnalysis(ctx, allAnalysisIssues)
 
 	// ④ intake 入队：原子去重创建 active task，并将 orchestrate 迁移为 queued。
 	for _, issue := range intakeIssues {
@@ -791,13 +804,9 @@ func (c *Controller) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("列出现有任务失败: %w", err)
 		}
-		allIssues, err := c.github.ListIssuesByState(ctx, "all")
-		if err != nil {
-			return fmt.Errorf("扫描全量 issues 失败: %w", err)
-		}
 
-		issueByNumber := make(map[int]IssueInfo, len(allIssues))
-		for _, issue := range allIssues {
+		issueByNumber := make(map[int]IssueInfo, len(allIssuesCache))
+		for _, issue := range allIssuesCache {
 			issueByNumber[issue.Number] = issue
 		}
 		if err := c.syncPRReviewableMetadata(ctx, allTasks, issueByNumber); err != nil {
@@ -916,15 +925,11 @@ func (c *Controller) Run(ctx context.Context) error {
 		}
 
 		// ⑧ 检查父 issue 进度（Sub-Issue 模式）
-		c.checkParentProgress(ctx, allIssues)
+		c.checkParentProgress(ctx, allIssuesCache)
 		return nil
 	}
 
-	allIssues, err := c.github.ListIssuesByState(ctx, "all")
-	if err != nil {
-		return fmt.Errorf("扫描全量 issues 失败: %w", err)
-	}
-	c.checkParentProgress(ctx, allIssues)
+	c.checkParentProgress(ctx, allIssuesCache)
 
 	// ⑨ 定时巡检纠偏：即使 hash 未变化也会做轻量对账，失败不阻塞主流程。
 	if err := c.maybeRunDagReconcile(ctx); err != nil {
@@ -1041,6 +1046,126 @@ func (c *Controller) persistBlockedByDependencies(issueToTask map[int]string, de
 	}
 
 	return persisted
+}
+
+// hydrateTasksFromGitHub 从 GitHub 重建跨 workflow run 丢失的 task 状态。
+// 扫描所有 open + 带 bot:* 标签的 issues，对 tasks.json 中不存在的 issue 重建 task，
+// 对已存在但 PR 类标签缺 pr_num/branch 的 task 补全元数据。
+// 返回 hydrated issues 列表（用于后续依赖分析，不参与 label 迁移）。
+func (c *Controller) hydrateTasksFromGitHub(
+	ctx context.Context,
+	allIssuesCache []IssueInfo,
+	activeIssueToTask map[int]string,
+	issueToTask map[int]string,
+) []IssueInfo {
+	if os.Getenv("NIUMA_DISABLE_HYDRATE") == "1" {
+		fmt.Println("[control][hydrate] disabled by NIUMA_DISABLE_HYDRATE=1")
+		return nil
+	}
+
+	var hydratedIssues []IssueInfo
+
+	for _, issue := range allIssuesCache {
+		if !strings.EqualFold(issue.State, "open") {
+			continue
+		}
+		if !hasBotLabel(issue.Labels) {
+			continue
+		}
+		// 跳过 bot:orchestrate（由 intake 处理）
+		if hasLabel(issue.Labels, string(state.StateOrchestrate)) {
+			continue
+		}
+		// 跳过已有 active task 的 issue
+		if _, ok := activeIssueToTask[issue.Number]; ok {
+			// 但检查是否需要补全 PR metadata
+			c.hydrateExistingTaskMetadata(ctx, issue, activeIssueToTask[issue.Number])
+			continue
+		}
+
+		// 重建 task
+		meta := map[string]string{
+			"issue_num": strconv.Itoa(issue.Number),
+		}
+		task, reused, err := c.taskctl.CreateOrReuseActiveIssueTask(issue.Title, issue.Body, meta)
+		if err != nil {
+			fmt.Printf("[control][hydrate] 创建任务失败 (issue #%d): %v\n", issue.Number, err)
+			continue
+		}
+		issueToTask[issue.Number] = task.ID
+		activeIssueToTask[issue.Number] = task.ID
+
+		if reused {
+			fmt.Printf("[control][hydrate] action=reused issue_num=%d task_id=%s\n", issue.Number, task.ID)
+		} else {
+			fmt.Printf("[control][hydrate] action=created issue_num=%d task_id=%s\n", issue.Number, task.ID)
+		}
+
+		// PR 类标签：补全 pr_num/branch
+		if isPRStateLabel(issue.Labels) {
+			resolved, err := c.github.ResolvePRMetadata(ctx, issue.Number)
+			if err != nil {
+				if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+					fmt.Printf("[control][hydrate] action=pr_metadata_skipped issue_num=%d reason=%s\n", issue.Number, skipReason)
+				} else {
+					fmt.Printf("[control][hydrate] action=pr_metadata_failed issue_num=%d err=%v\n", issue.Number, err)
+				}
+			} else {
+				metaUpdate := map[string]string{
+					"pr_num": strconv.Itoa(resolved.PRNum),
+					"branch": resolved.Branch,
+				}
+				if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+					fmt.Printf("[control][hydrate] action=metadata_update_failed task_id=%s err=%v\n", task.ID, err)
+				} else {
+					fmt.Printf("[control][hydrate] action=metadata_synced issue_num=%d pr_num=%d branch=%s\n", issue.Number, resolved.PRNum, resolved.Branch)
+				}
+			}
+		}
+
+		hydratedIssues = append(hydratedIssues, issue)
+	}
+
+	if len(hydratedIssues) > 0 {
+		fmt.Printf("[control][hydrate] 重建 %d 个 tasks\n", len(hydratedIssues))
+	}
+	return hydratedIssues
+}
+
+// hydrateExistingTaskMetadata 对已有 active task 但缺 pr_num 的 PR 类 issue 补全元数据。
+func (c *Controller) hydrateExistingTaskMetadata(ctx context.Context, issue IssueInfo, taskID string) {
+	if !isPRStateLabel(issue.Labels) {
+		return
+	}
+
+	// 检查 task 是否已有 pr_num
+	tasks, err := c.taskctl.List("")
+	if err != nil {
+		return
+	}
+	for _, t := range tasks {
+		if t.ID == taskID && t.PRNum() == 0 {
+			resolved, err := c.github.ResolvePRMetadata(ctx, issue.Number)
+			if err != nil {
+				if skipReason, skippable := classifyPRMetadataSkipReason(err); skippable {
+					fmt.Printf("[control][hydrate] action=existing_pr_metadata_skipped issue_num=%d reason=%s\n", issue.Number, skipReason)
+				} else {
+					fmt.Printf("[control][hydrate] action=existing_pr_metadata_failed issue_num=%d err=%v\n", issue.Number, err)
+				}
+				return
+			}
+			metaUpdate := map[string]string{
+				"pr_num": strconv.Itoa(resolved.PRNum),
+				"branch": resolved.Branch,
+			}
+			if err := c.taskctl.Update(taskID, UpdateOpts{Metadata: &metaUpdate}); err != nil {
+				fmt.Printf("[control][hydrate] action=existing_metadata_update_failed task_id=%s err=%v\n", taskID, err)
+			} else {
+				fmt.Printf("[control][hydrate] action=existing_metadata_synced issue_num=%d pr_num=%d branch=%s\n", issue.Number, resolved.PRNum, resolved.Branch)
+			}
+			return
+		}
+	}
 }
 
 // collectAutomationIssues 仅扫描 orchestrate 入口 issue。
@@ -1756,6 +1881,32 @@ func FormatStatus(status *ControlStatus) string {
 func hasLabel(labels []string, target string) bool {
 	for _, l := range labels {
 		if l == target {
+			return true
+		}
+	}
+	return false
+}
+
+// isBotLabel 判断标签是否为 bot:* 前缀
+func isBotLabel(label string) bool {
+	return strings.HasPrefix(label, "bot:")
+}
+
+// hasBotLabel 判断 labels 列表中是否包含任意 bot:* 标签
+func hasBotLabel(labels []string) bool {
+	for _, l := range labels {
+		if isBotLabel(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPRStateLabel 判断 labels 是否包含 PR 类状态标签（需要查询 PR API 补全元数据）
+func isPRStateLabel(labels []string) bool {
+	for _, l := range labels {
+		switch l {
+		case string(state.StatePRReviewable), "bot:pr-approved":
 			return true
 		}
 	}

@@ -625,9 +625,11 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 
 	// 找新 issue（仅以 active task 去重）
 	existing := make(map[int]bool)
+	activeIssueToTask := make(map[int]string)
 	for _, t := range c.mockTaskCtl.tasks {
 		if n := t.IssueNum(); n > 0 && isTaskActiveStatus(t.Status) {
 			existing[n] = true
+			activeIssueToTask[n] = t.ID
 		}
 	}
 
@@ -638,10 +640,7 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 		}
 	}
 
-	// 分析依赖：显式 depends-on 优先，AI 仅补全未声明依赖。
-	analysis := c.buildDependencyAnalysis(ctx, issues)
-
-	// 创建 task
+	// 创建 task 并建立 issue->task 索引
 	issueToTask := make(map[int]string)
 	for _, t := range c.mockTaskCtl.tasks {
 		if n := t.IssueNum(); n > 0 {
@@ -655,10 +654,20 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 			continue
 		}
 		issueToTask[issue.Number] = task.ID
+		activeIssueToTask[issue.Number] = task.ID
 		if hasLabel(issue.Labels, string(state.StateOrchestrate)) {
 			_ = state.TransitionBotState(ctx, c.mockGitHub, issue.Number, state.StateOrchestrate, state.StateQueued)
 		}
 	}
+
+	// hydrate：从 GitHub 重建丢失的 task 状态
+	hydratedIssues := c.hydrateInMem(ctx, activeIssueToTask, issueToTask)
+
+	// 分析依赖：显式 depends-on 优先，AI 仅补全未声明依赖。
+	allAnalysisIssues := make([]IssueInfo, 0, len(issues)+len(hydratedIssues))
+	allAnalysisIssues = append(allAnalysisIssues, issues...)
+	allAnalysisIssues = append(allAnalysisIssues, hydratedIssues...)
+	analysis := c.buildDependencyAnalysis(ctx, allAnalysisIssues)
 
 	// 先落盘 blocked_by，再决定是否推进 ready。
 	blockedByPersisted := true
@@ -705,6 +714,81 @@ func (c *inMemController) RunInMem(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// hydrateInMem 模拟 hydrateTasksFromGitHub 逻辑但使用内存 mock
+func (c *inMemController) hydrateInMem(
+	ctx context.Context,
+	activeIssueToTask map[int]string,
+	issueToTask map[int]string,
+) []IssueInfo {
+	if os.Getenv("NIUMA_DISABLE_HYDRATE") == "1" {
+		return nil
+	}
+
+	// 获取全量 issues（模拟 allIssuesCache）
+	allIssues, err := c.mockGitHub.ListIssuesByState(ctx, "all")
+	if err != nil {
+		return nil
+	}
+
+	var hydratedIssues []IssueInfo
+
+	for _, issue := range allIssues {
+		if !strings.EqualFold(issue.State, "open") {
+			continue
+		}
+		if !hasBotLabel(issue.Labels) {
+			continue
+		}
+		if hasLabel(issue.Labels, string(state.StateOrchestrate)) {
+			continue
+		}
+		if taskID, ok := activeIssueToTask[issue.Number]; ok {
+			// 补全已有 task 的 PR metadata
+			if isPRStateLabel(issue.Labels) {
+				for i := range c.mockTaskCtl.tasks {
+					if c.mockTaskCtl.tasks[i].ID == taskID && c.mockTaskCtl.tasks[i].PRNum() == 0 {
+						resolved, err := c.mockGitHub.ResolvePRMetadata(ctx, issue.Number)
+						if err == nil {
+							metaUpdate := map[string]string{
+								"pr_num": strconv.Itoa(resolved.PRNum),
+								"branch": resolved.Branch,
+							}
+							_ = c.mockTaskCtl.update(taskID, UpdateOpts{Metadata: &metaUpdate})
+						}
+						break
+					}
+				}
+			}
+			continue
+		}
+
+		// 重建 task
+		meta := map[string]string{"issue_num": strconv.Itoa(issue.Number)}
+		task, err := c.mockTaskCtl.create(issue.Title, issue.Body, meta)
+		if err != nil {
+			continue
+		}
+		issueToTask[issue.Number] = task.ID
+		activeIssueToTask[issue.Number] = task.ID
+
+		// PR 类标签：补全 pr_num/branch
+		if isPRStateLabel(issue.Labels) {
+			resolved, err := c.mockGitHub.ResolvePRMetadata(ctx, issue.Number)
+			if err == nil {
+				metaUpdate := map[string]string{
+					"pr_num": strconv.Itoa(resolved.PRNum),
+					"branch": resolved.Branch,
+				}
+				_ = c.mockTaskCtl.update(task.ID, UpdateOpts{Metadata: &metaUpdate})
+			}
+		}
+
+		hydratedIssues = append(hydratedIssues, issue)
+	}
+
+	return hydratedIssues
 }
 
 func newIssueLockTestController(owner string, store IssueLockStore, ttl, heartbeat time.Duration, nowFn func() time.Time) *Controller {
@@ -3069,4 +3153,223 @@ func findLineIndexContaining(lines []string, target string) int {
 		}
 	}
 	return -1
+}
+
+// === hydrate 相关测试 ===
+
+// TestHydrate_EmptyTasksJson_PRReviewableIssue 空 tasks.json + bot:pr-reviewable issue 重建
+func TestHydrate_EmptyTasksJson_PRReviewableIssue(t *testing.T) {
+	// 构建 issues：#100 标签 bot:pr-reviewable，open 状态
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: add feature", Body: "some body", State: "open", Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	// 不设置 issuesByLabel（intake 不会扫到 #100，因为它不是 bot:orchestrate）
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	// 设置 issuesByNumber 供 ListIssuesByState("all") 使用
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+	// 设置 PR metadata
+	ctrl.mockGitHub.resolvePRMetadata[100] = PRMetadata{PRNum: 200, Branch: "feat/100-add-feature"}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 验证 task 被创建
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	task := ctrl.mockTaskCtl.tasks[0]
+	assert.Equal(t, "100", task.Metadata["issue_num"])
+	// 验证 PR metadata 被补全
+	assert.Equal(t, "200", task.Metadata["pr_num"])
+	assert.Equal(t, "feat/100-add-feature", task.Metadata["branch"])
+	// 验证 ResolvePRMetadata 被调用
+	assert.Contains(t, ctrl.mockGitHub.resolvePRMetadataCall, 100)
+}
+
+// TestHydrate_EmptyTasksJson_QueuedWithClosedDep 空 tasks.json + bot:queued + 依赖已关闭
+func TestHydrate_EmptyTasksJson_QueuedWithClosedDep(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: base", Body: "base feature", State: "closed", Labels: []string{"bot:done"}},
+		{Number: 101, Title: "feat: follow-up", Body: "depends-on: #100", State: "open", Labels: []string{"bot:queued"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// #101 应该被 hydrate 重建
+	var task101 *Task
+	for i := range ctrl.mockTaskCtl.tasks {
+		if ctrl.mockTaskCtl.tasks[i].IssueNum() == 101 {
+			task101 = &ctrl.mockTaskCtl.tasks[i]
+			break
+		}
+	}
+	require.NotNil(t, task101, "task for #101 should be created by hydrate")
+
+	// #100 已 closed，不是 open issue 且带 bot:done（不是 active bot 标签需求），
+	// 但依赖解析时 #100 不在 issueSet 中（因为它 closed 不会被 hydrate），
+	// 所以 blocked_by 应为空（依赖的 issue 不在本轮 task 集中，filterIssueDeps 会过滤掉）
+	assert.Empty(t, task101.BlockedBy, "blocked_by should be empty since #100 is not in active task set")
+
+	// 不应调用 ResolvePRMetadata（因为 #101 不是 PR 类标签）
+	for _, call := range ctrl.mockGitHub.resolvePRMetadataCall {
+		assert.NotEqual(t, 101, call, "should not call ResolvePRMetadata for bot:queued issue")
+	}
+}
+
+// TestHydrate_EmptyTasksJson_QueuedWithOpenDep 空 tasks.json + bot:queued + 依赖未关闭
+func TestHydrate_EmptyTasksJson_QueuedWithOpenDep(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: base", Body: "base feature", State: "open", Labels: []string{"bot:fix"}},
+		{Number: 101, Title: "feat: follow-up", Body: "depends-on: #100", State: "open", Labels: []string{"bot:queued"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 两个 issues 都应被 hydrate 重建
+	require.Len(t, ctrl.mockTaskCtl.tasks, 2)
+
+	var task100, task101 *Task
+	for i := range ctrl.mockTaskCtl.tasks {
+		switch ctrl.mockTaskCtl.tasks[i].IssueNum() {
+		case 100:
+			task100 = &ctrl.mockTaskCtl.tasks[i]
+		case 101:
+			task101 = &ctrl.mockTaskCtl.tasks[i]
+		}
+	}
+	require.NotNil(t, task100)
+	require.NotNil(t, task101)
+
+	// #101 应有 blocked_by 包含 #100 的 task
+	assert.Contains(t, task101.BlockedBy, task100.ID, "task #101 should be blocked by task #100")
+}
+
+// TestHydrate_ExistingTask_MissingPRNum 已有 task 但缺 pr_num，补全
+func TestHydrate_ExistingTask_MissingPRNum(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: add feature", Body: "some body", State: "open", Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+	// 设置已有 task（无 pr_num）
+	ctrl.mockTaskCtl.tasks = []Task{
+		{
+			ID:       "existing-task-1",
+			Subject:  "feat: add feature",
+			Status:   TaskStatusPending,
+			Metadata: map[string]string{"issue_num": "100"},
+		},
+	}
+	// 设置 PR metadata
+	ctrl.mockGitHub.resolvePRMetadata[100] = PRMetadata{PRNum: 200, Branch: "feat/100-add-feature"}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 不应创建新 task（复用已有的）
+	require.Len(t, ctrl.mockTaskCtl.tasks, 1)
+	task := ctrl.mockTaskCtl.tasks[0]
+	assert.Equal(t, "existing-task-1", task.ID)
+	// PR metadata 应被补全
+	assert.Equal(t, "200", task.Metadata["pr_num"])
+	assert.Equal(t, "feat/100-add-feature", task.Metadata["branch"])
+}
+
+// TestHydrate_NoDoubleProcessing intake 和 hydrate 不重复处理同一 issue
+func TestHydrate_NoDoubleProcessing(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: new feature", Body: "new feature", State: "open", Labels: []string{"bot:orchestrate"}},
+	}
+
+	ctrl := newInMemController(issues, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = issues
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 应只创建一次 task（intake 创建，hydrate 不重复）
+	assert.Equal(t, 1, ctrl.mockTaskCtl.createCallCount)
+}
+
+// TestHydrate_DisabledByEnvVar NIUMA_DISABLE_HYDRATE=1 跳过 hydrate
+func TestHydrate_DisabledByEnvVar(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: add feature", Body: "some body", State: "open", Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+	ctrl.mockGitHub.resolvePRMetadata[100] = PRMetadata{PRNum: 200, Branch: "feat/100-add-feature"}
+
+	// 设置环境变量禁用 hydrate
+	t.Setenv("NIUMA_DISABLE_HYDRATE", "1")
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// hydrate 被禁用，不应创建 task
+	assert.Empty(t, ctrl.mockTaskCtl.tasks)
+	// 不应调用 ResolvePRMetadata
+	assert.Empty(t, ctrl.mockGitHub.resolvePRMetadataCall)
+}
+
+// TestHydrate_PRApiOnlyForPRStateLabels bot:queued 不触发 PR API 调用
+func TestHydrate_PRApiOnlyForPRStateLabels(t *testing.T) {
+	issues := []IssueInfo{
+		{Number: 100, Title: "feat: queued feature", Body: "some body", State: "open", Labels: []string{"bot:queued"}},
+		{Number: 101, Title: "feat: pr feature", Body: "some body", State: "open", Labels: []string{"bot:pr-reviewable"}},
+	}
+
+	ctrl := newInMemController(nil, "")
+	ctrl.mockGitHub.issuesByLabel["bot:orchestrate"] = []IssueInfo{}
+	for _, issue := range issues {
+		ctrl.mockGitHub.issuesByNumber[issue.Number] = issue
+	}
+	ctrl.mockGitHub.resolvePRMetadata[101] = PRMetadata{PRNum: 201, Branch: "feat/101-pr-feature"}
+
+	err := ctrl.RunInMem(context.Background())
+	require.NoError(t, err)
+
+	// 两个 task 应被创建
+	require.Len(t, ctrl.mockTaskCtl.tasks, 2)
+
+	// ResolvePRMetadata 应只被 #101 调用，不应被 #100 调用
+	for _, call := range ctrl.mockGitHub.resolvePRMetadataCall {
+		assert.NotEqual(t, 100, call, "should not call ResolvePRMetadata for bot:queued issue #100")
+	}
+	assert.Contains(t, ctrl.mockGitHub.resolvePRMetadataCall, 101, "should call ResolvePRMetadata for bot:pr-reviewable issue #101")
+
+	// 验证 #101 的 PR metadata 被补全
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		if task.IssueNum() == 101 {
+			assert.Equal(t, "201", task.Metadata["pr_num"])
+			assert.Equal(t, "feat/101-pr-feature", task.Metadata["branch"])
+		}
+	}
 }
