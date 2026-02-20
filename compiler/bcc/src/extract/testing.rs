@@ -169,7 +169,7 @@ pub fn normalize_core_fields(record: &FileRecord) -> Value {
         .map(|item| (normalize_spaces(item.callee.trim()), item.line))
         .collect();
     calls.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    calls.dedup();
+    calls.dedup_by(|a, b| a.0 == b.0);
 
     let mut imports: Vec<(String, String)> = record
         .imports
