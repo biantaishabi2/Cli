@@ -82,6 +82,7 @@ fn score_impl(
             dimensions::code_quality::CodeQualityDimension::new(
                 cq.weight,
                 cq.blocking,
+                cq.config.threshold,
                 Some(path.to_string()),
             ),
         ));

@@ -32,7 +32,7 @@ impl Detector for SwallowedErrorDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
-                    severity: "info".to_string(),
+                    severity: "critical".to_string(),
                     message: "Discarding Result/Error with `let _ =` silently swallows errors".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
@@ -65,7 +65,7 @@ impl Detector for SwallowedErrorDetector {
                         results.push(SmellRecord {
                             category: "error_handling".to_string(),
                             rule: "swallowed_error".to_string(),
-                            severity: "info".to_string(),
+                            severity: "critical".to_string(),
                             message: "Exception caught but swallowed (empty handler or pass)".to_string(),
                             file: file_path.to_string(),
                             line: i + 1,
@@ -89,7 +89,7 @@ impl Detector for SwallowedErrorDetector {
                     results.push(SmellRecord {
                         category: "error_handling".to_string(),
                         rule: "swallowed_error".to_string(),
-                        severity: "info".to_string(),
+                        severity: "critical".to_string(),
                         message: "Exception caught but swallowed (trivial return)".to_string(),
                         file: file_path.to_string(),
                         line: i + 1,
@@ -110,7 +110,7 @@ impl Detector for SwallowedErrorDetector {
                             results.push(SmellRecord {
                                 category: "error_handling".to_string(),
                                 rule: "swallowed_error".to_string(),
-                                severity: "info".to_string(),
+                                severity: "critical".to_string(),
                                 message: "Exception caught but swallowed (trivial return)".to_string(),
                                 file: file_path.to_string(),
                                 line: i + 1,
@@ -132,7 +132,7 @@ impl Detector for SwallowedErrorDetector {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
-                    severity: "info".to_string(),
+                    severity: "critical".to_string(),
                     message: "Exception caught but swallowed (empty catch block)".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,

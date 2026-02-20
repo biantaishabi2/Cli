@@ -12,14 +12,16 @@ use std::fs;
 pub struct CodeQualityDimension {
     weight: f64,
     blocking: bool,
+    threshold: f64,
     smell_report_path: Option<String>,
 }
 
 impl CodeQualityDimension {
-    pub fn new(weight: f64, blocking: bool, smell_report_path: Option<String>) -> Self {
+    pub fn new(weight: f64, blocking: bool, threshold: f64, smell_report_path: Option<String>) -> Self {
         Self {
             weight,
             blocking,
+            threshold,
             smell_report_path,
         }
     }
@@ -92,7 +94,7 @@ impl ScoringDimension for CodeQualityDimension {
 
         let score = (100.0 - penalty).max(0.0);
         // critical smell 存在时直接判定为不通过（blocking 语义）
-        let passed = score >= 60.0 && critical == 0;
+        let passed = score >= self.threshold && critical == 0;
 
         let mut result = DimensionResult {
             score,
@@ -197,7 +199,7 @@ mod tests {
 
     #[test]
     fn no_smell_report_returns_100() {
-        let dim = CodeQualityDimension::new(0.10, true, None);
+        let dim = CodeQualityDimension::new(0.10, true, 60.0, None);
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 100.0);
@@ -207,7 +209,7 @@ mod tests {
     fn empty_smells_returns_100() {
         let f = make_smell_report_file(vec![]);
         let dim =
-            CodeQualityDimension::new(0.10, true, Some(f.path().to_str().unwrap().to_string()));
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 100.0);
@@ -223,7 +225,7 @@ mod tests {
         ];
         let f = make_smell_report_file(smells);
         let dim =
-            CodeQualityDimension::new(0.10, true, Some(f.path().to_str().unwrap().to_string()));
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 76.0);
@@ -235,7 +237,7 @@ mod tests {
         let smells = (0..10).map(|_| make_smell("critical")).collect();
         let f = make_smell_report_file(smells);
         let dim =
-            CodeQualityDimension::new(0.10, true, Some(f.path().to_str().unwrap().to_string()));
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
@@ -244,7 +246,7 @@ mod tests {
 
     #[test]
     fn file_not_found_fails_with_zero() {
-        let dim = CodeQualityDimension::new(0.10, true, Some("/nonexistent/path.json".to_string()));
+        let dim = CodeQualityDimension::new(0.10, true, 60.0, Some("/nonexistent/path.json".to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
@@ -261,7 +263,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(b"not valid json{{{").unwrap();
         let dim =
-            CodeQualityDimension::new(0.10, true, Some(f.path().to_str().unwrap().to_string()));
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
