@@ -94,15 +94,30 @@ jobs:
           fi
 
       - name: Run PR Gate
+        id: pr_gate
         if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != ''"
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
         run: |
           ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
 
+      - name: Gate Failed -> Transition to PR Needs Fix
+        if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'"
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ inputs.repo }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          "$NIUMA_BIN" state-label set \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            --from bot:pr-created \
+            --to bot:pr-needs-fix
+
       - name: AI Self-Review
-        if: steps.find_pr.outputs.pr_number != ''
+        if: steps.find_pr.outputs.pr_number != '' && (inputs.skip_test_gate || steps.pr_gate.outcome == 'success')
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           NIUMA_IMPLEMENTATION_PROVIDER: codex

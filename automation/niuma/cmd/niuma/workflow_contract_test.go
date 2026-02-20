@@ -102,6 +102,18 @@ func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(content, "--max-retries \"$GATE_MAX_RETRIES\""))
 }
 
+func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
+	content := loadWorkflowFile(t, "niuma-review-reusable.yml")
+
+	assert.Contains(t, content, "id: pr_gate")
+	assert.Contains(t, content, "continue-on-error: true")
+	assert.Contains(t, content, "steps.pr_gate.outcome == 'failure'")
+	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
+	assert.Contains(t, content, "--from bot:pr-created")
+	assert.Contains(t, content, "--to bot:pr-needs-fix")
+	assert.Contains(t, content, "inputs.skip_test_gate || steps.pr_gate.outcome == 'success'")
+}
+
 // ─── YAML 结构体定义 ───
 
 type workflowFile struct {
