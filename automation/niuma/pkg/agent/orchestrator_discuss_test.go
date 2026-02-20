@@ -233,8 +233,10 @@ func TestDoPlanFinal_FallbackProvider(t *testing.T) {
 
 func TestDoPlanFinal_AllParseFail_FallbackRawText(t *testing.T) {
 	// 所有 provider 返回非 JSON，降级为原文定稿，流程继续
-	p1 := ai.NewMockProvider("not json", "not json")
-	p2 := ai.NewMockProvider("still not json", "still not json")
+	// WithRecovery 在首次 parse 失败后尝试 repair（消耗 1 次额外调用），
+	// 因此每个 provider 需要 3 个响应：原始调用 + repair + 重试。
+	p1 := ai.NewMockProvider("not json", "repair also bad", "not json retry")
+	p2 := ai.NewMockProvider("still not json", "repair also bad", "still not json retry")
 	mockGH := NewMockGitHub()
 	mockGH.SetIssue(1, "Fix login", "Body")
 	mockGH.SetLabel(1, string(state.StateNeedsDiscussion))
