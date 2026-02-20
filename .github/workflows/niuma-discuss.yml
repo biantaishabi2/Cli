@@ -65,7 +65,7 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ format('{0}', inputs.issue) }}
-      max_discussion_rounds: ${{ inputs.max_discussion_rounds }}
-      visible_round_interval: ${{ inputs.visible_round_interval }}
-      visible_only_on_diff: ${{ inputs.visible_only_on_diff }}
+      max_discussion_rounds: ${{ fromJSON(inputs.max_discussion_rounds) }}
+      visible_round_interval: ${{ fromJSON(inputs.visible_round_interval) }}
+      visible_only_on_diff: ${{ fromJSON(inputs.visible_only_on_diff) }}
     secrets: inherit
