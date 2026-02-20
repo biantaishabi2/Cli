@@ -130,6 +130,9 @@ func newSuffixConflictProfileWithRule(name string, suffixes []string, profileHin
 
 // TryResolveByRule 通过注册的 resolverFn 执行 Rule 层冲突修复。
 func (p *suffixRuleResolverProfile) TryResolveByRule(repoDir string, relPath string) error {
+	if p.resolverFn == nil {
+		return fmt.Errorf("profile %s: no rule resolver registered", p.Name())
+	}
 	return p.resolverFn(repoDir, relPath)
 }
 
