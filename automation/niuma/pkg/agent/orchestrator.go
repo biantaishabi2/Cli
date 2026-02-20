@@ -38,6 +38,9 @@ type OrchestratorConfig struct {
 	// plan-final 重试与降级
 	PlanFinalProviders []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
 	PlanFinalMaxRetries int          // 每个 provider 的重试次数（0=默认1）
+
+	// discuss 评论裁剪
+	MaxHumanComments int // discuss 评论裁剪上限（0=默认10）
 }
 
 // getMaxIterateRounds 获取最大迭代轮数，默认3
@@ -70,6 +73,14 @@ func (c *OrchestratorConfig) getVisibleOnlyOnDiff() bool {
 		return true
 	}
 	return c.VisibleOnlyOnDiff
+}
+
+// getMaxHumanComments 获取 discuss 评论裁剪上限，默认 10
+func (c *OrchestratorConfig) getMaxHumanComments() int {
+	if c == nil || c.MaxHumanComments <= 0 {
+		return 10
+	}
+	return c.MaxHumanComments
 }
 
 // Orchestrator 核心编排器
@@ -922,8 +933,14 @@ func (o *Orchestrator) transitionFrom(ctx context.Context, from, to state.State,
 	return state.TransitionWithRetry(ctx, o.github, o.issueNumber, from, to, nil)
 }
 
-// buildPromptInput 从 GitHub 读取 issue 和评论构建 PromptInput
+// buildPromptInput 从 GitHub 读取 issue 和评论构建 PromptInput（全量模式）
 func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, error) {
+	return o.buildPromptInputWithFilter(ctx, 0)
+}
+
+// buildPromptInputWithFilter 从 GitHub 读取 issue 和评论构建 PromptInput。
+// maxHuman <= 0 全量返回；maxHuman > 0 裁剪评论（用于 debate 阶段上下文瘦身）。
+func (o *Orchestrator) buildPromptInputWithFilter(ctx context.Context, maxHuman int) (*PromptInput, error) {
 	issue, err := o.github.GetIssue(ctx, o.issueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("获取 issue 失败: %w", err)
@@ -937,7 +954,7 @@ func (o *Orchestrator) buildPromptInput(ctx context.Context) (*PromptInput, erro
 	return &PromptInput{
 		IssueTitle: issue.GetTitle(),
 		IssueBody:  issue.GetBody(),
-		Comments:   gh.ToCommentBodies(comments),
+		Comments:   FilterCommentsForPrompt(comments, maxHuman),
 	}, nil
 }
 
@@ -955,7 +972,12 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 		speaker = "B"
 	}
 
-	input, err := o.buildPromptInput(ctx)
+	// debate 路径使用评论裁剪
+	maxHuman := 10
+	if o.config != nil {
+		maxHuman = o.config.getMaxHumanComments()
+	}
+	input, err := o.buildPromptInputWithFilter(ctx, maxHuman)
 	if err != nil {
 		return nil, err
 	}
@@ -980,14 +1002,19 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 	}
 
 	primaryProvider := providers[speakerIdx%len(providers)]
+	lastProvider := primaryProvider // 跟踪最终失败的 provider
 
 	// 第1次尝试：主 provider
 	raw, comment, parseErr := tryDebateRound(primaryProvider)
 
 	// 第1级降级：格式修复重试（同 provider）
 	if parseErr != nil {
-		fmt.Fprintf(os.Stderr, "[WARN] debate_%s parse 失败 (provider=%s)，尝试格式修复重试: %v\n",
-			strings.ToLower(speaker), primaryProvider.Name(), parseErr)
+		errKind := recoverableKind(parseErr)
+		rawPrefix := truncatePrefix(raw, 500)
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s parse 失败 | provider=%s | round=%d/%d | kind=%s | raw_prefix=\"%s\" | err=%s\n",
+			strings.ToLower(speaker), primaryProvider.Name(), round, maxRounds, errKind, rawPrefix, parseErr.Error())
+		fmt.Fprintf(os.Stderr, "[INFO] debate_%s format-repair 尝试 | provider=%s | round=%d/%d\n",
+			strings.ToLower(speaker), primaryProvider.Name(), round, maxRounds)
 		repairPrompt := BuildFormatRepairPrompt(raw)
 		repairRaw, repairErr := primaryProvider.Complete(ctx, repairPrompt)
 		if repairErr == nil {
@@ -1001,18 +1028,21 @@ func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRound
 	if parseErr != nil && len(providers) > 1 {
 		fallbackIdx := (speakerIdx + 1) % len(providers)
 		fallbackProvider := providers[fallbackIdx]
-		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 主 provider 修复失败，切换 fallback provider=%s\n",
-			strings.ToLower(speaker), fallbackProvider.Name())
+		errKind := recoverableKind(parseErr)
+		fmt.Fprintf(os.Stderr, "[WARN] debate_%s 降级到备选 provider | from=%s | to=%s | round=%d/%d | kind=%s\n",
+			strings.ToLower(speaker), primaryProvider.Name(), fallbackProvider.Name(), round, maxRounds, errKind)
 		raw, comment, parseErr = tryDebateRound(fallbackProvider)
+		lastProvider = fallbackProvider
 	}
 
 	// 第3级：中止上报
 	if parseErr != nil {
+		rawPrefix := truncatePrefix(raw, 500)
 		abortBody := fmt.Sprintf("<!-- BOT:DISCUSS_ABORT issue=%d round=%d -->\n\n## ⛔ 讨论中止\n\n"+
 			"第 %d/%d 轮 debate_%s 解析连续失败，已中止本次讨论。\n\n"+
-			"**错误**: %s\n\n**provider**: %s\n\n请人工检查后重新触发讨论。",
+			"**错误**: %s\n\n**provider**: %s\n\n**raw_prefix**: %.500s\n\n请人工检查后重新触发讨论。",
 			o.issueNumber, round, round, maxRounds, strings.ToLower(speaker),
-			parseErr.Error(), primaryProvider.Name())
+			parseErr.Error(), lastProvider.Name(), rawPrefix)
 		_, _ = o.github.AddComment(ctx, o.issueNumber, abortBody)
 		return nil, fmt.Errorf("debate_%s 3 级降级均失败: %w", strings.ToLower(speaker), parseErr)
 	}
@@ -1182,6 +1212,24 @@ func slugFromTitle(title string) string {
 		slug = slug[:30]
 	}
 	return slug
+}
+
+// recoverableKind 从 error 中提取 RecoverableErrorKind，未匹配时返回 "Unknown"
+func recoverableKind(err error) string {
+	var recErr *RecoverableError
+	if errors.As(err, &recErr) {
+		return string(recErr.Kind)
+	}
+	return "Unknown"
+}
+
+// truncatePrefix 截取字符串前 maxLen 个字符，超长时追加 "..."
+func truncatePrefix(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // BuildImplementContext 从 PromptInput 构建实现上下文

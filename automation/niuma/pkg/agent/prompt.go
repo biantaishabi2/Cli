@@ -5,8 +5,12 @@ package agent
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
+	"github.com/google/go-github/v68/github"
 )
 
 // PromptInput 构建 prompt 的输入数据
@@ -66,6 +70,86 @@ func renderTemplate(name, tmplStr string, input *PromptInput) (string, error) {
 		return "", fmt.Errorf("渲染模板 %s 失败: %w", name, err)
 	}
 	return buf.String(), nil
+}
+
+// FilterCommentsForPrompt 对评论列表进行裁剪，用于 debate 阶段上下文瘦身。
+// maxHuman <= 0 时全量返回（等价于 ToCommentBodies 行为）。
+// maxHuman > 0 时：按 CreatedAt 升序排序后，取最近 N 条人类评论，
+// 自动附加含 BOT:DISCUSSION_SUMMARY marker 的最新一条 BOT 评论（如果存在），
+// 最终按原始时间顺序合并输出。
+func FilterCommentsForPrompt(comments []*github.IssueComment, maxHuman int) []string {
+	if maxHuman <= 0 {
+		// 全量模式：等价于 ToCommentBodies
+		bodies := make([]string, 0, len(comments))
+		for _, c := range comments {
+			body := strings.TrimSpace(c.GetBody())
+			if body != "" {
+				bodies = append(bodies, body)
+			}
+		}
+		return bodies
+	}
+
+	// 显式按 CreatedAt 升序排序（防御性，不依赖 API 顺序）
+	sorted := make([]*github.IssueComment, len(comments))
+	copy(sorted, comments)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].GetCreatedAt().Before(sorted[j].GetCreatedAt().Time)
+	})
+
+	// 分离人类评论和 BOT 评论
+	var humanComments []*github.IssueComment
+	var summaryBOT *github.IssueComment
+	for _, c := range sorted {
+		if isBot(c) {
+			// 记录含 BOT:DISCUSSION_SUMMARY marker 的最新 BOT 评论
+			if strings.Contains(c.GetBody(), string(marker.TypeDiscussionSummary)) {
+				summaryBOT = c
+			}
+			continue
+		}
+		humanComments = append(humanComments, c)
+	}
+
+	// 取人类评论最后 N 条
+	if len(humanComments) > maxHuman {
+		humanComments = humanComments[len(humanComments)-maxHuman:]
+	}
+
+	// 合并：人类评论 + summary BOT 评论，按原始时间顺序
+	var merged []*github.IssueComment
+	merged = append(merged, humanComments...)
+	if summaryBOT != nil {
+		merged = append(merged, summaryBOT)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].GetCreatedAt().Before(merged[j].GetCreatedAt().Time)
+	})
+
+	// 转为 body 文本
+	bodies := make([]string, 0, len(merged))
+	for _, c := range merged {
+		body := strings.TrimSpace(c.GetBody())
+		if body != "" {
+			bodies = append(bodies, body)
+		}
+	}
+	return bodies
+}
+
+// isBot 判断评论是否来自 BOT（双重条件）
+func isBot(c *github.IssueComment) bool {
+	user := c.GetUser()
+	if user == nil {
+		return false
+	}
+	if user.GetType() == "Bot" {
+		return true
+	}
+	if strings.HasSuffix(user.GetLogin(), "[bot]") {
+		return true
+	}
+	return false
 }
 
 const draftTmpl = `你是一个高级软件工程师。请分析以下 GitHub Issue 并生成一个方案草案。

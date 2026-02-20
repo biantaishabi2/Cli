@@ -69,14 +69,15 @@ func ParseDraftResponse(raw string) (*DraftPlan, error) {
 
 // ParseDebateResponse 解析 AB 轮流评论输出。
 // 协议：自然语言正文 + 末尾 JSON（仅 should_finish）。
+// 所有解析错误均返回 *RecoverableError，对齐 ParseFinalPlanResponse 模式。
 func ParseDebateResponse(raw string) (*DebateComment, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("空响应")
+		return nil, &RecoverableError{Kind: EmptyResponse, Message: "debate 响应为空"}
 	}
 
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
-		return nil, fmt.Errorf("无法解析 AB 评论：缺少 should_finish JSON")
+		return nil, &RecoverableError{Kind: MissingJSON, Message: "缺少 should_finish JSON 代码块"}
 	}
 
 	type debateJSON struct {
@@ -84,10 +85,10 @@ func ParseDebateResponse(raw string) (*DebateComment, error) {
 	}
 	var parsed debateJSON
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-		return nil, fmt.Errorf("无法解析 AB 评论 JSON: %w", err)
+		return nil, &RecoverableError{Kind: JSONParseError, Err: err, Message: "debate JSON 解析失败"}
 	}
 	if parsed.ShouldFinish == nil {
-		return nil, fmt.Errorf("AB 评论缺少必填字段: should_finish")
+		return nil, &RecoverableError{Kind: MissingField, Message: "debate JSON 缺少 should_finish 字段"}
 	}
 
 	body := strings.TrimSpace(stripLastJSONSegment(raw, jsonStr))
