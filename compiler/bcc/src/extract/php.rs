@@ -251,7 +251,8 @@ fn extract_php_recursive(
                         && callee != "static"
                     {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line, args: vec![] });
+                        let args = extract_php_call_args(node, source);
+                        calls.push(CallRecord { callee, line, args });
                     }
                 }
                 // 继续递归
@@ -290,7 +291,8 @@ fn extract_php_recursive(
                     let callee = common::node_text(class_node, source);
                     if callee.chars().next().map_or(false, |c| c.is_uppercase()) {
                         let line = node.start_position().row + 1;
-                        calls.push(CallRecord { callee, line, args: vec![] });
+                        let args = extract_php_call_args(node, source);
+                        calls.push(CallRecord { callee, line, args });
                     }
                 }
                 if cursor.goto_first_child() {
@@ -328,6 +330,28 @@ fn extract_php_recursive(
             break;
         }
     }
+}
+
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+fn extract_php_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
 }
 
 /// 获取方法的可见性修饰符

@@ -217,10 +217,15 @@ fn extract_recursive(
                         if !module.is_empty()
                             && module.chars().next().map_or(false, |c| c.is_uppercase())
                         {
+                            // dot 节点的 parent 是 call 节点，从 call 节点提取参数
+                            let args = node
+                                .parent()
+                                .map(|p| extract_elixir_call_args(p, source))
+                                .unwrap_or_default();
                             calls.push(CallRecord {
                                 callee: module,
                                 line: node.start_position().row + 1,
-                                args: vec![],
+                                args,
                             });
                         }
                     }
@@ -253,6 +258,29 @@ fn extract_recursive(
             break;
         }
     }
+}
+
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+/// Elixir 的 dot 节点位于 call 节点内部，arguments 是 call 的子节点。
+fn extract_elixir_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = find_child_by_kind(&call_node, "arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
 }
 
 /// 判断 dot 是否位于 alias/import/use/require 声明语境中。

@@ -182,10 +182,11 @@ fn extract_recursive(
                 if let Some(func_node) = node.child_by_field_name("function") {
                     let callee = extract_call_name(func_node, source);
                     if !callee.is_empty() {
+                        let args = extract_rust_call_args(node, source);
                         calls.push(CallRecord {
                             callee,
                             line: node.start_position().row + 1,
-                            args: vec![],
+                            args,
                         });
                     }
                 }
@@ -222,6 +223,28 @@ fn extract_recursive(
             break;
         }
     }
+}
+
+/// 提取调用参数的文本列表（用于 detect_unnecessary_default 等规则匹配）
+fn extract_rust_call_args(call_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        for i in 0..args_node.child_count() {
+            if let Some(arg) = args_node.child(i) {
+                // 跳过括号和逗号
+                if matches!(arg.kind(), "(" | ")" | ",") {
+                    continue;
+                }
+                let text = common::node_text(arg, source);
+                // 去掉引号
+                let cleaned = text.trim_matches(|c: char| c == '\'' || c == '"');
+                if !cleaned.is_empty() {
+                    args.push(cleaned.to_string());
+                }
+            }
+        }
+    }
+    args
 }
 
 /// 检查节点是否有 pub 可见性修饰符
