@@ -20,7 +20,7 @@ const (
 	TypeConvergeWarning            Type = "BOT:CONVERGE_WARNING"
 	TypeDiscussionRoundLimitNotice Type = "BOT:DISCUSSION_ROUND_LIMIT_NOTICE"
 	TypeLabelGuard                 Type = "BOT:LABEL_GUARD"
-	TypeGateRetry                 Type = "BOT:GATE_RETRY"
+	TypeGateRetry                  Type = "BOT:GATE_RETRY"
 )
 
 // AllTypes 返回所有有效的 Marker 类型
@@ -50,6 +50,7 @@ type Marker struct {
 	Label         string // 仅 LABEL_GUARD 使用
 	Action        string // 仅 LABEL_GUARD 使用
 	Actor         string // 仅 LABEL_GUARD 使用
+	AttemptKey    string // 仅 GATE_RETRY 使用：重试作用域 key
 }
 
 // markerRe 匹配 <!-- BOT:TYPE key=value key=value ... -->
@@ -113,6 +114,8 @@ func Parse(line string) *Marker {
 			m.Action = val
 		case "actor":
 			m.Actor = val
+		case "akey":
+			m.AttemptKey = val
 		}
 	}
 
@@ -181,6 +184,9 @@ func Render(m *Marker) string {
 	}
 	if m.Actor != "" {
 		parts = append(parts, fmt.Sprintf("actor=%s", m.Actor))
+	}
+	if m.AttemptKey != "" {
+		parts = append(parts, fmt.Sprintf("akey=%s", m.AttemptKey))
 	}
 
 	return strings.Join(parts, " ") + " -->"
