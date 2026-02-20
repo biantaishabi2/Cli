@@ -169,8 +169,13 @@ fn build_skeleton(node: Node) -> String {
 }
 
 fn build_skeleton_recursive(node: Node, result: &mut String) {
-    if node.child_count() == 0 {
-        // 叶子节点只保留类型
+    // 叶子节点和"原子"复合节点只保留类型，不展开子节点。
+    // 这样骨架只反映语句级控制流，不区分参数个数、字符串内容等细节。
+    const ATOMIC_KINDS: &[&str] = &[
+        "argument_list", "parameters", "string", "concatenated_string",
+        "tuple", "list", "dictionary", "set",
+    ];
+    if node.child_count() == 0 || ATOMIC_KINDS.contains(&node.kind()) {
         result.push_str(node.kind());
     } else {
         result.push('(');
@@ -370,7 +375,10 @@ def process_order(order):
 
     #[test]
     fn boilerplate_skeleton_detected() {
-        // 两个函数骨架相同但叶子不同（不同的函数调用）
+        // 两个函数骨架相同但 normalized AST 不同：
+        // 调用参数个数不同（process(item) vs transform(item, extra)），
+        // normalized_ast 区分参数数量 → structural_hash 不同，
+        // 但 build_skeleton 将 argument_list 视为原子节点不展开 → skeleton_hash 相同
         let source = r#"
 def fetch_users(db):
     items = db.query("users")
@@ -381,7 +389,7 @@ def fetch_users(db):
 def fetch_orders(db):
     items = db.execute("orders")
     for item in items:
-        transform(item)
+        transform(item, "extra")
     return items
 "#;
         let tree = parse_python(source);

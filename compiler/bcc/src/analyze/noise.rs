@@ -712,9 +712,12 @@ def normal():
 
     #[test]
     fn trivial_comment_detected() {
+        // 注释与代码字面高度相似，normalized_levenshtein 应超过 0.7
         let source = r#"
-# increment x
-x += 1
+# set total to zero
+total = 0
+# return total
+return total
 "#;
         let tree = parse_python(source);
         let record = make_record("python", "test.py");

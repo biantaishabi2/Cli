@@ -114,7 +114,9 @@ def process_order(order):
 
 #[test]
 fn boilerplate_skeleton_detected() {
-    // 两个函数骨架相同但叶子节点（函数调用名）不同
+    // 两个函数骨架相同但叶子节点不同：调用参数个数不同导致
+    // normalized AST 不同（structural_hash 不同），
+    // 但 build_skeleton 将 argument_list 视为原子不展开（skeleton_hash 相同）
     let source = r#"
 def fetch_users(db):
     items = db.query("users")
@@ -125,7 +127,7 @@ def fetch_users(db):
 def fetch_orders(db):
     items = db.execute("orders")
     for item in items:
-        transform(item)
+        transform(item, "extra")
     return items
 "#;
     let result = run_analyze_python(source, "skeleton_dup");
