@@ -3485,3 +3485,153 @@ fn layer_violation_backward_compatible_no_seed_file() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// 测试8: seed 文件不存在时应报错退出（exit code 1）
+#[test]
+fn layer_violation_seed_file_not_found_exits_1() {
+    let root = temp_dir("bcc_layer_v8");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+
+    let nonexistent_seed = root.join("nonexistent_seed.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &nonexistent_seed.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate");
+    assert_eq!(output.status.code(), Some(1), "should exit 1 when seed file not found");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("read seed_file failed"),
+        "stderr should mention read seed_file failed: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试9: seed 文件 YAML 格式非法时应报错退出（exit code 1）
+#[test]
+fn layer_violation_seed_file_invalid_yaml_exits_1() {
+    let root = temp_dir("bcc_layer_v9");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // 非法 YAML
+    write(&seed, "{{{{not valid yaml at all!!!}}}}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate");
+    assert_eq!(output.status.code(), Some(1), "should exit 1 when seed yaml is invalid");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parse seed yaml failed"),
+        "stderr should mention parse seed yaml failed: {}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试10: 未知 layer（不在 layers 配置中）默认放行，不产生 violation
+#[test]
+fn layer_violation_unknown_layer_default_allowed() {
+    let root = temp_dir("bcc_layer_v10");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // MOD_A 和 MOD_B 的 layer 值不在 layers 配置的 name 列表中
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: unknown_tier
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: another_unknown
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: service
+      precedence: 2
+    - name: infrastructure
+      precedence: 3
+  forbidden_transitions: []
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0), "unknown layers should not cause violation");
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("No layer violations detected."),
+        "unknown layers should default to allowed: {}",
+        report
+    );
+
+    // summary.json 的 layer_violation_count 应为 0
+    let summary_raw = fs::read_to_string(out.join("summary.json")).expect("read summary");
+    let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
+    assert_eq!(summary["layer_violation_count"], 0);
+
+    let _ = fs::remove_dir_all(&root);
+}
