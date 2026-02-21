@@ -1816,7 +1816,12 @@ fn export_mermaid_overview(
     }
 }
 
-/// 子模块详情图：展示父模块内部子模块 + 对外依赖（继承边）
+/// 子模块详情图：展示父模块内部子模块 + 对外依赖
+/// 优化策略：
+/// 1. 外部依赖只展示父/顶层模块（不展开其他父模块的子模块）
+/// 2. 继承边合并到父级出发（parent_id → 外部父/顶层模块）
+/// 3. 兄弟边：子模块 ≤4 个时画全部，>4 个时省略
+/// 4. 禁止边合并到父级（不展开到每个子模块）
 fn export_mermaid_detail(
     parent_id: &str,
     kids: &[String],
@@ -1838,74 +1843,61 @@ fn export_mermaid_detail(
     println!("%% === {} 子模块详情 ===", parent_label);
     println!("graph TD");
 
-    // 收集所有相关模块 ID（子模块 + 外部依赖目标）
     let kid_set: HashSet<&str> = kids.iter().map(|s| s.as_str()).collect();
 
-    // 构建子模块展开后的边
-    let mut allow_edges: Vec<Edge> = Vec::new();
-    let mut forbid_edges: Vec<Edge> = Vec::new();
-    for rel in &seed.relations_expected {
-        let r = rel.rationale.as_deref().unwrap_or("").to_string();
-        if rel.allowed {
-            allow_edges.push(Edge {
-                caller: rel.caller.clone(),
-                callee: rel.callee.clone(),
-                rationale: r,
-            });
-        } else {
-            forbid_edges.push(Edge {
-                caller: rel.caller.clone(),
-                callee: rel.callee.clone(),
-                rationale: r,
-            });
+    // 构建"子模块→其父模块"映射（用于将外部子模块折叠为父模块）
+    let mut child_to_parent: HashMap<String, String> = HashMap::new();
+    for (pid, child_ids) in children_map {
+        for cid in child_ids {
+            child_to_parent.insert(cid.clone(), pid.clone());
         }
     }
 
-    // 展开继承边
-    let explicit_keys: HashSet<String> = allow_edges
-        .iter()
-        .chain(forbid_edges.iter())
-        .map(|e| edge_key(&e.caller, &e.callee))
-        .collect();
-    let expanded_forbid =
-        expand_edges_to_children(&forbid_edges, children_map, &explicit_keys, true);
-    forbid_edges.extend(expanded_forbid);
-
-    let all_keys: HashSet<String> = allow_edges
-        .iter()
-        .chain(forbid_edges.iter())
-        .map(|e| edge_key(&e.caller, &e.callee))
-        .collect();
-    let expanded_allow =
-        expand_edges_to_children(&allow_edges, children_map, &all_keys, false);
-    allow_edges.extend(expanded_allow);
-
-    let final_keys: HashSet<String> = allow_edges
-        .iter()
-        .chain(forbid_edges.iter())
-        .map(|e| edge_key(&e.caller, &e.callee))
-        .collect();
-    let sibling_edges = sibling_default_allow_edges(children_map, &final_keys);
-    allow_edges.extend(sibling_edges);
-
-    // 只保留与本 parent 的子模块相关的边
-    let relevant_allow: Vec<&Edge> = allow_edges
-        .iter()
-        .filter(|e| kid_set.contains(e.caller.as_str()) || kid_set.contains(e.callee.as_str()))
-        .collect();
-    let relevant_forbid: Vec<&Edge> = forbid_edges
-        .iter()
-        .filter(|e| kid_set.contains(e.caller.as_str()) || kid_set.contains(e.callee.as_str()))
-        .collect();
-
-    // 收集出现的外部模块
-    let mut external_ids: BTreeSet<String> = BTreeSet::new();
-    for e in relevant_allow.iter().chain(relevant_forbid.iter()) {
-        if !kid_set.contains(e.caller.as_str()) {
-            external_ids.insert(e.caller.clone());
+    // 将模块 ID 折叠为父/顶层模块（如果是其他父模块的子模块，折叠为其父；否则保持原样）
+    let collapse_to_parent = |id: &str| -> String {
+        if kid_set.contains(id) || id == parent_id {
+            return id.to_string(); // 本 parent 的子模块不折叠
         }
-        if !kid_set.contains(e.callee.as_str()) {
-            external_ids.insert(e.callee.clone());
+        if let Some(pid) = child_to_parent.get(id) {
+            pid.clone() // 其他父模块的子模块 → 折叠为其父
+        } else {
+            id.to_string() // 顶层模块保持原样
+        }
+    };
+
+    // 收集 seed 中与本 parent（或其子模块）相关的原始边
+    // 只处理 relations_expected（父/顶层级别），不做边展开
+    let mut out_targets: BTreeSet<String> = BTreeSet::new(); // parent → 外部
+    let mut in_sources: BTreeSet<String> = BTreeSet::new();  // 外部 → parent
+    let mut forbid_out_targets: BTreeSet<String> = BTreeSet::new();
+    let mut forbid_in_sources: BTreeSet<String> = BTreeSet::new();
+
+    for rel in &seed.relations_expected {
+        let caller_collapsed = collapse_to_parent(&rel.caller);
+        let callee_collapsed = collapse_to_parent(&rel.callee);
+        let is_caller_mine = caller_collapsed == parent_id
+            || kid_set.contains(caller_collapsed.as_str());
+        let is_callee_mine = callee_collapsed == parent_id
+            || kid_set.contains(callee_collapsed.as_str());
+
+        if !is_caller_mine && !is_callee_mine {
+            continue;
+        }
+
+        if rel.allowed {
+            if is_caller_mine && !is_callee_mine {
+                out_targets.insert(callee_collapsed);
+            }
+            if !is_caller_mine && is_callee_mine {
+                in_sources.insert(caller_collapsed);
+            }
+        } else {
+            if is_caller_mine && !is_callee_mine {
+                forbid_out_targets.insert(callee_collapsed);
+            }
+            if !is_caller_mine && is_callee_mine {
+                forbid_in_sources.insert(caller_collapsed);
+            }
         }
     }
 
@@ -1924,6 +1916,14 @@ fn export_mermaid_detail(
         parent_id
     );
 
+    // 收集所有外部模块 ID（去重）
+    let mut external_ids: BTreeSet<String> = BTreeSet::new();
+    for id in out_targets.iter().chain(in_sources.iter())
+        .chain(forbid_out_targets.iter()).chain(forbid_in_sources.iter())
+    {
+        external_ids.insert(id.clone());
+    }
+
     // 输出外部模块节点
     for ext_id in &external_ids {
         if let Some(ext) = module_map.get(ext_id.as_str()) {
@@ -1937,80 +1937,13 @@ fn export_mermaid_detail(
 
     println!();
 
-    // 继承边去重：如果所有子模块对同一目标都有继承边，合并为父 subgraph 出发的一条边
-    // 按 (方向, 外部模块) 分组统计继承边
-    let kid_count = kids.len();
-
-    // outgoing: 子模块 → 外部（key = callee, value = 出现的子模块集合）
-    let mut inherited_out: HashMap<String, HashSet<String>> = HashMap::new();
-    // incoming: 外部 → 子模块（key = caller, value = 出现的子模块集合）
-    let mut inherited_in: HashMap<String, HashSet<String>> = HashMap::new();
-
-    for e in &relevant_allow {
-        if !e.rationale.contains("inherited") {
-            continue;
-        }
-        if kid_set.contains(e.caller.as_str()) && !kid_set.contains(e.callee.as_str()) {
-            inherited_out
-                .entry(e.callee.clone())
-                .or_default()
-                .insert(e.caller.clone());
-        }
-        if !kid_set.contains(e.caller.as_str()) && kid_set.contains(e.callee.as_str()) {
-            inherited_in
-                .entry(e.caller.clone())
-                .or_default()
-                .insert(e.callee.clone());
-        }
-    }
-    // forbid 也做同样处理
-    let mut forbid_out: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut forbid_in: HashMap<String, HashSet<String>> = HashMap::new();
-    for e in &relevant_forbid {
-        if kid_set.contains(e.callee.as_str()) && !kid_set.contains(e.caller.as_str()) {
-            forbid_in
-                .entry(e.caller.clone())
-                .or_default()
-                .insert(e.callee.clone());
-        }
-        if kid_set.contains(e.caller.as_str()) && !kid_set.contains(e.callee.as_str()) {
-            forbid_out
-                .entry(e.callee.clone())
-                .or_default()
-                .insert(e.caller.clone());
-        }
-    }
-
-    // 所有子模块都有的继承边 → 合并为父级边
-    let merged_out: HashSet<String> = inherited_out
-        .iter()
-        .filter(|(_, kids_set)| kids_set.len() == kid_count)
-        .map(|(callee, _)| callee.clone())
-        .collect();
-    let merged_in: HashSet<String> = inherited_in
-        .iter()
-        .filter(|(_, kids_set)| kids_set.len() == kid_count)
-        .map(|(caller, _)| caller.clone())
-        .collect();
-    let merged_forbid_out: HashSet<String> = forbid_out
-        .iter()
-        .filter(|(_, kids_set)| kids_set.len() == kid_count)
-        .map(|(callee, _)| callee.clone())
-        .collect();
-    let merged_forbid_in: HashSet<String> = forbid_in
-        .iter()
-        .filter(|(_, kids_set)| kids_set.len() == kid_count)
-        .map(|(caller, _)| caller.clone())
-        .collect();
-
-    let mut seen = HashSet::new();
     let mut edge_idx: usize = 0;
     let mut inherited_indices: Vec<usize> = Vec::new();
     let mut sibling_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
 
-    // 输出合并后的父级继承边（outgoing）
-    for callee in &merged_out {
+    // 输出继承边（outgoing）: parent → 外部
+    for callee in &out_targets {
         let label = rationale_map
             .get(&(parent_id.to_string(), callee.clone()))
             .cloned()
@@ -2023,8 +1956,8 @@ fn export_mermaid_detail(
         inherited_indices.push(edge_idx);
         edge_idx += 1;
     }
-    // 输出合并后的父级继承边（incoming）
-    for caller in &merged_in {
+    // 输出继承边（incoming）: 外部 → parent
+    for caller in &in_sources {
         let label = rationale_map
             .get(&(caller.clone(), parent_id.to_string()))
             .cloned()
@@ -2038,68 +1971,41 @@ fn export_mermaid_detail(
         edge_idx += 1;
     }
 
-    // 输出未合并的 allow 边（只有部分子模块有的、兄弟边等）
-    for e in &relevant_allow {
-        let key = edge_key(&e.caller, &e.callee);
-        if !seen.insert(key) {
-            continue;
-        }
-        // 跳过已合并的继承边
-        if e.rationale.contains("inherited") {
-            if kid_set.contains(e.caller.as_str())
-                && merged_out.contains(&e.callee)
-            {
-                continue;
-            }
-            if kid_set.contains(e.callee.as_str())
-                && merged_in.contains(&e.caller)
-            {
-                continue;
+    // 兄弟边：子模块 ≤4 个时画全部，>4 个时省略
+    let show_sibling_edges = kids.len() <= 4;
+    if show_sibling_edges {
+        // 生成兄弟边（只在两个子模块间没有显式关系时）
+        let mut sibling_seen: HashSet<String> = HashSet::new();
+        for i in 0..kids.len() {
+            for j in (i + 1)..kids.len() {
+                let key = edge_key(&kids[i], &kids[j]);
+                if sibling_seen.insert(key) {
+                    println!("  {} <-.-> {}", kids[i], kids[j]);
+                    sibling_indices.push(edge_idx);
+                    edge_idx += 1;
+                }
             }
         }
-
-        let label = find_edge_rationale(e, parent_id, rationale_map);
-        if e.rationale.contains("sibling") {
-            if !label.is_empty() {
-                println!("  {} <-.->|\"{}\"| {}", e.caller, label, e.callee);
-            } else {
-                println!("  {} <-.-> {}", e.caller, e.callee);
-            }
-            sibling_indices.push(edge_idx);
-        } else if e.rationale.contains("inherited") {
-            if !label.is_empty() {
-                println!("  {} -.->|\"{}\"| {}", e.caller, label, e.callee);
-            } else {
-                println!("  {} -.-> {}", e.caller, e.callee);
-            }
-            inherited_indices.push(edge_idx);
-        } else {
-            if !label.is_empty() {
-                println!("  {} -->|\"{}\"| {}", e.caller, label, e.callee);
-            } else {
-                println!("  {} --> {}", e.caller, e.callee);
-            }
-            edge_idx += 1;
-            continue;
-        }
-        edge_idx += 1;
+    } else {
+        println!("  %% {} 个子模块，兄弟边省略（默认互相可见）", kids.len());
     }
 
-    // 输出合并后的父级 forbid 边
-    for callee in &merged_forbid_out {
+    // 输出禁止边（outgoing）: parent 子模块 → 外部
+    for callee in &forbid_out_targets {
         let label = rationale_map
             .get(&(parent_id.to_string(), callee.clone()))
             .cloned()
             .unwrap_or_default();
         if !label.is_empty() {
-            println!("  {} -.->|\"⛔ {}\"| {}", callee, label, parent_id);
+            println!("  {} -.->|\"⛔ {}\"| {}", parent_id, label, callee);
         } else {
-            println!("  {} -.-x {}", callee, parent_id);
+            println!("  {} -.-x {}", parent_id, callee);
         }
         forbid_indices.push(edge_idx);
         edge_idx += 1;
     }
-    for caller in &merged_forbid_in {
+    // 输出禁止边（incoming）: 外部 → parent
+    for caller in &forbid_in_sources {
         let label = rationale_map
             .get(&(caller.clone(), parent_id.to_string()))
             .cloned()
@@ -2108,30 +2014,6 @@ fn export_mermaid_detail(
             println!("  {} -.->|\"⛔ {}\"| {}", caller, label, parent_id);
         } else {
             println!("  {} -.-x {}", caller, parent_id);
-        }
-        forbid_indices.push(edge_idx);
-        edge_idx += 1;
-    }
-
-    // 输出未合并的 forbid 边
-    for e in &relevant_forbid {
-        let key = edge_key(&e.caller, &e.callee);
-        if !seen.insert(key) {
-            continue;
-        }
-        // 跳过已合并的
-        if kid_set.contains(e.callee.as_str()) && merged_forbid_in.contains(&e.caller) {
-            continue;
-        }
-        if kid_set.contains(e.caller.as_str()) && merged_forbid_out.contains(&e.callee) {
-            continue;
-        }
-
-        let label = find_edge_rationale(e, parent_id, rationale_map);
-        if !label.is_empty() {
-            println!("  {} -.->|\"⛔ {}\"| {}", e.caller, label, e.callee);
-        } else {
-            println!("  {} -.-x {}", e.caller, e.callee);
         }
         forbid_indices.push(edge_idx);
         edge_idx += 1;
