@@ -2540,4 +2540,163 @@ profiles:
         assert_eq!(ancestors[0], "L8");
         assert_eq!(ancestors[8], "L0");
     }
+
+    /// 全流程集成测试：3 层 parent 层级 + layer violation 组合
+    /// 验证 matrix_impl 生成正确 contract，validate_impl 检测 layer violation
+    #[test]
+    fn test_arch_parent_layer_integration() {
+        let root = temp_dir("bcc_parent_layer_integration");
+        let seed_path = root.join("seed.yaml");
+        let ast_path = root.join("ast.json");
+        let matrix_out = root.join("matrix_out");
+        let validate_out = root.join("validate_out");
+
+        // 构造 3 层模块层级：GRANDCHILD → CHILD → PARENT
+        // PARENT 和 CHILD 在 application 层，GRANDCHILD 在 infrastructure 层
+        // forbidden_transitions: infrastructure → application
+        write(
+            &seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: PARENT
+    display_name: Parent Module
+    layer: application
+    precedence: 10
+    path_rules:
+      include: ["src/parent/**"]
+  - module_id: CHILD
+    display_name: Child Module
+    layer: application
+    parent: PARENT
+    precedence: 20
+    path_rules:
+      include: ["src/child/**"]
+  - module_id: GRANDCHILD
+    display_name: Grandchild Module
+    layer: infrastructure
+    parent: CHILD
+    precedence: 30
+    path_rules:
+      include: ["src/grandchild/**"]
+relations_expected:
+  - caller: GRANDCHILD
+    callee: CHILD
+    allowed: true
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+        );
+
+        // AST: infrastructure 模块 (GRANDCHILD) 调用 application 模块 (CHILD)
+        write(
+            &ast_path,
+            r#"{
+  "source_count": 3,
+  "records": [
+    {
+      "sourcePath": "src/parent/main.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/child/service.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/grandchild/repo.ts",
+      "localDependencies": ["src/child/service.ts"],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+        );
+
+        // Step 1: matrix_impl 应成功生成 contract
+        matrix_impl(
+            &seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        )
+        .expect("matrix_impl should succeed with parent hierarchy");
+
+        // 验证 target contract 包含 GRANDCHILD→CHILD 的 allow edge
+        let target_raw =
+            fs::read_to_string(matrix_out.join("v3.target-matrix.yaml")).expect("read target");
+        assert!(
+            target_raw.contains("GRANDCHILD"),
+            "target should contain GRANDCHILD"
+        );
+        assert!(
+            target_raw.contains("CHILD"),
+            "target should contain CHILD"
+        );
+
+        // 构造 actual relations JSON（infrastructure→application 边）
+        let actual_path = root.join("actual.json");
+        write(
+            &actual_path,
+            r#"[
+  {"caller":"GRANDCHILD","callee":"CHILD","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+
+        // Step 2: validate_impl 应检测 layer violation 并返回 exit code 2
+        let code = validate_impl(
+            &matrix_out.join("v3.target-matrix.yaml").to_string_lossy(),
+            &matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
+            &matrix_out.join("v3.gates.yaml").to_string_lossy(),
+            &actual_path.to_string_lossy(),
+            &validate_out.to_string_lossy(),
+            "both",
+            false,
+            false,
+            None,
+            None,
+            Some(&seed_path.to_string_lossy()),
+            true, // fail_on_layer_violation
+        )
+        .expect("validate_impl should succeed");
+        assert_eq!(code, 2, "exit code should be 2 due to layer violation");
+
+        // Step 3: 验证 v3-validation-report.md 包含 Layer Violations 章节
+        let report =
+            fs::read_to_string(validate_out.join("v3-validation-report.md")).expect("read report");
+        assert!(
+            report.contains("Layer Violations"),
+            "report should contain Layer Violations section"
+        );
+        assert!(
+            report.contains("GRANDCHILD"),
+            "report should mention GRANDCHILD in violation"
+        );
+
+        // Step 4: 验证 summary.json 中 layer_violation_count > 0
+        let summary_raw =
+            fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
+        let summary: serde_json::Value =
+            serde_json::from_str(&summary_raw).expect("parse summary");
+        let lvc = summary["layer_violation_count"].as_i64().unwrap_or(0);
+        assert!(
+            lvc > 0,
+            "summary.json layer_violation_count should be > 0, got {}",
+            lvc
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

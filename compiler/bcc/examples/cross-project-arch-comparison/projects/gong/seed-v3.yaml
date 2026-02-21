@@ -5,6 +5,9 @@ notes:
   - "覆盖 Session 四个子 issue (#8/#10/#11/#12) 新增的全部代码"
   - "CLI 模块预留待建的交互层 (cli/*.ex)"
   - "注释掉的边按实施步骤标记 [Step1-4]，每步开工前取消注释再跑 validate"
+  - "AGENT_CORE/AGENT_LOOP 为 AGENT 子模块（parent: AGENT），用于演示 parent 层级继承"
+  - "layer_rules 定义 application/infrastructure 分层及 forbidden_transitions"
+  - "注意：现有 relations_expected 尚未针对 AGENT_CORE/AGENT_LOOP 子模块调整，待后续迭代"
   # 实施步骤:
   # Step1: Renderer + Chat 基础版 → SESSION→AGENT, SESSION→PROVIDERS, AGENT→STREAM
   # Step2: Run + CLI 入口扩展 → CLI→RUNTIME
@@ -21,6 +24,26 @@ modules:
       include:
         - "gong/agent.ex"
         - "gong/agent_loop.ex"
+
+  - module_id: AGENT_CORE
+    display_name: Agent 核心逻辑
+    domain_kind: business
+    layer: application
+    parent: AGENT
+    precedence: 11
+    path_rules:
+      include:
+        - "**/agent.ex"
+
+  - module_id: AGENT_LOOP
+    display_name: Agent 循环控制
+    domain_kind: business
+    layer: application
+    parent: AGENT
+    precedence: 12
+    path_rules:
+      include:
+        - "**/agent_loop.ex"
 
   - module_id: SESSION
     display_name: 会话协调
@@ -316,3 +339,12 @@ relations_expected:
     callee: SESSION
     allowed: false
     rationale: "存储层不能反向依赖 Session"
+
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
