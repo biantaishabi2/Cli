@@ -1,6 +1,6 @@
 ai:
   # 唯一真相源：切换 provider 只需改这里
-  default: claude
+  default: codex
 
   providers:
     # Claude Code

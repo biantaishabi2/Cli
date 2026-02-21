@@ -206,6 +206,39 @@ niuma state-label set --repo <owner/repo> --issue <issue编号> --to bot:fix
 niuma state-label set --repo <owner/repo> --issue <issue编号> --from bot:pr-needs-fix --to bot:iterating
 ```
 
+## Control 编排命令（必会）
+
+当你已经给子 issue 打了 `bot:orchestrate`，但看起来“没开始”时，先用 control 命令确认系统状态：
+
+```bash
+# 1) 看全局 DAG 与 task 状态
+niuma control status --repo <owner/repo> --repo-dir <repo_dir>
+
+# 2) 检查某个 issue 是否进入编排队列
+niuma control check --repo <owner/repo> --issue <issue编号> --repo-dir <repo_dir>
+
+# 3) 手动跑一轮协调循环（最常用）
+niuma control run --repo <owner/repo> --repo-dir <repo_dir>
+```
+
+### `control run` 的期望行为
+
+1. 先 hydrate `bot:orchestrate/bot:queued` 的 issue 为本地 tasks。
+2. 按 `depends-on` 拓扑，只把 ready 的子 issue 从 `bot:queued` 推进到 `bot:fix`。
+3. 未满足依赖的 issue 继续保持 `bot:queued`（这是正确行为，不是卡死）。
+
+### 常见“没开始”误判
+
+1. **4 个子 issue 同时是 `bot:queued`，只看到 1 个变成 `bot:fix`**：正常。DAG 按关键路径逐个推进。
+2. **父 issue 也被打了 `bot:orchestrate`**：会被当独立任务，造成干扰。清理父 issue 的 `bot:*`。
+3. **工作流并发取消导致只处理到最后一个事件**：手动执行一次 `niuma control run` 可补偿推进。
+4. **有标签但无 token**：本地命令报 `GITHUB_TOKEN environment variable not set`，需要先注入 token。
+
+```bash
+export GITHUB_TOKEN="$(gh auth token)"
+niuma control run --repo <owner/repo> --repo-dir <repo_dir>
+```
+
 ## 常见错误
 
 1. **给父 issue 打了 `bot:orchestrate`**：父 issue 会被 niuma 当作独立任务来跑，与子 issue 重复执行。父 issue 只做 tracker，不打 bot 标签。
