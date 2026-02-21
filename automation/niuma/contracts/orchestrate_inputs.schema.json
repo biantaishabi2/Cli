@@ -20,11 +20,6 @@
       "default": ".",
       "description": "仓库目录（默认当前仓库根目录）"
     },
-    "build_niuma": {
-      "type": "boolean",
-      "default": true,
-      "description": "是否在 workflow 内构建 niuma"
-    },
     "label_whitelist": {
       "type": "string",
       "default": "bot:orchestrate,bot:queued,bot:pr-reviewable",

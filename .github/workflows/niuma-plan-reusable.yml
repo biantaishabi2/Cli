@@ -26,11 +26,6 @@ on:
         required: false
         default: "."
         type: string
-      build_niuma:
-        description: "是否在当前提交构建 niuma"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   issues: write
@@ -45,31 +40,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build niuma from current commit
-        if: inputs.build_niuma
+      - name: Setup niuma binary
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.tmp"
-          (
-            cd automation/niuma
-            go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma
-          )
-          echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-
-      - name: Resolve niuma binary
-        run: |
-          if [ -n "${NIUMA_BIN:-}" ]; then
-            exit 0
-          fi
-          if [ "${{ inputs.build_niuma }}" = "true" ]; then
+          if [ -d "automation/niuma" ]; then
+            echo "检测到 niuma 源码，从源码构建..."
+            mkdir -p "$GITHUB_WORKSPACE/.tmp"
+            (cd automation/niuma && go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma)
             echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-            exit 0
+          else
+            echo "无 niuma 源码，使用系统已安装的 niuma..."
+            niuma_path="$(command -v niuma || true)"
+            if [ -z "$niuma_path" ]; then
+              echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma"
+              exit 1
+            fi
+            echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
           fi
-          niuma_path="$(command -v niuma || true)"
-          if [ -z "$niuma_path" ]; then
-            echo "::error::build_niuma=false 但未找到预装 niuma 二进制"
-            exit 1
-          fi
-          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
 
       - name: Check if issue is in orchestration queue
         id: check_orchestration

@@ -173,10 +173,7 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
             "${{ github.event.pull_request.number }}",
             "${PR_NUMBER}",
         )
-        cls.resolve_niuma_script = extract_step_run_script(REUSABLE_PATH, "Resolve niuma binary").replace(
-            "${{ inputs.build_niuma }}",
-            "${INPUT_BUILD_NIUMA}",
-        )
+        cls.setup_niuma_script = extract_step_run_script(REUSABLE_PATH, "Setup niuma binary")
 
     def test_gong_consumes_cli_reusable_with_sha_pin(self) -> None:
         content = GONG_ORCHESTRATE_PATH.read_text(encoding="utf-8")
@@ -184,7 +181,7 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
             content,
             r"uses:\s*biantaishabi2/Cli/\.github/workflows/niuma-orchestrate-reusable\.yml@[0-9a-f]{40}",
         )
-        self.assertIn("build_niuma: false", content)
+        # build_niuma 已从 reusable workflow 移除，调用方传递会被忽略，不强制检查
         self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable\"", content)
         self.assertIn("types: [niuma.task.completed]", content)
 
@@ -340,16 +337,16 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
             self.assertEqual(warn_run.returncode, 0, msg=warn_run.stderr + warn_run.stdout)
             self.assertIn("::warning title=orchestrate dispatch failed::", warn_run.stdout)
 
-    def test_build_niuma_false_uses_preinstalled_binary_from_real_script(self) -> None:
+    def test_setup_niuma_auto_detect_uses_preinstalled_binary(self) -> None:
+        """无 automation/niuma 目录时，自动 fallback 到系统 niuma"""
         with tempfile.TemporaryDirectory() as niuma_dir:
             niuma_bin = pathlib.Path(niuma_dir) / "niuma"
             niuma_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             niuma_bin.chmod(0o755)
 
             success_run, _, success_env = run_shell_script(
-                self.resolve_niuma_script,
+                self.setup_niuma_script,
                 {
-                    "INPUT_BUILD_NIUMA": "false",
                     "NIUMA_BIN": "",
                 },
                 path_prefix=niuma_dir,
@@ -359,16 +356,15 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as empty_path_dir:
             failure_run, _, _ = run_shell_script(
-                self.resolve_niuma_script,
+                self.setup_niuma_script,
                 {
-                    "INPUT_BUILD_NIUMA": "false",
                     "NIUMA_BIN": "",
                 },
                 path_prefix=empty_path_dir,
                 isolate_path=True,
             )
             self.assertNotEqual(failure_run.returncode, 0)
-            self.assertIn("build_niuma=false 但未找到预装 niuma 二进制", failure_run.stderr + failure_run.stdout)
+            self.assertIn("找不到 niuma 二进制", failure_run.stderr + failure_run.stdout)
 
 
 if __name__ == "__main__":

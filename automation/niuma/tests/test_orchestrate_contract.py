@@ -157,7 +157,7 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertEqual(schema["required"], ["repo"])
         props = schema["properties"]
         self.assertEqual(props["repo_dir"]["default"], ".")
-        self.assertTrue(props["build_niuma"]["default"])
+        self.assertNotIn("build_niuma", props)
         self.assertEqual(props["label_whitelist"]["default"], "bot:orchestrate,bot:queued,bot:pr-reviewable")
         self.assertTrue(props["enable_dispatch_wakeup"]["default"])
         self.assertEqual(props["event_id"]["default"], "")
