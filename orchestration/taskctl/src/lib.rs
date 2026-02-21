@@ -476,7 +476,9 @@ fn unresolved_dependencies(store: &TaskStore, task_id: &str) -> Result<Vec<Strin
             .tasks
             .get(dep_id)
             .ok_or_else(|| TaskError::MissingDependency(dep_id.clone()))?;
-        if dep.status != TaskStatus::Completed {
+        if dep.status != TaskStatus::Completed
+            && dep.metadata.get("integrated").and_then(|v| v.as_str()) != Some("true")
+        {
             unresolved.push(dep_id.clone());
         }
     }
