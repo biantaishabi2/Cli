@@ -72,6 +72,33 @@ struct SeedSpec {
     /// 分层校验规则（可选，未提供时使用默认规则）
     #[serde(default)]
     layer_rules: Option<SeedLayerRules>,
+    /// 时序流程定义（可选，用于流程校验和 sequenceDiagram 导出）
+    #[serde(default)]
+    flows: Vec<SeedFlow>,
+}
+
+/// 时序流程定义
+#[derive(Debug, Deserialize)]
+struct SeedFlow {
+    name: String,
+    steps: Vec<SeedFlowStep>,
+}
+
+/// 流程中的单步
+#[derive(Debug, Deserialize)]
+struct SeedFlowStep {
+    from: String,
+    to: String,
+    #[serde(default)]
+    action: Option<String>,
+}
+
+/// 流程校验结果
+#[derive(Debug)]
+struct FlowValidationResult {
+    flow_name: String,
+    missing_steps: Vec<(String, String, Option<String>)>, // (from, to, action)
+    shortcuts: Vec<(String, String, String)>,              // (from, to, bypassed_module)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1664,6 +1691,105 @@ fn validate_impl(
     Ok(code)
 }
 
+/// 校验流程定义：检查每个 step 是否有对应的实际依赖边，以及是否存在跳过中间模块的捷径
+fn validate_flows(
+    flows: &[SeedFlow],
+    actual_edges: &HashSet<(String, String)>,
+) -> Vec<FlowValidationResult> {
+    let mut results = Vec::new();
+    for flow in flows {
+        let mut missing_steps = Vec::new();
+        let mut shortcuts = Vec::new();
+
+        // 检查每个 step 是否在 actual edges 中存在
+        for step in &flow.steps {
+            if !actual_edges.contains(&(step.from.clone(), step.to.clone())) {
+                missing_steps.push((
+                    step.from.clone(),
+                    step.to.clone(),
+                    step.action.clone(),
+                ));
+            }
+        }
+
+        // 捷径检测：flow 定义 A→B→C，但 actual 存在 A→C 直接边
+        // 遍历所有非相邻 step 对，检查是否存在跳跃边
+        let nodes: Vec<&str> = {
+            let mut ns = Vec::new();
+            for step in &flow.steps {
+                if ns.is_empty() || *ns.last().unwrap() != step.from.as_str() {
+                    ns.push(step.from.as_str());
+                }
+                ns.push(step.to.as_str());
+            }
+            ns
+        };
+        // 对于序列 [A, B, C, D]，检查 A→C, A→D, B→D 等跳跃边
+        for i in 0..nodes.len() {
+            for j in (i + 2)..nodes.len() {
+                let from = nodes[i].to_string();
+                let to = nodes[j].to_string();
+                if actual_edges.contains(&(from.clone(), to.clone())) {
+                    // 收集被跳过的中间模块
+                    let bypassed: Vec<&str> = nodes[i + 1..j].to_vec();
+                    let bypassed_str = bypassed.join("→");
+                    shortcuts.push((from, to, bypassed_str));
+                }
+            }
+        }
+
+        results.push(FlowValidationResult {
+            flow_name: flow.name.clone(),
+            missing_steps,
+            shortcuts,
+        });
+    }
+    results
+}
+
+/// 渲染 Mermaid sequenceDiagram
+fn render_mermaid_flows(flows: &[SeedFlow], module_map: &HashMap<&str, &SeedModule>) -> String {
+    let mut out = String::new();
+    for (i, flow) in flows.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("%% 流程: {}\n", flow.name));
+        out.push_str("sequenceDiagram\n");
+
+        // 收集参与者（保持出现顺序）
+        let mut participants: Vec<&str> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for step in &flow.steps {
+            if seen.insert(step.from.as_str()) {
+                participants.push(step.from.as_str());
+            }
+            if seen.insert(step.to.as_str()) {
+                participants.push(step.to.as_str());
+            }
+        }
+
+        // 输出 participant 声明
+        for pid in &participants {
+            let display = module_map
+                .get(pid)
+                .and_then(|m| m.display_name.as_deref())
+                .unwrap_or(pid);
+            out.push_str(&format!("    participant {} as {}\n", pid, display));
+        }
+
+        // 输出步骤
+        for step in &flow.steps {
+            let action = step.action.as_deref().unwrap_or(" ");
+            out.push_str(&format!(
+                "    {}->>{}:{}\n",
+                step.from, step.to, action
+            ));
+        }
+    }
+    out
+}
+
 pub fn export_mermaid(seed_file: &str, output: Option<&str>) {
     let seed_raw = match fs::read_to_string(seed_file) {
         Ok(s) => s,
@@ -1695,6 +1821,42 @@ pub fn export_mermaid(seed_file: &str, output: Option<&str>) {
         }
     }
 
+    // === 流程校验与 sequenceDiagram ===
+    let flows_mermaid = if !seed.flows.is_empty() {
+        // 从 relations_expected 中构建 actual edges 集合（allowed=true 的边）
+        let actual_edges: HashSet<(String, String)> = seed
+            .relations_expected
+            .iter()
+            .filter(|r| r.allowed)
+            .map(|r| (r.caller.clone(), r.callee.clone()))
+            .collect();
+
+        // 校验
+        let results = validate_flows(&seed.flows, &actual_edges);
+        for result in &results {
+            if !result.missing_steps.is_empty() || !result.shortcuts.is_empty() {
+                eprintln!("[flow] 流程「{}」校验结果:", result.flow_name);
+                for (from, to, action) in &result.missing_steps {
+                    let act = action.as_deref().unwrap_or("");
+                    eprintln!("  缺失步骤: {} → {} {}", from, to, act);
+                }
+                for (from, to, bypassed) in &result.shortcuts {
+                    eprintln!(
+                        "  捷径: {} → {} 跳过 {}",
+                        from, to, bypassed
+                    );
+                }
+            } else {
+                eprintln!("[flow] 流程「{}」校验通过", result.flow_name);
+            }
+        }
+
+        // 渲染 sequenceDiagram
+        Some(render_mermaid_flows(&seed.flows, &module_map))
+    } else {
+        None
+    };
+
     // === 总览图 ===
     let overview = render_mermaid_overview(&seed, &children_map, &module_map, &rationale_map);
 
@@ -1721,6 +1883,9 @@ pub fn export_mermaid(seed_file: &str, output: Option<&str>) {
     match output {
         None => {
             // 无 --output：输出到 stdout（保持兼容）
+            if let Some(ref fm) = flows_mermaid {
+                println!("{}", fm);
+            }
             println!("{}", overview);
             for (label, mermaid, _) in &details {
                 println!();
@@ -1748,6 +1913,14 @@ pub fn export_mermaid(seed_file: &str, output: Option<&str>) {
                  - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）\n\
                  - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）"
             ));
+
+            // 时序流程图（在总览图之前）
+            if let Some(ref fm) = flows_mermaid {
+                main_parts.push(format!(
+                    "## 时序流程图\n\n```mermaid\n{}\n```",
+                    fm.trim()
+                ));
+            }
 
             // 总览图
             main_parts.push(format!(
@@ -2925,6 +3098,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         // sourcePath 是 gong/tools/truncate.ex，但 localDependencies 中引用 gong/truncate.ex
@@ -2990,6 +3164,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let ast = AstSnapshot {
@@ -3054,6 +3229,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let pm = build_parent_map(&seed);
@@ -3091,6 +3267,7 @@ profiles:
             }],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -3128,6 +3305,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -3172,6 +3350,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let pm = build_parent_map(&seed);
@@ -3207,6 +3386,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -3235,6 +3415,7 @@ profiles:
             modules,
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         // 校验通过
@@ -3303,6 +3484,7 @@ profiles:
                 rationale: None,
             }],
             layer_rules: None,
+            flows: vec![],
         };
 
         let children_map = build_children_map(&seed);
@@ -3416,6 +3598,7 @@ profiles:
             ],
             relations_expected: vec![],
             layer_rules: None,
+            flows: vec![],
         };
 
         let children_map = build_children_map(&seed);
@@ -3881,5 +4064,147 @@ layer_rules:
                 }
             }
         }
+    }
+
+    #[test]
+    fn flows_parse_from_yaml() {
+        let yaml = r#"
+version: "1.0"
+modules:
+  - module_id: A
+    display_name: 模块A
+  - module_id: B
+    display_name: 模块B
+  - module_id: C
+    display_name: 模块C
+relations_expected: []
+flows:
+  - name: "测试流程"
+    steps:
+      - from: A
+        to: B
+        action: "请求"
+      - from: B
+        to: C
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(seed.flows.len(), 1);
+        assert_eq!(seed.flows[0].name, "测试流程");
+        assert_eq!(seed.flows[0].steps.len(), 2);
+        assert_eq!(seed.flows[0].steps[0].action, Some("请求".to_string()));
+        assert_eq!(seed.flows[0].steps[1].action, None);
+    }
+
+    #[test]
+    fn flows_absent_defaults_to_empty() {
+        let yaml = r#"
+version: "1.0"
+modules: []
+relations_expected: []
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        assert!(seed.flows.is_empty());
+    }
+
+    #[test]
+    fn validate_flows_detects_missing_steps() {
+        let flows = vec![SeedFlow {
+            name: "f1".into(),
+            steps: vec![
+                SeedFlowStep { from: "A".into(), to: "B".into(), action: Some("act1".into()) },
+                SeedFlowStep { from: "B".into(), to: "C".into(), action: None },
+            ],
+        }];
+        // actual 只有 A→B，缺少 B→C
+        let mut actual = HashSet::new();
+        actual.insert(("A".into(), "B".into()));
+
+        let results = validate_flows(&flows, &actual);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].missing_steps.len(), 1);
+        assert_eq!(results[0].missing_steps[0].0, "B");
+        assert_eq!(results[0].missing_steps[0].1, "C");
+    }
+
+    #[test]
+    fn validate_flows_detects_shortcuts() {
+        let flows = vec![SeedFlow {
+            name: "f1".into(),
+            steps: vec![
+                SeedFlowStep { from: "A".into(), to: "B".into(), action: None },
+                SeedFlowStep { from: "B".into(), to: "C".into(), action: None },
+            ],
+        }];
+        // actual 有 A→B, B→C, 还有跳跃边 A→C
+        let mut actual = HashSet::new();
+        actual.insert(("A".into(), "B".into()));
+        actual.insert(("B".into(), "C".into()));
+        actual.insert(("A".into(), "C".into()));
+
+        let results = validate_flows(&flows, &actual);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].missing_steps.is_empty());
+        assert_eq!(results[0].shortcuts.len(), 1);
+        assert_eq!(results[0].shortcuts[0].0, "A");
+        assert_eq!(results[0].shortcuts[0].1, "C");
+        assert_eq!(results[0].shortcuts[0].2, "B");
+    }
+
+    #[test]
+    fn validate_flows_all_pass() {
+        let flows = vec![SeedFlow {
+            name: "happy".into(),
+            steps: vec![
+                SeedFlowStep { from: "A".into(), to: "B".into(), action: None },
+                SeedFlowStep { from: "B".into(), to: "C".into(), action: None },
+            ],
+        }];
+        let mut actual = HashSet::new();
+        actual.insert(("A".into(), "B".into()));
+        actual.insert(("B".into(), "C".into()));
+
+        let results = validate_flows(&flows, &actual);
+        assert!(results[0].missing_steps.is_empty());
+        assert!(results[0].shortcuts.is_empty());
+    }
+
+    #[test]
+    fn render_mermaid_flows_basic() {
+        let flows = vec![SeedFlow {
+            name: "测试流程".into(),
+            steps: vec![
+                SeedFlowStep { from: "A".into(), to: "B".into(), action: Some("请求".into()) },
+                SeedFlowStep { from: "B".into(), to: "C".into(), action: None },
+            ],
+        }];
+        let mod_a = SeedModule {
+            module_id: "A".into(),
+            display_name: Some("模块A".into()),
+            layer: None, domain_kind: None, parent: None,
+            precedence: None, path_rules: None,
+        };
+        let mod_b = SeedModule {
+            module_id: "B".into(),
+            display_name: Some("模块B".into()),
+            layer: None, domain_kind: None, parent: None,
+            precedence: None, path_rules: None,
+        };
+        let mod_c = SeedModule {
+            module_id: "C".into(),
+            display_name: None,
+            layer: None, domain_kind: None, parent: None,
+            precedence: None, path_rules: None,
+        };
+        let module_map: HashMap<&str, &SeedModule> = [
+            ("A", &mod_a), ("B", &mod_b), ("C", &mod_c),
+        ].into_iter().collect();
+
+        let result = render_mermaid_flows(&flows, &module_map);
+        assert!(result.contains("sequenceDiagram"));
+        assert!(result.contains("participant A as 模块A"));
+        assert!(result.contains("participant B as 模块B"));
+        assert!(result.contains("participant C as C")); // 无 display_name 时用 module_id
+        assert!(result.contains("A->>B:请求"));
+        assert!(result.contains("B->>C: ")); // 无 action 时用空格
     }
 }

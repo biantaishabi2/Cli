@@ -838,3 +838,22 @@ relations_expected:
     callee: plugin_tool_extension
     allowed: false
     rationale: "infra 不应依赖 plugin 实现层"
+
+flows:
+  - name: "消息处理主流程"
+    steps:
+      - from: channel_ingress
+        to: gateway_control_plane
+        action: "路由解析"
+      - from: gateway_control_plane
+        to: agent_runtime
+        action: "分发到 Agent"
+      - from: agent_runtime
+        to: plugin_tool_extension
+        action: "工具调用"
+      - from: agent_runtime
+        to: external_dependencies
+        action: "LLM 调用"
+      - from: agent_runtime
+        to: channel_ingress
+        action: "回复发送"
