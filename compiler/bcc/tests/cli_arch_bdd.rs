@@ -3016,3 +3016,306 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// === parent 层级依赖边继承 (L1) BDD 集成测试 ===
+
+/// 辅助：构建带 parent_map 的 target contract YAML
+fn write_target_with_parent_map(
+    path: &Path,
+    allow_edges: &[(&str, &str)],
+    forbid_edges: &[(&str, &str)],
+    parent_map: &[(&str, &str)],
+) {
+    let mut yaml = String::from(
+        "version: v3\nkind: target_contract\nintent: target\nsource_of_truth: test\nnotes: []\n",
+    );
+    yaml.push_str("allow_edges:\n");
+    if allow_edges.is_empty() {
+        yaml.push_str("  []\n");
+    } else {
+        for (caller, callee) in allow_edges {
+            yaml.push_str(&format!("  - caller: {}\n    callee: {}\n", caller, callee));
+        }
+    }
+    yaml.push_str("forbid_edges:\n");
+    if forbid_edges.is_empty() {
+        yaml.push_str("  []\n");
+    } else {
+        for (caller, callee) in forbid_edges {
+            yaml.push_str(&format!("  - caller: {}\n    callee: {}\n", caller, callee));
+        }
+    }
+    if !parent_map.is_empty() {
+        yaml.push_str("parent_map:\n");
+        for (child, parent) in parent_map {
+            yaml.push_str(&format!("  {}: {}\n", child, parent));
+        }
+    }
+    write(path, &yaml);
+}
+
+fn write_standard_transition(path: &Path) {
+    write(
+        path,
+        "version: v3\nkind: transition_contract\nbase: v3.target\nintent: transition\nnotes: []\ntemporary_allow_edges: []\nblocked_edges: []\n",
+    );
+}
+
+fn write_standard_gates(path: &Path) {
+    write(
+        path,
+        "version: v3\nkind: verification_gates\nintent: gate\nprofiles:\n  transition:\n    max_unexpected_edges_count: 999\n    max_forbidden_edges_count: 999\n    max_forbidden_total_edges: 999\n    max_missing_edges_count: 999\n    max_directed_density_pct: 100\n    max_bidirectional_pair_count: 999\n  target:\n    max_unexpected_edges_count: 999\n    max_forbidden_edges_count: 999\n    max_forbidden_total_edges: 999\n    max_missing_edges_count: 999\n    max_directed_density_pct: 100\n    max_bidirectional_pair_count: 999\n",
+    );
+}
+
+fn write_actual_edges(path: &Path, edges: &[(&str, &str)]) {
+    let entries: Vec<String> = edges
+        .iter()
+        .map(|(c, e)| {
+            format!(
+                r#"  {{"caller":"{}","callee":"{}","import_edges":1,"call_edges":0,"total_edges":1}}"#,
+                c, e
+            )
+        })
+        .collect();
+    write(path, &format!("[\n{}\n]", entries.join(",\n")));
+}
+
+/// BDD: 子模块继承父模块 allow 边
+#[test]
+fn inherit_parent_allow_edge_via_cli() {
+    let root = temp_dir("bcc_inherit_allow");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(
+        &target,
+        &[("AGENT", "SESSION")],
+        &[],
+        &[("AGENT_HISTORY", "AGENT")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("AGENT_HISTORY", "SESSION")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("Inheritance Summary"),
+        "report should contain Inheritance Summary"
+    );
+    assert!(
+        report.contains("inherited from"),
+        "report should contain 'inherited from'"
+    );
+    assert!(
+        report.contains("unexpected_edges_count: 0"),
+        "AGENT_HISTORY->SESSION should be matched via inheritance"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: forbid 精确匹配优先于继承 allow
+#[test]
+fn forbid_overrides_inherited_allow_via_cli() {
+    let root = temp_dir("bcc_forbid_override");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(
+        &target,
+        &[("AGENT", "SESSION")],
+        &[("AGENT_HISTORY", "SESSION")],
+        &[("AGENT_HISTORY", "AGENT")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("AGENT_HISTORY", "SESSION")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("forbidden_edges_count: 1"),
+        "AGENT_HISTORY->SESSION should be forbidden (exact forbid overrides inherited allow)"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: 同父内聚默认 allowed
+#[test]
+fn sibling_cohesion_allowed_via_cli() {
+    let root = temp_dir("bcc_sibling_cohesion");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(
+        &target,
+        &[],
+        &[],
+        &[("AGENT_HISTORY", "AGENT"), ("AGENT_LOOP", "AGENT")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("AGENT_HISTORY", "AGENT_LOOP")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("sibling cohesion"),
+        "report should mention sibling cohesion"
+    );
+    assert!(
+        report.contains("unexpected_edges_count: 0"),
+        "sibling edges should not be unexpected"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: 无 parent 向后兼容
+#[test]
+fn no_parent_backward_compatible_via_cli() {
+    let root = temp_dir("bcc_no_parent_compat");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(&target, &[("A", "B")], &[], &[]);
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("A", "B"), ("C", "D")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("unexpected_edges_count: 1"),
+        "C->D should be unexpected"
+    );
+    assert!(
+        !report.contains("Inheritance Summary"),
+        "no inheritance summary without parent_map"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: 多层嵌套继承
+#[test]
+fn multi_level_inheritance_via_cli() {
+    let root = temp_dir("bcc_multi_level_inherit");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(
+        &target,
+        &[("A", "X")],
+        &[],
+        &[("C", "B"), ("B", "A")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("C", "X")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("Inheritance Summary"),
+        "report should contain Inheritance Summary"
+    );
+    assert!(
+        report.contains("inherited from"),
+        "C->X should be inherited from A->X"
+    );
+    assert!(
+        report.contains("unexpected_edges_count: 0"),
+        "C->X should be matched via multi-level inheritance"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}

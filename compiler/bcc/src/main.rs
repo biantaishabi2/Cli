@@ -299,6 +299,10 @@ enum ArchAction {
         /// SmellReport JSON 路径，有 smell 则 validate 失败（exit 1）
         #[arg(long)]
         smell_gate: Option<String>,
+
+        /// 启用 parent 层级依赖边继承（默认 true）
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
+        inherit_parent_edges: bool,
     },
 
     /// 导出 bugfix 可消费的 module_map.json
@@ -646,6 +650,7 @@ fn main() {
                 fail_on_forbidden,
                 export_bdd_source,
                 smell_gate,
+                inherit_parent_edges,
             } => {
                 arch::validate(
                     &target,
@@ -658,6 +663,7 @@ fn main() {
                     fail_on_forbidden,
                     export_bdd_source.as_deref(),
                     smell_gate.as_deref(),
+                    inherit_parent_edges,
                 );
             }
             ArchAction::ExportModuleMap {

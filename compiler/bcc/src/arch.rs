@@ -132,6 +132,8 @@ struct TargetContract {
     notes: Vec<String>,
     allow_edges: Vec<Edge>,
     forbid_edges: Vec<Edge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_map: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -195,6 +197,32 @@ struct SummaryScenario {
     gate_pass: bool,
 }
 
+/// 继承配置：控制是否启用 parent 链继承查找
+#[derive(Debug, Clone)]
+pub(crate) struct InheritanceConfig {
+    pub enabled: bool,
+    pub parent_map: HashMap<String, String>,
+    pub max_depth: usize,
+}
+
+/// 记录继承来源的边信息
+#[derive(Debug, Clone)]
+struct InheritedEdge {
+    edge: String,
+    inherited_from: String,
+}
+
+/// 评估原因枚举
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+enum EvalReason {
+    ExactMatch,
+    InheritedAllow,
+    InheritedForbid,
+    SiblingCohesion,
+    Unexpected,
+}
+
 #[derive(Debug)]
 struct EvalResult {
     name: String,
@@ -209,6 +237,8 @@ struct EvalResult {
     missing_edges_count: i64,
     unexpected_top: Vec<(String, i64)>,
     forbidden_top: Vec<(String, i64)>,
+    inherited_edges: Vec<InheritedEdge>,
+    sibling_cohesion_edges: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -686,6 +716,18 @@ fn matrix_impl(
         });
     }
 
+    // 构建 parent_map 用于持久化到 contract
+    let raw_parent_map = build_parent_map(&seed);
+    let parent_map_for_contract: HashMap<String, String> = raw_parent_map
+        .iter()
+        .filter_map(|(k, v)| v.as_ref().map(|p| (k.clone(), p.clone())))
+        .collect();
+    let parent_map_opt = if parent_map_for_contract.is_empty() {
+        None
+    } else {
+        Some(parent_map_for_contract)
+    };
+
     let target = TargetContract {
         version: seed.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
         kind: "target_contract".to_string(),
@@ -701,6 +743,7 @@ fn matrix_impl(
         ],
         allow_edges,
         forbid_edges,
+        parent_map: parent_map_opt,
     };
 
     let transition = TransitionContract {
@@ -817,11 +860,92 @@ fn matrix_impl(
     Ok(())
 }
 
+/// 沿 parent 链获取祖先列表（从近到远），使用 HashMap<String, String> 形式的 parent_map
+fn get_ancestors_from_flat(module_id: &str, parent_map: &HashMap<String, String>) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut current = module_id.to_string();
+    for _ in 0..20 {
+        if let Some(parent) = parent_map.get(&current) {
+            ancestors.push(parent.clone());
+            current = parent.clone();
+        } else {
+            break;
+        }
+    }
+    ancestors
+}
+
+/// 逐层外扩查找：在 edge_set 中寻找 caller/callee 的祖先组合匹配
+/// 返回 Some((matched_key, depth)) 或 None
+fn find_inherited_match(
+    caller: &str,
+    callee: &str,
+    edge_set: &HashSet<String>,
+    inheritance: &InheritanceConfig,
+) -> Option<(String, usize)> {
+    let caller_chain: Vec<String> = {
+        let mut chain = vec![caller.to_string()];
+        chain.extend(get_ancestors_from_flat(caller, &inheritance.parent_map));
+        chain
+    };
+    let callee_chain: Vec<String> = {
+        let mut chain = vec![callee.to_string()];
+        chain.extend(get_ancestors_from_flat(callee, &inheritance.parent_map));
+        chain
+    };
+
+    // 逐层外扩：depth=1 查 (parent_A,B)/(A,parent_B)/(parent_A,parent_B)
+    // depth=2 查 grandparent 组合，以此类推
+    for depth in 1..=inheritance.max_depth {
+        // 收集在当前深度层或更浅层的祖先索引组合
+        // caller_chain[0]=self, [1]=parent, [2]=grandparent, ...
+        // callee_chain[0]=self, [1]=parent, [2]=grandparent, ...
+        // 在 depth d，检查所有 (i,j) 使得 max(i,j) == d
+        for i in 0..=depth {
+            for j in 0..=depth {
+                if i == 0 && j == 0 {
+                    continue; // 精确匹配已处理
+                }
+                if i.max(j) != depth {
+                    continue; // 避免重复检查低层
+                }
+                if i >= caller_chain.len() || j >= callee_chain.len() {
+                    continue;
+                }
+                let k = edge_key(&caller_chain[i], &callee_chain[j]);
+                if edge_set.contains(&k) {
+                    return Some((k, depth));
+                }
+            }
+        }
+    }
+
+    if caller_chain.len() > inheritance.max_depth + 1 || callee_chain.len() > inheritance.max_depth + 1 {
+        eprintln!(
+            "warn: inheritance lookup for {}→{} exceeded max_depth={}",
+            caller, callee, inheritance.max_depth
+        );
+    }
+
+    None
+}
+
+/// 判断两个模块是否共享同一直接 parent
+fn are_siblings(a: &str, b: &str, parent_map: &HashMap<String, String>) -> Option<String> {
+    let pa = parent_map.get(a);
+    let pb = parent_map.get(b);
+    match (pa, pb) {
+        (Some(p1), Some(p2)) if p1 == p2 => Some(p1.clone()),
+        _ => None,
+    }
+}
+
 fn evaluate_scenario(
     name: &str,
     allow_set: &HashSet<String>,
     forbid_set: &HashSet<String>,
     actual_rows: &[RelationActual],
+    inheritance: &InheritanceConfig,
 ) -> EvalResult {
     let actual_set: HashSet<String> = actual_rows
         .iter()
@@ -837,22 +961,71 @@ fn evaluate_scenario(
 
     let mut unexpected_top = Vec::new();
     let mut forbidden_top = Vec::new();
+    let mut inherited_edges = Vec::new();
+    let mut sibling_cohesion_edges = Vec::new();
 
     for edge in actual_rows {
         let k = edge_key(&edge.caller, &edge.callee);
         let weight = edge.total_edges;
+
+        // ① 精确匹配 forbid_set → forbidden
         if forbid_set.contains(&k) {
             forbidden_edges_count += 1;
             forbidden_total_edges += weight;
             forbidden_top.push((k, weight));
-        } else if allow_set.contains(&k) {
+            continue;
+        }
+
+        // ② 精确匹配 allow_set → matched
+        if allow_set.contains(&k) {
             matched_edges_count += 1;
             matched_total_edges += weight;
-        } else {
-            unexpected_edges_count += 1;
-            unexpected_total_edges += weight;
-            unexpected_top.push((k, weight));
+            continue;
         }
+
+        if inheritance.enabled {
+            // ③ 沿 parent 链查 forbid（逐层外扩）→ forbidden (inherited)
+            if let Some((inherited_from, _depth)) =
+                find_inherited_match(&edge.caller, &edge.callee, forbid_set, inheritance)
+            {
+                forbidden_edges_count += 1;
+                forbidden_total_edges += weight;
+                forbidden_top.push((k.clone(), weight));
+                inherited_edges.push(InheritedEdge {
+                    edge: k,
+                    inherited_from,
+                });
+                continue;
+            }
+
+            // ④ 同父内聚检查
+            if let Some(_parent) =
+                are_siblings(&edge.caller, &edge.callee, &inheritance.parent_map)
+            {
+                matched_edges_count += 1;
+                matched_total_edges += weight;
+                sibling_cohesion_edges.push(k);
+                continue;
+            }
+
+            // ⑤ 沿 parent 链查 allow（逐层外扩）→ matched (inherited)
+            if let Some((inherited_from, _depth)) =
+                find_inherited_match(&edge.caller, &edge.callee, allow_set, inheritance)
+            {
+                matched_edges_count += 1;
+                matched_total_edges += weight;
+                inherited_edges.push(InheritedEdge {
+                    edge: k,
+                    inherited_from,
+                });
+                continue;
+            }
+        }
+
+        // ⑥ 以上均未命中 → unexpected
+        unexpected_edges_count += 1;
+        unexpected_total_edges += weight;
+        unexpected_top.push((k, weight));
     }
 
     let mut missing_edges_count = 0;
@@ -878,6 +1051,8 @@ fn evaluate_scenario(
         missing_edges_count,
         unexpected_top,
         forbidden_top,
+        inherited_edges,
+        sibling_cohesion_edges,
     }
 }
 
@@ -1038,6 +1213,7 @@ pub fn validate(
     fail_on_forbidden: bool,
     export_bdd_source: Option<&str>,
     smell_gate: Option<&str>,
+    inherit_parent_edges: bool,
 ) {
     let code = match validate_impl(
         target_path,
@@ -1050,6 +1226,7 @@ pub fn validate(
         fail_on_forbidden,
         export_bdd_source,
         smell_gate,
+        inherit_parent_edges,
     ) {
         Ok(code) => code,
         Err(e) => {
@@ -1073,6 +1250,7 @@ fn validate_impl(
     fail_on_forbidden: bool,
     export_bdd_source: Option<&str>,
     smell_gate: Option<&str>,
+    inherit_parent_edges: bool,
 ) -> Result<i32, String> {
     let target_raw =
         fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
@@ -1112,13 +1290,26 @@ fn validate_impl(
         transition_forbid.insert(edge_key(&e.caller, &e.callee));
     }
 
+    // 构造 InheritanceConfig
+    let flat_parent_map: HashMap<String, String> = target
+        .parent_map
+        .as_ref()
+        .cloned()
+        .unwrap_or_default();
+    let inheritance = InheritanceConfig {
+        enabled: inherit_parent_edges && !flat_parent_map.is_empty(),
+        parent_map: flat_parent_map,
+        max_depth: 5,
+    };
+
     let structure = compute_structure(&actual);
-    let target_eval = evaluate_scenario("v3_target", &target_allow, &target_forbid, &actual);
+    let target_eval = evaluate_scenario("v3_target", &target_allow, &target_forbid, &actual, &inheritance);
     let transition_eval = evaluate_scenario(
         "v3_transition",
         &transition_allow,
         &transition_forbid,
         &actual,
+        &inheritance,
     );
 
     let (target_pass, target_rows) =
@@ -1228,6 +1419,13 @@ fn validate_impl(
     report.push('\n');
 
     let write_eval = |r: &EvalResult, pass: bool, report: &mut String| {
+        // 构建继承来源查找表
+        let inherited_map: HashMap<&str, &str> = r
+            .inherited_edges
+            .iter()
+            .map(|ie| (ie.edge.as_str(), ie.inherited_from.as_str()))
+            .collect();
+
         report.push_str(&format!("## {}\n", r.name));
         report.push_str(&format!("- allow_count: {}\n", r.allow_count));
         report.push_str(&format!("- forbid_count: {}\n", r.forbid_count));
@@ -1263,7 +1461,14 @@ fn validate_impl(
                 r.forbidden_top.len()
             ));
             for (edge, c) in r.forbidden_top.iter().take(20) {
-                report.push_str(&format!("- {}: {}\n", edge, c));
+                if let Some(from) = inherited_map.get(edge.as_str()) {
+                    report.push_str(&format!(
+                        "- {}: {} (inherited from {})\n",
+                        edge, c, from
+                    ));
+                } else {
+                    report.push_str(&format!("- {}: {}\n", edge, c));
+                }
             }
             report.push('\n');
         }
@@ -1275,6 +1480,33 @@ fn validate_impl(
             ));
             for (edge, c) in r.unexpected_top.iter().take(20) {
                 report.push_str(&format!("- {}: {}\n", edge, c));
+            }
+            report.push('\n');
+        }
+
+        // Inheritance Summary
+        if !r.inherited_edges.is_empty() || !r.sibling_cohesion_edges.is_empty() {
+            report.push_str("### Inheritance Summary\n");
+            if !r.inherited_edges.is_empty() {
+                report.push_str(&format!(
+                    "- inherited_edges: {}\n",
+                    r.inherited_edges.len()
+                ));
+                for ie in &r.inherited_edges {
+                    report.push_str(&format!(
+                        "  - {} (inherited from {})\n",
+                        ie.edge, ie.inherited_from
+                    ));
+                }
+            }
+            if !r.sibling_cohesion_edges.is_empty() {
+                report.push_str(&format!(
+                    "- sibling_cohesion_edges: {}\n",
+                    r.sibling_cohesion_edges.len()
+                ));
+                for edge in &r.sibling_cohesion_edges {
+                    report.push_str(&format!("  - {} (sibling cohesion)\n", edge));
+                }
             }
             report.push('\n');
         }
@@ -1909,6 +2141,7 @@ relations_expected:
             true,
             None,
             None,
+            true,
         )
         .expect("validate ok");
         assert_eq!(code, 0);
@@ -2023,6 +2256,7 @@ profiles:
             true,
             None,
             None,
+            true,
         )
         .expect("strict validate");
         assert_eq!(strict_code, 2);
@@ -2038,6 +2272,7 @@ profiles:
             false,
             None,
             None,
+            true,
         )
         .expect("report validate");
         assert_eq!(report_code, 0);
@@ -2392,5 +2627,147 @@ profiles:
         assert_eq!(ancestors.len(), 9);
         assert_eq!(ancestors[0], "L8");
         assert_eq!(ancestors[8], "L0");
+    }
+
+    // === 继承评估相关测试 ===
+
+    fn make_inheritance(parent_map: HashMap<String, String>) -> InheritanceConfig {
+        InheritanceConfig {
+            enabled: true,
+            parent_map,
+            max_depth: 5,
+        }
+    }
+
+    fn disabled_inheritance() -> InheritanceConfig {
+        InheritanceConfig {
+            enabled: false,
+            parent_map: HashMap::new(),
+            max_depth: 5,
+        }
+    }
+
+    /// 子模块继承父模块 allow 边
+    #[test]
+    fn evaluate_inherit_allow_from_parent() {
+        let allow: HashSet<String> = vec![edge_key("AGENT", "SESSION")].into_iter().collect();
+        let forbid: HashSet<String> = HashSet::new();
+        let actual = vec![RelationActual {
+            caller: "AGENT_HISTORY".to_string(),
+            callee: "SESSION".to_string(),
+            import_edges: 1,
+            call_edges: 0,
+            total_edges: 1,
+        }];
+        let mut pm = HashMap::new();
+        pm.insert("AGENT_HISTORY".to_string(), "AGENT".to_string());
+        let inheritance = make_inheritance(pm);
+
+        let result = evaluate_scenario("test", &allow, &forbid, &actual, &inheritance);
+        assert_eq!(result.matched_edges_count, 1);
+        assert_eq!(result.unexpected_edges_count, 0);
+        assert_eq!(result.inherited_edges.len(), 1);
+        assert_eq!(result.inherited_edges[0].edge, "AGENT_HISTORY->SESSION");
+        assert_eq!(result.inherited_edges[0].inherited_from, "AGENT->SESSION");
+    }
+
+    /// forbid 精确匹配优先于继承 allow
+    #[test]
+    fn evaluate_forbid_overrides_inherited_allow() {
+        let allow: HashSet<String> = vec![edge_key("AGENT", "SESSION")].into_iter().collect();
+        let forbid: HashSet<String> = vec![edge_key("AGENT_HISTORY", "SESSION")].into_iter().collect();
+        let actual = vec![RelationActual {
+            caller: "AGENT_HISTORY".to_string(),
+            callee: "SESSION".to_string(),
+            import_edges: 1,
+            call_edges: 0,
+            total_edges: 1,
+        }];
+        let mut pm = HashMap::new();
+        pm.insert("AGENT_HISTORY".to_string(), "AGENT".to_string());
+        let inheritance = make_inheritance(pm);
+
+        let result = evaluate_scenario("test", &allow, &forbid, &actual, &inheritance);
+        assert_eq!(result.forbidden_edges_count, 1);
+        assert_eq!(result.inherited_edges.len(), 0);
+    }
+
+    /// 同父内聚默认 allowed
+    #[test]
+    fn evaluate_sibling_cohesion() {
+        let allow: HashSet<String> = HashSet::new();
+        let forbid: HashSet<String> = HashSet::new();
+        let actual = vec![RelationActual {
+            caller: "AGENT_HISTORY".to_string(),
+            callee: "AGENT_LOOP".to_string(),
+            import_edges: 1,
+            call_edges: 0,
+            total_edges: 1,
+        }];
+        let mut pm = HashMap::new();
+        pm.insert("AGENT_HISTORY".to_string(), "AGENT".to_string());
+        pm.insert("AGENT_LOOP".to_string(), "AGENT".to_string());
+        let inheritance = make_inheritance(pm);
+
+        let result = evaluate_scenario("test", &allow, &forbid, &actual, &inheritance);
+        assert_eq!(result.matched_edges_count, 1);
+        assert_eq!(result.unexpected_edges_count, 0);
+        assert_eq!(result.sibling_cohesion_edges.len(), 1);
+        assert_eq!(result.sibling_cohesion_edges[0], "AGENT_HISTORY->AGENT_LOOP");
+    }
+
+    /// 无 parent 时向后兼容
+    #[test]
+    fn evaluate_no_parent_backward_compatible() {
+        let allow: HashSet<String> = vec![edge_key("A", "B")].into_iter().collect();
+        let forbid: HashSet<String> = HashSet::new();
+        let actual = vec![
+            RelationActual {
+                caller: "A".to_string(),
+                callee: "B".to_string(),
+                import_edges: 1,
+                call_edges: 0,
+                total_edges: 1,
+            },
+            RelationActual {
+                caller: "C".to_string(),
+                callee: "D".to_string(),
+                import_edges: 1,
+                call_edges: 0,
+                total_edges: 1,
+            },
+        ];
+        let inheritance = disabled_inheritance();
+
+        let result = evaluate_scenario("test", &allow, &forbid, &actual, &inheritance);
+        assert_eq!(result.matched_edges_count, 1);
+        assert_eq!(result.unexpected_edges_count, 1);
+        assert!(result.inherited_edges.is_empty());
+        assert!(result.sibling_cohesion_edges.is_empty());
+    }
+
+    /// 多层嵌套继承
+    #[test]
+    fn evaluate_multi_level_inherit() {
+        let allow: HashSet<String> = vec![edge_key("A", "X")].into_iter().collect();
+        let forbid: HashSet<String> = HashSet::new();
+        let actual = vec![RelationActual {
+            caller: "C".to_string(),
+            callee: "X".to_string(),
+            import_edges: 1,
+            call_edges: 0,
+            total_edges: 1,
+        }];
+        let mut pm = HashMap::new();
+        pm.insert("C".to_string(), "B".to_string());
+        pm.insert("B".to_string(), "A".to_string());
+        let inheritance = make_inheritance(pm);
+
+        let result = evaluate_scenario("test", &allow, &forbid, &actual, &inheritance);
+        assert_eq!(result.matched_edges_count, 1);
+        assert_eq!(result.unexpected_edges_count, 0);
+        assert_eq!(result.inherited_edges.len(), 1);
+        assert_eq!(result.inherited_edges[0].edge, "C->X");
+        assert_eq!(result.inherited_edges[0].inherited_from, "A->X");
     }
 }
