@@ -1784,15 +1784,18 @@ fn export_mermaid_overview(
         if !seen.insert(key) {
             continue;
         }
-        let label_part = rel
-            .rationale
-            .as_deref()
-            .map(|r| format!(" -- \"{}\"", r))
-            .unwrap_or_default();
         if rel.allowed {
-            println!("  {}{} --> {}", rel.caller, label_part, rel.callee);
+            if let Some(ref r) = rel.rationale {
+                println!("  {} -->|\"{}\"| {}", rel.caller, r, rel.callee);
+            } else {
+                println!("  {} --> {}", rel.caller, rel.callee);
+            }
         } else {
-            println!("  {}{} -.-x {}", rel.caller, label_part, rel.callee);
+            if let Some(ref r) = rel.rationale {
+                println!("  {} -.->|\"⛔ {}\"| {}", rel.caller, r, rel.callee);
+            } else {
+                println!("  {} -.-x {}", rel.caller, rel.callee);
+            }
         }
     }
 }
@@ -1927,17 +1930,24 @@ fn export_mermaid_detail(
         }
         // 查找 rationale：优先用父级原始 rationale（继承边回溯到父关系）
         let label = find_edge_rationale(e, parent_id, rationale_map);
-        let label_part = if !label.is_empty() {
-            format!(" -- \"{}\"", label)
-        } else {
-            String::new()
-        };
         if e.rationale.contains("sibling") {
-            println!("  {}{} <-.-> {}", e.caller, label_part, e.callee);
+            if !label.is_empty() {
+                println!("  {} <-.->|\"{}\"| {}", e.caller, label, e.callee);
+            } else {
+                println!("  {} <-.-> {}", e.caller, e.callee);
+            }
         } else if e.rationale.contains("inherited") {
-            println!("  {}{} -.-> {}", e.caller, label_part, e.callee);
+            if !label.is_empty() {
+                println!("  {} -.->|\"{}\"| {}", e.caller, label, e.callee);
+            } else {
+                println!("  {} -.-> {}", e.caller, e.callee);
+            }
         } else {
-            println!("  {}{} --> {}", e.caller, label_part, e.callee);
+            if !label.is_empty() {
+                println!("  {} -->|\"{}\"| {}", e.caller, label, e.callee);
+            } else {
+                println!("  {} --> {}", e.caller, e.callee);
+            }
         }
     }
     for e in &relevant_forbid {
@@ -1946,12 +1956,11 @@ fn export_mermaid_detail(
             continue;
         }
         let label = find_edge_rationale(e, parent_id, rationale_map);
-        let label_part = if !label.is_empty() {
-            format!(" -- \"{}\"", label)
+        if !label.is_empty() {
+            println!("  {} -.->|\"⛔ {}\"| {}", e.caller, label, e.callee);
         } else {
-            String::new()
-        };
-        println!("  {}{} -.-x {}", e.caller, label_part, e.callee);
+            println!("  {} -.-x {}", e.caller, e.callee);
+        }
     }
 }
 

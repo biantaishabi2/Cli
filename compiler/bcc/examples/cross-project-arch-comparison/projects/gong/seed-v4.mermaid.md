@@ -3,7 +3,7 @@
 > 由 `bcc arch export-mermaid --seed-file seed-v4.yaml` 自动生成
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
-- 边样式：`-->` = 显式 allowed, `-.->` = 继承 allowed, `<-.->` = 兄弟模块, `-.-x` = forbidden
+- 边样式：`-->` = 显式 allowed, `-.->` = 继承 allowed, `<-.->` = 兄弟模块, `⛔` = forbidden
 - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）
 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）
 
@@ -35,30 +35,30 @@ graph TD
   end
   style AGENT fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none
 
-  AGENT -- "Agent 构建 system prompt" --> PROMPT
-  AGENT -- "Agent 处理 tool_result 等数据" --> DATA
-  AGENT -- "Agent 通过 Jido tools 参数注入工具" --> TOOLS
-  AGENT -- "AgentLoop 调用 HookRunner 执行 gate/pipe" --> HOOK
-  AGENT -- "AgentLoop 调用 Extension setup/teardown" --> EXTENSIONS
-  AGENT -- "AgentLoop 使用 retry/steering/abort" --> RUNTIME
-  AGENT -- "AgentLoop 发射流式事件" --> STREAM
-  SESSION -- "Session 驱动 AgentLoop 执行" --> AGENT
-  SESSION -- "Session 广播流式事件给订阅者" --> STREAM
-  SESSION -- "Session 使用 steering/retry/settings" --> RUNTIME
-  SESSION -- "Session 构建 LLM backend" --> PROVIDERS
-  COMPACTION -- "Compaction 调用 LLM 生成摘要" --> PROVIDERS
-  COMPACTION -- "Summarizer 构建压缩 prompt" --> PROMPT
-  COMPACTION -- "Compaction 持久化压缩结果" --> TAPE
-  EXTENSIONS -- "ExtensionIntegration 注册扩展命令" --> SESSION
-  TOOLS -- "Tools 返回 ToolResult 数据" --> DATA
-  RUNTIME -- "Auth 模块查询 ModelRegistry 做认证校验" --> PROVIDERS
-  INFRA -- "Application 启动时注册 Provider" --> PROVIDERS
-  INFRA -- "Application 启动时调用 PromptTemplate.init()" --> PROMPT
-  INFRA -- "Application 启动 SessionRegistry 和 SessionSupervisor" --> SESSION
-  CLI -- "CLI 创建/管理 Session" --> SESSION
-  DATA -- "数据层不能反向依赖 Agent" -.-x AGENT
-  TOOLS -- "工具不能反向依赖 Agent" -.-x AGENT
-  TAPE -- "存储层不能反向依赖 Session" -.-x SESSION
+  AGENT -->|"Agent 构建 system prompt"| PROMPT
+  AGENT -->|"Agent 处理 tool_result 等数据"| DATA
+  AGENT -->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
+  AGENT -->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
+  AGENT -->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
+  AGENT -->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
+  AGENT -->|"AgentLoop 发射流式事件"| STREAM
+  SESSION -->|"Session 驱动 AgentLoop 执行"| AGENT
+  SESSION -->|"Session 广播流式事件给订阅者"| STREAM
+  SESSION -->|"Session 使用 steering/retry/settings"| RUNTIME
+  SESSION -->|"Session 构建 LLM backend"| PROVIDERS
+  COMPACTION -->|"Compaction 调用 LLM 生成摘要"| PROVIDERS
+  COMPACTION -->|"Summarizer 构建压缩 prompt"| PROMPT
+  COMPACTION -->|"Compaction 持久化压缩结果"| TAPE
+  EXTENSIONS -->|"ExtensionIntegration 注册扩展命令"| SESSION
+  TOOLS -->|"Tools 返回 ToolResult 数据"| DATA
+  RUNTIME -->|"Auth 模块查询 ModelRegistry 做认证校验"| PROVIDERS
+  INFRA -->|"Application 启动时注册 Provider"| PROVIDERS
+  INFRA -->|"Application 启动时调用 PromptTemplate.init()"| PROMPT
+  INFRA -->|"Application 启动 SessionRegistry 和 SessionSupervisor"| SESSION
+  CLI -->|"CLI 创建/管理 Session"| SESSION
+  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT
+  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT
+  TAPE -.->|"⛔ 存储层不能反向依赖 Session"| SESSION
 ```
 
 ## Agent 运行时 子模块详情
@@ -79,26 +79,26 @@ graph TD
   STREAM["流式输出"]
   TOOLS["工具集"]
 
-  AGENT_CORE -- "Agent 构建 system prompt" -.-> PROMPT
-  AGENT_LOOP -- "Agent 构建 system prompt" -.-> PROMPT
-  AGENT_CORE -- "Agent 处理 tool_result 等数据" -.-> DATA
-  AGENT_LOOP -- "Agent 处理 tool_result 等数据" -.-> DATA
-  AGENT_CORE -- "Agent 通过 Jido tools 参数注入工具" -.-> TOOLS
-  AGENT_LOOP -- "Agent 通过 Jido tools 参数注入工具" -.-> TOOLS
-  AGENT_CORE -- "AgentLoop 调用 HookRunner 执行 gate/pipe" -.-> HOOK
-  AGENT_LOOP -- "AgentLoop 调用 HookRunner 执行 gate/pipe" -.-> HOOK
-  AGENT_CORE -- "AgentLoop 调用 Extension setup/teardown" -.-> EXTENSIONS
-  AGENT_LOOP -- "AgentLoop 调用 Extension setup/teardown" -.-> EXTENSIONS
-  AGENT_CORE -- "AgentLoop 使用 retry/steering/abort" -.-> RUNTIME
-  AGENT_LOOP -- "AgentLoop 使用 retry/steering/abort" -.-> RUNTIME
-  AGENT_CORE -- "AgentLoop 发射流式事件" -.-> STREAM
-  AGENT_LOOP -- "AgentLoop 发射流式事件" -.-> STREAM
-  SESSION -- "Session 驱动 AgentLoop 执行" -.-> AGENT_CORE
-  SESSION -- "Session 驱动 AgentLoop 执行" -.-> AGENT_LOOP
-  AGENT_CORE -- "兄弟模块" <-.-> AGENT_LOOP
-  AGENT_LOOP -- "兄弟模块" <-.-> AGENT_CORE
-  DATA -- "数据层不能反向依赖 Agent" -.-x AGENT_CORE
-  DATA -- "数据层不能反向依赖 Agent" -.-x AGENT_LOOP
-  TOOLS -- "工具不能反向依赖 Agent" -.-x AGENT_CORE
-  TOOLS -- "工具不能反向依赖 Agent" -.-x AGENT_LOOP
+  AGENT_CORE -.->|"Agent 构建 system prompt"| PROMPT
+  AGENT_LOOP -.->|"Agent 构建 system prompt"| PROMPT
+  AGENT_CORE -.->|"Agent 处理 tool_result 等数据"| DATA
+  AGENT_LOOP -.->|"Agent 处理 tool_result 等数据"| DATA
+  AGENT_CORE -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
+  AGENT_LOOP -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
+  AGENT_CORE -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
+  AGENT_LOOP -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
+  AGENT_CORE -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
+  AGENT_LOOP -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
+  AGENT_CORE -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
+  AGENT_LOOP -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
+  AGENT_CORE -.->|"AgentLoop 发射流式事件"| STREAM
+  AGENT_LOOP -.->|"AgentLoop 发射流式事件"| STREAM
+  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT_CORE
+  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT_LOOP
+  AGENT_CORE <-.->|"兄弟模块"| AGENT_LOOP
+  AGENT_LOOP <-.->|"兄弟模块"| AGENT_CORE
+  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT_CORE
+  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT_LOOP
+  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT_CORE
+  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT_LOOP
 ```
