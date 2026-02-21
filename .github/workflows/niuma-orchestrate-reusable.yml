@@ -252,8 +252,12 @@ jobs:
           else
             echo "无 niuma 源码，使用系统已安装的 niuma..."
             niuma_path="$(command -v niuma || true)"
+            # 某些 self-hosted runner 服务环境 PATH 不含 /usr/local/bin，补绝对路径兜底。
+            if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
+              niuma_path="/usr/local/bin/niuma"
+            fi
             if [ -z "$niuma_path" ]; then
-              echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma"
+              echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
               exit 1
             fi
             echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
