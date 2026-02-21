@@ -6,6 +6,7 @@ pub mod compliance;
 pub mod coverage;
 pub mod density;
 pub mod layering;
+pub use layering::{check_layer_transition, check_layer_transition_with_precedence};
 
 use super::config::ScoringConfig;
 use super::context::ScoringContext;

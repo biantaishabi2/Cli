@@ -52,6 +52,11 @@ on:
         required: false
         default: false
         type: boolean
+      store_dir:
+        description: "tasks.json 存储目录（多 runner 共享场景，绝对路径）"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   issues: write
@@ -267,6 +272,7 @@ jobs:
           NIUMA_INTEGRATION_GATE_MAX_RETRIES: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
           NIUMA_PR_CONFLICT_RETRY_THRESHOLD: ${{ vars.NIUMA_PR_CONFLICT_RETRY_THRESHOLD || '3' }}
           NIUMA_PR_CONFLICT_UNKNOWN_BACKOFFS: ${{ vars.NIUMA_PR_CONFLICT_UNKNOWN_BACKOFFS || '5s,15s,30s' }}
+          NIUMA_STORE_DIR: ${{ inputs.store_dir }}
         run: |
           resolved_repo_dir="$REPO_DIR"
           if [ -z "$resolved_repo_dir" ]; then
@@ -298,7 +304,12 @@ jobs:
             resolved_repo_dir="$WORKSPACE/$resolved_repo_dir"
           fi
 
-          STORE_PATH="$resolved_repo_dir/.niuma/tasks.json"
+          STORE_DIR="${{ inputs.store_dir }}"
+          if [ -n "$STORE_DIR" ]; then
+            STORE_PATH="$STORE_DIR/tasks.json"
+          else
+            STORE_PATH="$resolved_repo_dir/.niuma/tasks.json"
+          fi
           if [ ! -f "$STORE_PATH" ]; then
             echo "integration_gate_status=passed" >> "$GITHUB_OUTPUT"
             exit 0

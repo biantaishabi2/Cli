@@ -50,6 +50,17 @@ struct AstRelationHint {
     reason: String,
 }
 
+/// 分层校验规则（可选，嵌入 SeedSpec）
+#[derive(Debug, Deserialize)]
+struct SeedLayerRules {
+    #[serde(default)]
+    layers: Vec<score::config::LayerDefinition>,
+    #[serde(default)]
+    forbidden_transitions: Vec<(String, String)>,
+    #[serde(default)]
+    allowed_transitions: Vec<(String, String)>,
+}
+
 #[derive(Debug, Deserialize)]
 struct SeedSpec {
     version: Option<String>,
@@ -58,14 +69,15 @@ struct SeedSpec {
     modules: Vec<SeedModule>,
     #[serde(default)]
     relations_expected: Vec<SeedRelation>,
+    /// 分层校验规则（可选，未提供时使用默认规则）
+    #[serde(default)]
+    layer_rules: Option<SeedLayerRules>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SeedModule {
     module_id: String,
     display_name: Option<String>,
-    // TODO: 实现分层校验（api/service/dao 调用合规性）
-    // See: https://github.com/biantaishabi2/Cli/issues/TODO
     layer: Option<String>,
     // TODO: 实现领域分析（core/support 模块比例统计）
     // See: https://github.com/biantaishabi2/Cli/issues/TODO
@@ -188,6 +200,8 @@ struct ValidateSummary {
     generated_at: String,
     outputs: Vec<String>,
     scenarios: BTreeMap<String, SummaryScenario>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layer_violation_count: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1228,6 +1242,8 @@ pub fn validate(
     export_bdd_source: Option<&str>,
     smell_gate: Option<&str>,
     inherit_parent_edges: bool,
+    seed_file: Option<&str>,
+    fail_on_layer_violation: bool,
 ) {
     let code = match validate_impl(
         target_path,
@@ -1241,6 +1257,8 @@ pub fn validate(
         export_bdd_source,
         smell_gate,
         inherit_parent_edges,
+        seed_file,
+        fail_on_layer_violation,
     ) {
         Ok(code) => code,
         Err(e) => {
@@ -1265,6 +1283,8 @@ fn validate_impl(
     export_bdd_source: Option<&str>,
     smell_gate: Option<&str>,
     inherit_parent_edges: bool,
+    seed_file: Option<&str>,
+    fail_on_layer_violation: bool,
 ) -> Result<i32, String> {
     let target_raw =
         fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
@@ -1544,6 +1564,109 @@ fn validate_impl(
         ));
     }
 
+    // === Layer violation 检查 ===
+    let layer_violation_count: Option<i64> = if let Some(seed_path) = seed_file {
+        let seed_raw =
+            fs::read_to_string(seed_path).map_err(|e| format!("read seed_file failed: {}", e))?;
+        let seed: SeedSpec = serde_yaml::from_str(&seed_raw)
+            .map_err(|e| format!("parse seed yaml failed: {}", e))?;
+
+        // 构建 module_id → layer 映射
+        let layer_map: HashMap<String, String> = seed
+            .modules
+            .iter()
+            .filter_map(|m| m.layer.as_ref().map(|l| (m.module_id.clone(), l.clone())))
+            .collect();
+
+        // 只有至少一个模块定义了 layer 才触发检查
+        if layer_map.is_empty() {
+            None
+        } else {
+            // 构建 layer rules
+            let default_config = score::config::LayeringDimensionConfig::default();
+            let layers = match seed.layer_rules {
+                Some(ref rules) if !rules.layers.is_empty() => &rules.layers,
+                _ => &default_config.layers,
+            };
+            let forbidden = match seed.layer_rules {
+                Some(ref rules) => &rules.forbidden_transitions,
+                None => &default_config.forbidden_transitions,
+            };
+            let allowed = match seed.layer_rules {
+                Some(ref rules) if !rules.allowed_transitions.is_empty() => {
+                    &rules.allowed_transitions
+                }
+                _ => &default_config.allowed_transitions,
+            };
+
+            struct LayerViolationRecord {
+                caller: String,
+                callee: String,
+                caller_layer: String,
+                callee_layer: String,
+            }
+
+            // 预计算 layer precedence map，避免循环内重复构建
+            let layer_precedence: HashMap<&str, i32> = layers
+                .iter()
+                .map(|l| (l.name.as_str(), l.precedence))
+                .collect();
+
+            let mut violations = Vec::new();
+            for edge in &actual {
+                let caller_layer = layer_map.get(&edge.caller);
+                let callee_layer = layer_map.get(&edge.callee);
+                match (caller_layer, callee_layer) {
+                    (Some(cl), Some(dl)) => {
+                        if !score::check_layer_transition_with_precedence(
+                            cl,
+                            dl,
+                            layer_precedence.get(cl.as_str()).copied(),
+                            layer_precedence.get(dl.as_str()).copied(),
+                            forbidden,
+                            allowed,
+                        ) {
+                            violations.push(LayerViolationRecord {
+                                caller: edge.caller.clone(),
+                                callee: edge.callee.clone(),
+                                caller_layer: cl.clone(),
+                                callee_layer: dl.clone(),
+                            });
+                        }
+                    }
+                    (None, _) => {
+                        eprintln!(
+                            "[validate] skip layer check: {} has no layer defined",
+                            edge.caller
+                        );
+                    }
+                    (_, None) => {
+                        eprintln!(
+                            "[validate] skip layer check: {} has no layer defined",
+                            edge.callee
+                        );
+                    }
+                }
+            }
+
+            report.push_str("\n## Layer Violations\n");
+            if violations.is_empty() {
+                report.push_str("No layer violations detected.\n");
+            } else {
+                for v in &violations {
+                    report.push_str(&format!(
+                        "- {} ({}) → {} ({})\n",
+                        v.caller, v.caller_layer, v.callee, v.callee_layer
+                    ));
+                }
+            }
+
+            Some(violations.len() as i64)
+        }
+    } else {
+        None
+    };
+
     fs::write(out_dir_path.join("v3-validation-report.md"), report)
         .map_err(|e| format!("write v3-validation-report.md failed: {}", e))?;
 
@@ -1581,6 +1704,7 @@ fn validate_impl(
             ),
         ],
         scenarios,
+        layer_violation_count,
     };
 
     fs::write(
@@ -1714,6 +1838,15 @@ fn validate_impl(
             code = code.max(1);
         } else {
             eprintln!("[smell-gate] no smells found, gate passed");
+        }
+    }
+
+    // layer violation gate
+    if fail_on_layer_violation {
+        if let Some(count) = layer_violation_count {
+            if count > 0 {
+                code = 2;
+            }
         }
     }
 
@@ -2159,6 +2292,8 @@ relations_expected:
             None,
             None,
             true,
+            None,
+            false,
         )
         .expect("validate ok");
         assert_eq!(code, 0);
@@ -2274,6 +2409,8 @@ profiles:
             None,
             None,
             true,
+            None,
+            false,
         )
         .expect("strict validate");
         assert_eq!(strict_code, 2);
@@ -2290,6 +2427,8 @@ profiles:
             None,
             None,
             true,
+            None,
+            false,
         )
         .expect("report validate");
         assert_eq!(report_code, 0);
@@ -2330,6 +2469,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         // sourcePath 是 gong/tools/truncate.ex，但 localDependencies 中引用 gong/truncate.ex
@@ -2394,6 +2534,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let ast = AstSnapshot {
@@ -2457,6 +2598,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let pm = build_parent_map(&seed);
@@ -2493,6 +2635,7 @@ profiles:
                 path_rules: None,
             }],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -2529,6 +2672,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -2572,6 +2716,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let pm = build_parent_map(&seed);
@@ -2606,6 +2751,7 @@ profiles:
                 },
             ],
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         let result = validate_parent_hierarchy(&seed);
@@ -2633,6 +2779,7 @@ profiles:
             source_of_truth: None,
             modules,
             relations_expected: vec![],
+            layer_rules: None,
         };
 
         // 校验通过
