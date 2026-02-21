@@ -1360,7 +1360,14 @@ func (c *Controller) shouldEnqueueIntegrationMergeTask(ctx context.Context, task
 		return false
 	}
 	issueByNumber[issueNum] = issue
-	return hasLabel(issue.Labels, "bot:pr-reviewable")
+	if !hasLabel(issue.Labels, "bot:pr-reviewable") {
+		return false
+	}
+	// 仅 DAG 子 issue（body 含 parent: #N）才走预合并，独立 issue 跳过
+	if parseParent(issue.Body) <= 0 {
+		return false
+	}
+	return true
 }
 
 // reconcilePRReviewableConflicts 协调 bot:pr-reviewable 的冲突回退逻辑。

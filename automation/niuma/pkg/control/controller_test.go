@@ -3061,6 +3061,54 @@ func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
 	assert.Equal(t, []string{"bot:pr-needs-fix"}, issueByNumber[321].Labels)
 }
 
+func TestShouldEnqueueIntegrationMergeTask_DAGSubIssueAllowed(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.getIssueOverride[100] = IssueInfo{
+		Number: 100,
+		Labels: []string{"bot:pr-reviewable"},
+		Body:   "parent: #50",
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{}
+	task := Task{ID: "task-100", Metadata: map[string]string{"issue_num": "100"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.True(t, allowed)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_StandaloneIssueBlocked(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.getIssueOverride[200] = IssueInfo{
+		Number: 200,
+		Labels: []string{"bot:pr-reviewable"},
+		Body:   "some description without parent declaration",
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{}
+	task := Task{ID: "task-200", Metadata: map[string]string{"issue_num": "200"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_NoLabelNoParent(t *testing.T) {
+	mockGH := newMockGitHubOps()
+	mockGH.getIssueOverride[300] = IssueInfo{
+		Number: 300,
+		Labels: []string{"bot:fix"},
+		Body:   "parent: #50",
+	}
+
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{}
+	task := Task{ID: "task-300", Metadata: map[string]string{"issue_num": "300"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+}
+
 func TestEnsureIssueCommentWithMarker_DedupByMarker(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.listCommentBodies[321] = []string{
