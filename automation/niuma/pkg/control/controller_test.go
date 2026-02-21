@@ -3061,6 +3061,38 @@ func TestShouldEnqueueIntegrationMergeTask_UsesLatestIssueLabel(t *testing.T) {
 	assert.Equal(t, []string{"bot:pr-needs-fix"}, issueByNumber[321].Labels)
 }
 
+func TestShouldEnqueueIntegrationMergeTask_DAGSubIssueAllowed(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 428,
+			Labels: []string{"bot:pr-reviewable"},
+			Body:   "parent: #427\ndepends-on: #426",
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{}
+	task := Task{ID: "task-428", Metadata: map[string]string{"issue_num": "428"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.True(t, allowed)
+}
+
+func TestShouldEnqueueIntegrationMergeTask_IndependentIssueBlocked(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 500,
+			Labels: []string{"bot:pr-reviewable"},
+			Body:   "## 背景\n普通 issue，无 parent",
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+	issueByNumber := map[int]IssueInfo{}
+	task := Task{ID: "task-500", Metadata: map[string]string{"issue_num": "500"}}
+
+	allowed := ctrl.shouldEnqueueIntegrationMergeTask(context.Background(), task, issueByNumber)
+	assert.False(t, allowed)
+}
+
 func TestEnsureIssueCommentWithMarker_DedupByMarker(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.listCommentBodies[321] = []string{
