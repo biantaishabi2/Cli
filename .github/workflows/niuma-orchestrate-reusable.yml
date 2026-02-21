@@ -244,24 +244,16 @@ jobs:
       - name: Setup niuma binary
         if: steps.trigger_gate.outputs.should_run == 'true' && steps.loop_guard.outputs.blocked != 'true' && steps.idempotency_guard.outputs.duplicate_event != 'true'
         run: |
-          if [ -d "automation/niuma" ]; then
-            echo "检测到 niuma 源码，从源码构建..."
-            mkdir -p "$GITHUB_WORKSPACE/.tmp"
-            (cd automation/niuma && go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma)
-            echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-          else
-            echo "无 niuma 源码，使用系统已安装的 niuma..."
-            niuma_path="$(command -v niuma || true)"
-            # 某些 self-hosted runner 服务环境 PATH 不含 /usr/local/bin，补绝对路径兜底。
-            if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
-              niuma_path="/usr/local/bin/niuma"
-            fi
-            if [ -z "$niuma_path" ]; then
-              echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
-              exit 1
-            fi
-            echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
+          niuma_path="$(command -v niuma || true)"
+          # 某些 self-hosted runner 服务环境 PATH 不含 /usr/local/bin，补绝对路径兜底。
+          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
+            niuma_path="/usr/local/bin/niuma"
           fi
+          if [ -z "$niuma_path" ]; then
+            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
+            exit 1
+          fi
+          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
 
       - name: Run Orchestration
         id: control_run

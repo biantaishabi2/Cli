@@ -58,20 +58,15 @@ jobs:
 
       - name: Setup niuma binary
         run: |
-          if [ -d "automation/niuma" ]; then
-            echo "检测到 niuma 源码，从源码构建..."
-            mkdir -p "$GITHUB_WORKSPACE/.tmp"
-            (cd automation/niuma && go build -o "$GITHUB_WORKSPACE/.tmp/niuma" ./cmd/niuma)
-            echo "NIUMA_BIN=$GITHUB_WORKSPACE/.tmp/niuma" >> "$GITHUB_ENV"
-          else
-            echo "无 niuma 源码，使用系统已安装的 niuma..."
-            niuma_path="$(command -v niuma || true)"
-            if [ -z "$niuma_path" ]; then
-              echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma"
-              exit 1
-            fi
-            echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
+          niuma_path="$(command -v niuma || true)"
+          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
+            niuma_path="/usr/local/bin/niuma"
           fi
+          if [ -z "$niuma_path" ]; then
+            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
+            exit 1
+          fi
+          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
 
       # 事件驱动启动一次 discuss，后续轮次在进程内循环推进
       - name: Check Discussion
