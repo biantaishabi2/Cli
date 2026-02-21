@@ -32,7 +32,11 @@ func NewTaskCtlClient(configBin, repoDir string) (*TaskCtlClient, error) {
 	}
 
 	storePath := filepath.Join(repoDir, ".niuma", "tasks.json")
-	// 确保 .niuma 目录存在
+	// 支持环境变量覆盖 store 路径（多 runner 共享场景）
+	if overrideDir := os.Getenv("NIUMA_STORE_DIR"); overrideDir != "" {
+		storePath = filepath.Join(overrideDir, "tasks.json")
+	}
+	// 确保 store 目录存在
 	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
 		return nil, fmt.Errorf("创建 .niuma 目录失败: %w", err)
 	}
