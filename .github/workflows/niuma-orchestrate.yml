@@ -22,6 +22,7 @@ jobs:
     secrets: inherit
     with:
       repo: ${{ github.repository }}
+      store_dir: /home/wangbo/.niuma/stores/Cli
       workflow_source_repo: ${{ github.repository }}
       workflow_source_ref: ${{ github.event.repository.default_branch }}
       repo_dir: "."
