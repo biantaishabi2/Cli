@@ -140,11 +140,11 @@ const (
 	integrationGateStatusRetrying  = "retrying"
 	integrationGateStatusEscalated = "escalated"
 
-	integrationGateDefaultMaxRetries = 2
-	integrationGateErrorLimit        = 800
-	prConflictRetryDefaultThreshold              = 3
-	integrationConflictRetryDefaultThreshold     = 3
-	prConflictAIDefaultMaxAttempts   = 2
+	integrationGateDefaultMaxRetries         = 2
+	integrationGateErrorLimit                = 800
+	prConflictRetryDefaultThreshold          = 3
+	integrationConflictRetryDefaultThreshold = 3
+	prConflictAIDefaultMaxAttempts           = 2
 
 	issueLockDefaultTTL       = 5 * time.Minute
 	issueLockDefaultHeartbeat = 100 * time.Second
@@ -160,13 +160,13 @@ const (
 )
 
 var (
-	prConflictRetryMarkerRe                 = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
-	integrationConflictRetryMarkerRe        = regexp.MustCompile(`<!--\s*INTEGRATION_CONFLICT_RETRY:(\d+)\s*-->`)
-	defaultPRConflictUnknownBackoffs        = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
-	prConflictDetectedCommentMarkerFmt      = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
-	prConflictEscalatedCommentMarkerFmt     = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
-	integrationConflictCommentMarker        = "<!-- BOT:INTEGRATION_CONFLICT_RETRY -->"
-	needsHumanRecoveryCooldown              = 5 * time.Minute
+	prConflictRetryMarkerRe             = regexp.MustCompile(`<!--\s*PR_CONFLICT_RETRY:(\d+)\s*-->`)
+	integrationConflictRetryMarkerRe    = regexp.MustCompile(`<!--\s*INTEGRATION_CONFLICT_RETRY:(\d+)\s*-->`)
+	defaultPRConflictUnknownBackoffs    = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+	prConflictDetectedCommentMarkerFmt  = "<!-- BOT:CONFLICT_DETECTED sha:%s -->"
+	prConflictEscalatedCommentMarkerFmt = "<!-- BOT:CONFLICT_ESCALATED sha:%s -->"
+	integrationConflictCommentMarker    = "<!-- BOT:INTEGRATION_CONFLICT_RETRY -->"
+	needsHumanRecoveryCooldown          = 5 * time.Minute
 )
 
 // Controller 多 Issue 协调控制器
@@ -2876,6 +2876,18 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 
 		// 只有标签清理成功才清除 metadata 和写恢复 comment，否则保留以便下次 reconcile 重试
 		if labelsCleaned {
+			// 恢复流转后重置 integration conflict retry 计数，
+			// 避免下一轮因历史超限计数再次立即升级到 needs-human。
+			if issue, err := c.github.GetIssue(ctx, issueNum); err == nil {
+				if parseIntegrationConflictRetryCount(issue.Body) > 0 {
+					if err := c.persistIntegrationConflictRetryCount(ctx, issue, 0); err != nil {
+						fmt.Printf("[control] issue #%d 重置 integration retry marker 失败: %v\n", issueNum, err)
+					}
+				}
+			} else {
+				fmt.Printf("[control] issue #%d 读取 body 失败，跳过 retry marker 重置: %v\n", issueNum, err)
+			}
+
 			clearMeta := map[string]string{
 				metaKeyIntegrationConflictLabelSynced: "",
 				metaKeyEscalatedAt:                    "",

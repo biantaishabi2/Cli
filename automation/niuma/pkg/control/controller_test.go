@@ -3726,6 +3726,7 @@ func TestReconcileNeedsHumanRecovery_PRMergeable(t *testing.T) {
 	mockGH := newMockGitHubOps(
 		IssueInfo{
 			Number: 50,
+			Body:   "issue body\n\n<!-- INTEGRATION_CONFLICT_RETRY:4 -->",
 			Labels: []string{needsHumanLabel, integrationConflictLabel},
 		},
 	)
@@ -3767,6 +3768,11 @@ func TestReconcileNeedsHumanRecovery_PRMergeable(t *testing.T) {
 	labels, _ := mockGH.ListLabels(context.Background(), 50)
 	assert.NotContains(t, labels, needsHumanLabel)
 	assert.NotContains(t, labels, integrationConflictLabel)
+
+	// recovery 后应重置 integration conflict retry marker，避免下一轮立即再次超限
+	issueAfter, err := mockGH.GetIssue(context.Background(), 50)
+	require.NoError(t, err)
+	assert.Equal(t, 0, parseIntegrationConflictRetryCount(issueAfter.Body))
 }
 
 func TestReconcileNeedsHumanRecovery_PRConflicting(t *testing.T) {
@@ -3964,8 +3970,8 @@ func TestTryResolveIntegrationConflictWithAI_Success(t *testing.T) {
 		taskctl:  taskctlClient,
 		analyzer: NewDependencyAnalyzer(provider),
 		cfg: &ControlConfig{
-			RepoDir:                dir,
-			PRConflictEnableAI:     true,
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
 			PRConflictAIMaxAttempts: 2,
 		},
 	}
@@ -4002,8 +4008,8 @@ func TestTryResolveIntegrationConflictWithAI_Failure_Retry(t *testing.T) {
 		taskctl:  taskctlClient,
 		analyzer: NewDependencyAnalyzer(provider),
 		cfg: &ControlConfig{
-			RepoDir:                dir,
-			PRConflictEnableAI:     true,
+			RepoDir:                 dir,
+			PRConflictEnableAI:      true,
 			PRConflictAIMaxAttempts: 1,
 		},
 	}
