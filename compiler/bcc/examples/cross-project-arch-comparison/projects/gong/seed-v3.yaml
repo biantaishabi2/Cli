@@ -33,7 +33,7 @@ modules:
     precedence: 11
     path_rules:
       include:
-        - "**/agent.ex"
+        - "gong/agent/core.ex"
 
   - module_id: AGENT_LOOP
     display_name: Agent 循环控制
@@ -43,7 +43,7 @@ modules:
     precedence: 12
     path_rules:
       include:
-        - "**/agent_loop.ex"
+        - "gong/agent/loop.ex"
 
   - module_id: SESSION
     display_name: 会话协调

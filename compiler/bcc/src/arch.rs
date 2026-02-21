@@ -2632,16 +2632,41 @@ layer_rules:
         )
         .expect("matrix_impl should succeed with parent hierarchy");
 
+        // 验证 parent 继承语义：通过 build_parent_map + get_ancestors 校验祖先链
+        let seed_content = fs::read_to_string(&seed_path).expect("read seed");
+        let seed: SeedSpec = serde_yaml::from_str(&seed_content).expect("parse seed");
+        let parent_map = build_parent_map(&seed);
+
+        // GRANDCHILD → CHILD → PARENT 的祖先链
+        let gc_ancestors = get_ancestors("GRANDCHILD", &parent_map);
+        assert_eq!(
+            gc_ancestors,
+            vec!["CHILD".to_string(), "PARENT".to_string()],
+            "GRANDCHILD should have ancestors [CHILD, PARENT]"
+        );
+        let child_ancestors = get_ancestors("CHILD", &parent_map);
+        assert_eq!(
+            child_ancestors,
+            vec!["PARENT".to_string()],
+            "CHILD should have ancestors [PARENT]"
+        );
+        let parent_ancestors = get_ancestors("PARENT", &parent_map);
+        assert!(
+            parent_ancestors.is_empty(),
+            "PARENT should have no ancestors"
+        );
+
         // 验证 target contract 包含 GRANDCHILD→CHILD 的 allow edge
         let target_raw =
             fs::read_to_string(matrix_out.join("v3.target-matrix.yaml")).expect("read target");
+        let target: TargetContract =
+            serde_yaml::from_str(&target_raw).expect("parse target contract");
+        let has_gc_child_edge = target.allow_edges.iter().any(|e| {
+            e.caller == "GRANDCHILD" && e.callee == "CHILD"
+        });
         assert!(
-            target_raw.contains("GRANDCHILD"),
-            "target should contain GRANDCHILD"
-        );
-        assert!(
-            target_raw.contains("CHILD"),
-            "target should contain CHILD"
+            has_gc_child_edge,
+            "target contract should contain allow edge GRANDCHILD→CHILD"
         );
 
         // 构造 actual relations JSON（infrastructure→application 边）
@@ -2698,5 +2723,63 @@ layer_rules:
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 验证真实 gong seed-v3.yaml 的结构：parent 层级和 layer_rules 格式
+    #[test]
+    fn test_gong_seed_v3_structure() {
+        let seed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/cross-project-arch-comparison/projects/gong/seed-v3.yaml");
+        let content = fs::read_to_string(&seed_path)
+            .expect("should read gong seed-v3.yaml");
+        let seed: SeedSpec = serde_yaml::from_str(&content)
+            .expect("gong seed-v3.yaml should parse as valid SeedSpec");
+
+        // 验证 AGENT_CORE.parent = AGENT
+        let agent_core = seed.modules.iter().find(|m| m.module_id == "AGENT_CORE")
+            .expect("AGENT_CORE module should exist");
+        assert_eq!(
+            agent_core.parent.as_deref(),
+            Some("AGENT"),
+            "AGENT_CORE.parent should be AGENT"
+        );
+
+        // 验证 AGENT_LOOP.parent = AGENT
+        let agent_loop = seed.modules.iter().find(|m| m.module_id == "AGENT_LOOP")
+            .expect("AGENT_LOOP module should exist");
+        assert_eq!(
+            agent_loop.parent.as_deref(),
+            Some("AGENT"),
+            "AGENT_LOOP.parent should be AGENT"
+        );
+
+        // 验证 layer_rules 存在且格式正确
+        let layer_rules = seed.layer_rules.as_ref()
+            .expect("layer_rules should be present");
+        assert!(
+            !layer_rules.layers.is_empty(),
+            "layer_rules.layers should not be empty"
+        );
+        assert!(
+            !layer_rules.forbidden_transitions.is_empty(),
+            "layer_rules.forbidden_transitions should not be empty"
+        );
+
+        // 验证 parent 层级无循环引用
+        validate_parent_hierarchy(&seed)
+            .expect("gong seed-v3.yaml parent hierarchy should be valid");
+
+        // 验证 path_rules 不使用 ** 通配符（避免错误匹配 BDD 文件）
+        for m in &[agent_core, agent_loop] {
+            if let Some(ref pr) = m.path_rules {
+                for rule in &pr.include {
+                    assert!(
+                        !rule.starts_with("**/"),
+                        "module {} path_rule '{}' should not use ** prefix to avoid matching BDD files",
+                        m.module_id, rule
+                    );
+                }
+            }
+        }
     }
 }
