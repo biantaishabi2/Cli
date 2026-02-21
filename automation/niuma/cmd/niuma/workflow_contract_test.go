@@ -17,6 +17,8 @@ func TestWorkflowContract_EntrypointUsesReusableAndKeepsTriggers(t *testing.T) {
 
 	assert.Contains(t, content, "issues:")
 	assert.Contains(t, content, "types: [labeled]")
+	assert.Contains(t, content, "pull_request:")
+	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "repository_dispatch:")
 	assert.Contains(t, content, "types: [niuma.task.completed]")
 	assert.Contains(t, content, "github.event.label.name == 'bot:orchestrate'")
@@ -51,6 +53,8 @@ func TestWorkflowContract_ReusableHasIdempotencyLoopGuardAndConcurrency(t *testi
 
 	assert.Contains(t, content, "concurrency:")
 	assert.Contains(t, content, "cancel-in-progress: false")
+	assert.Contains(t, content, "github.event_name == 'pull_request'")
+	assert.Contains(t, content, "reason=\"pr_not_merged\"")
 	assert.Contains(t, content, "Idempotency Guard")
 	assert.Contains(t, content, "/tmp/niuma-orchestrate-dedup")
 	assert.Contains(t, content, "duplicate_event")
@@ -73,8 +77,8 @@ func TestWorkflowContract_DispatchCompletedUsesNiumaBinary(t *testing.T) {
 func TestWorkflowContract_ImplementGateHasMaxRetriesValidation(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-implement-reusable.yml")
 
-	assert.Contains(t, content, "GATE_MAX_RETRIES=2",
-		"niuma-implement-reusable.yml 必须包含 GATE_MAX_RETRIES 默认值回退")
+	assert.Contains(t, content, "MAX_RETRIES=2",
+		"niuma-implement-reusable.yml 必须包含 MAX_RETRIES 默认值回退")
 }
 
 func TestWorkflowContract_IterateGateHasMaxRetriesValidation(t *testing.T) {
@@ -88,8 +92,9 @@ func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-implement-reusable.yml")
 
 	assert.Contains(t, content, "\"$NIUMA_BIN\" gate run")
-	assert.Contains(t, content, "GATE_MAX_RETRIES=2")
-	assert.Contains(t, content, "--max-retries \"$GATE_MAX_RETRIES\"")
+	assert.Contains(t, content, "MAX_RETRIES=2")
+	assert.Contains(t, content, "--max-retries \"$MAX_RETRIES\"")
+	assert.Contains(t, content, "--self-check", "implement workflow 应使用 self-check 模式")
 }
 
 func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {

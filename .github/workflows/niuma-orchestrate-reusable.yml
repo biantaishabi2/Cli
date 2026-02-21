@@ -66,7 +66,7 @@ jobs:
   orchestrate:
     runs-on: self-hosted
     if: >
-      (github.event_name == 'issues' || github.event_name == 'repository_dispatch' || github.event_name == 'schedule') &&
+      (github.event_name == 'issues' || github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'pull_request') &&
       (github.event_name != 'repository_dispatch' || inputs.enable_dispatch_wakeup)
     concurrency:
       group: ${{ inputs.concurrency_key == 'niuma-orchestrate-${repo}' && format('niuma-orchestrate-{0}', inputs.repo) || inputs.concurrency_key }}
@@ -99,6 +99,13 @@ jobs:
             if [ -z "$issue" ]; then
               issue="${{ github.event.client_payload.trigger_pr }}"
             fi
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+              trigger_source="pull_request:merged"
+            else
+              trigger_source="pull_request:closed"
+            fi
+            issue="pr-${{ github.event.pull_request.number }}"
           elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
             trigger_source="schedule"
           fi
@@ -109,6 +116,9 @@ jobs:
 
           if [ -z "$raw_event_id" ]; then
             raw_event_id="${{ github.event.client_payload.event_id }}"
+          fi
+          if [ -z "$raw_event_id" ] && [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            raw_event_id="pr-${{ github.event.pull_request.number }}-merge-${{ github.event.pull_request.merge_commit_sha }}"
           fi
           if [ -n "$raw_event_id" ]; then
             event_id="$raw_event_id"
@@ -158,6 +168,14 @@ jobs:
             elif [ "${{ github.event.client_payload.event_source }}" != "close-after-integration-merge" ]; then
               should_run="false"
               reason="dispatch_source_mismatch"
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if [ "${{ github.event.action }}" != "closed" ]; then
+              should_run="false"
+              reason="pr_action_mismatch"
+            elif [ "${{ github.event.pull_request.merged }}" != "true" ]; then
+              should_run="false"
+              reason="pr_not_merged"
             fi
           fi
 
