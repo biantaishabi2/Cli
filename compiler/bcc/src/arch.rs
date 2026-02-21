@@ -70,6 +70,8 @@ struct SeedModule {
     // TODO: 实现领域分析（core/support 模块比例统计）
     // See: https://github.com/biantaishabi2/Cli/issues/TODO
     domain_kind: Option<String>,
+    #[serde(default)]
+    parent: Option<String>,
     precedence: Option<i64>,
     path_rules: Option<PathRules>,
 }
@@ -563,6 +565,8 @@ fn matrix_impl(
     if injection_patterns.is_some() {
         eprintln!("warn: --injection-patterns is reserved for phase2 and currently ignored");
     }
+
+    validate_parent_hierarchy(&seed)?;
 
     let file_to_module = map_files_to_modules(&seed, &ast)?;
     let actual = derive_actual_relations(&ast, &file_to_module);
@@ -1698,6 +1702,71 @@ fn report_impl(
     Ok(())
 }
 
+/// 校验 seed 中 parent 层级的合法性：无效引用和循环引用
+fn validate_parent_hierarchy(seed: &SeedSpec) -> Result<(), String> {
+    let known_ids: HashSet<&str> = seed.modules.iter().map(|m| m.module_id.as_str()).collect();
+
+    // 检查无效 parent 引用
+    for m in &seed.modules {
+        if let Some(ref p) = m.parent {
+            if !known_ids.contains(p.as_str()) {
+                return Err(format!(
+                    "module '{}' has invalid parent '{}': not found in seed modules",
+                    m.module_id, p
+                ));
+            }
+        }
+    }
+
+    // 检查循环引用
+    let parent_map: HashMap<&str, &str> = seed
+        .modules
+        .iter()
+        .filter_map(|m| m.parent.as_ref().map(|p| (m.module_id.as_str(), p.as_str())))
+        .collect();
+
+    for m in &seed.modules {
+        if m.parent.is_some() {
+            let mut visited = HashSet::new();
+            let mut current = m.module_id.as_str();
+            visited.insert(current);
+            while let Some(&next) = parent_map.get(current) {
+                if !visited.insert(next) {
+                    return Err(format!(
+                        "circular parent reference detected involving module '{}'",
+                        next
+                    ));
+                }
+                current = next;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 构建 module_id → parent 映射
+pub(crate) fn build_parent_map(seed: &SeedSpec) -> HashMap<String, Option<String>> {
+    seed.modules
+        .iter()
+        .map(|m| (m.module_id.clone(), m.parent.clone()))
+        .collect()
+}
+
+/// 沿 parent 链向上遍历，收集祖先列表（从近到远排序）
+pub(crate) fn get_ancestors(
+    module_id: &str,
+    parent_map: &HashMap<String, Option<String>>,
+) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut current = module_id;
+    while let Some(Some(ref parent)) = parent_map.get(current) {
+        ancestors.push(parent.clone());
+        current = parent.as_str();
+    }
+    ancestors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1988,6 +2057,7 @@ profiles:
                     display_name: None,
                     layer: None,
                     domain_kind: None,
+                    parent: None,
                     precedence: Some(10),
                     path_rules: Some(PathRules {
                         include: vec!["gong/tools/**".to_string()],
@@ -1999,6 +2069,7 @@ profiles:
                     display_name: None,
                     layer: None,
                     domain_kind: None,
+                    parent: None,
                     precedence: Some(10),
                     path_rules: Some(PathRules {
                         include: vec!["gong/truncate.ex".to_string()],
@@ -2050,6 +2121,7 @@ profiles:
                     display_name: None,
                     layer: None,
                     domain_kind: None,
+                    parent: None,
                     precedence: Some(10),
                     path_rules: Some(PathRules {
                         include: vec!["src/a/**".to_string()],
@@ -2061,6 +2133,7 @@ profiles:
                     display_name: None,
                     layer: None,
                     domain_kind: None,
+                    parent: None,
                     precedence: Some(10),
                     path_rules: Some(PathRules {
                         include: vec!["src/b/**".to_string()],
@@ -2092,5 +2165,198 @@ profiles:
         let ftm = map_files_to_modules(&seed, &ast).expect("map ok");
         // src/b/bar.ts 既是 sourcePath 又是 dep，应保持 sourcePath 的映射
         assert_eq!(ftm.get("src/b/bar.ts"), Some(&"MOD_B".to_string()));
+    }
+
+    // === parent 层级相关测试 ===
+
+    /// 基本层级解析：build_parent_map 和 get_ancestors 正确工作
+    #[test]
+    fn parent_hierarchy_basic() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "AGENT".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "AGENT_HISTORY".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("AGENT".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "AGENT_LOOP".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("AGENT".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        let pm = build_parent_map(&seed);
+        assert_eq!(pm.get("AGENT"), Some(&None));
+        assert_eq!(
+            pm.get("AGENT_HISTORY"),
+            Some(&Some("AGENT".to_string()))
+        );
+        assert_eq!(
+            pm.get("AGENT_LOOP"),
+            Some(&Some("AGENT".to_string()))
+        );
+
+        let ancestors = get_ancestors("AGENT_HISTORY", &pm);
+        assert_eq!(ancestors, vec!["AGENT"]);
+
+        let ancestors_root = get_ancestors("AGENT", &pm);
+        assert!(ancestors_root.is_empty());
+    }
+
+    /// 无效 parent 引用被检测
+    #[test]
+    fn parent_invalid_reference() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![SeedModule {
+                module_id: "X".to_string(),
+                display_name: None,
+                layer: None,
+                domain_kind: None,
+                parent: Some("NONEXISTENT".to_string()),
+                precedence: None,
+                path_rules: None,
+            }],
+            relations_expected: vec![],
+        };
+
+        let result = validate_parent_hierarchy(&seed);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("X"));
+        assert!(msg.contains("NONEXISTENT"));
+    }
+
+    /// 循环引用被检测
+    #[test]
+    fn parent_circular_reference() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "A".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("B".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "B".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("A".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        let result = validate_parent_hierarchy(&seed);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("circular"));
+    }
+
+    /// 多层嵌套：get_ancestors 返回从近到远的祖先列表
+    #[test]
+    fn parent_multi_level_ancestors() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "A".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "B".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("A".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "C".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: Some("B".to_string()),
+                    precedence: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        let pm = build_parent_map(&seed);
+        let ancestors = get_ancestors("C", &pm);
+        assert_eq!(ancestors, vec!["B", "A"]);
+    }
+
+    /// 向后兼容：无 parent 字段的 seed 正常通过校验
+    #[test]
+    fn parent_backward_compatible() {
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "MOD1".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "MOD2".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: vec![],
+        };
+
+        let result = validate_parent_hierarchy(&seed);
+        assert!(result.is_ok());
     }
 }
