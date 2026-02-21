@@ -1939,7 +1939,6 @@ fn export_mermaid_detail(
 
     let mut edge_idx: usize = 0;
     let mut inherited_indices: Vec<usize> = Vec::new();
-    let mut sibling_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
 
     // 输出继承边（outgoing）: parent → 外部
@@ -1971,24 +1970,7 @@ fn export_mermaid_detail(
         edge_idx += 1;
     }
 
-    // 兄弟边：子模块 ≤4 个时画全部，>4 个时省略
-    let show_sibling_edges = kids.len() <= 4;
-    if show_sibling_edges {
-        // 生成兄弟边（只在两个子模块间没有显式关系时）
-        let mut sibling_seen: HashSet<String> = HashSet::new();
-        for i in 0..kids.len() {
-            for j in (i + 1)..kids.len() {
-                let key = edge_key(&kids[i], &kids[j]);
-                if sibling_seen.insert(key) {
-                    println!("  {} <-.-> {}", kids[i], kids[j]);
-                    sibling_indices.push(edge_idx);
-                    edge_idx += 1;
-                }
-            }
-        }
-    } else {
-        println!("  %% {} 个子模块，兄弟边省略（默认互相可见）", kids.len());
-    }
+    // 兄弟边省略：subgraph 包裹已表达同父归属，不画额外边避免布局冲突
 
     // 输出禁止边（outgoing）: parent 子模块 → 外部
     for callee in &forbid_out_targets {
@@ -2019,14 +2001,10 @@ fn export_mermaid_detail(
         edge_idx += 1;
     }
 
-    // 边着色：继承边橙色，兄弟边绿色，禁止边红色
+    // 边着色：继承边橙色，禁止边红色
     if !inherited_indices.is_empty() {
         let indices: Vec<String> = inherited_indices.iter().map(|i| i.to_string()).collect();
         println!("  linkStyle {} stroke:#FF9800,stroke-width:2px", indices.join(","));
-    }
-    if !sibling_indices.is_empty() {
-        let indices: Vec<String> = sibling_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#4CAF50,stroke-width:2px", indices.join(","));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
