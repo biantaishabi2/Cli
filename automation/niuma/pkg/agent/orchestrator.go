@@ -456,6 +456,20 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	}
 	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
 
+	// 读取已有 PR 历史，让 AI 编码前看到之前的 review/gate 意见
+	if existingPR, _ := o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated); existingPR != nil {
+		prNum := existingPR.Marker.PR
+		if prNum > 0 {
+			prHistory, err := o.buildPRHistory(ctx, prNum)
+			if err != nil {
+				prHistory = fmt.Sprintf("(读取 PR #%d 历史失败: %v)", prNum, err)
+			}
+			if prHistory != "" {
+				input.ReviewComment = prHistory
+			}
+		}
+	}
+
 	// 记录进入前的状态，用于失败回滚
 	prevState := currentState
 
@@ -533,7 +547,11 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 
 	// AI agent 模式执行
 	implProvider := o.getImplementProvider()
-	result, err := implProvider.Execute(ctx, input.FinalPlan+"\n\n"+BuildImplementContext(input), ai.WithWorkDir(actualWorkDir))
+	implementPrompt, err := BuildImplementPrompt(input)
+	if err != nil {
+		return 0, fmt.Errorf("构建 implement prompt 失败: %w", err)
+	}
+	result, err := implProvider.Execute(ctx, implementPrompt, ai.WithWorkDir(actualWorkDir))
 	if err != nil {
 		return 0, fmt.Errorf("AI 代码实现失败: %w", err)
 	}

@@ -949,3 +949,61 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 		"应恰好包含 maxHuman (%d) 条人类评论", maxHuman)
 	assert.Equal(t, 0, botInPrompt, "普通 BOT 评论应全部被过滤")
 }
+
+// ===== #423 DoImplement PR 历史注入测试 =====
+
+func TestDoImplement_InjectsPRHistory(t *testing.T) {
+	// 有已存在 PR 时，DoImplement 应将 PR 历史注入 input.ReviewComment
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 实现代码")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	// 预设已有 PR marker（模拟之前 implement 已创建过 PR）
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 42,
+	}, "PR created")
+
+	// 设置 PR 42 上的 review 和 comment 历史
+	mockGH.Reviews[42] = []*github.PullRequestReview{
+		{Body: github.Ptr("Gate 测试失败：缺少错误处理"), State: github.Ptr("COMMENT")},
+	}
+	mockGH.Comments[42] = []*github.IssueComment{
+		{Body: github.Ptr("已修复部分问题")},
+	}
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoImplement(context.Background(), "/tmp/work")
+	require.NoError(t, err)
+
+	// 验证 AI Execute 收到的 prompt 包含 PR 历史内容
+	lastPrompt := mockAI.LastPrompt()
+	assert.Contains(t, lastPrompt, "Gate 测试失败", "prompt 应包含 PR review 历史")
+	assert.Contains(t, lastPrompt, "已修复部分问题", "prompt 应包含 PR comment 历史")
+}
+
+func TestDoImplement_NoPRHistory_WhenNoPRMarker(t *testing.T) {
+	// 无已有 PR marker 时，ReviewComment 应为空
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 实现代码")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix login", "Body")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	// 不设置 PR marker
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoImplement(context.Background(), "/tmp/work")
+	require.NoError(t, err)
+
+	// 验证 AI Execute 收到的 prompt 不包含 PR 历史章节的内容区块
+	lastPrompt := mockAI.LastPrompt()
+	assert.NotContains(t, lastPrompt, "编码前必须先逐条阅读，针对其中指出的问题进行修复", "无 PR 时 prompt 不应包含历史 PR 内容区块")
+}

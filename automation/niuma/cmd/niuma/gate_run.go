@@ -26,10 +26,12 @@ var gateRunCmd = &cobra.Command{
 }
 
 var flagGateMaxRetries string
+var flagGateSelfCheck bool
 
 func init() {
 	gateCmd.AddCommand(gateRunCmd)
 	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", "2", "gate 自动修复最大重试次数")
+	gateRunCmd.Flags().BoolVar(&flagGateSelfCheck, "self-check", false, "self-check 模式：gate 失败时不设标签/不写 issue 评论，仅写 PR review")
 }
 
 // parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2，值 ≤0 clamp 到 1。
@@ -71,6 +73,7 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 		PR:         flagPR,
 		RepoDir:    repoDir,
 		MaxRetries: maxRetries,
+		SelfCheck:  flagGateSelfCheck,
 		RunID:      os.Getenv("GITHUB_RUN_ID"),
 		RunAttempt: os.Getenv("GITHUB_RUN_ATTEMPT"),
 		MarkNeedsFix: func(ctx context.Context, repo string, issue int) error {

@@ -40,6 +40,7 @@ type Options struct {
 	MaxRetries int
 	RunID      string
 	RunAttempt string
+	SelfCheck  bool // self-check 模式：gate 失败时不设标签/不写 issue 评论，仅写 PR review
 
 	Now                  func() time.Time
 	RunGate              RunGateFunc
@@ -142,15 +143,17 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 
 	if retryCount <= r.opts.MaxRetries {
-		// 未超限，标记 needs-fix
-		if err := r.opts.MarkNeedsFix(ctx, r.opts.Repo, r.opts.Issue); err != nil {
-			return result, fmt.Errorf("%w: gate 失败后设置 bot:pr-needs-fix 失败: %v", ErrGateFailed, err)
+		if !r.opts.SelfCheck {
+			// 正常模式：设标签 + 写 issue 评论
+			if err := r.opts.MarkNeedsFix(ctx, r.opts.Repo, r.opts.Issue); err != nil {
+				return result, fmt.Errorf("%w: gate 失败后设置 bot:pr-needs-fix 失败: %v", ErrGateFailed, err)
+			}
+			commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
+			if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
+				return result, fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
+			}
 		}
-		commentBody := fmt.Sprintf(defaultNeedsFixCommentTemplate, retryCount, r.opts.MaxRetries, attemptKey)
-		if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
-			return result, fmt.Errorf("%w: gate 失败评论发布失败: %v", ErrGateFailed, err)
-		}
-		// 将错误详情写到 PR review，供 iterate 的 ListPRReviews 读取
+		// 两种模式都写 PR review（失败详情供 iterate 读取）
 		if r.opts.AddPRReview != nil {
 			reviewBody := fmt.Sprintf("## ❌ Gate 测试失败详情\n\n```\n%s\n```\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`", gateFailure, retryCount, r.opts.MaxRetries, attemptKey)
 			if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {

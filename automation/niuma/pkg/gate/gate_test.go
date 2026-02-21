@@ -425,3 +425,88 @@ func TestRunner_AddPRReviewFailureDoesNotBlock(t *testing.T) {
 	assert.Equal(t, 1, markCalled, "PR review 失败不应阻塞主流程")
 	assert.Equal(t, 1, commentCalled)
 }
+
+// ===== SelfCheck 模式测试 =====
+
+func TestRunner_SelfCheck_SkipsMarkNeedsFixAndComment(t *testing.T) {
+	markCalled := 0
+	commentCalled := 0
+	prReviewCalled := 0
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9040,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		SelfCheck:  true,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "go test failed", errors.New("exit status 1")
+		},
+		MarkNeedsFix: func(context.Context, string, int) error {
+			markCalled++
+			return nil
+		},
+		AddLabels: func(context.Context, string, int, []string) error { return nil },
+		AddComment: func(context.Context, string, int, string) error {
+			commentCalled++
+			return nil
+		},
+		FindGateRetryState:   func(context.Context, int) (int, string, error) { return 0, "", nil },
+		UpsertGateRetryCount: func(context.Context, int, int, string) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+		AddPRReview: func(context.Context, string, int, string) error {
+			prReviewCalled++
+			return nil
+		},
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.False(t, result.Passed)
+	assert.Equal(t, 0, markCalled, "self-check 模式不应调用 MarkNeedsFix")
+	assert.Equal(t, 0, commentCalled, "self-check 模式不应写 issue 评论")
+	assert.Equal(t, 1, prReviewCalled, "self-check 模式仍应写 PR review")
+}
+
+func TestRunner_SelfCheck_EscalationStillWorks(t *testing.T) {
+	// self-check 模式下超限 escalation 行为不变
+	labelCalled := 0
+	commentCalled := 0
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9041,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 1,
+		SelfCheck:  true,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "gate failed", errors.New("exit status 1")
+		},
+		MarkNeedsFix: func(context.Context, string, int) error { return nil },
+		AddLabels: func(context.Context, string, int, []string) error {
+			labelCalled++
+			return nil
+		},
+		AddComment: func(context.Context, string, int, string) error {
+			commentCalled++
+			return nil
+		},
+		FindGateRetryState: func(context.Context, int) (int, string, error) {
+			return 1, defaultAttemptKey(358, 9041), nil // 已有 1 次，超限
+		},
+		UpsertGateRetryCount: func(context.Context, int, int, string) error { return nil },
+		HasLabel:             func(context.Context, int, string) (bool, error) { return false, nil },
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.True(t, result.Escalated, "超限时 escalation 行为不变")
+	assert.Equal(t, 1, labelCalled, "超限时应打标签")
+	assert.Equal(t, 1, commentCalled, "超限时应写评论")
+}

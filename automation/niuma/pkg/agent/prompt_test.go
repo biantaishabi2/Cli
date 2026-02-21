@@ -70,6 +70,28 @@ func TestBuildImplementPrompt(t *testing.T) {
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "Add user API")
 	assert.Contains(t, result, "/api/users")
+	// 无 ReviewComment 时不应渲染历史章节的标题和内容区块
+	assert.NotContains(t, result, "编码前必须先逐条阅读，针对其中指出的问题进行修复")
+}
+
+func TestBuildImplementPrompt_WithReviewComment(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle:    "Fix auth bug",
+		FinalPlan:     "## 方案\n修复认证逻辑",
+		ReviewComment: "Gate 测试失败：缺少边界检查\n\n已修复部分问题",
+	}
+
+	result, err := BuildImplementPrompt(input)
+	require.NoError(t, err)
+
+	// 应渲染历史 PR Review 章节
+	assert.Contains(t, result, "历史 PR Review 与 CI/Gate 反馈")
+	assert.Contains(t, result, "Gate 测试失败")
+	assert.Contains(t, result, "编码前必须先逐条阅读")
+
+	// 应包含新增的要求条目
+	assert.Contains(t, result, "0.2 **先检查 CI/Gate 结果**")
+	assert.Contains(t, result, "5. **完成前自验**")
 }
 
 func TestBuildIteratePrompt(t *testing.T) {
