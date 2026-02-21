@@ -1662,6 +1662,112 @@ fn validate_impl(
     Ok(code)
 }
 
+pub fn export_mermaid(seed_file: &str) {
+    let seed_raw = match fs::read_to_string(seed_file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("read seed_file failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let seed: SeedSpec = match serde_yaml::from_str(&seed_raw) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("parse seed yaml failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // 按 layer 分组
+    let mut layer_groups: BTreeMap<String, Vec<&SeedModule>> = BTreeMap::new();
+    let mut no_layer: Vec<&SeedModule> = Vec::new();
+    // 只收集无 parent 的模块（顶层），子模块在父模块内嵌套
+    let children_map = build_children_map(&seed);
+    for m in &seed.modules {
+        if m.parent.is_some() {
+            continue; // 子模块跳过，由父模块嵌套输出
+        }
+        if let Some(ref layer) = m.layer {
+            layer_groups
+                .entry(layer.clone())
+                .or_default()
+                .push(m);
+        } else {
+            no_layer.push(m);
+        }
+    }
+
+    // module_id → SeedModule 映射
+    let module_map: HashMap<&str, &SeedModule> = seed
+        .modules
+        .iter()
+        .map(|m| (m.module_id.as_str(), m))
+        .collect();
+
+    println!("graph TD");
+
+    // 输出按 layer 分组的 subgraph
+    for (layer, modules) in &layer_groups {
+        println!("  subgraph {}[\"{}\"]", layer, layer);
+        for m in modules {
+            let label = m
+                .display_name
+                .as_deref()
+                .unwrap_or(&m.module_id);
+            // 检查是否有子模块
+            if let Some(kids) = children_map.get(&m.module_id) {
+                println!(
+                    "    subgraph {}[\"{}\"]",
+                    m.module_id, label
+                );
+                for kid_id in kids {
+                    if let Some(kid) = module_map.get(kid_id.as_str()) {
+                        let kid_label = kid
+                            .display_name
+                            .as_deref()
+                            .unwrap_or(&kid.module_id);
+                        let shape = domain_kind_shape(&kid.module_id, kid_label, kid.domain_kind.as_deref());
+                        println!("      {}", shape);
+                    }
+                }
+                println!("    end");
+            } else {
+                let shape = domain_kind_shape(&m.module_id, label, m.domain_kind.as_deref());
+                println!("    {}", shape);
+            }
+        }
+        println!("  end");
+    }
+
+    // 无 layer 的模块
+    for m in &no_layer {
+        let label = m.display_name.as_deref().unwrap_or(&m.module_id);
+        let shape = domain_kind_shape(&m.module_id, label, m.domain_kind.as_deref());
+        println!("  {}", shape);
+    }
+
+    println!();
+
+    // 输出边
+    for rel in &seed.relations_expected {
+        if rel.allowed {
+            println!("  {} --> {}", rel.caller, rel.callee);
+        } else {
+            println!("  {} -.-x {}", rel.caller, rel.callee);
+        }
+    }
+}
+
+/// 根据 domain_kind 返回不同 Mermaid 节点形状
+/// core=圆角stadium, support=方框, generic=圆柱cylindrical
+fn domain_kind_shape(id: &str, label: &str, domain_kind: Option<&str>) -> String {
+    match domain_kind {
+        Some("core") => format!("{}([\"{}\"])", id, label),
+        Some("generic") => format!("{}[(\"{}\")]", id, label),
+        _ => format!("{}[\"{}\"]", id, label),
+    }
+}
+
 pub fn export_module_map(
     module_map_path: &str,
     module_registry_path: Option<&str>,

@@ -346,6 +346,12 @@ enum ArchAction {
         format: String,
     },
 
+    /// 导出 seed 为 Mermaid 依赖图
+    ExportMermaid {
+        #[arg(long)]
+        seed_file: String,
+    },
+
     /// 架构健康度评分
     Score {
         #[command(subcommand)]
@@ -708,6 +714,9 @@ fn main() {
                     top,
                     &format,
                 );
+            }
+            ArchAction::ExportMermaid { seed_file } => {
+                arch::export_mermaid(&seed_file);
             }
             ArchAction::Score { action } => {
                 action.execute();
