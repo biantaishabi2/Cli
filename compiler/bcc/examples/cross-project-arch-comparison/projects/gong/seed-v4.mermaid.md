@@ -3,7 +3,7 @@
 > 由 `bcc arch export-mermaid --seed-file seed-v4.yaml` 自动生成
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
-- 边样式：`-->` = 显式 allowed, `-.->` = 继承 allowed, `<-.->` = 兄弟模块, `⛔` = forbidden
+- 边颜色：🔵 蓝色 = 允许依赖, 🟠 橙色 = 继承依赖, 🟢 绿色 = 兄弟模块, 🔴 红色 = 禁止依赖
 - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）
 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）
 
@@ -59,6 +59,8 @@ graph TD
   DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT
   TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT
   TAPE -.->|"⛔ 存储层不能反向依赖 Session"| SESSION
+  linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 stroke:#2196F3,stroke-width:2px
+  linkStyle 21,22,23 stroke:#F44336,stroke-width:2px,stroke-dasharray:5
 ```
 
 ## Agent 运行时 子模块详情
@@ -79,26 +81,19 @@ graph TD
   STREAM["流式输出"]
   TOOLS["工具集"]
 
-  AGENT_CORE -.->|"Agent 构建 system prompt"| PROMPT
-  AGENT_LOOP -.->|"Agent 构建 system prompt"| PROMPT
-  AGENT_CORE -.->|"Agent 处理 tool_result 等数据"| DATA
-  AGENT_LOOP -.->|"Agent 处理 tool_result 等数据"| DATA
-  AGENT_CORE -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
-  AGENT_LOOP -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
-  AGENT_CORE -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
-  AGENT_LOOP -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
-  AGENT_CORE -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
-  AGENT_LOOP -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
-  AGENT_CORE -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
-  AGENT_LOOP -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
-  AGENT_CORE -.->|"AgentLoop 发射流式事件"| STREAM
-  AGENT_LOOP -.->|"AgentLoop 发射流式事件"| STREAM
-  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT_CORE
-  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT_LOOP
+  AGENT -.->|"Agent 构建 system prompt"| PROMPT
+  AGENT -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
+  AGENT -.->|"Agent 处理 tool_result 等数据"| DATA
+  AGENT -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
+  AGENT -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
+  AGENT -.->|"AgentLoop 发射流式事件"| STREAM
+  AGENT -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
+  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT
   AGENT_CORE <-.->|"兄弟模块"| AGENT_LOOP
   AGENT_LOOP <-.->|"兄弟模块"| AGENT_CORE
-  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT_CORE
-  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT_LOOP
-  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT_CORE
-  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT_LOOP
+  DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT
+  TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT
+  linkStyle 0,1,2,3,4,5,6,7 stroke:#FF9800,stroke-width:2px
+  linkStyle 8,9 stroke:#4CAF50,stroke-width:2px
+  linkStyle 10,11 stroke:#F44336,stroke-width:2px
 ```

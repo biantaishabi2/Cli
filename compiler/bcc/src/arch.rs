@@ -1779,6 +1779,9 @@ fn export_mermaid_overview(
 
     // 总览图只画 relations_expected 中的原始边（父/顶层级别）
     let mut seen = HashSet::new();
+    let mut edge_idx: usize = 0;
+    let mut allow_indices: Vec<usize> = Vec::new();
+    let mut forbid_indices: Vec<usize> = Vec::new();
     for rel in &seed.relations_expected {
         let key = edge_key(&rel.caller, &rel.callee);
         if !seen.insert(key) {
@@ -1790,13 +1793,26 @@ fn export_mermaid_overview(
             } else {
                 println!("  {} --> {}", rel.caller, rel.callee);
             }
+            allow_indices.push(edge_idx);
         } else {
             if let Some(ref r) = rel.rationale {
                 println!("  {} -.->|\"⛔ {}\"| {}", rel.caller, r, rel.callee);
             } else {
                 println!("  {} -.-x {}", rel.caller, rel.callee);
             }
+            forbid_indices.push(edge_idx);
         }
+        edge_idx += 1;
+    }
+
+    // 边着色：允许边蓝色，禁止边红色
+    if !allow_indices.is_empty() {
+        let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#2196F3,stroke-width:2px", indices.join(","));
+    }
+    if !forbid_indices.is_empty() {
+        let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5", indices.join(","));
     }
 }
 
@@ -1921,14 +1937,127 @@ fn export_mermaid_detail(
 
     println!();
 
-    // 输出边（带标注）
+    // 继承边去重：如果所有子模块对同一目标都有继承边，合并为父 subgraph 出发的一条边
+    // 按 (方向, 外部模块) 分组统计继承边
+    let kid_count = kids.len();
+
+    // outgoing: 子模块 → 外部（key = callee, value = 出现的子模块集合）
+    let mut inherited_out: HashMap<String, HashSet<String>> = HashMap::new();
+    // incoming: 外部 → 子模块（key = caller, value = 出现的子模块集合）
+    let mut inherited_in: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for e in &relevant_allow {
+        if !e.rationale.contains("inherited") {
+            continue;
+        }
+        if kid_set.contains(e.caller.as_str()) && !kid_set.contains(e.callee.as_str()) {
+            inherited_out
+                .entry(e.callee.clone())
+                .or_default()
+                .insert(e.caller.clone());
+        }
+        if !kid_set.contains(e.caller.as_str()) && kid_set.contains(e.callee.as_str()) {
+            inherited_in
+                .entry(e.caller.clone())
+                .or_default()
+                .insert(e.callee.clone());
+        }
+    }
+    // forbid 也做同样处理
+    let mut forbid_out: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut forbid_in: HashMap<String, HashSet<String>> = HashMap::new();
+    for e in &relevant_forbid {
+        if kid_set.contains(e.callee.as_str()) && !kid_set.contains(e.caller.as_str()) {
+            forbid_in
+                .entry(e.caller.clone())
+                .or_default()
+                .insert(e.callee.clone());
+        }
+        if kid_set.contains(e.caller.as_str()) && !kid_set.contains(e.callee.as_str()) {
+            forbid_out
+                .entry(e.callee.clone())
+                .or_default()
+                .insert(e.caller.clone());
+        }
+    }
+
+    // 所有子模块都有的继承边 → 合并为父级边
+    let merged_out: HashSet<String> = inherited_out
+        .iter()
+        .filter(|(_, kids_set)| kids_set.len() == kid_count)
+        .map(|(callee, _)| callee.clone())
+        .collect();
+    let merged_in: HashSet<String> = inherited_in
+        .iter()
+        .filter(|(_, kids_set)| kids_set.len() == kid_count)
+        .map(|(caller, _)| caller.clone())
+        .collect();
+    let merged_forbid_out: HashSet<String> = forbid_out
+        .iter()
+        .filter(|(_, kids_set)| kids_set.len() == kid_count)
+        .map(|(callee, _)| callee.clone())
+        .collect();
+    let merged_forbid_in: HashSet<String> = forbid_in
+        .iter()
+        .filter(|(_, kids_set)| kids_set.len() == kid_count)
+        .map(|(caller, _)| caller.clone())
+        .collect();
+
     let mut seen = HashSet::new();
+    let mut edge_idx: usize = 0;
+    let mut inherited_indices: Vec<usize> = Vec::new();
+    let mut sibling_indices: Vec<usize> = Vec::new();
+    let mut forbid_indices: Vec<usize> = Vec::new();
+
+    // 输出合并后的父级继承边（outgoing）
+    for callee in &merged_out {
+        let label = rationale_map
+            .get(&(parent_id.to_string(), callee.clone()))
+            .cloned()
+            .unwrap_or_default();
+        if !label.is_empty() {
+            println!("  {} -.->|\"{}\"| {}", parent_id, label, callee);
+        } else {
+            println!("  {} -.-> {}", parent_id, callee);
+        }
+        inherited_indices.push(edge_idx);
+        edge_idx += 1;
+    }
+    // 输出合并后的父级继承边（incoming）
+    for caller in &merged_in {
+        let label = rationale_map
+            .get(&(caller.clone(), parent_id.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        if !label.is_empty() {
+            println!("  {} -.->|\"{}\"| {}", caller, label, parent_id);
+        } else {
+            println!("  {} -.-> {}", caller, parent_id);
+        }
+        inherited_indices.push(edge_idx);
+        edge_idx += 1;
+    }
+
+    // 输出未合并的 allow 边（只有部分子模块有的、兄弟边等）
     for e in &relevant_allow {
         let key = edge_key(&e.caller, &e.callee);
         if !seen.insert(key) {
             continue;
         }
-        // 查找 rationale：优先用父级原始 rationale（继承边回溯到父关系）
+        // 跳过已合并的继承边
+        if e.rationale.contains("inherited") {
+            if kid_set.contains(e.caller.as_str())
+                && merged_out.contains(&e.callee)
+            {
+                continue;
+            }
+            if kid_set.contains(e.callee.as_str())
+                && merged_in.contains(&e.caller)
+            {
+                continue;
+            }
+        }
+
         let label = find_edge_rationale(e, parent_id, rationale_map);
         if e.rationale.contains("sibling") {
             if !label.is_empty() {
@@ -1936,31 +2065,90 @@ fn export_mermaid_detail(
             } else {
                 println!("  {} <-.-> {}", e.caller, e.callee);
             }
+            sibling_indices.push(edge_idx);
         } else if e.rationale.contains("inherited") {
             if !label.is_empty() {
                 println!("  {} -.->|\"{}\"| {}", e.caller, label, e.callee);
             } else {
                 println!("  {} -.-> {}", e.caller, e.callee);
             }
+            inherited_indices.push(edge_idx);
         } else {
             if !label.is_empty() {
                 println!("  {} -->|\"{}\"| {}", e.caller, label, e.callee);
             } else {
                 println!("  {} --> {}", e.caller, e.callee);
             }
+            edge_idx += 1;
+            continue;
         }
+        edge_idx += 1;
     }
+
+    // 输出合并后的父级 forbid 边
+    for callee in &merged_forbid_out {
+        let label = rationale_map
+            .get(&(parent_id.to_string(), callee.clone()))
+            .cloned()
+            .unwrap_or_default();
+        if !label.is_empty() {
+            println!("  {} -.->|\"⛔ {}\"| {}", callee, label, parent_id);
+        } else {
+            println!("  {} -.-x {}", callee, parent_id);
+        }
+        forbid_indices.push(edge_idx);
+        edge_idx += 1;
+    }
+    for caller in &merged_forbid_in {
+        let label = rationale_map
+            .get(&(caller.clone(), parent_id.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        if !label.is_empty() {
+            println!("  {} -.->|\"⛔ {}\"| {}", caller, label, parent_id);
+        } else {
+            println!("  {} -.-x {}", caller, parent_id);
+        }
+        forbid_indices.push(edge_idx);
+        edge_idx += 1;
+    }
+
+    // 输出未合并的 forbid 边
     for e in &relevant_forbid {
         let key = edge_key(&e.caller, &e.callee);
         if !seen.insert(key) {
             continue;
         }
+        // 跳过已合并的
+        if kid_set.contains(e.callee.as_str()) && merged_forbid_in.contains(&e.caller) {
+            continue;
+        }
+        if kid_set.contains(e.caller.as_str()) && merged_forbid_out.contains(&e.callee) {
+            continue;
+        }
+
         let label = find_edge_rationale(e, parent_id, rationale_map);
         if !label.is_empty() {
             println!("  {} -.->|\"⛔ {}\"| {}", e.caller, label, e.callee);
         } else {
             println!("  {} -.-x {}", e.caller, e.callee);
         }
+        forbid_indices.push(edge_idx);
+        edge_idx += 1;
+    }
+
+    // 边着色：继承边橙色，兄弟边绿色，禁止边红色
+    if !inherited_indices.is_empty() {
+        let indices: Vec<String> = inherited_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#FF9800,stroke-width:2px", indices.join(","));
+    }
+    if !sibling_indices.is_empty() {
+        let indices: Vec<String> = sibling_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#4CAF50,stroke-width:2px", indices.join(","));
+    }
+    if !forbid_indices.is_empty() {
+        let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#F44336,stroke-width:2px", indices.join(","));
     }
 }
 
