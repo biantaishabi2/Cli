@@ -477,6 +477,10 @@ modules:
         - "src/agents/pi-*"
 
 relations_expected:
+  # =============================================
+  # 父模块级别（总览图使用）
+  # =============================================
+
   # === gateway_control_plane 依赖 ===
   - caller: gateway_control_plane
     callee: agent_runtime
@@ -599,7 +603,213 @@ relations_expected:
     allowed: true
     rationale: "host 使用 infra 原语"
 
-  # === 禁止方向 ===
+  # =============================================
+  # 子模块级别（详情图使用，精确到具体子模块）
+  # =============================================
+
+  # --- agent_runtime 子模块 → 外部 ---
+  - caller: agent_core
+    callee: external_dependencies
+    allowed: true
+    rationale: "Agent 编排调用 LLM provider"
+  - caller: agent_core
+    callee: infra_config
+    allowed: true
+    rationale: "Agent 读取运行时配置"
+  - caller: agent_core
+    callee: infra_shared
+    allowed: true
+    rationale: "Agent 使用 extensionAPI/日志"
+  - caller: agent_core
+    callee: agent_tools
+    allowed: true
+    rationale: "Agent 编排注入 tools"
+  - caller: agent_core
+    callee: gateway_session_routing
+    allowed: true
+    rationale: "Agent 解析 session-key 路由"
+  - caller: agent_core
+    callee: channel_core
+    allowed: true
+    rationale: "Agent 输出绑定渠道语义"
+  - caller: auto_reply
+    callee: infra_config
+    allowed: true
+    rationale: "自动回复读取配置规则"
+  - caller: auto_reply
+    callee: agent_core
+    allowed: true
+    rationale: "自动回复委托 Agent 编排执行"
+  - caller: agent_memory
+    callee: infra_core
+    allowed: true
+    rationale: "记忆持久化到 infra 存储"
+  - caller: agent_memory
+    callee: infra_shared
+    allowed: true
+    rationale: "记忆使用共享工具/类型"
+  - caller: media_processing
+    callee: external_dependencies
+    allowed: true
+    rationale: "媒体处理调用外部 AI 服务"
+  - caller: media_processing
+    callee: infra_shared
+    allowed: true
+    rationale: "媒体处理使用共享工具"
+
+  # --- 外部 → agent_runtime 子模块 ---
+  - caller: gateway_server
+    callee: agent_core
+    allowed: true
+    rationale: "网关服务器分发请求到 Agent"
+  - caller: channel_core
+    callee: agent_core
+    allowed: true
+    rationale: "渠道核心触发 Agent 会话"
+  - caller: infra_scheduler
+    callee: agent_core
+    allowed: true
+    rationale: "cron 定时启动 Agent turn"
+
+  # --- gateway_control_plane 子模块 → 外部 ---
+  - caller: gateway_server
+    callee: infra_config
+    allowed: true
+    rationale: "服务器读取网关配置"
+  - caller: gateway_server
+    callee: infra_shared
+    allowed: true
+    rationale: "服务器使用日志/健康检查工具"
+  - caller: gateway_server
+    callee: plugin_core
+    allowed: true
+    rationale: "服务器加载 gateway 插件"
+  - caller: gateway_server
+    callee: channel_core
+    allowed: true
+    rationale: "服务器协调渠道契约"
+  - caller: gateway_api_adapters
+    callee: agent_core
+    allowed: true
+    rationale: "API 适配器转发到 Agent"
+  - caller: gateway_api_adapters
+    callee: infra_shared
+    allowed: true
+    rationale: "API 适配器使用类型定义"
+  - caller: gateway_session_routing
+    callee: infra_core
+    allowed: true
+    rationale: "会话路由持久化到 infra"
+  - caller: gateway_session_routing
+    callee: infra_shared
+    allowed: true
+    rationale: "路由使用 session-key 类型"
+  - caller: gateway_protocol
+    callee: infra_shared
+    allowed: true
+    rationale: "协议层使用共享类型定义"
+
+  # --- 外部 → gateway_control_plane 子模块 ---
+  - caller: platform_hosts
+    callee: gateway_protocol
+    allowed: true
+    rationale: "host 通过网关协议连接"
+
+  # --- channel_ingress 子模块 → 外部 ---
+  - caller: channel_core
+    callee: infra_config
+    allowed: true
+    rationale: "渠道核心读取渠道配置"
+  - caller: channel_core
+    callee: infra_shared
+    allowed: true
+    rationale: "渠道核心使用共享工具/类型"
+  - caller: channel_core
+    callee: gateway_session_routing
+    allowed: true
+    rationale: "渠道核心解析 session-key 路由"
+  - caller: channel_core
+    callee: plugin_core
+    allowed: true
+    rationale: "渠道核心调用 plugin action"
+
+  # --- plugin_tool_extension 子模块 → 外部 ---
+  - caller: agent_tools
+    callee: agent_core
+    allowed: true
+    rationale: "工具执行需要 Agent 上下文"
+  - caller: agent_tools
+    callee: infra_shared
+    allowed: true
+    rationale: "工具使用共享类型定义"
+  - caller: plugin_core
+    callee: infra_config
+    allowed: true
+    rationale: "插件核心读取插件配置"
+  - caller: plugin_core
+    callee: infra_shared
+    allowed: true
+    rationale: "插件核心使用共享工具"
+  - caller: system_hooks
+    callee: infra_shared
+    allowed: true
+    rationale: "钩子使用共享日志/工具"
+
+  # --- foundation_infra 子模块 → 外部（上行边，实际违规）---
+  - caller: infra_scheduler
+    callee: agent_core
+    allowed: true
+    rationale: "cron 定时启动 Agent turn（上行违规）"
+  - caller: infra_outbound
+    callee: channel_core
+    allowed: true
+    rationale: "投递逻辑依赖渠道（应迁出 infra）"
+
+  # --- ops_client_entry 子模块 → 外部 ---
+  - caller: ops_commands
+    callee: agent_core
+    allowed: true
+    rationale: "CLI 命令触发 Agent 操作"
+  - caller: ops_commands
+    callee: gateway_server
+    allowed: true
+    rationale: "CLI 命令控制网关"
+  - caller: ops_commands
+    callee: infra_config
+    allowed: true
+    rationale: "CLI 命令读写配置"
+  - caller: ops_commands
+    callee: channel_core
+    allowed: true
+    rationale: "CLI 命令管理渠道"
+  - caller: ops_commands
+    callee: plugin_core
+    allowed: true
+    rationale: "CLI 命令管理插件"
+  - caller: ops_commands
+    callee: external_dependencies
+    allowed: true
+    rationale: "CLI login/auth"
+  - caller: ops_browser
+    callee: gateway_api_adapters
+    allowed: true
+    rationale: "浏览器集成通过 API 适配器"
+  - caller: ops_tui
+    callee: infra_shared
+    allowed: true
+    rationale: "TUI 使用共享格式化工具"
+  - caller: ops_web
+    callee: media_processing
+    allowed: true
+    rationale: "Web 接口调用媒体处理"
+  - caller: ops_cli
+    callee: infra_shared
+    allowed: true
+    rationale: "CLI 基础设施使用共享工具"
+
+  # =============================================
+  # 禁止方向
+  # =============================================
   - caller: external_dependencies
     callee: gateway_control_plane
     allowed: false

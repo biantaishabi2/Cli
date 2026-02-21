@@ -3,7 +3,7 @@
 > 由 `bcc arch export-mermaid --seed-file seed-v4.yaml` 自动生成
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
-- 边颜色：🔵 蓝色 = 允许依赖, 🟠 橙色 = 继承依赖, 🔴 红色 = 禁止依赖
+- 边颜色：🔵 蓝色 = 允许依赖, 🔴 红色 = 禁止依赖
 - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）
 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）
 
@@ -81,17 +81,17 @@ graph TD
   STREAM["流式输出"]
   TOOLS["工具集"]
 
-  AGENT -.->|"Agent 处理 tool_result 等数据"| DATA
-  AGENT -.->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
-  AGENT -.->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
-  AGENT -.->|"Agent 构建 system prompt"| PROMPT
-  AGENT -.->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
-  AGENT -.->|"AgentLoop 发射流式事件"| STREAM
-  AGENT -.->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
-  SESSION -.->|"Session 驱动 AgentLoop 执行"| AGENT
+  AGENT -->|"Agent 构建 system prompt"| PROMPT
+  AGENT -->|"Agent 处理 tool_result 等数据"| DATA
+  AGENT -->|"Agent 通过 Jido tools 参数注入工具"| TOOLS
+  AGENT -->|"AgentLoop 调用 HookRunner 执行 gate/pipe"| HOOK
+  AGENT -->|"AgentLoop 调用 Extension setup/teardown"| EXTENSIONS
+  AGENT -->|"AgentLoop 使用 retry/steering/abort"| RUNTIME
+  AGENT -->|"AgentLoop 发射流式事件"| STREAM
+  SESSION -->|"Session 驱动 AgentLoop 执行"| AGENT
   DATA -.->|"⛔ 数据层不能反向依赖 Agent"| AGENT
   TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT
-  linkStyle 0,1,2,3,4,5,6,7 stroke:#FF9800,stroke-width:2px
-  linkStyle 8,9 stroke:#F44336,stroke-width:2px
+  linkStyle 0,1,2,3,4,5,6,7 stroke:#2196F3,stroke-width:2px
+  linkStyle 8,9 stroke:#F44336,stroke-width:2px,stroke-dasharray:5
 ```
 

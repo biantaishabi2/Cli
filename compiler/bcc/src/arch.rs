@@ -1777,12 +1777,20 @@ fn export_mermaid_overview(
 
     println!();
 
-    // 总览图只画 relations_expected 中的原始边（父/顶层级别）
+    // 总览图只画父/顶层模块之间的边（跳过子模块级别边）
+    let child_ids: HashSet<&str> = children_map
+        .values()
+        .flat_map(|kids| kids.iter().map(|s| s.as_str()))
+        .collect();
     let mut seen = HashSet::new();
     let mut edge_idx: usize = 0;
     let mut allow_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
     for rel in &seed.relations_expected {
+        // 跳过子模块级别的边
+        if child_ids.contains(rel.caller.as_str()) || child_ids.contains(rel.callee.as_str()) {
+            continue;
+        }
         let key = edge_key(&rel.caller, &rel.callee);
         if !seen.insert(key) {
             continue;
@@ -1817,18 +1825,17 @@ fn export_mermaid_overview(
 }
 
 /// 子模块详情图：展示父模块内部子模块 + 对外依赖
-/// 优化策略：
-/// 1. 外部依赖只展示父/顶层模块（不展开其他父模块的子模块）
-/// 2. 继承边合并到父级出发（parent_id → 外部父/顶层模块）
-/// 3. 兄弟边：子模块 ≤4 个时画全部，>4 个时省略
-/// 4. 禁止边合并到父级（不展开到每个子模块）
+/// 策略：
+/// 1. 子模块级别边（seed 中 caller/callee 是本 parent 的子模块）→ 精确画到子模块
+/// 2. 父模块级别边（seed 中 caller/callee 是本 parent 本身）→ 画到 parent subgraph
+/// 3. 外部模块统一折叠到父/顶层模块（不展开其他 parent 的子模块）
 fn export_mermaid_detail(
     parent_id: &str,
     kids: &[String],
     seed: &SeedSpec,
     children_map: &HashMap<String, Vec<String>>,
     module_map: &HashMap<&str, &SeedModule>,
-    rationale_map: &HashMap<(String, String), String>,
+    _rationale_map: &HashMap<(String, String), String>,
 ) {
     let parent_mod = match module_map.get(parent_id) {
         Some(m) => m,
@@ -1845,7 +1852,7 @@ fn export_mermaid_detail(
 
     let kid_set: HashSet<&str> = kids.iter().map(|s| s.as_str()).collect();
 
-    // 构建"子模块→其父模块"映射（用于将外部子模块折叠为父模块）
+    // 构建"子模块→其父模块"映射
     let mut child_to_parent: HashMap<String, String> = HashMap::new();
     for (pid, child_ids) in children_map {
         for cid in child_ids {
@@ -1853,51 +1860,121 @@ fn export_mermaid_detail(
         }
     }
 
-    // 将模块 ID 折叠为父/顶层模块（如果是其他父模块的子模块，折叠为其父；否则保持原样）
-    let collapse_to_parent = |id: &str| -> String {
+    // 折叠外部子模块为其父模块（本 parent 的子模块保持不变）
+    let collapse_external = |id: &str| -> String {
         if kid_set.contains(id) || id == parent_id {
-            return id.to_string(); // 本 parent 的子模块不折叠
+            return id.to_string();
         }
         if let Some(pid) = child_to_parent.get(id) {
-            pid.clone() // 其他父模块的子模块 → 折叠为其父
+            pid.clone()
         } else {
-            id.to_string() // 顶层模块保持原样
+            id.to_string()
         }
     };
 
-    // 收集 seed 中与本 parent（或其子模块）相关的原始边
-    // 只处理 relations_expected（父/顶层级别），不做边展开
-    let mut out_targets: BTreeSet<String> = BTreeSet::new(); // parent → 外部
-    let mut in_sources: BTreeSet<String> = BTreeSet::new();  // 外部 → parent
-    let mut forbid_out_targets: BTreeSet<String> = BTreeSet::new();
-    let mut forbid_in_sources: BTreeSet<String> = BTreeSet::new();
+    // 边结构：(from, to, rationale, is_allowed)
+    // from/to 中本 parent 的子模块保持原 ID，外部折叠为父/顶层
+    struct DetailEdge {
+        from: String,
+        to: String,
+        rationale: String,
+        allowed: bool,
+    }
+
+    let mut edges: Vec<DetailEdge> = Vec::new();
+    let mut seen_keys: HashSet<String> = HashSet::new();
 
     for rel in &seed.relations_expected {
-        let caller_collapsed = collapse_to_parent(&rel.caller);
-        let callee_collapsed = collapse_to_parent(&rel.callee);
-        let is_caller_mine = caller_collapsed == parent_id
+        // 判断 caller/callee 是否属于本 parent 或其子模块
+        let caller_is_kid = kid_set.contains(rel.caller.as_str());
+        let callee_is_kid = kid_set.contains(rel.callee.as_str());
+        let caller_is_parent = rel.caller == parent_id;
+        let callee_is_parent = rel.callee == parent_id;
+        let caller_is_mine = caller_is_kid || caller_is_parent;
+        let callee_is_mine = callee_is_kid || callee_is_parent;
+
+        // 外部折叠后是否属于本 parent
+        let caller_collapsed = collapse_external(&rel.caller);
+        let callee_collapsed = collapse_external(&rel.callee);
+        let caller_collapsed_mine = caller_collapsed == parent_id
             || kid_set.contains(caller_collapsed.as_str());
-        let is_callee_mine = callee_collapsed == parent_id
+        let callee_collapsed_mine = callee_collapsed == parent_id
             || kid_set.contains(callee_collapsed.as_str());
 
-        if !is_caller_mine && !is_callee_mine {
+        // 只保留与本 parent 相关的边（至少一端属于本 parent）
+        if !caller_is_mine && !callee_is_mine
+            && !caller_collapsed_mine && !callee_collapsed_mine
+        {
             continue;
         }
 
-        if rel.allowed {
-            if is_caller_mine && !is_callee_mine {
-                out_targets.insert(callee_collapsed);
+        // 内部边（两端都是本 parent 的子模块）→ 画子模块间的边
+        if caller_is_kid && callee_is_kid {
+            let key = format!("{}→{}", rel.caller, rel.callee);
+            if seen_keys.insert(key) {
+                edges.push(DetailEdge {
+                    from: rel.caller.clone(),
+                    to: rel.callee.clone(),
+                    rationale: rel.rationale.as_deref().unwrap_or("").to_string(),
+                    allowed: rel.allowed,
+                });
             }
-            if !is_caller_mine && is_callee_mine {
-                in_sources.insert(caller_collapsed);
+            continue;
+        }
+
+        // 外向边：本 parent 的子模块 → 外部
+        if caller_is_kid {
+            let ext = collapse_external(&rel.callee);
+            let key = format!("{}→{}", rel.caller, ext);
+            if seen_keys.insert(key) {
+                edges.push(DetailEdge {
+                    from: rel.caller.clone(),
+                    to: ext,
+                    rationale: rel.rationale.as_deref().unwrap_or("").to_string(),
+                    allowed: rel.allowed,
+                });
             }
+            continue;
+        }
+
+        // 内向边：外部 → 本 parent 的子模块
+        if callee_is_kid {
+            let ext = collapse_external(&rel.caller);
+            let key = format!("{}→{}", ext, rel.callee);
+            if seen_keys.insert(key) {
+                edges.push(DetailEdge {
+                    from: ext,
+                    to: rel.callee.clone(),
+                    rationale: rel.rationale.as_deref().unwrap_or("").to_string(),
+                    allowed: rel.allowed,
+                });
+            }
+            continue;
+        }
+
+        // 父模块级别边（caller 或 callee 是 parent_id 本身，或折叠后属于本 parent）
+        let from = if caller_is_parent {
+            parent_id.to_string()
         } else {
-            if is_caller_mine && !is_callee_mine {
-                forbid_out_targets.insert(callee_collapsed);
-            }
-            if !is_caller_mine && is_callee_mine {
-                forbid_in_sources.insert(caller_collapsed);
-            }
+            caller_collapsed.clone()
+        };
+        let to = if callee_is_parent {
+            parent_id.to_string()
+        } else {
+            callee_collapsed.clone()
+        };
+        // 跳过自环
+        if from == to {
+            continue;
+        }
+        let key = format!("{}→{}", from, to);
+        if seen_keys.insert(key) {
+            edges.push(DetailEdge {
+                from,
+                to,
+                rationale: rel.rationale.as_deref().unwrap_or("").to_string(),
+                allowed: rel.allowed,
+            });
         }
     }
 
@@ -1916,12 +1993,15 @@ fn export_mermaid_detail(
         parent_id
     );
 
-    // 收集所有外部模块 ID（去重）
+    // 收集外部模块 ID
     let mut external_ids: BTreeSet<String> = BTreeSet::new();
-    for id in out_targets.iter().chain(in_sources.iter())
-        .chain(forbid_out_targets.iter()).chain(forbid_in_sources.iter())
-    {
-        external_ids.insert(id.clone());
+    for e in &edges {
+        if !kid_set.contains(e.from.as_str()) && e.from != parent_id {
+            external_ids.insert(e.from.clone());
+        }
+        if !kid_set.contains(e.to.as_str()) && e.to != parent_id {
+            external_ids.insert(e.to.clone());
+        }
     }
 
     // 输出外部模块节点
@@ -1938,77 +2018,36 @@ fn export_mermaid_detail(
     println!();
 
     let mut edge_idx: usize = 0;
-    let mut inherited_indices: Vec<usize> = Vec::new();
+    let mut allow_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
 
-    // 输出继承边（outgoing）: parent → 外部
-    for callee in &out_targets {
-        let label = rationale_map
-            .get(&(parent_id.to_string(), callee.clone()))
-            .cloned()
-            .unwrap_or_default();
-        if !label.is_empty() {
-            println!("  {} -.->|\"{}\"| {}", parent_id, label, callee);
+    for e in &edges {
+        if e.allowed {
+            if !e.rationale.is_empty() {
+                println!("  {} -->|\"{}\"| {}", e.from, e.rationale, e.to);
+            } else {
+                println!("  {} --> {}", e.from, e.to);
+            }
+            allow_indices.push(edge_idx);
         } else {
-            println!("  {} -.-> {}", parent_id, callee);
+            if !e.rationale.is_empty() {
+                println!("  {} -.->|\"⛔ {}\"| {}", e.from, e.rationale, e.to);
+            } else {
+                println!("  {} -.-x {}", e.from, e.to);
+            }
+            forbid_indices.push(edge_idx);
         }
-        inherited_indices.push(edge_idx);
-        edge_idx += 1;
-    }
-    // 输出继承边（incoming）: 外部 → parent
-    for caller in &in_sources {
-        let label = rationale_map
-            .get(&(caller.clone(), parent_id.to_string()))
-            .cloned()
-            .unwrap_or_default();
-        if !label.is_empty() {
-            println!("  {} -.->|\"{}\"| {}", caller, label, parent_id);
-        } else {
-            println!("  {} -.-> {}", caller, parent_id);
-        }
-        inherited_indices.push(edge_idx);
         edge_idx += 1;
     }
 
-    // 兄弟边省略：subgraph 包裹已表达同父归属，不画额外边避免布局冲突
-
-    // 输出禁止边（outgoing）: parent 子模块 → 外部
-    for callee in &forbid_out_targets {
-        let label = rationale_map
-            .get(&(parent_id.to_string(), callee.clone()))
-            .cloned()
-            .unwrap_or_default();
-        if !label.is_empty() {
-            println!("  {} -.->|\"⛔ {}\"| {}", parent_id, label, callee);
-        } else {
-            println!("  {} -.-x {}", parent_id, callee);
-        }
-        forbid_indices.push(edge_idx);
-        edge_idx += 1;
-    }
-    // 输出禁止边（incoming）: 外部 → parent
-    for caller in &forbid_in_sources {
-        let label = rationale_map
-            .get(&(caller.clone(), parent_id.to_string()))
-            .cloned()
-            .unwrap_or_default();
-        if !label.is_empty() {
-            println!("  {} -.->|\"⛔ {}\"| {}", caller, label, parent_id);
-        } else {
-            println!("  {} -.-x {}", caller, parent_id);
-        }
-        forbid_indices.push(edge_idx);
-        edge_idx += 1;
-    }
-
-    // 边着色：继承边橙色，禁止边红色
-    if !inherited_indices.is_empty() {
-        let indices: Vec<String> = inherited_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#FF9800,stroke-width:2px", indices.join(","));
+    // 边着色：允许边蓝色，禁止边红色
+    if !allow_indices.is_empty() {
+        let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
+        println!("  linkStyle {} stroke:#2196F3,stroke-width:2px", indices.join(","));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#F44336,stroke-width:2px", indices.join(","));
+        println!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5", indices.join(","));
     }
 }
 
