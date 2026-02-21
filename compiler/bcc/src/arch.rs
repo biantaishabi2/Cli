@@ -2541,8 +2541,15 @@ profiles:
         assert_eq!(ancestors[8], "L0");
     }
 
-    /// 全流程集成测试：3 层 parent 层级 + layer violation 组合
-    /// 验证 matrix_impl 生成正确 contract，validate_impl 检测 layer violation
+    /// 全流程端到端集成测试：parent 层级校验 + layer violation
+    ///
+    /// 验证 parent hierarchy 校验已集成到 matrix pipeline：
+    /// 1. 合法 parent 层级 → matrix_impl 成功生成 contract
+    /// 2. 非法 parent 引用 → matrix_impl 返回错误（校验拦截）
+    /// 3. validate_impl 端到端检测 infrastructure→application layer violation
+    ///
+    /// 注：当前 parent 的作用是"层级校验 + parent_map 元数据"，
+    /// "子模块继承父模块 allow_edges"属于后续迭代（#429 scope 外）。
     #[test]
     fn test_arch_parent_layer_integration() {
         let root = temp_dir("bcc_parent_layer_integration");
@@ -2632,31 +2639,7 @@ layer_rules:
         )
         .expect("matrix_impl should succeed with parent hierarchy");
 
-        // 验证 parent 继承语义：通过 build_parent_map + get_ancestors 校验祖先链
-        let seed_content = fs::read_to_string(&seed_path).expect("read seed");
-        let seed: SeedSpec = serde_yaml::from_str(&seed_content).expect("parse seed");
-        let parent_map = build_parent_map(&seed);
-
-        // GRANDCHILD → CHILD → PARENT 的祖先链
-        let gc_ancestors = get_ancestors("GRANDCHILD", &parent_map);
-        assert_eq!(
-            gc_ancestors,
-            vec!["CHILD".to_string(), "PARENT".to_string()],
-            "GRANDCHILD should have ancestors [CHILD, PARENT]"
-        );
-        let child_ancestors = get_ancestors("CHILD", &parent_map);
-        assert_eq!(
-            child_ancestors,
-            vec!["PARENT".to_string()],
-            "CHILD should have ancestors [PARENT]"
-        );
-        let parent_ancestors = get_ancestors("PARENT", &parent_map);
-        assert!(
-            parent_ancestors.is_empty(),
-            "PARENT should have no ancestors"
-        );
-
-        // 验证 target contract 包含 GRANDCHILD→CHILD 的 allow edge
+        // Step 1a: 验证 matrix 输出的 target contract 包含 seed 中声明的 allow edge
         let target_raw =
             fs::read_to_string(matrix_out.join("v3.target-matrix.yaml")).expect("read target");
         let target: TargetContract =
@@ -2669,9 +2652,10 @@ layer_rules:
             "target contract should contain allow edge GRANDCHILD→CHILD"
         );
 
-        // 反向验证：parent 继承语义集成到 matrix 流水线
-        // 构造含无效 parent 引用的 seed，验证 matrix_impl 拒绝处理
-        // 若 validate_parent_hierarchy 被从 matrix_impl 移除，此断言将失败
+        // Step 1b: 验证 parent hierarchy 校验已集成到 matrix pipeline
+        // 构造含无效 parent 引用的 seed → matrix_impl 必须拒绝
+        // 这证明 validate_parent_hierarchy 是 matrix pipeline 的一环，
+        // 若被移除此断言立即失败
         let bad_seed_path = root.join("bad_seed.yaml");
         write(
             &bad_seed_path,
@@ -2705,13 +2689,51 @@ relations_expected: []
         );
         assert!(
             bad_result.is_err(),
-            "matrix_impl should fail when parent references non-existent module"
+            "matrix_impl should reject seed with invalid parent reference"
         );
         let err_msg = bad_result.unwrap_err();
         assert!(
             err_msg.contains("NONEXISTENT_PARENT"),
             "error should mention the invalid parent 'NONEXISTENT_PARENT', got: {}",
             err_msg
+        );
+
+        // Step 1c: 验证循环 parent 引用也被 matrix pipeline 拒绝
+        let cycle_seed_path = root.join("cycle_seed.yaml");
+        write(
+            &cycle_seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: MOD_X
+    display_name: Module X
+    parent: MOD_Y
+    precedence: 10
+    path_rules:
+      include: ["src/x/**"]
+  - module_id: MOD_Y
+    display_name: Module Y
+    parent: MOD_X
+    precedence: 20
+    path_rules:
+      include: ["src/y/**"]
+relations_expected: []
+"#,
+        );
+        let cycle_matrix_out = root.join("cycle_matrix_out");
+        let cycle_result = matrix_impl(
+            &cycle_seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &cycle_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        );
+        assert!(
+            cycle_result.is_err(),
+            "matrix_impl should reject seed with circular parent references"
         );
 
         // 构造 actual relations JSON（infrastructure→application 边）
