@@ -1,0 +1,626 @@
+version: 0.4.0
+source_of_truth: architecture_docs
+notes:
+  - "v2：基于 v1 扁平模块 + V3 整改分析，拆分子模块 + layer_rules + domain_kind + rationale"
+  - "layer 管调用方向（application→infrastructure 允许，反向禁止）"
+  - "domain_kind 管业务归属（core=核心业务 / support=支撑能力 / generic=通用基础设施）"
+
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - - infrastructure
+      - application
+
+modules:
+  # =============================================
+  # application 层
+  # =============================================
+
+  # --- agent_runtime（Agent 运行时）---
+  - module_id: agent_runtime
+    display_name: Agent 运行时
+    domain_kind: core
+    layer: application
+    precedence: 10
+    path_rules:
+      include:
+        - "src/agents/**"
+        - "src/auto-reply/**"
+        - "src/memory/**"
+        - "src/media/**"
+        - "src/media-understanding/**"
+        - "src/link-understanding/**"
+        - "src/markdown/**"
+        - "src/tts/**"
+      exclude:
+        - "src/agents/tools/**"
+
+  - module_id: agent_core
+    display_name: Agent 编排引擎
+    domain_kind: core
+    layer: application
+    precedence: 11
+    parent: agent_runtime
+    path_rules:
+      include:
+        - "src/agents/**"
+      exclude:
+        - "src/agents/tools/**"
+
+  - module_id: auto_reply
+    display_name: 自动回复
+    domain_kind: core
+    layer: application
+    precedence: 12
+    parent: agent_runtime
+    path_rules:
+      include:
+        - "src/auto-reply/**"
+
+  - module_id: agent_memory
+    display_name: Agent 记忆
+    domain_kind: support
+    layer: application
+    precedence: 13
+    parent: agent_runtime
+    path_rules:
+      include:
+        - "src/memory/**"
+
+  - module_id: media_processing
+    display_name: 媒体处理
+    domain_kind: support
+    layer: application
+    precedence: 14
+    parent: agent_runtime
+    path_rules:
+      include:
+        - "src/media/**"
+        - "src/media-understanding/**"
+        - "src/link-understanding/**"
+        - "src/markdown/**"
+        - "src/tts/**"
+
+  # --- channel_ingress（渠道接入）---
+  - module_id: channel_ingress
+    display_name: 渠道接入
+    domain_kind: core
+    layer: application
+    precedence: 20
+    path_rules:
+      include:
+        - "src/channels/**"
+        - "src/discord/**"
+        - "src/telegram/**"
+        - "src/slack/**"
+        - "src/line/**"
+        - "src/signal/**"
+        - "src/imessage/**"
+        - "src/whatsapp/**"
+        - "src/channel-web.ts"
+
+  - module_id: channel_core
+    display_name: 渠道核心
+    domain_kind: core
+    layer: application
+    precedence: 21
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/channels/**"
+
+  - module_id: channel_discord
+    display_name: Discord 适配器
+    domain_kind: support
+    layer: application
+    precedence: 22
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/discord/**"
+
+  - module_id: channel_slack
+    display_name: Slack 适配器
+    domain_kind: support
+    layer: application
+    precedence: 23
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/slack/**"
+
+  - module_id: channel_telegram
+    display_name: Telegram 适配器
+    domain_kind: support
+    layer: application
+    precedence: 24
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/telegram/**"
+
+  - module_id: channel_line
+    display_name: LINE 适配器
+    domain_kind: support
+    layer: application
+    precedence: 25
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/line/**"
+
+  - module_id: channel_signal
+    display_name: Signal 适配器
+    domain_kind: support
+    layer: application
+    precedence: 26
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/signal/**"
+
+  - module_id: channel_imessage
+    display_name: iMessage 适配器
+    domain_kind: support
+    layer: application
+    precedence: 27
+    parent: channel_ingress
+    path_rules:
+      include:
+        - "src/imessage/**"
+        - "src/whatsapp/**"
+        - "src/channel-web.ts"
+
+  # --- gateway_control_plane（网关控制面）---
+  - module_id: gateway_control_plane
+    display_name: 网关控制面
+    domain_kind: core
+    layer: application
+    precedence: 30
+    path_rules:
+      include:
+        - "src/gateway/**"
+        - "src/routing/**"
+        - "src/sessions/**"
+        - "src/pairing/**"
+
+  - module_id: gateway_protocol
+    display_name: 网关协议
+    domain_kind: core
+    layer: application
+    precedence: 31
+    parent: gateway_control_plane
+    path_rules:
+      include:
+        - "src/gateway/protocol/**"
+
+  - module_id: gateway_server
+    display_name: 网关服务器
+    domain_kind: core
+    layer: application
+    precedence: 32
+    parent: gateway_control_plane
+    path_rules:
+      include:
+        - "src/gateway/server/**"
+        - "src/gateway/server-methods/**"
+        - "src/gateway/health-state/**"
+        - "src/gateway/plugins/**"
+
+  - module_id: gateway_api_adapters
+    display_name: API 适配器
+    domain_kind: support
+    layer: application
+    precedence: 33
+    parent: gateway_control_plane
+    path_rules:
+      include:
+        - "src/gateway/openai-http/**"
+        - "src/gateway/openresponses-http/**"
+
+  - module_id: gateway_session_routing
+    display_name: 会话路由
+    domain_kind: support
+    layer: application
+    precedence: 34
+    parent: gateway_control_plane
+    path_rules:
+      include:
+        - "src/sessions/**"
+        - "src/routing/**"
+        - "src/pairing/**"
+
+  # --- plugin_tool_extension（插件与工具扩展）---
+  - module_id: plugin_tool_extension
+    display_name: 插件与工具
+    domain_kind: support
+    layer: application
+    precedence: 40
+    path_rules:
+      include:
+        - "src/plugins/**"
+        - "src/agents/tools/**"
+        - "src/hooks/**"
+        - "src/plugin-sdk/**"
+
+  - module_id: plugin_core
+    display_name: 插件核心
+    domain_kind: core
+    layer: application
+    precedence: 41
+    parent: plugin_tool_extension
+    path_rules:
+      include:
+        - "src/plugins/**"
+        - "src/plugin-sdk/**"
+
+  - module_id: agent_tools
+    display_name: Agent 工具
+    domain_kind: support
+    layer: application
+    precedence: 42
+    parent: plugin_tool_extension
+    path_rules:
+      include:
+        - "src/agents/tools/**"
+
+  - module_id: system_hooks
+    display_name: 系统钩子
+    domain_kind: support
+    layer: application
+    precedence: 43
+    parent: plugin_tool_extension
+    path_rules:
+      include:
+        - "src/hooks/**"
+
+  # =============================================
+  # infrastructure 层
+  # =============================================
+
+  # --- foundation_infra（基础设施与治理）---
+  - module_id: foundation_infra
+    display_name: 基础设施
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 50
+    path_rules:
+      include:
+        - "src/config/**"
+        - "src/infra/**"
+        - "src/cron/**"
+        - "src/security/**"
+        - "src/logging/**"
+        - "src/types/**"
+        - "src/utils/**"
+        - "src/utils.ts"
+        - "src/process/**"
+        - "src/compat/**"
+        - "src/shared/**"
+        - "src/test-helpers/**"
+        - "src/test-utils/**"
+        - "src/entry.ts"
+        - "src/index.ts"
+        - "src/runtime.ts"
+        - "src/globals.ts"
+        - "src/logger.ts"
+        - "src/logging.ts"
+        - "src/polls.ts"
+        - "src/version.ts"
+        - "src/extensionAPI.ts"
+
+  - module_id: infra_config
+    display_name: 配置管理
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 51
+    parent: foundation_infra
+    path_rules:
+      include:
+        - "src/config/**"
+
+  - module_id: infra_core
+    display_name: 核心基础设施
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 52
+    parent: foundation_infra
+    path_rules:
+      include:
+        - "src/infra/**"
+      exclude:
+        - "src/infra/outbound/**"
+
+  - module_id: infra_outbound
+    display_name: 消息投递
+    domain_kind: support
+    layer: infrastructure
+    precedence: 53
+    parent: foundation_infra
+    path_rules:
+      include:
+        - "src/infra/outbound/**"
+
+  - module_id: infra_scheduler
+    display_name: 定时调度
+    domain_kind: support
+    layer: infrastructure
+    precedence: 54
+    parent: foundation_infra
+    path_rules:
+      include:
+        - "src/cron/**"
+
+  - module_id: infra_shared
+    display_name: 共享工具
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 55
+    parent: foundation_infra
+    path_rules:
+      include:
+        - "src/utils/**"
+        - "src/utils.ts"
+        - "src/types/**"
+        - "src/logging/**"
+        - "src/security/**"
+        - "src/process/**"
+        - "src/compat/**"
+        - "src/shared/**"
+        - "src/test-helpers/**"
+        - "src/test-utils/**"
+        - "src/entry.ts"
+        - "src/index.ts"
+        - "src/runtime.ts"
+        - "src/globals.ts"
+        - "src/logger.ts"
+        - "src/logging.ts"
+        - "src/polls.ts"
+        - "src/version.ts"
+        - "src/extensionAPI.ts"
+
+  # --- ops_client_entry（运维与客户端入口）---
+  - module_id: ops_client_entry
+    display_name: 运维入口
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 60
+    path_rules:
+      include:
+        - "src/cli/**"
+        - "src/commands/**"
+        - "src/tui/**"
+        - "src/terminal/**"
+        - "src/wizard/**"
+        - "src/browser/**"
+        - "src/web/**"
+
+  - module_id: ops_commands
+    display_name: CLI 命令
+    domain_kind: support
+    layer: infrastructure
+    precedence: 61
+    parent: ops_client_entry
+    path_rules:
+      include:
+        - "src/commands/**"
+
+  - module_id: ops_cli
+    display_name: CLI 基础设施
+    domain_kind: support
+    layer: infrastructure
+    precedence: 62
+    parent: ops_client_entry
+    path_rules:
+      include:
+        - "src/cli/**"
+
+  - module_id: ops_browser
+    display_name: 浏览器集成
+    domain_kind: support
+    layer: infrastructure
+    precedence: 63
+    parent: ops_client_entry
+    path_rules:
+      include:
+        - "src/browser/**"
+
+  - module_id: ops_web
+    display_name: Web 接口
+    domain_kind: support
+    layer: infrastructure
+    precedence: 64
+    parent: ops_client_entry
+    path_rules:
+      include:
+        - "src/web/**"
+
+  - module_id: ops_tui
+    display_name: 终端 UI
+    domain_kind: support
+    layer: infrastructure
+    precedence: 65
+    parent: ops_client_entry
+    path_rules:
+      include:
+        - "src/tui/**"
+        - "src/terminal/**"
+        - "src/wizard/**"
+
+  # --- platform_hosts（平台宿主）---
+  - module_id: platform_hosts
+    display_name: 平台宿主
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 70
+    path_rules:
+      include:
+        - "src/acp/**"
+        - "src/node-host/**"
+        - "src/canvas-host/**"
+        - "src/daemon/**"
+        - "src/macos/**"
+
+  # --- external_dependencies（外部依赖边界）---
+  - module_id: external_dependencies
+    display_name: 外部依赖
+    domain_kind: generic
+    layer: infrastructure
+    precedence: 80
+    path_rules:
+      include:
+        - "src/providers/**"
+        - "src/agents/pi-*"
+
+relations_expected:
+  # === gateway_control_plane 依赖 ===
+  - caller: gateway_control_plane
+    callee: agent_runtime
+    allowed: true
+    rationale: "网关分发请求到 Agent 运行时"
+  - caller: gateway_control_plane
+    callee: channel_ingress
+    allowed: true
+    rationale: "网关与渠道协调契约"
+  - caller: gateway_control_plane
+    callee: foundation_infra
+    allowed: true
+    rationale: "网关使用共享 infra/config"
+  - caller: gateway_control_plane
+    callee: platform_hosts
+    allowed: true
+    rationale: "网关集成 host/node 入口"
+  - caller: gateway_control_plane
+    callee: plugin_tool_extension
+    allowed: true
+    rationale: "网关调用 plugin 服务/hooks"
+
+  # === agent_runtime 依赖 ===
+  - caller: agent_runtime
+    callee: plugin_tool_extension
+    allowed: true
+    rationale: "运行时调用 tools/plugins"
+  - caller: agent_runtime
+    callee: foundation_infra
+    allowed: true
+    rationale: "运行时使用 config/session/存储"
+  - caller: agent_runtime
+    callee: gateway_control_plane
+    allowed: true
+    rationale: "运行时解析 session/route 契约"
+  - caller: agent_runtime
+    callee: channel_ingress
+    allowed: true
+    rationale: "运行时输出路径绑定渠道语义"
+  - caller: agent_runtime
+    callee: external_dependencies
+    allowed: true
+    rationale: "运行时 provider auth/model 握手"
+
+  # === channel_ingress 依赖 ===
+  - caller: channel_ingress
+    callee: foundation_infra
+    allowed: true
+    rationale: "渠道持久化状态和策略"
+  - caller: channel_ingress
+    callee: agent_runtime
+    allowed: true
+    rationale: "渠道触发 runtime 会话流"
+  - caller: channel_ingress
+    callee: gateway_control_plane
+    allowed: true
+    rationale: "入站路由/session 解析"
+  - caller: channel_ingress
+    callee: plugin_tool_extension
+    allowed: true
+    rationale: "渠道 action 调用 plugin/tool"
+
+  # === plugin_tool_extension 依赖 ===
+  - caller: plugin_tool_extension
+    callee: foundation_infra
+    allowed: true
+    rationale: "plugin runtime 依赖共享 infra 契约"
+  - caller: plugin_tool_extension
+    callee: agent_runtime
+    allowed: true
+    rationale: "tools 需要 runtime 上下文/schema"
+  - caller: plugin_tool_extension
+    callee: gateway_control_plane
+    allowed: true
+    rationale: "tool/session 状态绑定通过控制面"
+
+  # === ops_client_entry 依赖 ===
+  - caller: ops_client_entry
+    callee: gateway_control_plane
+    allowed: true
+    rationale: "ops 控制网关表面"
+  - caller: ops_client_entry
+    callee: foundation_infra
+    allowed: true
+    rationale: "ops 读写 infra/config"
+  - caller: ops_client_entry
+    callee: agent_runtime
+    allowed: true
+    rationale: "ops 触发 runtime 操作"
+  - caller: ops_client_entry
+    callee: channel_ingress
+    allowed: true
+    rationale: "onboarding 和 capability 管理"
+  - caller: ops_client_entry
+    callee: platform_hosts
+    allowed: true
+    rationale: "daemon/node-host 生命周期管理"
+  - caller: ops_client_entry
+    callee: plugin_tool_extension
+    allowed: true
+    rationale: "plugin 生命周期操作"
+  - caller: ops_client_entry
+    callee: external_dependencies
+    allowed: true
+    rationale: "login/auth bootstrap"
+
+  # === foundation_infra 依赖（infrastructure→application 违规但业务需要）===
+  - caller: foundation_infra
+    callee: agent_runtime
+    allowed: true
+    rationale: "scheduler/cron 启动 runtime turn"
+
+  # === platform_hosts 依赖 ===
+  - caller: platform_hosts
+    callee: gateway_control_plane
+    allowed: true
+    rationale: "host 通过网关协议连接"
+  - caller: platform_hosts
+    callee: foundation_infra
+    allowed: true
+    rationale: "host 使用 infra 原语"
+
+  # === 禁止方向 ===
+  - caller: external_dependencies
+    callee: gateway_control_plane
+    allowed: false
+    rationale: "外部适配器不应驱动网关内部"
+  - caller: external_dependencies
+    callee: agent_runtime
+    allowed: false
+    rationale: "provider 不应反向依赖 runtime 内部"
+  - caller: external_dependencies
+    callee: ops_client_entry
+    allowed: false
+    rationale: "provider 不应依赖 cli/ops 内部"
+  - caller: platform_hosts
+    callee: ops_client_entry
+    allowed: false
+    rationale: "host 层不应依赖 cli/browser 层"
+  - caller: platform_hosts
+    callee: agent_runtime
+    allowed: false
+    rationale: "host 层应通过协议端口而非直接引用 runtime"
+  - caller: foundation_infra
+    callee: plugin_tool_extension
+    allowed: false
+    rationale: "infra 不应依赖 plugin 实现层"
