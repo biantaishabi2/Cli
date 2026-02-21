@@ -39,8 +39,9 @@ pub fn score(
     output: Option<&str>,
     threshold: f64,
     verbose: bool,
+    smell_report: Option<&str>,
 ) {
-    if let Err(e) = score_impl(input, config, mode, format, output, threshold, verbose) {
+    if let Err(e) = score_impl(input, config, mode, format, output, threshold, verbose, smell_report) {
         eprintln!("[score] error: {}", e);
         std::process::exit(1);
     }
@@ -54,6 +55,7 @@ fn score_impl(
     output: Option<&str>,
     threshold: f64,
     verbose: bool,
+    smell_report: Option<&str>,
 ) -> Result<(), String> {
     // 加载配置
     let config = match config {
@@ -72,8 +74,19 @@ fn score_impl(
     // 构建评分上下文
     let ctx = ScoringContext::from_input_dir(input)?;
 
-    // 创建评分器
-    let calculator = ScoreCalculator::new(config, scoring_mode);
+    // 创建评分器（若传了 smell_report，追加 code_quality 维度）
+    let mut calculator = ScoreCalculator::new(config.clone(), scoring_mode);
+    if let Some(path) = smell_report {
+        let cq = &config.dimensions.code_quality;
+        calculator.add_dimension(Box::new(
+            dimensions::code_quality::CodeQualityDimension::new(
+                cq.weight,
+                cq.blocking,
+                cq.config.threshold,
+                Some(path.to_string()),
+            ),
+        ));
+    }
 
     // 计算评分
     let score = calculator.calculate(&ctx);

@@ -55,6 +55,11 @@ impl ScoreCalculator {
         }
     }
 
+    /// 动态追加维度
+    pub fn add_dimension(&mut self, dim: Box<dyn ScoringDimension>) {
+        self.dimensions.push(dim);
+    }
+
     /// 计算架构评分
     pub fn calculate(&self, ctx: &ScoringContext) -> ArchitectureScore {
         let mut dimension_scores = Vec::new();

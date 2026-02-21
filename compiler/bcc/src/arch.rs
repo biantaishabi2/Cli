@@ -1033,6 +1033,7 @@ pub fn validate(
     fail_on_gate: bool,
     fail_on_forbidden: bool,
     export_bdd_source: Option<&str>,
+    smell_gate: Option<&str>,
 ) {
     let code = match validate_impl(
         target_path,
@@ -1044,6 +1045,7 @@ pub fn validate(
         fail_on_gate,
         fail_on_forbidden,
         export_bdd_source,
+        smell_gate,
     ) {
         Ok(code) => code,
         Err(e) => {
@@ -1066,6 +1068,7 @@ fn validate_impl(
     fail_on_gate: bool,
     fail_on_forbidden: bool,
     export_bdd_source: Option<&str>,
+    smell_gate: Option<&str>,
 ) -> Result<i32, String> {
     let target_raw =
         fs::read_to_string(target_path).map_err(|e| format!("read target failed: {}", e))?;
@@ -1386,6 +1389,78 @@ fn validate_impl(
     if fail_on_gate {
         if (enforce_target && !target_pass) || (enforce_transition && !transition_pass) {
             code = 2;
+        }
+    }
+
+    // smell-gate: 读取 SmellReport JSON，有 smell 则输出 CI 报告并设 gate 失败
+    if let Some(smell_path) = smell_gate {
+        let smell_raw = fs::read_to_string(smell_path)
+            .map_err(|e| format!("read smell-gate file failed: {}", e))?;
+        let smell_reports: Vec<crate::analyze::SmellReport> = serde_json::from_str(&smell_raw)
+            .map_err(|e| format!("parse smell-gate json failed: {}", e))?;
+
+        let mut all_smells: Vec<&crate::analyze::SmellRecord> = Vec::new();
+        for report in &smell_reports {
+            all_smells.extend(report.smells.iter());
+        }
+
+        if !all_smells.is_empty() {
+            // 按 severity 排序：critical > warning > info
+            let severity_order = |s: &str| -> u8 {
+                match s {
+                    "critical" => 0,
+                    "warning" => 1,
+                    "info" => 2,
+                    _ => 3,
+                }
+            };
+            all_smells.sort_by(|a, b| {
+                severity_order(&a.severity)
+                    .cmp(&severity_order(&b.severity))
+                    .then_with(|| a.file.cmp(&b.file))
+                    .then_with(|| a.line.cmp(&b.line))
+            });
+
+            eprintln!("\n=== Smell Gate Report ({} issue(s)) ===\n", all_smells.len());
+            for smell in &all_smells {
+                eprintln!(
+                    "[{}] {}:{} - {} ({})",
+                    smell.severity.to_uppercase(),
+                    smell.file,
+                    smell.line,
+                    smell.message,
+                    smell.rule
+                );
+                if !smell.offending_code.is_empty() {
+                    eprintln!("  offending: {}", smell.offending_code);
+                }
+                if !smell.fix_hint.is_empty() {
+                    eprintln!("  fix: {}", smell.fix_hint);
+                }
+                if !smell.code_snippet.is_empty() {
+                    for snippet_line in smell.code_snippet.lines() {
+                        eprintln!("  {}", snippet_line);
+                    }
+                }
+            }
+
+            // 统计
+            let critical = all_smells.iter().filter(|s| s.severity == "critical").count();
+            let warning = all_smells.iter().filter(|s| s.severity == "warning").count();
+            let info = all_smells.iter().filter(|s| s.severity == "info").count();
+            eprintln!(
+                "\nTotal: {} (critical={}, warning={}, info={})",
+                all_smells.len(),
+                critical,
+                warning,
+                info
+            );
+            eprintln!("smell_gate=FAIL\n");
+
+            // 保留已有的更高失败码（如 code=2 来自 forbidden/gate 失败）
+            code = code.max(1);
+        } else {
+            eprintln!("[smell-gate] no smells found, gate passed");
         }
     }
 
@@ -1764,6 +1839,7 @@ relations_expected:
             true,
             true,
             None,
+            None,
         )
         .expect("validate ok");
         assert_eq!(code, 0);
@@ -1877,6 +1953,7 @@ profiles:
             true,
             true,
             None,
+            None,
         )
         .expect("strict validate");
         assert_eq!(strict_code, 2);
@@ -1890,6 +1967,7 @@ profiles:
             "both",
             false,
             false,
+            None,
             None,
         )
         .expect("report validate");

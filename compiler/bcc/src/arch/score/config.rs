@@ -75,6 +75,9 @@ pub struct DimensionsConfig {
     /// 测试覆盖维度
     #[serde(default)]
     pub coverage: DimensionConfig<CoverageDimensionConfig>,
+    /// 代码质量维度（需配合 --smell-report 使用）
+    #[serde(default)]
+    pub code_quality: DimensionConfig<CodeQualityDimensionConfig>,
 }
 
 impl Default for DimensionsConfig {
@@ -85,6 +88,12 @@ impl Default for DimensionsConfig {
             layering: DimensionConfig::enabled(0.25, true, LayeringDimensionConfig::default()),
             acyclic: DimensionConfig::enabled(0.10, true, AcyclicDimensionConfig::default()),
             coverage: DimensionConfig::enabled(0.10, false, CoverageDimensionConfig::default()),
+            code_quality: DimensionConfig {
+                enabled: false,
+                weight: 0.10,
+                blocking: true,
+                config: CodeQualityDimensionConfig::default(),
+            },
         }
     }
 }
@@ -315,6 +324,26 @@ impl Default for CoverageDimensionConfig {
     }
 }
 
+/// 代码质量维度配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeQualityDimensionConfig {
+    /// 通过阈值
+    #[serde(default = "default_code_quality_threshold")]
+    pub threshold: f64,
+}
+
+fn default_code_quality_threshold() -> f64 {
+    60.0
+}
+
+impl Default for CodeQualityDimensionConfig {
+    fn default() -> Self {
+        Self {
+            threshold: default_code_quality_threshold(),
+        }
+    }
+}
+
 /// 自定义规则
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomRule {
@@ -444,6 +473,13 @@ impl ScoringConfig {
                 return Err("weight for dimension 'coverage' must be positive".into());
             }
         }
+        if self.dimensions.code_quality.enabled {
+            total_weight += self.dimensions.code_quality.weight;
+            enabled_count += 1;
+            if self.dimensions.code_quality.weight <= 0.0 {
+                return Err("weight for dimension 'code_quality' must be positive".into());
+            }
+        }
 
         if enabled_count > 0 && (total_weight - 1.0).abs() > 0.001 {
             return Err(format!(
@@ -464,12 +500,12 @@ impl ScoringConfig {
             threshold: 80.0,
             dimensions: DimensionsConfig {
                 compliance: DimensionConfig::enabled(
-                    0.30,
+                    0.25,
                     true,
                     ComplianceDimensionConfig::default(),
                 ),
                 density: DimensionConfig::enabled(
-                    0.25,
+                    0.20,
                     true,
                     DensityDimensionConfig {
                         ideal_min: 10.0,
@@ -500,6 +536,11 @@ impl ScoringConfig {
                         contract_weight: 0.6,
                     },
                 ),
+                code_quality: DimensionConfig::enabled(
+                    0.10,
+                    true,
+                    CodeQualityDimensionConfig { threshold: 60.0 },
+                ),
             },
             custom_rules: Vec::new(),
             output: OutputConfig::default(),
@@ -516,12 +557,12 @@ impl ScoringConfig {
             threshold: 60.0,
             dimensions: DimensionsConfig {
                 compliance: DimensionConfig::enabled(
-                    0.30,
+                    0.25,
                     false, // 非一票否决
                     ComplianceDimensionConfig::default(),
                 ),
                 density: DimensionConfig::enabled(
-                    0.25,
+                    0.20,
                     false,
                     DensityDimensionConfig {
                         ideal_min: 10.0,
@@ -547,6 +588,11 @@ impl ScoringConfig {
                         bdd_weight: 0.4,
                         contract_weight: 0.6,
                     },
+                ),
+                code_quality: DimensionConfig::enabled(
+                    0.10,
+                    true,
+                    CodeQualityDimensionConfig { threshold: 60.0 },
                 ),
             },
             custom_rules: Vec::new(),
@@ -581,6 +627,10 @@ impl ScoringConfig {
                     ..Default::default()
                 },
                 coverage: DimensionConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                code_quality: DimensionConfig {
                     enabled: false,
                     ..Default::default()
                 },

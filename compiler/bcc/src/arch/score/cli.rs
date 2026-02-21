@@ -33,6 +33,10 @@ pub enum ScoreAction {
         /// 详细输出
         #[arg(short, long)]
         verbose: bool,
+
+        /// SmellReport JSON 路径（启用 code_quality 维度）
+        #[arg(long)]
+        smell_report: Option<String>,
     },
 
     /// 生成默认配置文件
@@ -77,6 +81,7 @@ impl ScoreAction {
                 output,
                 threshold,
                 verbose,
+                smell_report,
             } => {
                 super::score(
                     &input,
@@ -86,6 +91,7 @@ impl ScoreAction {
                     output.as_deref(),
                     threshold,
                     verbose,
+                    smell_report.as_deref(),
                 );
             }
             ScoreAction::InitConfig { output, template } => {

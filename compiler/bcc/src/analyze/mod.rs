@@ -7,11 +7,12 @@
 
 pub mod duplication;
 pub mod error_handling;
+pub mod linter;
 pub mod noise;
 pub mod security;
 
 use crate::extract::FileRecord;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -87,11 +88,11 @@ fn detect_redundant_type_check(record: &FileRecord) -> Vec<SmellRecord> {
             {
                 let (severity, confidence, extra_msg) = match lang {
                     "elixir" => (
-                        "medium",
+                        "warning",
                         0.7,
                         " (guard may serve as pattern dispatch)",
                     ),
-                    _ => ("high", 0.9, ""),
+                    _ => ("critical", 0.9, ""),
                 };
                 smells.push(SmellRecord {
                     category: "defensive".to_string(),
@@ -105,6 +106,11 @@ fn detect_redundant_type_check(record: &FileRecord) -> Vec<SmellRecord> {
                     line: guard.line,
                     source: "bcc".to_string(),
                     confidence,
+                    fix_hint: String::new(),
+                    code_snippet: String::new(),
+                    offending_code: String::new(),
+                    suggested_fix: String::new(),
+                    evidence: vec![],
                 });
             }
         }
@@ -146,7 +152,7 @@ fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
                 smells.push(SmellRecord {
                     category: "defensive".to_string(),
                     rule: "unnecessary_default".to_string(),
-                    severity: "medium".to_string(),
+                    severity: "warning".to_string(),
                     message: format!(
                         "Field '{}' is required but accessed with default value",
                         field_name
@@ -155,6 +161,11 @@ fn detect_unnecessary_default(record: &FileRecord) -> Vec<SmellRecord> {
                     line: call.line,
                     source: "bcc".to_string(),
                     confidence: 0.8,
+                    fix_hint: String::new(),
+                    code_snippet: String::new(),
+                    offending_code: String::new(),
+                    suggested_fix: String::new(),
+                    evidence: vec![],
                 });
             }
         }
@@ -177,7 +188,8 @@ pub struct SmellRecord {
     pub category: String,
     /// 规则标识：redundant_type_check / hardcoded_credential / ...
     pub rule: String,
-    /// 严重级别：high / medium / low
+    /// 严重级别：critical / warning / info（兼容旧值 high→critical, medium→warning, low→info）
+    #[serde(deserialize_with = "deserialize_severity")]
     pub severity: String,
     /// 人类可读描述
     pub message: String,
@@ -189,6 +201,70 @@ pub struct SmellRecord {
     pub source: String,
     /// 置信度 0.0 - 1.0
     pub confidence: f64,
+    /// 修复提示
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix_hint: String,
+    /// 代码片段（含上下文行 + ← HERE 标记）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code_snippet: String,
+    /// 问题代码行
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub offending_code: String,
+    /// 建议修复代码
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suggested_fix: String,
+    /// 证据链
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<SmellEvidence>,
+}
+
+/// 气味证据
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SmellEvidence {
+    /// 证据类型：regex_match / ast_pattern / linter_output
+    pub kind: String,
+    /// 证据描述
+    pub detail: String,
+}
+
+/// severity 反序列化：将旧值 high→critical, medium→warning, low→info 映射到新值
+fn deserialize_severity<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(normalize_severity(&s))
+}
+
+/// 将 severity 旧值映射到新值
+pub fn normalize_severity(s: &str) -> String {
+    match s {
+        "high" => "critical".to_string(),
+        "medium" => "warning".to_string(),
+        "low" => "info".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 从源码中提取代码片段（目标行 + 前后 context_lines 行），在目标行末尾加 ← HERE 标记
+pub fn extract_code_snippet(source: &str, line: usize, context_lines: usize) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    if line == 0 || line > lines.len() {
+        return String::new();
+    }
+    let idx = line - 1;
+    let start = idx.saturating_sub(context_lines);
+    let end = (idx + context_lines + 1).min(lines.len());
+    let mut snippet = String::new();
+    for i in start..end {
+        let line_num = i + 1;
+        if i == idx {
+            snippet.push_str(&format!("{:>4} | {}  ← HERE\n", line_num, lines[i]));
+        } else {
+            snippet.push_str(&format!("{:>4} | {}\n", line_num, lines[i]));
+        }
+    }
+    snippet
 }
 
 /// 汇总统计
@@ -279,11 +355,7 @@ fn build_ts_detectors() -> Vec<Box<dyn SmellDetector>> {
 /// - ast_file: extract 输出的 JSON 文件路径（Vec<FileRecord> 或单个 FileRecord）
 /// - output: SmellReport JSON 输出路径
 /// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling,noise,duplication,defensive）
-pub fn run(
-    ast_file: &str,
-    output: &str,
-    rules: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(ast_file: &str, output: &str, rules: Option<String>, linters: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     // 解析 rules 参数
     let rule_filter: Option<Vec<String>> = rules.map(|r| {
         r.split(',')
@@ -296,9 +368,14 @@ pub fn run(
     let content = fs::read_to_string(ast_file)
         .map_err(|e| format!("cannot read '{}': {}", ast_file, e))?;
 
-    // 支持 Vec<FileRecord> 和单个 FileRecord 两种输入格式
+    // 支持三种输入格式：Vec<FileRecord>、单个 FileRecord、{ source_count, records: [...] } wrapper
     let records: Vec<FileRecord> = serde_json::from_str::<Vec<FileRecord>>(&content)
         .or_else(|_| serde_json::from_str::<FileRecord>(&content).map(|r| vec![r]))
+        .or_else(|_| {
+            #[derive(Deserialize)]
+            struct AstBatch { records: Vec<FileRecord> }
+            serde_json::from_str::<AstBatch>(&content).map(|b| b.records)
+        })
         .map_err(|e| format!("failed to parse '{}': {}", ast_file, e))?;
 
     // 构建两类检测器，按 rules 过滤
@@ -495,6 +572,39 @@ pub fn run(
         .into());
     }
 
+    // 合并外部 linter 结果
+    let mut reports = reports;
+    if !linters.is_empty() {
+        let external_smells = linter::run_linters(&linters);
+        if !external_smells.is_empty() {
+            // 按文件分组合并到对应的 SmellReport
+            for smell in external_smells {
+                if let Some(report) = reports.iter_mut().find(|r| r.file == smell.file) {
+                    *report.summary.by_severity.entry(smell.severity.clone()).or_insert(0) += 1;
+                    *report.summary.by_category.entry(smell.category.clone()).or_insert(0) += 1;
+                    report.summary.total_smells += 1;
+                    report.smells.push(smell);
+                } else {
+                    // 外部 linter 报告了不在 AST 中的文件，创建新 report
+                    let mut by_severity = HashMap::new();
+                    by_severity.insert(smell.severity.clone(), 1);
+                    let mut by_category = HashMap::new();
+                    by_category.insert(smell.category.clone(), 1);
+                    let file = smell.file.clone();
+                    reports.push(SmellReport {
+                        file,
+                        smells: vec![smell],
+                        summary: SmellSummary {
+                            total_smells: 1,
+                            by_severity,
+                            by_category,
+                        },
+                    });
+                }
+            }
+        }
+    }
+
     // 写出结果
     let json = serde_json::to_string_pretty(&reports)?;
     if let Some(parent) = Path::new(output).parent() {
@@ -558,6 +668,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -600,6 +711,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             Some("defensive".to_string()),
+            vec![],
         )
         .unwrap();
 
@@ -644,6 +756,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -687,6 +800,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         )
         .unwrap();
 
@@ -745,6 +859,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             Some("security".to_string()),
+            vec![],
         )
         .unwrap();
 
@@ -791,6 +906,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         );
         assert!(
             result.is_ok(),
@@ -833,6 +949,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             None,
+            vec![],
         );
         assert!(
             result.is_err(),
@@ -873,7 +990,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -881,7 +998,7 @@ mod tests {
         assert_eq!(result[0].smells.len(), 1);
         let smell = &result[0].smells[0];
         assert_eq!(smell.rule, "redundant_type_check");
-        assert_eq!(smell.severity, "medium");
+        assert_eq!(smell.severity, "warning");
         assert!((smell.confidence - 0.7).abs() < f64::EPSILON);
         assert!(smell.message.contains("pattern dispatch"));
     }
@@ -913,14 +1030,14 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
         assert_eq!(result[0].smells.len(), 1);
         let smell = &result[0].smells[0];
         assert_eq!(smell.rule, "redundant_type_check");
-        assert_eq!(smell.severity, "high");
+        assert_eq!(smell.severity, "critical");
         assert!((smell.confidence - 0.9).abs() < f64::EPSILON);
     }
 
@@ -949,7 +1066,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -983,7 +1100,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1022,6 +1139,7 @@ mod tests {
             ast_path.to_str().unwrap(),
             out_path.to_str().unwrap(),
             Some("security".to_string()),
+            vec![],
         )
         .unwrap();
 
@@ -1056,14 +1174,14 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
         assert_eq!(result[0].smells.len(), 1);
         let smell = &result[0].smells[0];
         assert_eq!(smell.rule, "unnecessary_default");
-        assert_eq!(smell.severity, "medium");
+        assert_eq!(smell.severity, "warning");
         assert!((smell.confidence - 0.8).abs() < f64::EPSILON);
         assert!(smell.message.contains("email"));
     }
@@ -1094,7 +1212,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None).unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
