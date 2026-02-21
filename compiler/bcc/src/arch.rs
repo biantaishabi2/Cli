@@ -1884,8 +1884,27 @@ fn export_mermaid_detail(
     let mut edges: Vec<DetailEdge> = Vec::new();
     let mut seen_keys: HashSet<String> = HashSet::new();
 
+    // 第一遍：收集子模块级别边，记录已覆盖的 (方向, 外部模块) 对
+    // 用于后续去除冗余的父级边
+    let mut kid_out_covered: HashSet<String> = HashSet::new(); // 子模块→外部 已有边
+    let mut kid_in_covered: HashSet<String> = HashSet::new();  // 外部→子模块 已有边
+
     for rel in &seed.relations_expected {
-        // 判断 caller/callee 是否属于本 parent 或其子模块
+        let caller_is_kid = kid_set.contains(rel.caller.as_str());
+        let callee_is_kid = kid_set.contains(rel.callee.as_str());
+
+        if caller_is_kid && !callee_is_kid {
+            let ext = collapse_external(&rel.callee);
+            kid_out_covered.insert(ext);
+        }
+        if !caller_is_kid && callee_is_kid {
+            let ext = collapse_external(&rel.caller);
+            kid_in_covered.insert(ext);
+        }
+    }
+
+    // 第二遍：构建边
+    for rel in &seed.relations_expected {
         let caller_is_kid = kid_set.contains(rel.caller.as_str());
         let callee_is_kid = kid_set.contains(rel.callee.as_str());
         let caller_is_parent = rel.caller == parent_id;
@@ -1893,7 +1912,6 @@ fn export_mermaid_detail(
         let caller_is_mine = caller_is_kid || caller_is_parent;
         let callee_is_mine = callee_is_kid || callee_is_parent;
 
-        // 外部折叠后是否属于本 parent
         let caller_collapsed = collapse_external(&rel.caller);
         let callee_collapsed = collapse_external(&rel.callee);
         let caller_collapsed_mine = caller_collapsed == parent_id
@@ -1901,14 +1919,13 @@ fn export_mermaid_detail(
         let callee_collapsed_mine = callee_collapsed == parent_id
             || kid_set.contains(callee_collapsed.as_str());
 
-        // 只保留与本 parent 相关的边（至少一端属于本 parent）
         if !caller_is_mine && !callee_is_mine
             && !caller_collapsed_mine && !callee_collapsed_mine
         {
             continue;
         }
 
-        // 内部边（两端都是本 parent 的子模块）→ 画子模块间的边
+        // 内部边（两端都是本 parent 的子模块）
         if caller_is_kid && callee_is_kid {
             let key = format!("{}→{}", rel.caller, rel.callee);
             if seen_keys.insert(key) {
@@ -1952,7 +1969,7 @@ fn export_mermaid_detail(
             continue;
         }
 
-        // 父模块级别边（caller 或 callee 是 parent_id 本身，或折叠后属于本 parent）
+        // 父模块级别边 — 如果子模块级别已覆盖同方向同外部模块，跳过（除非是禁止边）
         let from = if caller_is_parent {
             parent_id.to_string()
         } else {
@@ -1963,10 +1980,20 @@ fn export_mermaid_detail(
         } else {
             callee_collapsed.clone()
         };
-        // 跳过自环
         if from == to {
             continue;
         }
+
+        // 允许边：子模块级别已精确覆盖则跳过
+        if rel.allowed {
+            if from == parent_id && kid_out_covered.contains(&to) {
+                continue;
+            }
+            if to == parent_id && kid_in_covered.contains(&from) {
+                continue;
+            }
+        }
+
         let key = format!("{}→{}", from, to);
         if seen_keys.insert(key) {
             edges.push(DetailEdge {
