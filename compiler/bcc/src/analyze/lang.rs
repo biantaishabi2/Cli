@@ -200,8 +200,8 @@ static RUST: LangConfig = LangConfig {
         "tuple_expression", "array_expression", "struct_expression",
     ],
     comment_prefix: "//",
-    empty_body_max_children: 0,
-    empty_body_allowed_kinds: &[],
+    empty_body_max_children: 1,
+    empty_body_allowed_kinds: &["expression_statement"],
 };
 
 static TYPESCRIPT: LangConfig = LangConfig {

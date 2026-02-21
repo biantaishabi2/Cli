@@ -258,6 +258,7 @@ fn detect_empty_functions(
                         || stmt_text == "pass"
                         || stmt_text == "todo!()"
                         || stmt_text == "unimplemented!()"
+                        || stmt_text == "Ok(())"
                 })
             })
         } else {
@@ -1115,6 +1116,27 @@ fn not_empty() {
             "Rust: 应检出 empty_function_body: {:?}",
             smells
         );
+    }
+
+    #[test]
+    fn empty_function_rust_ok_unit_stub() {
+        let source = r#"
+fn stub_ok() -> Result<(), Error> {
+    Ok(())
+}
+
+fn real_function() -> Result<(), Error> {
+    do_something();
+    Ok(())
+}
+"#;
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = LeftoverBoilerplateDetector;
+        let smells = detector.detect(&record, source, &tree);
+        let empty_smells: Vec<_> = smells.iter().filter(|s| s.rule == "empty_function_body").collect();
+        assert_eq!(empty_smells.len(), 1, "应只检出 stub_ok，不检出 real_function: {:?}", empty_smells);
+        assert!(empty_smells[0].message.contains("stub_ok"));
     }
 
     #[test]
