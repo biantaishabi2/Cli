@@ -3,10 +3,54 @@
 //! 评估分层架构的调用合规性，检查是否存在违反分层规则的依赖。
 
 use super::{DimensionResult, ScoringDimension};
-use crate::arch::score::config::LayeringDimensionConfig;
+use crate::arch::score::config::{LayerDefinition, LayeringDimensionConfig};
 use crate::arch::score::context::ScoringContext;
 use crate::arch::score::models::{Issue, Metric, Severity};
 use std::collections::HashMap;
+
+/// 独立函数：检查 layer 间的依赖是否允许
+///
+/// 规则优先级：同层允许 > 显式禁止 > 显式允许 > 默认 precedence 比较
+pub fn check_layer_transition(
+    from_layer: &str,
+    to_layer: &str,
+    layers: &[LayerDefinition],
+    forbidden_transitions: &[(String, String)],
+    allowed_transitions: &[(String, String)],
+) -> bool {
+    // 同层允许
+    if from_layer == to_layer {
+        return true;
+    }
+
+    // 检查显式禁止的转换
+    for (from, to) in forbidden_transitions {
+        if from == from_layer && to == to_layer {
+            return false;
+        }
+    }
+
+    // 检查显式允许的转换
+    for (from, to) in allowed_transitions {
+        if from == from_layer && to == to_layer {
+            return true;
+        }
+    }
+
+    // 默认：上层可以依赖下层（precedence 越小越上层）
+    let layer_precedence: HashMap<&str, i32> = layers
+        .iter()
+        .map(|l| (l.name.as_str(), l.precedence))
+        .collect();
+
+    let from_prec = layer_precedence.get(from_layer);
+    let to_prec = layer_precedence.get(to_layer);
+
+    match (from_prec, to_prec) {
+        (Some(f), Some(t)) => f < t, // 上层可以依赖下层
+        _ => true, // 未知层默认允许
+    }
+}
 
 /// 分层清晰维度
 pub struct LayeringDimension {
@@ -33,35 +77,15 @@ impl LayeringDimension {
         }
     }
 
-    /// 检查依赖是否允许
+    /// 检查依赖是否允许（委托给独立函数）
     fn is_allowed_transition(&self, from_layer: &str, to_layer: &str) -> bool {
-        // 同层允许
-        if from_layer == to_layer {
-            return true;
-        }
-
-        // 检查显式禁止的转换
-        for (from, to) in &self.config.forbidden_transitions {
-            if from == from_layer && to == to_layer {
-                return false;
-            }
-        }
-
-        // 检查显式允许的转换
-        for (from, to) in &self.config.allowed_transitions {
-            if from == from_layer && to == to_layer {
-                return true;
-            }
-        }
-
-        // 默认：上层可以依赖下层（precedence 越小越上层）
-        let from_prec = self.layer_precedence.get(from_layer);
-        let to_prec = self.layer_precedence.get(to_layer);
-
-        match (from_prec, to_prec) {
-            (Some(f), Some(t)) => f < t, // 上层可以依赖下层
-            _ => true, // 未知层默认允许
-        }
+        check_layer_transition(
+            from_layer,
+            to_layer,
+            &self.config.layers,
+            &self.config.forbidden_transitions,
+            &self.config.allowed_transitions,
+        )
     }
 
     /// 分析分层违规

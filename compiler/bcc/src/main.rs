@@ -299,6 +299,14 @@ enum ArchAction {
         /// SmellReport JSON 路径，有 smell 则 validate 失败（exit 1）
         #[arg(long)]
         smell_gate: Option<String>,
+
+        /// Seed 文件路径，用于加载模块 layer 元数据进行分层校验
+        #[arg(long)]
+        seed_file: Option<String>,
+
+        /// 启用时 layer violation 导致 exit code 2
+        #[arg(long, default_value_t = false)]
+        fail_on_layer_violation: bool,
     },
 
     /// 导出 bugfix 可消费的 module_map.json
@@ -646,6 +654,8 @@ fn main() {
                 fail_on_forbidden,
                 export_bdd_source,
                 smell_gate,
+                seed_file,
+                fail_on_layer_violation,
             } => {
                 arch::validate(
                     &target,
@@ -658,6 +668,8 @@ fn main() {
                     fail_on_forbidden,
                     export_bdd_source.as_deref(),
                     smell_gate.as_deref(),
+                    seed_file.as_deref(),
+                    fail_on_layer_violation,
                 );
             }
             ArchAction::ExportModuleMap {

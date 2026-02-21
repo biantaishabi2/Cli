@@ -3016,3 +3016,472 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+// === Layer Violation 集成测试 ===
+
+/// 共享辅助：创建最小 target/transition/gates 文件，不含 forbid/unexpected 边
+fn setup_minimal_contracts(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+
+    write(
+        &target,
+        r#"version: v3
+kind: target_contract
+intent: target
+source_of_truth: test
+notes: []
+allow_edges:
+  - caller: MOD_A
+    callee: MOD_B
+  - caller: MOD_B
+    callee: MOD_A
+forbid_edges: []
+"#,
+    );
+    write(
+        &transition,
+        r#"version: v3
+kind: transition_contract
+base: v3.target
+intent: transition
+notes: []
+temporary_allow_edges: []
+blocked_edges: []
+"#,
+    );
+    write(
+        &gates,
+        r#"version: v3
+kind: verification_gates
+intent: gate
+profiles:
+  transition:
+    max_unexpected_edges_count: 10
+    max_forbidden_edges_count: 10
+    max_forbidden_total_edges: 10
+    max_missing_edges_count: 10
+    max_directed_density_pct: 100
+    max_bidirectional_pair_count: 10
+  target:
+    max_unexpected_edges_count: 10
+    max_forbidden_edges_count: 10
+    max_forbidden_total_edges: 10
+    max_missing_edges_count: 10
+    max_directed_density_pct: 100
+    max_bidirectional_pair_count: 10
+"#,
+    );
+    (target, transition, gates)
+}
+
+/// 测试1: infrastructure → application 违规检测
+#[test]
+fn layer_violation_infra_to_app_detected() {
+    let root = temp_dir("bcc_layer_v1");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // MOD_A = infrastructure (precedence 3), MOD_B = application (precedence 1)
+    // infrastructure → application 是下层依赖上层，应该违规
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: infrastructure
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: application
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: service
+      precedence: 2
+    - name: infrastructure
+      precedence: 3
+  forbidden_transitions: []
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0)); // 不开 --fail-on-layer-violation
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(report.contains("## Layer Violations"), "report should have Layer Violations section");
+    assert!(
+        report.contains("MOD_A (infrastructure)"),
+        "report should mention MOD_A infrastructure: {}",
+        report
+    );
+    assert!(
+        report.contains("MOD_B (application)"),
+        "report should mention MOD_B application: {}",
+        report
+    );
+
+    // summary.json 应有 layer_violation_count
+    let summary_raw = fs::read_to_string(out.join("summary.json")).expect("read summary");
+    let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
+    assert_eq!(summary["layer_violation_count"], 1);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试2: application → infrastructure 允许
+#[test]
+fn layer_violation_app_to_infra_allowed() {
+    let root = temp_dir("bcc_layer_v2");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // MOD_A = application (precedence 1), MOD_B = infrastructure (precedence 3)
+    // 上层依赖下层，应该允许
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: application
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: infrastructure
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: service
+      precedence: 2
+    - name: infrastructure
+      precedence: 3
+  forbidden_transitions: []
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0));
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(report.contains("No layer violations detected."));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试3: 同层调用允许
+#[test]
+fn layer_violation_same_layer_allowed() {
+    let root = temp_dir("bcc_layer_v3");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: application
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: application
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+  forbidden_transitions: []
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0));
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(report.contains("No layer violations detected."));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试4: 自定义 forbidden_transitions
+#[test]
+fn layer_violation_custom_forbidden() {
+    let root = temp_dir("bcc_layer_v4");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // 自定义 forbidden: service → api
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: service
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: api
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: api
+      precedence: 1
+    - name: service
+      precedence: 2
+  forbidden_transitions:
+    - [service, api]
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0));
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(report.contains("## Layer Violations"));
+    assert!(report.contains("MOD_A (service)"));
+    assert!(report.contains("MOD_B (api)"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试5: 无 layer 定义时跳过（stderr 输出 warning）
+#[test]
+fn layer_violation_skip_when_no_layer() {
+    let root = temp_dir("bcc_layer_v5");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // MOD_A 有 layer，MOD_B 没有 layer → 只有一个模块有 layer，触发检查但跳过该边
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: application
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    path_rules:
+      include: ["src/b/**"]
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .output()
+        .expect("run validate");
+    assert_eq!(output.status.code(), Some(0));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[validate] skip layer check: MOD_B has no layer defined"),
+        "stderr should warn about MOD_B missing layer: {}",
+        stderr
+    );
+
+    // 报告不应包含违规（跳过的边不算违规）
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(report.contains("No layer violations detected."));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试6: --fail-on-layer-violation 门禁
+#[test]
+fn layer_violation_fail_on_flag_exit_code_2() {
+    let root = temp_dir("bcc_layer_v6");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    // infrastructure → application 违规
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: infrastructure
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: application
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 3
+  forbidden_transitions: []
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+            "--fail-on-layer-violation",
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(2), "should exit 2 when --fail-on-layer-violation and violations exist");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试7: 向后兼容——不传 --seed-file 时行为不变
+#[test]
+fn layer_violation_backward_compatible_no_seed_file() {
+    let root = temp_dir("bcc_layer_v7");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0));
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    // 不传 seed-file 时，报告不应含 Layer Violations 章节
+    assert!(
+        !report.contains("## Layer Violations"),
+        "report should NOT have Layer Violations without --seed-file"
+    );
+
+    // summary.json 不应有 layer_violation_count 字段
+    let summary_raw = fs::read_to_string(out.join("summary.json")).expect("read summary");
+    let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
+    assert!(summary.get("layer_violation_count").is_none());
+
+    let _ = fs::remove_dir_all(&root);
+}
