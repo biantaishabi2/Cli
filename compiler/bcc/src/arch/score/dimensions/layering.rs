@@ -8,13 +8,14 @@ use crate::arch::score::context::ScoringContext;
 use crate::arch::score::models::{Issue, Metric, Severity};
 use std::collections::HashMap;
 
-/// 独立函数：检查 layer 间的依赖是否允许
+/// 预计算版本：接收已查找的 from/to precedence 值，避免重复构建 map
 ///
 /// 规则优先级：同层允许 > 显式禁止 > 显式允许 > 默认 precedence 比较
-pub fn check_layer_transition(
+pub fn check_layer_transition_with_precedence(
     from_layer: &str,
     to_layer: &str,
-    layers: &[LayerDefinition],
+    from_precedence: Option<i32>,
+    to_precedence: Option<i32>,
     forbidden_transitions: &[(String, String)],
     allowed_transitions: &[(String, String)],
 ) -> bool {
@@ -38,18 +39,33 @@ pub fn check_layer_transition(
     }
 
     // 默认：上层可以依赖下层（precedence 越小越上层）
+    match (from_precedence, to_precedence) {
+        (Some(f), Some(t)) => f < t,
+        _ => true, // 未知层默认允许
+    }
+}
+
+/// 独立函数：检查 layer 间的依赖是否允许（内部构建 precedence map，适用于无预计算场景）
+pub fn check_layer_transition(
+    from_layer: &str,
+    to_layer: &str,
+    layers: &[LayerDefinition],
+    forbidden_transitions: &[(String, String)],
+    allowed_transitions: &[(String, String)],
+) -> bool {
     let layer_precedence: HashMap<&str, i32> = layers
         .iter()
         .map(|l| (l.name.as_str(), l.precedence))
         .collect();
 
-    let from_prec = layer_precedence.get(from_layer);
-    let to_prec = layer_precedence.get(to_layer);
-
-    match (from_prec, to_prec) {
-        (Some(f), Some(t)) => f < t, // 上层可以依赖下层
-        _ => true, // 未知层默认允许
-    }
+    check_layer_transition_with_precedence(
+        from_layer,
+        to_layer,
+        layer_precedence.get(from_layer).copied(),
+        layer_precedence.get(to_layer).copied(),
+        forbidden_transitions,
+        allowed_transitions,
+    )
 }
 
 /// 分层清晰维度
@@ -77,12 +93,13 @@ impl LayeringDimension {
         }
     }
 
-    /// 检查依赖是否允许（委托给独立函数）
+    /// 检查依赖是否允许（使用预计算的 layer_precedence）
     fn is_allowed_transition(&self, from_layer: &str, to_layer: &str) -> bool {
-        check_layer_transition(
+        check_layer_transition_with_precedence(
             from_layer,
             to_layer,
-            &self.config.layers,
+            self.layer_precedence.get(from_layer).copied(),
+            self.layer_precedence.get(to_layer).copied(),
             &self.config.forbidden_transitions,
             &self.config.allowed_transitions,
         )

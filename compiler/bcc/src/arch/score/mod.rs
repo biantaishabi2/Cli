@@ -26,7 +26,7 @@ pub mod output;
 pub use calculator::{ScoreCalculator, ScoringMode};
 pub use config::ScoringConfig;
 pub use context::ScoringContext;
-pub use dimensions::check_layer_transition;
+pub use dimensions::{check_layer_transition, check_layer_transition_with_precedence};
 pub use models::{ArchitectureScore, DimensionScore, Grade, Severity};
 
 

@@ -1357,13 +1357,26 @@ fn validate_impl(
                 callee_layer: String,
             }
 
+            // 预计算 layer precedence map，避免循环内重复构建
+            let layer_precedence: HashMap<&str, i32> = layers
+                .iter()
+                .map(|l| (l.name.as_str(), l.precedence))
+                .collect();
+
             let mut violations = Vec::new();
             for edge in &actual {
                 let caller_layer = layer_map.get(&edge.caller);
                 let callee_layer = layer_map.get(&edge.callee);
                 match (caller_layer, callee_layer) {
                     (Some(cl), Some(dl)) => {
-                        if !score::check_layer_transition(cl, dl, layers, forbidden, allowed) {
+                        if !score::check_layer_transition_with_precedence(
+                            cl,
+                            dl,
+                            layer_precedence.get(cl.as_str()).copied(),
+                            layer_precedence.get(dl.as_str()).copied(),
+                            forbidden,
+                            allowed,
+                        ) {
                             violations.push(LayerViolationRecord {
                                 caller: edge.caller.clone(),
                                 callee: edge.callee.clone(),
