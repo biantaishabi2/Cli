@@ -1848,7 +1848,7 @@ fn export_mermaid_detail(
 
     println!();
     println!("%% === {} 子模块详情 ===", parent_label);
-    println!("graph TD");
+    println!("graph LR");
 
     let kid_set: HashSet<&str> = kids.iter().map(|s| s.as_str()).collect();
 
