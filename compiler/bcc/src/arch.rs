@@ -1322,11 +1322,28 @@ fn validate_impl(
         let seed: SeedSpec = serde_yaml::from_str(&seed_raw)
             .map_err(|e| format!("parse seed yaml failed: {}", e))?;
 
-        // 构建 module_id → layer 映射
-        let layer_map: HashMap<String, String> = seed
+        // 构建 module_id → layer 映射（支持 parent chain 继承：无显式 layer 时沿祖先链查找）
+        let parent_map = build_parent_map(&seed);
+        let explicit_layer_map: HashMap<String, String> = seed
             .modules
             .iter()
             .filter_map(|m| m.layer.as_ref().map(|l| (m.module_id.clone(), l.clone())))
+            .collect();
+        let layer_map: HashMap<String, String> = seed
+            .modules
+            .iter()
+            .filter_map(|m| {
+                if let Some(l) = m.layer.as_ref() {
+                    Some((m.module_id.clone(), l.clone()))
+                } else {
+                    // 沿 parent chain 继承最近祖先的 layer
+                    let ancestors = get_ancestors(&m.module_id, &parent_map);
+                    ancestors
+                        .iter()
+                        .find_map(|a| explicit_layer_map.get(a))
+                        .map(|l| (m.module_id.clone(), l.clone()))
+                }
+            })
             .collect();
 
         // 只有至少一个模块定义了 layer 才触发检查
@@ -2787,6 +2804,126 @@ relations_expected: []
             lvc > 0,
             "summary.json layer_violation_count should be > 0, got {}",
             lvc
+        );
+
+        // === Step 5: parent 继承语义端到端验证 ===
+        // 构造场景：INHERITOR 无显式 layer，其 parent INFRA_BASE 有 layer: infrastructure
+        // INHERITOR 调用 APP_MOD (layer: application)，仅当 parent 继承生效时才触发 violation
+        // 若 parent 继承逻辑失效，INHERITOR 无 layer → 跳过检查 → 无 violation → 断言失败
+        let inherit_seed_path = root.join("inherit_seed.yaml");
+        write(
+            &inherit_seed_path,
+            r#"version: v3
+source_of_truth: test_inherit
+modules:
+  - module_id: APP_MOD
+    display_name: Application Module
+    layer: application
+    precedence: 10
+    path_rules:
+      include: ["src/app/**"]
+  - module_id: INFRA_BASE
+    display_name: Infrastructure Base
+    layer: infrastructure
+    precedence: 20
+    path_rules:
+      include: ["src/infra_base/**"]
+  - module_id: INHERITOR
+    display_name: Inheritor (no explicit layer)
+    parent: INFRA_BASE
+    precedence: 30
+    path_rules:
+      include: ["src/inheritor/**"]
+relations_expected:
+  - caller: INHERITOR
+    callee: APP_MOD
+    allowed: true
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+        );
+        let inherit_ast_path = root.join("inherit_ast.json");
+        write(
+            &inherit_ast_path,
+            r#"{
+  "source_count": 3,
+  "records": [
+    {"sourcePath": "src/app/handler.ts", "localDependencies": [], "localCallTargets": []},
+    {"sourcePath": "src/infra_base/base.ts", "localDependencies": [], "localCallTargets": []},
+    {"sourcePath": "src/inheritor/impl.ts", "localDependencies": ["src/app/handler.ts"], "localCallTargets": []}
+  ]
+}"#,
+        );
+        let inherit_matrix_out = root.join("inherit_matrix_out");
+        matrix_impl(
+            &inherit_seed_path.to_string_lossy(),
+            &inherit_ast_path.to_string_lossy(),
+            &inherit_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        )
+        .expect("matrix_impl should succeed with inherited layer");
+
+        let inherit_actual_path = root.join("inherit_actual.json");
+        write(
+            &inherit_actual_path,
+            r#"[
+  {"caller":"INHERITOR","callee":"APP_MOD","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+        let inherit_validate_out = root.join("inherit_validate_out");
+        let inherit_code = validate_impl(
+            &inherit_matrix_out
+                .join("v3.target-matrix.yaml")
+                .to_string_lossy(),
+            &inherit_matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
+            &inherit_matrix_out
+                .join("v3.gates.yaml")
+                .to_string_lossy(),
+            &inherit_actual_path.to_string_lossy(),
+            &inherit_validate_out.to_string_lossy(),
+            "both",
+            false,
+            false,
+            None,
+            None,
+            Some(&inherit_seed_path.to_string_lossy()),
+            true,
+        )
+        .expect("validate_impl should succeed");
+        // INHERITOR 无显式 layer，通过 parent INFRA_BASE 继承 infrastructure
+        // infrastructure → application 是 forbidden，因此应检测到 violation（exit code 2）
+        assert_eq!(
+            inherit_code, 2,
+            "exit code should be 2: INHERITOR inherits infrastructure layer from parent INFRA_BASE, \
+             calling APP_MOD (application) violates forbidden_transitions"
+        );
+        let inherit_report = fs::read_to_string(
+            inherit_validate_out.join("v3-validation-report.md"),
+        )
+        .expect("read inherit report");
+        assert!(
+            inherit_report.contains("INHERITOR"),
+            "report should mention INHERITOR in layer violation (inherited layer from parent)"
+        );
+        let inherit_summary_raw =
+            fs::read_to_string(inherit_validate_out.join("summary.json")).expect("read summary");
+        let inherit_summary: serde_json::Value =
+            serde_json::from_str(&inherit_summary_raw).expect("parse summary");
+        assert!(
+            inherit_summary["layer_violation_count"].as_i64().unwrap_or(0) > 0,
+            "layer_violation_count should be > 0 for inherited layer violation"
         );
 
         let _ = fs::remove_dir_all(&root);
