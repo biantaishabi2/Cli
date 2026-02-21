@@ -790,6 +790,10 @@ relations_expected:
     callee: external_dependencies
     allowed: true
     rationale: "CLI login/auth"
+  - caller: ops_commands
+    callee: platform_hosts
+    allowed: true
+    rationale: "CLI daemon/node-host 生命周期管理"
   - caller: ops_browser
     callee: gateway_api_adapters
     allowed: true
