@@ -115,7 +115,8 @@ func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
 	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
 	assert.Contains(t, content, "--from bot:pr-created")
 	assert.Contains(t, content, "--to bot:pr-needs-fix")
-	assert.Contains(t, content, "inputs.skip_test_gate || steps.pr_gate.outcome == 'success'")
+	assert.Contains(t, content, "steps.pr_gate.outcome == 'success'")
+	assert.NotContains(t, content, "skip_test_gate")
 }
 
 // ─── YAML 结构体定义 ───

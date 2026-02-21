@@ -11,11 +11,6 @@ on:
         description: "Issue 编号"
         required: true
         type: string
-      skip_test_gate:
-        description: "跳过 test gate（外部仓库无 niuma-test-gate.sh 时设为 true）"
-        required: false
-        default: false
-        type: boolean
       workflow_source_repo:
         description: "reusable workflow 源仓库（owner/repo）"
         required: false
@@ -81,21 +76,43 @@ jobs:
 
       - name: Run PR Gate
         id: pr_gate
-        if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != ''"
+        if: steps.find_pr.outputs.pr_number != ''
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
         run: |
-          ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
+          if [ -x "./.github/scripts/niuma-test-gate.sh" ]; then
+            echo "检测到自定义门禁脚本，执行..."
+            ./.github/scripts/niuma-test-gate.sh "$PR_NUMBER"
+          else
+            echo "无自定义门禁脚本，检查 GitHub PR status checks..."
+            # 等待 checks 完成（最多等 5 分钟）
+            for i in $(seq 1 30); do
+              PENDING=$(gh pr checks "$PR_NUMBER" --json state --jq '[.[] | select(.state == "PENDING")] | length' 2>/dev/null || echo "0")
+              if [ "$PENDING" = "0" ]; then
+                break
+              fi
+              echo "等待 $PENDING 个 check 完成... ($i/30)"
+              sleep 10
+            done
+            # 检查是否全部通过（排除本 workflow 自身的 review job）
+            FAILED=$(gh pr checks "$PR_NUMBER" --json name,conclusion --jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "failure")] | length' 2>/dev/null || echo "0")
+            if [ "$FAILED" != "0" ]; then
+              echo "::error::PR #$PR_NUMBER 有 $FAILED 个 check 失败"
+              gh pr checks "$PR_NUMBER" --json name,conclusion --jq '.[] | select(.conclusion == "FAILURE" or .conclusion == "failure") | "  ✗ \(.name)"'
+              exit 1
+            fi
+            echo "所有 PR checks 通过"
+          fi
 
       - name: Restore Workspace After Gate
-        if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != ''"
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
         run: |
           git checkout --force "$GITHUB_SHA"
 
       - name: Gate Failed -> Transition to PR Needs Fix
-        if: "!inputs.skip_test_gate && steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'"
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
@@ -108,7 +125,7 @@ jobs:
             --to bot:pr-needs-fix
 
       - name: AI Self-Review
-        if: steps.find_pr.outputs.pr_number != '' && (inputs.skip_test_gate || steps.pr_gate.outcome == 'success')
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           NIUMA_IMPLEMENTATION_PROVIDER: codex
