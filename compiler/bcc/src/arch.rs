@@ -1748,12 +1748,92 @@ pub fn export_mermaid(seed_file: &str) {
 
     println!();
 
-    // 输出边
+    // 构建展开后的全部边（含继承 + 兄弟）
+    let mut allow_edges: Vec<Edge> = Vec::new();
+    let mut forbid_edges: Vec<Edge> = Vec::new();
     for rel in &seed.relations_expected {
         if rel.allowed {
-            println!("  {} --> {}", rel.caller, rel.callee);
+            allow_edges.push(Edge {
+                caller: rel.caller.clone(),
+                callee: rel.callee.clone(),
+                rationale: "from relations_expected".to_string(),
+            });
         } else {
-            println!("  {} -.-x {}", rel.caller, rel.callee);
+            forbid_edges.push(Edge {
+                caller: rel.caller.clone(),
+                callee: rel.callee.clone(),
+                rationale: "from relations_expected".to_string(),
+            });
+        }
+    }
+
+    if !children_map.is_empty() {
+        let explicit_keys: HashSet<String> = allow_edges
+            .iter()
+            .chain(forbid_edges.iter())
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
+        let expanded_forbid =
+            expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
+        forbid_edges.extend(expanded_forbid);
+
+        let all_keys: HashSet<String> = allow_edges
+            .iter()
+            .chain(forbid_edges.iter())
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
+        let expanded_allow =
+            expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
+        allow_edges.extend(expanded_allow);
+
+        let final_keys: HashSet<String> = allow_edges
+            .iter()
+            .chain(forbid_edges.iter())
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
+        let sibling_edges = sibling_default_allow_edges(&children_map, &final_keys);
+        allow_edges.extend(sibling_edges);
+    }
+
+    // 有子模块的父模块集合（用于跳过父级边，只画子模块边）
+    let parents_with_children: HashSet<&str> = children_map.keys().map(|s| s.as_str()).collect();
+
+    // 去重用
+    let mut seen = HashSet::new();
+
+    // 输出 allow 边
+    for e in &allow_edges {
+        // 如果 caller 和 callee 都是有子模块的父模块，保留（父→父的边不展开到子×子）
+        // 如果只有一端是父模块，跳过父级边（由子模块的继承边代替）
+        if (parents_with_children.contains(e.caller.as_str())
+            || parents_with_children.contains(e.callee.as_str()))
+            && e.rationale == "from relations_expected"
+        {
+            continue;
+        }
+        let key = edge_key(&e.caller, &e.callee);
+        if seen.insert(key) {
+            if e.rationale.contains("sibling") {
+                println!("  {} <-.-> {}", e.caller, e.callee);
+            } else if e.rationale.contains("inherited") {
+                println!("  {} -.-> {}", e.caller, e.callee);
+            } else {
+                println!("  {} --> {}", e.caller, e.callee);
+            }
+        }
+    }
+
+    // 输出 forbid 边
+    for e in &forbid_edges {
+        if (parents_with_children.contains(e.caller.as_str())
+            || parents_with_children.contains(e.callee.as_str()))
+            && e.rationale == "from relations_expected"
+        {
+            continue;
+        }
+        let key = edge_key(&e.caller, &e.callee);
+        if seen.insert(key) {
+            println!("  {} -.-x {}", e.caller, e.callee);
         }
     }
 }

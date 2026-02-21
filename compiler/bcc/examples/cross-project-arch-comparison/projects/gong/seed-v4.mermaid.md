@@ -3,7 +3,7 @@
 > 由 `bcc arch export-mermaid --seed-file seed-v4.yaml` 自动生成
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
-- 边样式：`-->` = allowed, `-.-x` = forbidden
+- 边样式：`-->` = 显式 allowed, `-.->` = 继承 allowed, `<-.->` = 兄弟模块, `-.-x` = forbidden
 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内
 
 ```mermaid
@@ -31,14 +31,6 @@ graph TD
     BDD[("BDD 测试基础设施")]
   end
 
-  AGENT --> PROMPT
-  AGENT --> DATA
-  AGENT --> TOOLS
-  AGENT --> HOOK
-  AGENT --> EXTENSIONS
-  AGENT --> RUNTIME
-  AGENT --> STREAM
-  SESSION --> AGENT
   SESSION --> STREAM
   SESSION --> RUNTIME
   SESSION --> PROVIDERS
@@ -52,7 +44,27 @@ graph TD
   INFRA --> PROMPT
   INFRA --> SESSION
   CLI --> SESSION
-  DATA -.-x AGENT
-  TOOLS -.-x AGENT
+  AGENT_CORE -.-> PROMPT
+  AGENT_LOOP -.-> PROMPT
+  AGENT_CORE -.-> DATA
+  AGENT_LOOP -.-> DATA
+  AGENT_CORE -.-> TOOLS
+  AGENT_LOOP -.-> TOOLS
+  AGENT_CORE -.-> HOOK
+  AGENT_LOOP -.-> HOOK
+  AGENT_CORE -.-> EXTENSIONS
+  AGENT_LOOP -.-> EXTENSIONS
+  AGENT_CORE -.-> RUNTIME
+  AGENT_LOOP -.-> RUNTIME
+  AGENT_CORE -.-> STREAM
+  AGENT_LOOP -.-> STREAM
+  SESSION -.-> AGENT_CORE
+  SESSION -.-> AGENT_LOOP
+  AGENT_CORE <-.-> AGENT_LOOP
+  AGENT_LOOP <-.-> AGENT_CORE
   TAPE -.-x SESSION
+  DATA -.-x AGENT_CORE
+  DATA -.-x AGENT_LOOP
+  TOOLS -.-x AGENT_CORE
+  TOOLS -.-x AGENT_LOOP
 ```
