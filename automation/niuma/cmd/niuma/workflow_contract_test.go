@@ -37,7 +37,7 @@ func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
 	assert.Contains(t, content, "default: \".\"")
 	assert.NotContains(t, content, "build_niuma:")
 	assert.Contains(t, content, "label_whitelist:")
-	assert.Contains(t, content, "default: \"bot:orchestrate,bot:queued\"")
+	assert.Contains(t, content, "default: \"bot:orchestrate,bot:queued,bot:pr-reviewable\"")
 	assert.Contains(t, content, "enable_dispatch_wakeup:")
 	assert.Contains(t, content, "event_id:")
 	assert.Contains(t, content, "default: \"\"")
