@@ -1703,7 +1703,7 @@ fn report_impl(
 }
 
 /// 校验 seed 中 parent 层级的合法性：无效引用和循环引用
-fn validate_parent_hierarchy(seed: &SeedSpec) -> Result<(), String> {
+pub(crate) fn validate_parent_hierarchy(seed: &SeedSpec) -> Result<(), String> {
     let known_ids: HashSet<&str> = seed.modules.iter().map(|m| m.module_id.as_str()).collect();
 
     // 检查无效 parent 引用
@@ -2358,5 +2358,39 @@ profiles:
 
         let result = validate_parent_hierarchy(&seed);
         assert!(result.is_ok());
+    }
+
+    /// 深度 parent 链：10 层嵌套正确解析且通过校验
+    #[test]
+    fn parent_deep_chain() {
+        // 构建 L0 -> L1 -> L2 -> ... -> L9 的 10 层链
+        let modules: Vec<SeedModule> = (0..10)
+            .map(|i| SeedModule {
+                module_id: format!("L{}", i),
+                display_name: None,
+                layer: None,
+                domain_kind: None,
+                parent: if i == 0 { None } else { Some(format!("L{}", i - 1)) },
+                precedence: None,
+                path_rules: None,
+            })
+            .collect();
+
+        let seed = SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules,
+            relations_expected: vec![],
+        };
+
+        // 校验通过
+        assert!(validate_parent_hierarchy(&seed).is_ok());
+
+        // 最深节点的祖先链正确（从近到远）
+        let pm = build_parent_map(&seed);
+        let ancestors = get_ancestors("L9", &pm);
+        assert_eq!(ancestors.len(), 9);
+        assert_eq!(ancestors[0], "L8");
+        assert_eq!(ancestors[8], "L0");
     }
 }
