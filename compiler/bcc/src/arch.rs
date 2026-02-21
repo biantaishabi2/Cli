@@ -238,7 +238,7 @@ struct EvalResult {
     unexpected_top: Vec<(String, i64)>,
     forbidden_top: Vec<(String, i64)>,
     inherited_edges: Vec<InheritedEdge>,
-    sibling_cohesion_edges: Vec<String>,
+    sibling_cohesion_edges: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -861,11 +861,22 @@ fn matrix_impl(
 }
 
 /// 沿 parent 链获取祖先列表（从近到远），使用 HashMap<String, String> 形式的 parent_map
+/// 检测循环引用，遇到已访问节点时中断并输出警告
 fn get_ancestors_from_flat(module_id: &str, parent_map: &HashMap<String, String>) -> Vec<String> {
     let mut ancestors = Vec::new();
+    let mut visited = HashSet::new();
+    visited.insert(module_id.to_string());
     let mut current = module_id.to_string();
     for _ in 0..20 {
         if let Some(parent) = parent_map.get(&current) {
+            if visited.contains(parent) {
+                eprintln!(
+                    "warn: circular parent_map detected: {} -> {} (already visited)",
+                    current, parent
+                );
+                break;
+            }
+            visited.insert(parent.clone());
             ancestors.push(parent.clone());
             current = parent.clone();
         } else {
@@ -999,12 +1010,12 @@ fn evaluate_scenario(
             }
 
             // ④ 同父内聚检查
-            if let Some(_parent) =
+            if let Some(parent) =
                 are_siblings(&edge.caller, &edge.callee, &inheritance.parent_map)
             {
                 matched_edges_count += 1;
                 matched_total_edges += weight;
-                sibling_cohesion_edges.push(k);
+                sibling_cohesion_edges.push((k, parent));
                 continue;
             }
 
@@ -1504,8 +1515,11 @@ fn validate_impl(
                     "- sibling_cohesion_edges: {}\n",
                     r.sibling_cohesion_edges.len()
                 ));
-                for edge in &r.sibling_cohesion_edges {
-                    report.push_str(&format!("  - {} (sibling cohesion)\n", edge));
+                for (edge, parent) in &r.sibling_cohesion_edges {
+                    report.push_str(&format!(
+                        "  - {} (sibling cohesion under {})\n",
+                        edge, parent
+                    ));
                 }
             }
             report.push('\n');
@@ -2713,7 +2727,8 @@ profiles:
         assert_eq!(result.matched_edges_count, 1);
         assert_eq!(result.unexpected_edges_count, 0);
         assert_eq!(result.sibling_cohesion_edges.len(), 1);
-        assert_eq!(result.sibling_cohesion_edges[0], "AGENT_HISTORY->AGENT_LOOP");
+        assert_eq!(result.sibling_cohesion_edges[0].0, "AGENT_HISTORY->AGENT_LOOP");
+        assert_eq!(result.sibling_cohesion_edges[0].1, "AGENT");
     }
 
     /// 无 parent 时向后兼容

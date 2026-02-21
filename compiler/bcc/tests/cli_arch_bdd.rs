@@ -3214,8 +3214,8 @@ fn sibling_cohesion_allowed_via_cli() {
 
     let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
     assert!(
-        report.contains("sibling cohesion"),
-        "report should mention sibling cohesion"
+        report.contains("sibling cohesion under AGENT"),
+        "report should mention sibling cohesion with parent name"
     );
     assert!(
         report.contains("unexpected_edges_count: 0"),
@@ -3315,6 +3315,149 @@ fn multi_level_inheritance_via_cli() {
     assert!(
         report.contains("unexpected_edges_count: 0"),
         "C->X should be matched via multi-level inheritance"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: 循环 parent_map 不导致死循环
+#[test]
+fn circular_parent_map_no_hang() {
+    let root = temp_dir("bcc_circular_parent");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    // A->B->A 构成循环
+    write_target_with_parent_map(
+        &target,
+        &[("X", "Y")],
+        &[],
+        &[("A", "B"), ("B", "A")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("A", "Y")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success(), "circular parent_map should not cause hang or crash");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: --inherit-parent-edges=false 禁用继承
+#[test]
+fn inherit_parent_edges_disabled_via_cli() {
+    let root = temp_dir("bcc_inherit_disabled");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    write_target_with_parent_map(
+        &target,
+        &[("AGENT", "SESSION")],
+        &[],
+        &[("AGENT_HISTORY", "AGENT")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("AGENT_HISTORY", "SESSION")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--inherit-parent-edges", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("unexpected_edges_count: 1"),
+        "with inheritance disabled, AGENT_HISTORY->SESSION should be unexpected"
+    );
+    assert!(
+        !report.contains("Inheritance Summary"),
+        "no inheritance summary when disabled"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// BDD: 深层嵌套超过 max_depth 时截断
+#[test]
+fn max_depth_truncation_via_cli() {
+    let root = temp_dir("bcc_max_depth_truncation");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    // 构建深度为 7 的链：L7 -> L6 -> L5 -> L4 -> L3 -> L2 -> L1 -> ROOT
+    // max_depth 默认 5，所以 L7 到 ROOT 的距离为 7，超过 max_depth
+    write_target_with_parent_map(
+        &target,
+        &[("ROOT", "X")],
+        &[],
+        &[
+            ("L1", "ROOT"),
+            ("L2", "L1"),
+            ("L3", "L2"),
+            ("L4", "L3"),
+            ("L5", "L4"),
+            ("L6", "L5"),
+            ("L7", "L6"),
+        ],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("L7", "X")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    // L7 距离 ROOT 为 7 层，超过 max_depth=5，应为 unexpected
+    assert!(
+        report.contains("unexpected_edges_count: 1"),
+        "L7->X should be unexpected because depth 7 exceeds max_depth 5"
     );
 
     let _ = fs::remove_dir_all(&root);
