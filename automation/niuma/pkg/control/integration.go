@@ -117,6 +117,12 @@ func (b *IntegrationBuilder) ExecuteIntegrationMerge(integrationBranch string, b
 		ExecutedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// 确保 PR 分支在本地可用（CI 环境可能只 checkout 了默认分支）
+	if err := b.git("fetch", "origin", bi.Branch+":"+bi.Branch); err != nil {
+		// fetch 失败不阻断：可能是本地已有该分支
+		fmt.Printf("[integration] fetch origin %s 失败（可能已存在）: %v\n", bi.Branch, err)
+	}
+
 	// 确保 integration 分支存在
 	if _, err := b.EnsureBranch(integrationBranch, startPoint); err != nil {
 		return MergeOutcome{}, err
@@ -776,7 +782,13 @@ func (b *IntegrationBuilder) ComputeOldestMergeBase(prBranches []string) (string
 
 	var mergeBases []string
 	for _, branch := range prBranches {
-		mb, err := b.gitOutput("merge-base", b.baseBranch, branch)
+		// 优先用本地分支，fallback 到 origin/ 远程 ref（CI 环境可能没有本地分支）
+		ref := branch
+		mb, err := b.gitOutput("merge-base", b.baseBranch, ref)
+		if err != nil {
+			ref = "origin/" + branch
+			mb, err = b.gitOutput("merge-base", b.baseBranch, ref)
+		}
 		if err != nil {
 			return "", fmt.Errorf("计算分支 %s 的 merge-base 失败: %w", branch, err)
 		}
