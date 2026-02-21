@@ -1,9 +1,9 @@
-# Gong 架构依赖图 (seed-v4)
+# 架构依赖图
 
-> 由 `bcc arch export-mermaid --seed-file seed-v4.yaml` 自动生成
+> 由 `bcc arch export-mermaid` 自动生成
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
-- 边颜色：🔵 蓝色 = 允许依赖, 🔴 红色 = 禁止依赖
+- 边颜色：蓝色 = 允许依赖, 红色 = 禁止依赖
 - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）
 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）
 
@@ -61,12 +61,13 @@ graph TD
   TAPE -.->|"⛔ 存储层不能反向依赖 Session"| SESSION
   linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 stroke:#2196F3,stroke-width:2px
   linkStyle 21,22,23 stroke:#F44336,stroke-width:2px,stroke-dasharray:5
+
 ```
 
 ## Agent 运行时 子模块详情
 
 ```mermaid
-graph TD
+graph LR
   subgraph AGENT["Agent 运行时"]
     AGENT_CORE(["Agent 核心逻辑"])
     AGENT_LOOP(["Agent 循环控制"])
@@ -93,5 +94,5 @@ graph TD
   TOOLS -.->|"⛔ 工具不能反向依赖 Agent"| AGENT
   linkStyle 0,1,2,3,4,5,6,7 stroke:#2196F3,stroke-width:2px
   linkStyle 8,9 stroke:#F44336,stroke-width:2px,stroke-dasharray:5
-```
 
+```

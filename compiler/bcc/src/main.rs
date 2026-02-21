@@ -350,6 +350,9 @@ enum ArchAction {
     ExportMermaid {
         #[arg(long)]
         seed_file: String,
+        /// 输出 .md 文件路径（自动拆分超阈值的 detail 图到 -detail2.md）
+        #[arg(long, short)]
+        output: Option<String>,
     },
 
     /// 架构健康度评分
@@ -715,8 +718,8 @@ fn main() {
                     &format,
                 );
             }
-            ArchAction::ExportMermaid { seed_file } => {
-                arch::export_mermaid(&seed_file);
+            ArchAction::ExportMermaid { seed_file, output } => {
+                arch::export_mermaid(&seed_file, output.as_deref());
             }
             ArchAction::Score { action } => {
                 action.execute();

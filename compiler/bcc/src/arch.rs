@@ -1664,7 +1664,7 @@ fn validate_impl(
     Ok(code)
 }
 
-pub fn export_mermaid(seed_file: &str) {
+pub fn export_mermaid(seed_file: &str, output: Option<&str>) {
     let seed_raw = match fs::read_to_string(seed_file) {
         Ok(s) => s,
         Err(e) => {
@@ -1695,12 +1695,14 @@ pub fn export_mermaid(seed_file: &str) {
         }
     }
 
-    // === 总览图：只画父/顶层模块 ===
-    export_mermaid_overview(&seed, &children_map, &module_map, &rationale_map);
+    // === 总览图 ===
+    let overview = render_mermaid_overview(&seed, &children_map, &module_map, &rationale_map);
 
-    // === 子模块详情图：每个有子模块的父模块单独一张 ===
+    // === 子模块详情图 ===
+    const EDGE_THRESHOLD: usize = 15;
+    let mut details: Vec<(String, String, usize)> = Vec::new(); // (label, mermaid, edge_count)
     for (parent_id, kids) in &children_map {
-        export_mermaid_detail(
+        let (mermaid, edge_count) = render_mermaid_detail(
             parent_id,
             kids,
             &seed,
@@ -1708,16 +1710,127 @@ pub fn export_mermaid(seed_file: &str) {
             &module_map,
             &rationale_map,
         );
+        let parent_mod = module_map.get(parent_id.as_str());
+        let label = parent_mod
+            .and_then(|m| m.display_name.as_deref())
+            .unwrap_or(parent_id)
+            .to_string();
+        details.push((label, mermaid, edge_count));
+    }
+
+    match output {
+        None => {
+            // 无 --output：输出到 stdout（保持兼容）
+            println!("{}", overview);
+            for (label, mermaid, _) in &details {
+                println!();
+                println!("%% === {} 子模块详情 ===", label);
+                println!("{}", mermaid);
+            }
+        }
+        Some(out_path) => {
+            // 有 --output：自动生成 .md 文件，超阈值的拆到 -detail2.md
+            let main_path = std::path::PathBuf::from(out_path);
+            let stem = main_path.file_stem().unwrap_or_default().to_string_lossy();
+            let parent_dir = main_path.parent().unwrap_or(std::path::Path::new("."));
+            let overflow_name = format!("{}-detail2.md", stem);
+            let overflow_path = parent_dir.join(&overflow_name);
+
+            let mut main_parts: Vec<String> = Vec::new();
+            let mut overflow_parts: Vec<String> = Vec::new();
+
+            // 文件头
+            main_parts.push(format!(
+                "# 架构依赖图\n\n\
+                 > 由 `bcc arch export-mermaid` 自动生成\n\n\
+                 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic\n\
+                 - 边颜色：蓝色 = 允许依赖, 红色 = 禁止依赖\n\
+                 - 边标注：中文说明依赖用途（来自 seed 的 rationale 字段）\n\
+                 - 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）"
+            ));
+
+            // 总览图
+            main_parts.push(format!(
+                "## 总览图（父/顶层模块）\n\n```mermaid\n{}\n```",
+                overview
+            ));
+
+            let mut overflow_labels: Vec<String> = Vec::new();
+
+            for (label, mermaid, edge_count) in &details {
+                if *edge_count <= EDGE_THRESHOLD {
+                    main_parts.push(format!(
+                        "## {} 子模块详情\n\n```mermaid\n{}\n```",
+                        label, mermaid
+                    ));
+                } else {
+                    overflow_labels.push(label.clone());
+                    overflow_parts.push(format!(
+                        "## {} 子模块详情\n\n```mermaid\n{}\n```",
+                        label, mermaid
+                    ));
+                }
+            }
+
+            // 如果有 overflow，主文件加链接，生成 overflow 文件
+            if !overflow_labels.is_empty() {
+                let titles = overflow_labels.join(" / ");
+                main_parts.push(format!(
+                    "## {} 子模块详情\n\n> 这些图边数较多，单独存放：[{}](./{})",
+                    titles, overflow_name, overflow_name
+                ));
+
+                let mut overflow_content = format!(
+                    "# 架构依赖图 - {} 详情\n\n\
+                     > 从 [{}](./{}) 拆分，这些图边数较多（>{} 条边），单独文件渲染\n",
+                    titles,
+                    main_path.file_name().unwrap_or_default().to_string_lossy(),
+                    main_path.file_name().unwrap_or_default().to_string_lossy(),
+                    EDGE_THRESHOLD
+                );
+                for part in &overflow_parts {
+                    overflow_content.push('\n');
+                    overflow_content.push_str(part);
+                    overflow_content.push('\n');
+                }
+
+                if let Err(e) = fs::write(&overflow_path, &overflow_content) {
+                    eprintln!("写入 overflow 文件失败: {}", e);
+                } else {
+                    eprintln!(
+                        "拆分 {} 个详情图到 {}（边数 > {}）",
+                        overflow_labels.len(),
+                        overflow_path.display(),
+                        EDGE_THRESHOLD
+                    );
+                }
+            }
+
+            let main_content = main_parts.join("\n\n");
+            if let Err(e) = fs::write(&main_path, &main_content) {
+                eprintln!("写入主文件失败: {}", e);
+                std::process::exit(1);
+            }
+            eprintln!(
+                "已生成 {}（{} 个详情图在主文件，{} 个拆分到 overflow）",
+                main_path.display(),
+                details.len() - overflow_labels.len(),
+                overflow_labels.len()
+            );
+        }
     }
 }
 
 /// 总览图：父/顶层模块之间的依赖，子模块嵌套在父模块 subgraph 内
-fn export_mermaid_overview(
+/// 渲染总览图，返回 Mermaid 文本
+fn render_mermaid_overview(
     seed: &SeedSpec,
     children_map: &HashMap<String, Vec<String>>,
     module_map: &HashMap<&str, &SeedModule>,
-    rationale_map: &HashMap<(String, String), String>,
-) {
+    _rationale_map: &HashMap<(String, String), String>,
+) -> String {
+    let mut out = String::new();
+
     // 按 layer 分组（只收集顶层模块）
     let mut layer_groups: BTreeMap<String, Vec<&SeedModule>> = BTreeMap::new();
     let mut no_layer: Vec<&SeedModule> = Vec::new();
@@ -1732,15 +1845,14 @@ fn export_mermaid_overview(
         }
     }
 
-    println!("graph TD");
+    out.push_str("graph TD\n");
 
-    // 输出按 layer 分组的 subgraph
     for (layer, modules) in &layer_groups {
-        println!("  subgraph {}[\"{}\"]", layer, layer);
+        out.push_str(&format!("  subgraph {}[\"{}\"]\n", layer, layer));
         for m in modules {
             let label = m.display_name.as_deref().unwrap_or(&m.module_id);
             if let Some(kids) = children_map.get(&m.module_id) {
-                println!("    subgraph {}[\"{}\"]", m.module_id, label);
+                out.push_str(&format!("    subgraph {}[\"{}\"]\n", m.module_id, label));
                 for kid_id in kids {
                     if let Some(kid) = module_map.get(kid_id.as_str()) {
                         let kid_label = kid.display_name.as_deref().unwrap_or(&kid.module_id);
@@ -1749,35 +1861,33 @@ fn export_mermaid_overview(
                             kid_label,
                             kid.domain_kind.as_deref(),
                         );
-                        println!("      {}", shape);
+                        out.push_str(&format!("      {}\n", shape));
                     }
                 }
-                println!("    end");
+                out.push_str("    end\n");
             } else {
                 let shape = domain_kind_shape(&m.module_id, label, m.domain_kind.as_deref());
-                println!("    {}", shape);
+                out.push_str(&format!("    {}\n", shape));
             }
         }
-        println!("  end");
+        out.push_str("  end\n");
     }
 
     for m in &no_layer {
         let label = m.display_name.as_deref().unwrap_or(&m.module_id);
         let shape = domain_kind_shape(&m.module_id, label, m.domain_kind.as_deref());
-        println!("  {}", shape);
+        out.push_str(&format!("  {}\n", shape));
     }
 
-    // 父模块 subgraph 样式
     for parent_id in children_map.keys() {
-        println!(
-            "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none",
+        out.push_str(&format!(
+            "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none\n",
             parent_id
-        );
+        ));
     }
 
-    println!();
+    out.push('\n');
 
-    // 总览图只画父/顶层模块之间的边（跳过子模块级别边）
     let child_ids: HashSet<&str> = children_map
         .values()
         .flat_map(|kids| kids.iter().map(|s| s.as_str()))
@@ -1787,7 +1897,6 @@ fn export_mermaid_overview(
     let mut allow_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
     for rel in &seed.relations_expected {
-        // 跳过子模块级别的边
         if child_ids.contains(rel.caller.as_str()) || child_ids.contains(rel.callee.as_str()) {
             continue;
         }
@@ -1797,58 +1906,55 @@ fn export_mermaid_overview(
         }
         if rel.allowed {
             if let Some(ref r) = rel.rationale {
-                println!("  {} -->|\"{}\"| {}", rel.caller, r, rel.callee);
+                out.push_str(&format!("  {} -->|\"{}\"| {}\n", rel.caller, r, rel.callee));
             } else {
-                println!("  {} --> {}", rel.caller, rel.callee);
+                out.push_str(&format!("  {} --> {}\n", rel.caller, rel.callee));
             }
             allow_indices.push(edge_idx);
         } else {
             if let Some(ref r) = rel.rationale {
-                println!("  {} -.->|\"⛔ {}\"| {}", rel.caller, r, rel.callee);
+                out.push_str(&format!("  {} -.->|\"⛔ {}\"| {}\n", rel.caller, r, rel.callee));
             } else {
-                println!("  {} -.-x {}", rel.caller, rel.callee);
+                out.push_str(&format!("  {} -.-x {}\n", rel.caller, rel.callee));
             }
             forbid_indices.push(edge_idx);
         }
         edge_idx += 1;
     }
 
-    // 边着色：允许边蓝色，禁止边红色
     if !allow_indices.is_empty() {
         let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#2196F3,stroke-width:2px", indices.join(","));
+        out.push_str(&format!("  linkStyle {} stroke:#2196F3,stroke-width:2px\n", indices.join(",")));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5", indices.join(","));
+        out.push_str(&format!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n", indices.join(",")));
     }
+
+    out
 }
 
 /// 子模块详情图：展示父模块内部子模块 + 对外依赖
-/// 策略：
-/// 1. 子模块级别边（seed 中 caller/callee 是本 parent 的子模块）→ 精确画到子模块
-/// 2. 父模块级别边（seed 中 caller/callee 是本 parent 本身）→ 画到 parent subgraph
-/// 3. 外部模块统一折叠到父/顶层模块（不展开其他 parent 的子模块）
-fn export_mermaid_detail(
+/// 返回 (mermaid_text, edge_count)
+fn render_mermaid_detail(
     parent_id: &str,
     kids: &[String],
     seed: &SeedSpec,
     children_map: &HashMap<String, Vec<String>>,
     module_map: &HashMap<&str, &SeedModule>,
     _rationale_map: &HashMap<(String, String), String>,
-) {
+) -> (String, usize) {
     let parent_mod = match module_map.get(parent_id) {
         Some(m) => m,
-        None => return,
+        None => return (String::new(), 0),
     };
-    let parent_label = parent_mod
+    let _parent_label = parent_mod
         .display_name
         .as_deref()
         .unwrap_or(parent_id);
 
-    println!();
-    println!("%% === {} 子模块详情 ===", parent_label);
-    println!("graph LR");
+    let mut out = String::new();
+    out.push_str("graph LR\n");
 
     let kid_set: HashSet<&str> = kids.iter().map(|s| s.as_str()).collect();
 
@@ -2006,19 +2112,19 @@ fn export_mermaid_detail(
     }
 
     // 输出子模块节点（subgraph 包裹）
-    println!("  subgraph {}[\"{}\"]", parent_id, parent_label);
+    out.push_str(&format!("  subgraph {}[\"{}\"]\n", parent_id, _parent_label));
     for kid_id in kids {
         if let Some(kid) = module_map.get(kid_id.as_str()) {
             let kid_label = kid.display_name.as_deref().unwrap_or(&kid.module_id);
             let shape = domain_kind_shape(&kid.module_id, kid_label, kid.domain_kind.as_deref());
-            println!("    {}", shape);
+            out.push_str(&format!("    {}\n", shape));
         }
     }
-    println!("  end");
-    println!(
-        "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none",
+    out.push_str("  end\n");
+    out.push_str(&format!(
+        "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none\n",
         parent_id
-    );
+    ));
 
     // 收集外部模块 ID
     let mut external_ids: BTreeSet<String> = BTreeSet::new();
@@ -2036,14 +2142,15 @@ fn export_mermaid_detail(
         if let Some(ext) = module_map.get(ext_id.as_str()) {
             let ext_label = ext.display_name.as_deref().unwrap_or(&ext.module_id);
             let shape = domain_kind_shape(ext_id, ext_label, ext.domain_kind.as_deref());
-            println!("  {}", shape);
+            out.push_str(&format!("  {}\n", shape));
         } else {
-            println!("  {}[\"{}\"]", ext_id, ext_id);
+            out.push_str(&format!("  {}[\"{}\"]\n", ext_id, ext_id));
         }
     }
 
-    println!();
+    out.push('\n');
 
+    let edge_count = edges.len();
     let mut edge_idx: usize = 0;
     let mut allow_indices: Vec<usize> = Vec::new();
     let mut forbid_indices: Vec<usize> = Vec::new();
@@ -2051,31 +2158,32 @@ fn export_mermaid_detail(
     for e in &edges {
         if e.allowed {
             if !e.rationale.is_empty() {
-                println!("  {} -->|\"{}\"| {}", e.from, e.rationale, e.to);
+                out.push_str(&format!("  {} -->|\"{}\"| {}\n", e.from, e.rationale, e.to));
             } else {
-                println!("  {} --> {}", e.from, e.to);
+                out.push_str(&format!("  {} --> {}\n", e.from, e.to));
             }
             allow_indices.push(edge_idx);
         } else {
             if !e.rationale.is_empty() {
-                println!("  {} -.->|\"⛔ {}\"| {}", e.from, e.rationale, e.to);
+                out.push_str(&format!("  {} -.->|\"⛔ {}\"| {}\n", e.from, e.rationale, e.to));
             } else {
-                println!("  {} -.-x {}", e.from, e.to);
+                out.push_str(&format!("  {} -.-x {}\n", e.from, e.to));
             }
             forbid_indices.push(edge_idx);
         }
         edge_idx += 1;
     }
 
-    // 边着色：允许边蓝色，禁止边红色
     if !allow_indices.is_empty() {
         let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#2196F3,stroke-width:2px", indices.join(","));
+        out.push_str(&format!("  linkStyle {} stroke:#2196F3,stroke-width:2px\n", indices.join(",")));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
-        println!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5", indices.join(","));
+        out.push_str(&format!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n", indices.join(",")));
     }
+
+    (out, edge_count)
 }
 
 /// 查找边的 rationale：继承边回溯到父模块的原始 rationale
