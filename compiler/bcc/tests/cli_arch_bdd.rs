@@ -3697,3 +3697,168 @@ layer_rules:
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// CLI 集成测试：parent 层级 + layer violation + --fail-on-layer-violation
+/// 验证 bcc arch matrix → bcc arch validate 全流程退出码和输出文件
+#[test]
+fn arch_parent_layer_cli_integration() {
+    let root = temp_dir("bcc_cli_parent_layer");
+    let seed = root.join("seed.yaml");
+    let ast = root.join("ast.json");
+    let matrix_out = root.join("matrix_out");
+    let validate_out = root.join("validate_out");
+
+    // 带 parent 和 layer_rules 的 seed YAML
+    write(
+        &seed,
+        r#"version: v3
+source_of_truth: test_cli_integration
+modules:
+  - module_id: PARENT_MOD
+    display_name: Parent
+    layer: application
+    precedence: 10
+    path_rules:
+      include: ["src/parent/**"]
+  - module_id: CHILD_MOD
+    display_name: Child
+    layer: application
+    parent: PARENT_MOD
+    precedence: 20
+    path_rules:
+      include: ["src/child/**"]
+  - module_id: INFRA_MOD
+    display_name: Infra
+    layer: infrastructure
+    parent: CHILD_MOD
+    precedence: 30
+    path_rules:
+      include: ["src/infra/**"]
+relations_expected:
+  - caller: INFRA_MOD
+    callee: CHILD_MOD
+    allowed: true
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+    );
+
+    // AST: infrastructure 模块调用 application 模块
+    write(
+        &ast,
+        r#"{
+  "source_count": 3,
+  "records": [
+    {
+      "sourcePath": "src/parent/main.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/child/service.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/infra/repo.ts",
+      "localDependencies": ["src/child/service.ts"],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+    );
+
+    // Step 1: bcc arch matrix
+    let matrix_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "matrix",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "--out-dir",
+            &matrix_out.to_string_lossy(),
+            "--version",
+            "v3",
+            "--emit",
+            "all",
+        ])
+        .status()
+        .expect("run matrix");
+    assert!(matrix_status.success(), "matrix should succeed");
+
+    // 构造 actual relations
+    let actual = root.join("actual.json");
+    write(
+        &actual,
+        r#"[
+  {"caller":"INFRA_MOD","callee":"CHILD_MOD","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+    );
+
+    // Step 2: bcc arch validate --fail-on-layer-violation true
+    let validate_status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "validate",
+            "--target",
+            &matrix_out.join("v3.target-matrix.yaml").to_string_lossy(),
+            "--transition",
+            &matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
+            "--gates",
+            &matrix_out.join("v3.gates.yaml").to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &validate_out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--fail-on-layer-violation",
+            "true",
+        ])
+        .status()
+        .expect("run validate with layer violation");
+    assert_eq!(
+        validate_status.code(),
+        Some(2),
+        "validate should exit with code 2 due to layer violation"
+    );
+
+    // 验证报告文件存在且包含 Layer Violations
+    let report =
+        fs::read_to_string(validate_out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("Layer Violations"),
+        "report should contain Layer Violations section"
+    );
+    assert!(
+        report.contains("INFRA_MOD"),
+        "report should mention INFRA_MOD in violation"
+    );
+
+    // 验证 summary.json 中 layer_violation_count > 0
+    let summary_raw =
+        fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
+    let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
+    let lvc = summary["layer_violation_count"].as_i64().unwrap_or(0);
+    assert!(
+        lvc > 0,
+        "summary.json layer_violation_count should be > 0, got {}",
+        lvc
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}

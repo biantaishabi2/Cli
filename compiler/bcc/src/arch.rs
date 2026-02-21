@@ -1322,11 +1322,28 @@ fn validate_impl(
         let seed: SeedSpec = serde_yaml::from_str(&seed_raw)
             .map_err(|e| format!("parse seed yaml failed: {}", e))?;
 
-        // 构建 module_id → layer 映射
-        let layer_map: HashMap<String, String> = seed
+        // 构建 module_id → layer 映射（支持 parent chain 继承：无显式 layer 时沿祖先链查找）
+        let parent_map = build_parent_map(&seed);
+        let explicit_layer_map: HashMap<String, String> = seed
             .modules
             .iter()
             .filter_map(|m| m.layer.as_ref().map(|l| (m.module_id.clone(), l.clone())))
+            .collect();
+        let layer_map: HashMap<String, String> = seed
+            .modules
+            .iter()
+            .filter_map(|m| {
+                if let Some(l) = m.layer.as_ref() {
+                    Some((m.module_id.clone(), l.clone()))
+                } else {
+                    // 沿 parent chain 继承最近祖先的 layer
+                    let ancestors = get_ancestors(&m.module_id, &parent_map);
+                    ancestors
+                        .iter()
+                        .find_map(|a| explicit_layer_map.get(a))
+                        .map(|l| (m.module_id.clone(), l.clone()))
+                }
+            })
             .collect();
 
         // 只有至少一个模块定义了 layer 才触发检查
@@ -2539,5 +2556,434 @@ profiles:
         assert_eq!(ancestors.len(), 9);
         assert_eq!(ancestors[0], "L8");
         assert_eq!(ancestors[8], "L0");
+    }
+
+    /// 全流程端到端集成测试：parent 层级校验 + layer violation
+    ///
+    /// 验证 parent hierarchy 校验已集成到 matrix pipeline：
+    /// 1. 合法 parent 层级 → matrix_impl 成功生成 contract
+    /// 2. 非法 parent 引用 → matrix_impl 返回错误（校验拦截）
+    /// 3. validate_impl 端到端检测 infrastructure→application layer violation
+    ///
+    /// 注：当前 parent 的作用是"层级校验 + parent_map 元数据"，
+    /// "子模块继承父模块 allow_edges"属于后续迭代（#429 scope 外）。
+    #[test]
+    fn test_arch_parent_layer_integration() {
+        let root = temp_dir("bcc_parent_layer_integration");
+        let seed_path = root.join("seed.yaml");
+        let ast_path = root.join("ast.json");
+        let matrix_out = root.join("matrix_out");
+        let validate_out = root.join("validate_out");
+
+        // 构造 3 层模块层级：GRANDCHILD → CHILD → PARENT
+        // PARENT 和 CHILD 在 application 层，GRANDCHILD 在 infrastructure 层
+        // forbidden_transitions: infrastructure → application
+        write(
+            &seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: PARENT
+    display_name: Parent Module
+    layer: application
+    precedence: 10
+    path_rules:
+      include: ["src/parent/**"]
+  - module_id: CHILD
+    display_name: Child Module
+    layer: application
+    parent: PARENT
+    precedence: 20
+    path_rules:
+      include: ["src/child/**"]
+  - module_id: GRANDCHILD
+    display_name: Grandchild Module
+    layer: infrastructure
+    parent: CHILD
+    precedence: 30
+    path_rules:
+      include: ["src/grandchild/**"]
+relations_expected:
+  - caller: GRANDCHILD
+    callee: CHILD
+    allowed: true
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+        );
+
+        // AST: infrastructure 模块 (GRANDCHILD) 调用 application 模块 (CHILD)
+        write(
+            &ast_path,
+            r#"{
+  "source_count": 3,
+  "records": [
+    {
+      "sourcePath": "src/parent/main.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/child/service.ts",
+      "localDependencies": [],
+      "localCallTargets": []
+    },
+    {
+      "sourcePath": "src/grandchild/repo.ts",
+      "localDependencies": ["src/child/service.ts"],
+      "localCallTargets": []
+    }
+  ]
+}"#,
+        );
+
+        // Step 1: matrix_impl 应成功生成 contract
+        matrix_impl(
+            &seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        )
+        .expect("matrix_impl should succeed with parent hierarchy");
+
+        // Step 1a: 验证 matrix 输出的 target contract 包含 seed 中声明的 allow edge
+        let target_raw =
+            fs::read_to_string(matrix_out.join("v3.target-matrix.yaml")).expect("read target");
+        let target: TargetContract =
+            serde_yaml::from_str(&target_raw).expect("parse target contract");
+        let has_gc_child_edge = target.allow_edges.iter().any(|e| {
+            e.caller == "GRANDCHILD" && e.callee == "CHILD"
+        });
+        assert!(
+            has_gc_child_edge,
+            "target contract should contain allow edge GRANDCHILD→CHILD"
+        );
+
+        // Step 1b: 验证 parent hierarchy 校验已集成到 matrix pipeline
+        // 构造含无效 parent 引用的 seed → matrix_impl 必须拒绝
+        // 这证明 validate_parent_hierarchy 是 matrix pipeline 的一环，
+        // 若被移除此断言立即失败
+        let bad_seed_path = root.join("bad_seed.yaml");
+        write(
+            &bad_seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: MOD_A
+    display_name: Module A
+    precedence: 10
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    display_name: Module B
+    parent: NONEXISTENT_PARENT
+    precedence: 20
+    path_rules:
+      include: ["src/b/**"]
+relations_expected: []
+"#,
+        );
+        let bad_matrix_out = root.join("bad_matrix_out");
+        let bad_result = matrix_impl(
+            &bad_seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &bad_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        );
+        assert!(
+            bad_result.is_err(),
+            "matrix_impl should reject seed with invalid parent reference"
+        );
+        let err_msg = bad_result.unwrap_err();
+        assert!(
+            err_msg.contains("NONEXISTENT_PARENT"),
+            "error should mention the invalid parent 'NONEXISTENT_PARENT', got: {}",
+            err_msg
+        );
+
+        // Step 1c: 验证循环 parent 引用也被 matrix pipeline 拒绝
+        let cycle_seed_path = root.join("cycle_seed.yaml");
+        write(
+            &cycle_seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: MOD_X
+    display_name: Module X
+    parent: MOD_Y
+    precedence: 10
+    path_rules:
+      include: ["src/x/**"]
+  - module_id: MOD_Y
+    display_name: Module Y
+    parent: MOD_X
+    precedence: 20
+    path_rules:
+      include: ["src/y/**"]
+relations_expected: []
+"#,
+        );
+        let cycle_matrix_out = root.join("cycle_matrix_out");
+        let cycle_result = matrix_impl(
+            &cycle_seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &cycle_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        );
+        assert!(
+            cycle_result.is_err(),
+            "matrix_impl should reject seed with circular parent references"
+        );
+
+        // 构造 actual relations JSON（infrastructure→application 边）
+        let actual_path = root.join("actual.json");
+        write(
+            &actual_path,
+            r#"[
+  {"caller":"GRANDCHILD","callee":"CHILD","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+
+        // Step 2: validate_impl 应检测 layer violation 并返回 exit code 2
+        let code = validate_impl(
+            &matrix_out.join("v3.target-matrix.yaml").to_string_lossy(),
+            &matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
+            &matrix_out.join("v3.gates.yaml").to_string_lossy(),
+            &actual_path.to_string_lossy(),
+            &validate_out.to_string_lossy(),
+            "both",
+            false,
+            false,
+            None,
+            None,
+            Some(&seed_path.to_string_lossy()),
+            true, // fail_on_layer_violation
+        )
+        .expect("validate_impl should succeed");
+        assert_eq!(code, 2, "exit code should be 2 due to layer violation");
+
+        // Step 3: 验证 v3-validation-report.md 包含 Layer Violations 章节
+        let report =
+            fs::read_to_string(validate_out.join("v3-validation-report.md")).expect("read report");
+        assert!(
+            report.contains("Layer Violations"),
+            "report should contain Layer Violations section"
+        );
+        assert!(
+            report.contains("GRANDCHILD"),
+            "report should mention GRANDCHILD in violation"
+        );
+
+        // Step 4: 验证 summary.json 中 layer_violation_count > 0
+        let summary_raw =
+            fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
+        let summary: serde_json::Value =
+            serde_json::from_str(&summary_raw).expect("parse summary");
+        let lvc = summary["layer_violation_count"].as_i64().unwrap_or(0);
+        assert!(
+            lvc > 0,
+            "summary.json layer_violation_count should be > 0, got {}",
+            lvc
+        );
+
+        // === Step 5: parent 继承语义端到端验证 ===
+        // 构造场景：INHERITOR 无显式 layer，其 parent INFRA_BASE 有 layer: infrastructure
+        // INHERITOR 调用 APP_MOD (layer: application)，仅当 parent 继承生效时才触发 violation
+        // 若 parent 继承逻辑失效，INHERITOR 无 layer → 跳过检查 → 无 violation → 断言失败
+        let inherit_seed_path = root.join("inherit_seed.yaml");
+        write(
+            &inherit_seed_path,
+            r#"version: v3
+source_of_truth: test_inherit
+modules:
+  - module_id: APP_MOD
+    display_name: Application Module
+    layer: application
+    precedence: 10
+    path_rules:
+      include: ["src/app/**"]
+  - module_id: INFRA_BASE
+    display_name: Infrastructure Base
+    layer: infrastructure
+    precedence: 20
+    path_rules:
+      include: ["src/infra_base/**"]
+  - module_id: INHERITOR
+    display_name: Inheritor (no explicit layer)
+    parent: INFRA_BASE
+    precedence: 30
+    path_rules:
+      include: ["src/inheritor/**"]
+relations_expected:
+  - caller: INHERITOR
+    callee: APP_MOD
+    allowed: true
+layer_rules:
+  layers:
+    - name: application
+      precedence: 1
+    - name: infrastructure
+      precedence: 2
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+        );
+        let inherit_ast_path = root.join("inherit_ast.json");
+        write(
+            &inherit_ast_path,
+            r#"{
+  "source_count": 3,
+  "records": [
+    {"sourcePath": "src/app/handler.ts", "localDependencies": [], "localCallTargets": []},
+    {"sourcePath": "src/infra_base/base.ts", "localDependencies": [], "localCallTargets": []},
+    {"sourcePath": "src/inheritor/impl.ts", "localDependencies": ["src/app/handler.ts"], "localCallTargets": []}
+  ]
+}"#,
+        );
+        let inherit_matrix_out = root.join("inherit_matrix_out");
+        matrix_impl(
+            &inherit_seed_path.to_string_lossy(),
+            &inherit_ast_path.to_string_lossy(),
+            &inherit_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        )
+        .expect("matrix_impl should succeed with inherited layer");
+
+        let inherit_actual_path = root.join("inherit_actual.json");
+        write(
+            &inherit_actual_path,
+            r#"[
+  {"caller":"INHERITOR","callee":"APP_MOD","import_edges":1,"call_edges":0,"total_edges":1}
+]"#,
+        );
+        let inherit_validate_out = root.join("inherit_validate_out");
+        let inherit_code = validate_impl(
+            &inherit_matrix_out
+                .join("v3.target-matrix.yaml")
+                .to_string_lossy(),
+            &inherit_matrix_out
+                .join("v3.transition-matrix.yaml")
+                .to_string_lossy(),
+            &inherit_matrix_out
+                .join("v3.gates.yaml")
+                .to_string_lossy(),
+            &inherit_actual_path.to_string_lossy(),
+            &inherit_validate_out.to_string_lossy(),
+            "both",
+            false,
+            false,
+            None,
+            None,
+            Some(&inherit_seed_path.to_string_lossy()),
+            true,
+        )
+        .expect("validate_impl should succeed");
+        // INHERITOR 无显式 layer，通过 parent INFRA_BASE 继承 infrastructure
+        // infrastructure → application 是 forbidden，因此应检测到 violation（exit code 2）
+        assert_eq!(
+            inherit_code, 2,
+            "exit code should be 2: INHERITOR inherits infrastructure layer from parent INFRA_BASE, \
+             calling APP_MOD (application) violates forbidden_transitions"
+        );
+        let inherit_report = fs::read_to_string(
+            inherit_validate_out.join("v3-validation-report.md"),
+        )
+        .expect("read inherit report");
+        assert!(
+            inherit_report.contains("INHERITOR"),
+            "report should mention INHERITOR in layer violation (inherited layer from parent)"
+        );
+        let inherit_summary_raw =
+            fs::read_to_string(inherit_validate_out.join("summary.json")).expect("read summary");
+        let inherit_summary: serde_json::Value =
+            serde_json::from_str(&inherit_summary_raw).expect("parse summary");
+        assert!(
+            inherit_summary["layer_violation_count"].as_i64().unwrap_or(0) > 0,
+            "layer_violation_count should be > 0 for inherited layer violation"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 验证真实 gong seed-v3.yaml 的结构：parent 层级和 layer_rules 格式
+    #[test]
+    fn test_gong_seed_v3_structure() {
+        let seed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/cross-project-arch-comparison/projects/gong/seed-v3.yaml");
+        let content = fs::read_to_string(&seed_path)
+            .expect("should read gong seed-v3.yaml");
+        let seed: SeedSpec = serde_yaml::from_str(&content)
+            .expect("gong seed-v3.yaml should parse as valid SeedSpec");
+
+        // 验证 AGENT_CORE.parent = AGENT
+        let agent_core = seed.modules.iter().find(|m| m.module_id == "AGENT_CORE")
+            .expect("AGENT_CORE module should exist");
+        assert_eq!(
+            agent_core.parent.as_deref(),
+            Some("AGENT"),
+            "AGENT_CORE.parent should be AGENT"
+        );
+
+        // 验证 AGENT_LOOP.parent = AGENT
+        let agent_loop = seed.modules.iter().find(|m| m.module_id == "AGENT_LOOP")
+            .expect("AGENT_LOOP module should exist");
+        assert_eq!(
+            agent_loop.parent.as_deref(),
+            Some("AGENT"),
+            "AGENT_LOOP.parent should be AGENT"
+        );
+
+        // 验证 layer_rules 存在且格式正确
+        let layer_rules = seed.layer_rules.as_ref()
+            .expect("layer_rules should be present");
+        assert!(
+            !layer_rules.layers.is_empty(),
+            "layer_rules.layers should not be empty"
+        );
+        assert!(
+            !layer_rules.forbidden_transitions.is_empty(),
+            "layer_rules.forbidden_transitions should not be empty"
+        );
+
+        // 验证 parent 层级无循环引用
+        validate_parent_hierarchy(&seed)
+            .expect("gong seed-v3.yaml parent hierarchy should be valid");
+
+        // 验证 path_rules 不使用 ** 通配符（避免错误匹配 BDD 文件）
+        for m in &[agent_core, agent_loop] {
+            if let Some(ref pr) = m.path_rules {
+                for rule in &pr.include {
+                    assert!(
+                        !rule.starts_with("**/"),
+                        "module {} path_rule '{}' should not use ** prefix to avoid matching BDD files",
+                        m.module_id, rule
+                    );
+                }
+            }
+        }
     }
 }
