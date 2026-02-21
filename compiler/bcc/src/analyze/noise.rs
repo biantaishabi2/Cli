@@ -1,5 +1,6 @@
 //! 噪音代码检测器：CommentDensityDetector、LeftoverBoilerplateDetector、DeadCodeDetector
 
+use super::lang;
 use super::{SmellDetector, SmellRecord};
 use crate::extract::FileRecord;
 use tree_sitter::{Node, Tree};
@@ -217,9 +218,9 @@ impl SmellDetector for LeftoverBoilerplateDetector {
             }
         }
 
-        // 2. 空函数体检测（Python: pass / raise NotImplementedError）
-        if record.language == "python" {
-            detect_empty_python_functions(tree.root_node(), source, record, &mut smells);
+        // 2. 空函数体检测（多语言）
+        if lang::lang_config(&record.language).is_some() {
+            detect_empty_functions(tree.root_node(), source, record, &mut smells);
         }
 
         // 3. 未使用的 import
@@ -229,54 +230,64 @@ impl SmellDetector for LeftoverBoilerplateDetector {
     }
 }
 
-/// 检测 Python 空函数体（pass 或 raise NotImplementedError）
-fn detect_empty_python_functions(
+/// 检测空函数体（多语言：Python pass/..., Rust {}, TS {}, Elixir nil/空 do..end）
+fn detect_empty_functions(
     node: Node,
     source: &str,
     record: &FileRecord,
     smells: &mut Vec<SmellRecord>,
 ) {
-    if node.kind() == "function_definition" {
-        if let Some(body) = node.child_by_field_name("body") {
-            // 仅当函数体只有一条语句时才判定为空函数体
-            if body.named_child_count() == 1 {
-                if let Some(stmt) = body.named_child(0) {
+    if let Some(func) = lang::match_function(node, &record.language, source) {
+        let config = lang::lang_config(&record.language).unwrap();
+        let body = func.body;
+        let named_count = body.named_child_count();
+
+        let is_empty = if named_count == 0 {
+            // Rust: fn foo() {} — body 是 block，0 个 named child
+            // TS: function foo() {} — body 是 statement_block，0 个 named child
+            // Elixir: def foo, do: nil — body 可能 0 个 named child
+            config.empty_body_max_children == 0
+        } else if named_count <= config.empty_body_max_children {
+            // Python: pass / ... / raise NotImplementedError
+            (0..named_count).all(|i| {
+                body.named_child(i).map_or(false, |stmt| {
                     let stmt_text = source[stmt.byte_range()].trim();
-                    let is_empty_body = match stmt.kind() {
-                        "pass_statement" => true,
-                        "expression_statement" => stmt_text == "...",
-                        "raise_statement" => stmt_text.starts_with("raise NotImplementedError"),
-                        _ => false,
-                    };
-                    if is_empty_body {
-                        let func_name = node
-                            .child_by_field_name("name")
-                            .map(|n| &source[n.byte_range()])
-                            .unwrap_or("<anonymous>");
-                        smells.push(SmellRecord {
-                            category: "noise".to_string(),
-                            rule: "empty_function_body".to_string(),
-                            severity: "warning".to_string(),
-                            message: format!("函数 '{}' 体为空（{}）", func_name, stmt_text),
-                            file: record.file_path.clone(),
-                            line: node.start_position().row + 1,
-                            source: "bcc".to_string(),
-                            confidence: 0.9,
-                            fix_hint: String::new(),
-                            code_snippet: String::new(),
-                            offending_code: String::new(),
-                            suggested_fix: String::new(),
-                            evidence: vec![],
-                        });
-                    }
-                }
-            }
+                    config.empty_body_allowed_kinds.contains(&stmt.kind())
+                        || stmt_text == "..."
+                        || stmt_text.starts_with("raise NotImplementedError")
+                        || stmt_text == "pass"
+                        || stmt_text == "todo!()"
+                        || stmt_text == "unimplemented!()"
+                })
+            })
+        } else {
+            false
+        };
+
+        if is_empty {
+            let body_text = source[body.byte_range()].trim();
+            let display = if body_text.len() > 30 { &body_text[..30] } else { body_text };
+            smells.push(SmellRecord {
+                category: "noise".to_string(),
+                rule: "empty_function_body".to_string(),
+                severity: "warning".to_string(),
+                message: format!("函数 '{}' 体为空（{}）", func.name, display),
+                file: record.file_path.clone(),
+                line: node.start_position().row + 1,
+                source: "bcc".to_string(),
+                confidence: 0.9,
+                fix_hint: String::new(),
+                code_snippet: String::new(),
+                offending_code: String::new(),
+                suggested_fix: String::new(),
+                evidence: vec![],
+            });
         }
     }
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            detect_empty_python_functions(child, source, record, smells);
+            detect_empty_functions(child, source, record, smells);
         }
     }
 }
@@ -367,12 +378,12 @@ fn detect_commented_out_code(
     language: &str,
     smells: &mut Vec<SmellRecord>,
 ) {
-    // 只对 Python 做精确检测（需要 tree-sitter-python parse 验证）
-    if language != "python" {
-        return;
-    }
+    let config = match lang::lang_config(language) {
+        Some(c) => c,
+        None => return,
+    };
 
-    let comment_prefix = "#";
+    let comment_prefix = config.comment_prefix;
     let mut i = 0;
     while i < lines.len() {
         // 找连续注释块
@@ -391,8 +402,8 @@ fn detect_commented_out_code(
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            // 尝试用 tree-sitter-python parse
-            if try_parse_as_code(&code_text, "python") {
+            // 尝试用对应语言的 tree-sitter parse 验证
+            if try_parse_as_code(&code_text, language) {
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "commented_out_code".to_string(),
@@ -421,12 +432,13 @@ fn detect_commented_out_code(
 
 /// 尝试将文本作为代码 parse，成功且无 ERROR 节点返回 true
 fn try_parse_as_code(text: &str, language: &str) -> bool {
-    let lang = match language {
-        "python" => tree_sitter_python::LANGUAGE.into(),
-        _ => return false,
+    let config = match lang::lang_config(language) {
+        Some(c) => c,
+        None => return false,
     };
+    let ts_lang = (config.ts_language)();
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&lang).is_err() {
+    if parser.set_language(&ts_lang).is_err() {
         return false;
     }
     match parser.parse(text, None) {
@@ -450,30 +462,45 @@ fn has_error_node(node: Node) -> bool {
     false
 }
 
-/// 检测 if False / if 0 死分支（Python）
+/// 检测 if False / if 0 死分支（多语言）
 fn detect_dead_branches(
     node: Node,
     source: &str,
     record: &FileRecord,
     smells: &mut Vec<SmellRecord>,
 ) {
-    if record.language != "python" {
-        return;
-    }
-    detect_dead_branches_recursive(node, source, record, smells);
+    let config = match lang::lang_config(&record.language) {
+        Some(c) => c,
+        None => return,
+    };
+    detect_dead_branches_recursive(node, source, record, config, smells);
 }
 
 fn detect_dead_branches_recursive(
     node: Node,
     source: &str,
     record: &FileRecord,
+    config: &lang::LangConfig,
     smells: &mut Vec<SmellRecord>,
 ) {
-    if node.kind() == "if_statement" {
-        if let Some(condition) = node.child_by_field_name("condition") {
-            let cond_text = &source[condition.byte_range()];
+    if node.kind() == config.if_kind {
+        // 尝试从 field 获取条件，或者对 Elixir 用第一个 child
+        let condition = if !config.condition_field.is_empty() {
+            node.child_by_field_name(config.condition_field)
+        } else {
+            // Elixir: if 是 call，第二个 child 是条件
+            node.child(1)
+        };
+        if let Some(condition) = condition {
+            // TypeScript: condition 可能被 parenthesized_expression 包裹，如 if (false)
+            let actual_cond = if condition.kind() == "parenthesized_expression" {
+                condition.named_child(0).unwrap_or(condition)
+            } else {
+                condition
+            };
+            let cond_text = &source[actual_cond.byte_range()];
             let trimmed = cond_text.trim();
-            if trimmed == "False" || trimmed == "0" || trimmed == "false" {
+            if config.false_literals.contains(&trimmed) {
                 smells.push(SmellRecord {
                     category: "noise".to_string(),
                     rule: "dead_branch".to_string(),
@@ -495,32 +522,52 @@ fn detect_dead_branches_recursive(
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            detect_dead_branches_recursive(child, source, record, smells);
+            detect_dead_branches_recursive(child, source, record, config, smells);
         }
     }
 }
 
-/// 检测 return/raise 后不可达代码（Python）
+/// 检测 return/raise/throw 后不可达代码（多语言）
 fn detect_unreachable_code(
     node: Node,
     source: &str,
     record: &FileRecord,
     smells: &mut Vec<SmellRecord>,
 ) {
-    if record.language != "python" {
+    let config = match lang::lang_config(&record.language) {
+        Some(c) => c,
+        None => return,
+    };
+    // Elixir 没有显式 return，跳过 unreachable 检测
+    if config.return_kinds.is_empty() && config.raise_kinds.is_empty() {
         return;
     }
-    detect_unreachable_recursive(node, source, record, smells);
+    detect_unreachable_recursive(node, source, record, config, smells);
 }
 
 fn detect_unreachable_recursive(
     node: Node,
     source: &str,
     record: &FileRecord,
+    config: &lang::LangConfig,
     smells: &mut Vec<SmellRecord>,
 ) {
-    // 在 block 节点中查找 return_statement / raise_statement 后面还有语句
-    if node.kind() == "block" {
+    // 在代码块节点中查找 return/raise/throw 后面还有语句
+    // 只检测函数体直属的 block（parent 是 function_item/function_definition 等）
+    // 跳过 if/match/loop/闭包 内的 block，避免大量误报
+    let is_function_body_block = config.block_kinds.contains(&node.kind()) && {
+        let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
+        matches!(
+            parent_kind,
+            "function_item"
+                | "function_definition"
+                | "function_declaration"
+                | "method_definition"
+                | "arrow_function"
+                | "do_block"
+        )
+    };
+    if is_function_body_block {
         let mut found_return = false;
         let mut return_line = 0;
         for i in 0..node.named_child_count() {
@@ -546,7 +593,15 @@ fn detect_unreachable_recursive(
                     });
                     break;
                 }
-                if child.kind() == "return_statement" || child.kind() == "raise_statement" {
+                let child_kind = child.kind();
+                let is_terminator = config.return_kinds.contains(&child_kind)
+                    || config.raise_kinds.contains(&child_kind)
+                    // Rust/TS: return/throw 可能被 expression_statement 包裹
+                    || (child_kind == "expression_statement" && child.named_child(0).map_or(false, |inner| {
+                        config.return_kinds.contains(&inner.kind())
+                            || config.raise_kinds.contains(&inner.kind())
+                    }));
+                if is_terminator {
                     found_return = true;
                     return_line = child.start_position().row + 1;
                 }
@@ -556,7 +611,7 @@ fn detect_unreachable_recursive(
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            detect_unreachable_recursive(child, source, record, smells);
+            detect_unreachable_recursive(child, source, record, config, smells);
         }
     }
 }
@@ -936,6 +991,163 @@ def foo():
         assert!(
             smells.iter().any(|s| s.rule == "unreachable_code"),
             "应检出 unreachable_code: {:?}",
+            smells
+        );
+    }
+
+    // === 多语言测试 ===
+
+    fn parse_rust(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn parse_typescript(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn parse_elixir(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_elixir::LANGUAGE.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    #[test]
+    fn unreachable_code_rust() {
+        let source = r#"
+fn foo() -> i32 {
+    return 1;
+    let x = 2;
+}
+"#;
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = DeadCodeDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "unreachable_code"),
+            "Rust: 应检出 unreachable_code: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn unreachable_code_typescript() {
+        let source = r#"
+function foo(): number {
+    return 1;
+    const x = 2;
+}
+"#;
+        let tree = parse_typescript(source);
+        let record = make_record("typescript", "test.ts");
+        let detector = DeadCodeDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "unreachable_code"),
+            "TypeScript: 应检出 unreachable_code: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn dead_branch_rust() {
+        let source = r#"
+fn foo() {
+    if false {
+        println!("dead");
+    }
+}
+"#;
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = DeadCodeDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "dead_branch"),
+            "Rust: 应检出 dead_branch: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn dead_branch_typescript() {
+        let source = r#"
+function foo() {
+    if (false) {
+        console.log("dead");
+    }
+}
+"#;
+        let tree = parse_typescript(source);
+        let record = make_record("typescript", "test.ts");
+        let detector = DeadCodeDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "dead_branch"),
+            "TypeScript: 应检出 dead_branch: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn empty_function_rust() {
+        let source = r#"
+fn empty() {
+}
+
+fn not_empty() {
+    println!("hello");
+}
+"#;
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = LeftoverBoilerplateDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "empty_function_body"),
+            "Rust: 应检出 empty_function_body: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn empty_function_typescript() {
+        let source = r#"
+function empty() {
+}
+
+function notEmpty() {
+    console.log("hello");
+}
+"#;
+        let tree = parse_typescript(source);
+        let record = make_record("typescript", "test.ts");
+        let detector = LeftoverBoilerplateDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "empty_function_body"),
+            "TypeScript: 应检出 empty_function_body: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn commented_out_code_rust() {
+        let source = "// fn old_func() {\n//     let x = 1;\n//     println!(\"{}\", x);\n//     return x;\n// }\nfn real() { }\n";
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = DeadCodeDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "commented_out_code"),
+            "Rust: 应检出 commented_out_code: {:?}",
             smells
         );
     }

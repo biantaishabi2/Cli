@@ -1,7 +1,8 @@
 //! 结构性重复检测器：StructuralDuplicationDetector、BoilerplateSkeletonDetector
 //!
-//! MVP 仅支持 Python：对函数体 AST 做规范化后 blake3 hash，相同 hash 聚类。
+//! 支持 Python/Elixir/Rust/TypeScript：对函数体 AST 做规范化后 blake3 hash，相同 hash 聚类。
 
+use super::lang;
 use super::{SmellDetector, SmellRecord};
 use crate::extract::FileRecord;
 use std::collections::HashMap;
@@ -32,10 +33,6 @@ impl SmellDetector for StructuralDuplicationDetector {
     }
 
     fn detect(&self, record: &FileRecord, source: &str, tree: &Tree) -> Vec<SmellRecord> {
-        if record.language != "python" {
-            return vec![];
-        }
-
         let functions = extract_functions(&record.file_path, source, tree, &record.language);
         detect_structural_duplication(&functions)
     }
@@ -50,28 +47,24 @@ impl SmellDetector for BoilerplateSkeletonDetector {
     }
 
     fn detect(&self, record: &FileRecord, source: &str, tree: &Tree) -> Vec<SmellRecord> {
-        if record.language != "python" {
-            return vec![];
-        }
-
         let functions = extract_functions(&record.file_path, source, tree, &record.language);
         detect_boilerplate_skeleton(&functions)
     }
 }
 
-/// 从 AST 中提取所有函数的信息
+/// 从 AST 中提取所有函数的信息（支持 Python/Elixir/Rust/TypeScript）
 pub fn extract_functions(
     file_path: &str,
     source: &str,
     tree: &Tree,
     language: &str,
 ) -> Vec<FunctionInfo> {
-    if language != "python" {
+    if lang::lang_config(language).is_none() {
         return vec![];
     }
 
     let mut functions = Vec::new();
-    extract_functions_recursive(file_path, source, tree.root_node(), &mut functions);
+    extract_functions_recursive(file_path, source, tree.root_node(), language, &mut functions);
     functions
 }
 
@@ -79,103 +72,87 @@ fn extract_functions_recursive(
     file_path: &str,
     source: &str,
     node: Node,
+    language: &str,
     functions: &mut Vec<FunctionInfo>,
 ) {
-    if node.kind() == "function_definition" {
-        if let Some(body) = node.child_by_field_name("body") {
-            let name = node
-                .child_by_field_name("name")
-                .map(|n| &source[n.byte_range()])
-                .unwrap_or("<anonymous>");
+    if let Some(func) = lang::match_function(node, language, source) {
+        let config = lang::lang_config(language).unwrap();
+        let normalized_ast = normalize_ast(func.body, source, config);
+        let skeleton = build_skeleton(func.body, config);
 
-            let normalized_ast = normalize_ast(body, source);
-            let skeleton = build_skeleton(body);
-
-            // 跳过过短的函数体（< 3 个语句）
-            if body.named_child_count() < 2 {
-                // 仍然递归子节点
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_functions_recursive(file_path, source, child, functions);
-                    }
+        // 跳过过短的函数体（< 2 个 named child）
+        if func.body.named_child_count() < 2 {
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    extract_functions_recursive(file_path, source, child, language, functions);
                 }
-                return;
             }
-
-            let structural_hash = blake3::hash(normalized_ast.as_bytes()).to_hex().to_string();
-            let skeleton_hash = blake3::hash(skeleton.as_bytes()).to_hex().to_string();
-
-            functions.push(FunctionInfo {
-                file: file_path.to_string(),
-                name: name.to_string(),
-                line: node.start_position().row + 1,
-                normalized_ast,
-                structural_hash,
-                skeleton,
-                skeleton_hash,
-            });
+            return;
         }
+
+        let structural_hash = blake3::hash(normalized_ast.as_bytes()).to_hex().to_string();
+        let skeleton_hash = blake3::hash(skeleton.as_bytes()).to_hex().to_string();
+
+        functions.push(FunctionInfo {
+            file: file_path.to_string(),
+            name: func.name,
+            line: node.start_position().row + 1,
+            normalized_ast,
+            structural_hash,
+            skeleton,
+            skeleton_hash,
+        });
     }
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            extract_functions_recursive(file_path, source, child, functions);
+            extract_functions_recursive(file_path, source, child, language, functions);
         }
     }
 }
 
 /// 规范化 AST：identifier → $VAR, string → $STR, number → $NUM
-fn normalize_ast(node: Node, source: &str) -> String {
+fn normalize_ast(node: Node, source: &str, config: &lang::LangConfig) -> String {
     let mut result = String::new();
-    normalize_ast_recursive(node, source, &mut result);
+    normalize_ast_recursive(node, source, config, &mut result);
     result
 }
 
-fn normalize_ast_recursive(node: Node, source: &str, result: &mut String) {
-    match node.kind() {
-        "identifier" => {
-            result.push_str("$VAR");
-        }
-        "string" | "concatenated_string" => {
-            result.push_str("$STR");
-        }
-        "integer" | "float" => {
-            result.push_str("$NUM");
-        }
-        _ => {
-            if node.child_count() == 0 {
-                // 叶子节点保留原文
-                result.push_str(&source[node.byte_range()]);
-            } else {
-                result.push('(');
-                result.push_str(node.kind());
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        result.push(' ');
-                        normalize_ast_recursive(child, source, result);
-                    }
-                }
-                result.push(')');
+fn normalize_ast_recursive(node: Node, source: &str, config: &lang::LangConfig, result: &mut String) {
+    let kind = node.kind();
+    if config.identifier_kinds.contains(&kind) {
+        result.push_str("$VAR");
+    } else if config.string_kinds.contains(&kind) {
+        result.push_str("$STR");
+    } else if config.number_kinds.contains(&kind) {
+        result.push_str("$NUM");
+    } else if node.child_count() == 0 {
+        // 叶子节点保留原文
+        result.push_str(&source[node.byte_range()]);
+    } else {
+        result.push('(');
+        result.push_str(kind);
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                result.push(' ');
+                normalize_ast_recursive(child, source, config, result);
             }
         }
+        result.push(')');
     }
 }
 
 /// 构建骨架：只保留节点类型，忽略所有叶子节点内容
-fn build_skeleton(node: Node) -> String {
+fn build_skeleton(node: Node, config: &lang::LangConfig) -> String {
     let mut result = String::new();
-    build_skeleton_recursive(node, &mut result);
+    build_skeleton_recursive(node, config, &mut result);
     result
 }
 
-fn build_skeleton_recursive(node: Node, result: &mut String) {
+fn build_skeleton_recursive(node: Node, config: &lang::LangConfig, result: &mut String) {
     // 叶子节点和"原子"复合节点只保留类型，不展开子节点。
     // 这样骨架只反映语句级控制流，不区分参数个数、字符串内容等细节。
-    const ATOMIC_KINDS: &[&str] = &[
-        "argument_list", "parameters", "string", "concatenated_string",
-        "tuple", "list", "dictionary", "set",
-    ];
-    if node.child_count() == 0 || ATOMIC_KINDS.contains(&node.kind()) {
+    if node.child_count() == 0 || config.atomic_kinds.contains(&node.kind()) {
         result.push_str(node.kind());
     } else {
         result.push('(');
@@ -183,7 +160,7 @@ fn build_skeleton_recursive(node: Node, result: &mut String) {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 result.push(' ');
-                build_skeleton_recursive(child, result);
+                build_skeleton_recursive(child, config, result);
             }
         }
         result.push(')');
@@ -445,12 +422,155 @@ def multiply(a, b):
     }
 
     #[test]
-    fn non_python_skipped() {
+    fn unsupported_language_skipped() {
         let source = "def foo(): pass\ndef bar(): pass\n";
         let tree = parse_python(source);
+        let record = make_record("unknown", "test.txt");
+        let detector = StructuralDuplicationDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(smells.is_empty(), "不支持的语言应跳过");
+    }
+
+    // === 多语言测试 ===
+
+    fn parse_rust(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn parse_typescript(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn parse_elixir(source: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_elixir::LANGUAGE.into();
+        parser.set_language(&lang).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    #[test]
+    fn structural_duplication_rust() {
+        let source = r#"
+fn process_user(user: &str) -> bool {
+    let result = validate(user);
+    if result {
+        save(result);
+    }
+    result
+}
+
+fn process_order(order: &str) -> bool {
+    let result = validate(order);
+    if result {
+        save(result);
+    }
+    result
+}
+"#;
+        let tree = parse_rust(source);
         let record = make_record("rust", "test.rs");
         let detector = StructuralDuplicationDetector;
         let smells = detector.detect(&record, source, &tree);
-        assert!(smells.is_empty(), "非 Python 应跳过");
+        assert!(
+            smells.iter().any(|s| s.rule == "structural_duplication"),
+            "Rust: 应检出 structural_duplication: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn structural_duplication_typescript() {
+        let source = r#"
+function processUser(user: string): boolean {
+    const result = validate(user);
+    if (result) {
+        save(result);
+    }
+    return result;
+}
+
+function processOrder(order: string): boolean {
+    const result = validate(order);
+    if (result) {
+        save(result);
+    }
+    return result;
+}
+"#;
+        let tree = parse_typescript(source);
+        let record = make_record("typescript", "test.ts");
+        let detector = StructuralDuplicationDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "structural_duplication"),
+            "TypeScript: 应检出 structural_duplication: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn structural_duplication_elixir() {
+        let source = r#"
+def process_user(user) do
+  result = validate(user)
+  if result do
+    save(result)
+  end
+  result
+end
+
+def process_order(order) do
+  result = validate(order)
+  if result do
+    save(result)
+  end
+  result
+end
+"#;
+        let tree = parse_elixir(source);
+        let record = make_record("elixir", "test.ex");
+        let detector = StructuralDuplicationDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "structural_duplication"),
+            "Elixir: 应检出 structural_duplication: {:?}",
+            smells
+        );
+    }
+
+    #[test]
+    fn boilerplate_skeleton_rust() {
+        let source = r#"
+fn fetch_users(db: &Db) -> Vec<User> {
+    let items = db.query("users");
+    for item in &items {
+        process(item);
+    }
+    items
+}
+
+fn fetch_orders(db: &Db) -> Vec<Order> {
+    let items = db.execute("orders");
+    for item in &items {
+        transform(item, "extra");
+    }
+    items
+}
+"#;
+        let tree = parse_rust(source);
+        let record = make_record("rust", "test.rs");
+        let detector = BoilerplateSkeletonDetector;
+        let smells = detector.detect(&record, source, &tree);
+        assert!(
+            smells.iter().any(|s| s.rule == "boilerplate_skeleton"),
+            "Rust: 应检出 boilerplate_skeleton: {:?}",
+            smells
+        );
     }
 }

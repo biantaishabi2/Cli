@@ -7,6 +7,7 @@
 
 pub mod duplication;
 pub mod error_handling;
+pub mod lang;
 pub mod linter;
 pub mod noise;
 pub mod security;
