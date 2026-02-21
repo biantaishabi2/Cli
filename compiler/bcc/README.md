@@ -68,12 +68,13 @@ BCC 生成测试场景，BDDC 执行验证，形成"架构约束 → 测试验�
 ## 子命令
 
 ```
-bcc compile   YAML 契约 → Elixir 模块骨架
-bcc extract   源码 → FileRecord JSON（Elixir/TypeScript/PHP）
-bcc trace     文档覆盖审计（status/report/seed）
-bcc bugfix    git bugfix 历史 → bddc DSL 场景
-bcc arch      架构矩阵与门禁（matrix/validate/report/export-module-map）
-bcc bdd       新项目场景种子（seed）
+bcc compile        YAML 契约 → Elixir 模块骨架
+bcc extract        源码 → FileRecord JSON（Elixir/TypeScript/PHP/Rust）
+bcc trace          文档覆盖审计（status/report/seed）
+bcc bugfix         git bugfix 历史 → bddc DSL 场景
+bcc arch           架构矩阵与门禁（matrix/validate/report/export-module-map）
+bcc bdd            新项目场景种子（seed）
+bcc analyze smell  代码异味检测（重复/噪音/防御/错误处理/安全）
 ```
 
 ### bcc compile
@@ -198,6 +199,67 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 
 `--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
 `-s check` 会产出 `quality-check.json`，有不合格场景时返回非零；`-s fix` 会尝试修复并产出 `quality-fix.json`。
+
+### bcc analyze smell
+
+代码异味检测：接收 `bcc extract` 产出的 AST JSON，扫描 6 大类 19 项代码质量问题。
+
+```bash
+# 基本用法：从 extract 产出的 JSON 检测异味
+bcc analyze smell ast-output.json
+
+# 搭配 smell-gate 做 CI 门禁（超过阈值则非零退出）
+bcc analyze smell ast-output.json --smell-gate 10
+
+# 搭配外部 linter 结果合并
+bcc analyze smell ast-output.json --linter "eslint:eslint-report.json"
+```
+
+检测器通过 tree-sitter 解析 AST，支持 **Python / Elixir / Rust / TypeScript** 四种语言，覆盖以下检测能力：
+
+**重复代码检测** — 找出复制粘贴后只改了变量名的函数，以及 AST 骨架高度相似的函数。
+
+| 规则 | 说明 |
+|------|------|
+| `structural_duplication` | 结构重复：多个函数结构相同，仅变量名/字面量不同 |
+| `boilerplate_skeleton` | 骨架重复：函数 AST 骨架相似度超阈值 |
+
+**噪音代码检测** — 清理不影响运行但严重影响可读性的代码垃圾。
+
+| 规则 | 说明 |
+|------|------|
+| `empty_function_body` | 空函数体：函数体为空或仅含 `pass`/`Ok(())`/`todo!()` 等占位 |
+| `commented_out_code` | 注释掉的代码：连续 5+ 行注释可被 parser 解析为合法代码 |
+| `dead_branch` | 死分支：`if false` / `if False` 条件永远为假 |
+| `unreachable_code` | 不可达代码：`return`/`raise`/`throw` 后的同级语句 |
+| `trivial_comment` | 废话注释：注释内容与紧邻代码高度重复，无附加信息 |
+| `excessive_comments` | 过度注释：函数内注释行占比超过 60% |
+| `unused_import` | 未使用导入：import 声明在文件中无引用 |
+
+**过度防御检测** — 检测多余的防御性代码和遗留标记。
+
+| 规则 | 说明 |
+|------|------|
+| `leftover_boilerplate` | 残留样板：TODO/FIXME/HACK 注释未清理 |
+| `redundant_type_check` | 冗余类型检查：已有类型标注还手动做 type check |
+| `unnecessary_default` | 不必要默认值：schema 定义 required 的字段还写 `.get(key, default)` 兜底 |
+
+**错误处理检测** — 找出异常被吞没或被过宽捕获的风险点。
+
+| 规则 | 说明 |
+|------|------|
+| `swallowed_error` | 吞没异常：`rescue _ -> :ok` / `except: pass` 静默吞掉错误 |
+| `broad_catch` | 过宽捕获：`rescue _` / `except Exception` 通配捕获所有异常 |
+
+**安全模式检测** — 扫描常见安全隐患。
+
+| 规则 | 说明 |
+|------|------|
+| `hardcoded_credential` | 硬编码凭证：源码中直接写死 key/secret/token/password |
+| `injection_risk` | 注入风险：SQL 拼接、eval() 调用 |
+| `unsafe_deserialization` | 不安全反序列化：pickle.load / yaml.load 等 |
+| `weak_crypto` | 弱加密算法：MD5/SHA1/DES/RC4 |
+| `sensitive_data_log` | 敏感数据泄露：日志中打印 password/token 等字段 |
 
 ## 闭环
 
