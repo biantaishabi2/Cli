@@ -636,6 +636,43 @@ fn matrix_impl(
                 });
             }
         }
+
+        // 展开父模块边到子模块（继承）
+        let children_map = build_children_map(&seed);
+        if !children_map.is_empty() {
+            // 收集显式定义的 key，用于避免继承覆盖显式规则
+            let explicit_keys: HashSet<String> = allow_edges
+                .iter()
+                .chain(forbid_edges.iter())
+                .map(|e| edge_key(&e.caller, &e.callee))
+                .collect();
+
+            // forbid 展开优先：先展开 forbid，这样 allow 展开时能看到 forbid 的 key
+            let expanded_forbid =
+                expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
+            forbid_edges.extend(expanded_forbid);
+
+            // 更新 key 集合（含新 forbid）
+            let all_keys: HashSet<String> = allow_edges
+                .iter()
+                .chain(forbid_edges.iter())
+                .map(|e| edge_key(&e.caller, &e.callee))
+                .collect();
+
+            // allow 展开
+            let expanded_allow =
+                expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
+            allow_edges.extend(expanded_allow);
+
+            // 同父子模块间默认 allow（内聚性）
+            let final_keys: HashSet<String> = allow_edges
+                .iter()
+                .chain(forbid_edges.iter())
+                .map(|e| edge_key(&e.caller, &e.callee))
+                .collect();
+            let sibling_edges = sibling_default_allow_edges(&children_map, &final_keys);
+            allow_edges.extend(sibling_edges);
+        }
     }
 
     allow_edges.sort_by(|a, b| edge_key(&a.caller, &a.callee).cmp(&edge_key(&b.caller, &b.callee)));
@@ -1900,6 +1937,100 @@ pub(crate) fn get_ancestors(
     ancestors
 }
 
+/// 构建 parent → children 映射
+fn build_children_map(seed: &SeedSpec) -> HashMap<String, Vec<String>> {
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for m in &seed.modules {
+        if let Some(ref parent) = m.parent {
+            children
+                .entry(parent.clone())
+                .or_default()
+                .push(m.module_id.clone());
+        }
+    }
+    children
+}
+
+/// 展开 relations_expected 到子模块：父模块的 allow/forbid 边自动继承给子模块
+fn expand_edges_to_children(
+    edges: &[Edge],
+    children_map: &HashMap<String, Vec<String>>,
+    existing_keys: &HashSet<String>,
+    is_forbid: bool,
+) -> Vec<Edge> {
+    let mut expanded = Vec::new();
+    for edge in edges {
+        let callers = {
+            let mut v = vec![edge.caller.clone()];
+            if let Some(kids) = children_map.get(&edge.caller) {
+                v.extend(kids.iter().cloned());
+            }
+            v
+        };
+        let callees = {
+            let mut v = vec![edge.callee.clone()];
+            if let Some(kids) = children_map.get(&edge.callee) {
+                v.extend(kids.iter().cloned());
+            }
+            v
+        };
+        for c in &callers {
+            for e in &callees {
+                if c == &edge.caller && e == &edge.callee {
+                    continue; // 原始边已存在，跳过
+                }
+                let key = edge_key(c, e);
+                if existing_keys.contains(&key) {
+                    continue; // 已有显式定义，不覆盖
+                }
+                let inherit_note = if is_forbid {
+                    format!(
+                        "inherited forbid from {}→{}",
+                        edge.caller, edge.callee
+                    )
+                } else {
+                    format!(
+                        "inherited from {}→{}",
+                        edge.caller, edge.callee
+                    )
+                };
+                expanded.push(Edge {
+                    caller: c.clone(),
+                    callee: e.clone(),
+                    rationale: inherit_note,
+                });
+            }
+        }
+    }
+    expanded
+}
+
+/// 生成同父子模块间的默认 allow 边（内聚性）
+fn sibling_default_allow_edges(
+    children_map: &HashMap<String, Vec<String>>,
+    existing_keys: &HashSet<String>,
+) -> Vec<Edge> {
+    let mut edges = Vec::new();
+    for (parent, kids) in children_map {
+        for i in 0..kids.len() {
+            for j in 0..kids.len() {
+                if i == j {
+                    continue;
+                }
+                let key = edge_key(&kids[i], &kids[j]);
+                if !existing_keys.contains(&key) {
+                    edges.push(Edge {
+                        caller: kids[i].clone(),
+                        callee: kids[j].clone(),
+                        rationale: format!("sibling modules under {}", parent),
+                    });
+                }
+            }
+        }
+    }
+    edges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2539,5 +2670,210 @@ profiles:
         assert_eq!(ancestors.len(), 9);
         assert_eq!(ancestors[0], "L8");
         assert_eq!(ancestors[8], "L0");
+    }
+
+    // === #429 边继承测试 ===
+
+    #[test]
+    fn test_child_inherits_parent_allow_edge() {
+        // 场景 1：子模块继承父模块的 allow 边
+        // AGENT→SESSION allowed, AGENT_HISTORY.parent=AGENT
+        // → AGENT_HISTORY→SESSION 应被自动展开为 allow
+        let seed = SeedSpec {
+            version: Some("test".to_string()),
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "AGENT".to_string(),
+                    display_name: None,
+                    domain_kind: None,
+                    layer: None,
+                    precedence: None,
+                    parent: None,
+                    path_rules: Some(PathRules {
+                        include: vec!["src/agent/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+                SeedModule {
+                    module_id: "AGENT_HISTORY".to_string(),
+                    display_name: None,
+                    domain_kind: None,
+                    layer: None,
+                    precedence: None,
+                    parent: Some("AGENT".to_string()),
+                    path_rules: Some(PathRules {
+                        include: vec!["src/agent/history/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+                SeedModule {
+                    module_id: "SESSION".to_string(),
+                    display_name: None,
+                    domain_kind: None,
+                    layer: None,
+                    precedence: None,
+                    parent: None,
+                    path_rules: Some(PathRules {
+                        include: vec!["src/session/**".to_string()],
+                        exclude: vec![],
+                    }),
+                },
+            ],
+            relations_expected: vec![SeedRelation {
+                caller: "AGENT".to_string(),
+                callee: "SESSION".to_string(),
+                allowed: true,
+            }],
+            layer_rules: None,
+        };
+
+        let children_map = build_children_map(&seed);
+        assert_eq!(children_map.get("AGENT").unwrap(), &vec!["AGENT_HISTORY".to_string()]);
+
+        let allow_edges = vec![Edge {
+            caller: "AGENT".to_string(),
+            callee: "SESSION".to_string(),
+            rationale: "from relations_expected".to_string(),
+        }];
+        let existing: HashSet<String> = allow_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let expanded =
+            expand_edges_to_children(&allow_edges, &children_map, &existing, false);
+
+        // AGENT_HISTORY→SESSION 应被展开
+        let keys: HashSet<String> = expanded.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        assert!(keys.contains(&edge_key("AGENT_HISTORY", "SESSION")));
+
+        // rationale 标注继承来源
+        let ah_edge = expanded.iter().find(|e| e.caller == "AGENT_HISTORY" && e.callee == "SESSION").unwrap();
+        assert!(ah_edge.rationale.contains("inherited from AGENT→SESSION"));
+    }
+
+    #[test]
+    fn test_explicit_forbid_overrides_inherited_allow() {
+        // 场景 2：显式 forbid 优先于继承的 allow
+        // AGENT→SESSION allowed, 但显式 AGENT_HISTORY→SESSION forbidden
+        // → AGENT_HISTORY→SESSION 保持 forbidden
+        let allow_edges = vec![Edge {
+            caller: "AGENT".to_string(),
+            callee: "SESSION".to_string(),
+            rationale: "from relations_expected".to_string(),
+        }];
+        let forbid_edges = vec![Edge {
+            caller: "AGENT_HISTORY".to_string(),
+            callee: "SESSION".to_string(),
+            rationale: "from relations_expected".to_string(),
+        }];
+
+        let mut children_map = HashMap::new();
+        children_map.insert("AGENT".to_string(), vec!["AGENT_HISTORY".to_string()]);
+
+        // 先展开 forbid
+        let explicit_keys: HashSet<String> = allow_edges
+            .iter()
+            .chain(forbid_edges.iter())
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
+        let expanded_forbid = expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
+
+        // 更新 key 集合
+        let mut all_keys = explicit_keys;
+        for e in &expanded_forbid {
+            all_keys.insert(edge_key(&e.caller, &e.callee));
+        }
+
+        // 展开 allow —— AGENT_HISTORY→SESSION 已被显式 forbid，不应出现在 allow 展开中
+        let expanded_allow = expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
+        let allow_keys: HashSet<String> = expanded_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        assert!(!allow_keys.contains(&edge_key("AGENT_HISTORY", "SESSION")));
+    }
+
+    #[test]
+    fn test_sibling_modules_default_allowed() {
+        // 场景 3：同父子模块间默认 allowed
+        // AGENT_HISTORY 和 AGENT_LOOP 都是 AGENT 的子模块
+        // → AGENT_HISTORY↔AGENT_LOOP 默认 allow
+        let mut children_map = HashMap::new();
+        children_map.insert(
+            "AGENT".to_string(),
+            vec!["AGENT_HISTORY".to_string(), "AGENT_LOOP".to_string()],
+        );
+        let existing = HashSet::new();
+        let sibling_edges = sibling_default_allow_edges(&children_map, &existing);
+
+        let keys: HashSet<String> = sibling_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        assert!(keys.contains(&edge_key("AGENT_HISTORY", "AGENT_LOOP")));
+        assert!(keys.contains(&edge_key("AGENT_LOOP", "AGENT_HISTORY")));
+
+        // rationale 标注
+        let e = sibling_edges.iter().find(|e| e.caller == "AGENT_HISTORY").unwrap();
+        assert!(e.rationale.contains("sibling modules under AGENT"));
+    }
+
+    #[test]
+    fn test_no_parent_behavior_unchanged() {
+        // 场景 4：无 parent 时行为不变
+        // 所有模块无 parent → children_map 为空 → 不展开
+        let seed = SeedSpec {
+            version: Some("test".to_string()),
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "A".to_string(),
+                    display_name: None,
+                    domain_kind: None,
+                    layer: None,
+                    precedence: None,
+                    parent: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "B".to_string(),
+                    display_name: None,
+                    domain_kind: None,
+                    layer: None,
+                    precedence: None,
+                    parent: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: vec![],
+            layer_rules: None,
+        };
+
+        let children_map = build_children_map(&seed);
+        assert!(children_map.is_empty());
+    }
+
+    #[test]
+    fn test_multi_level_inheritance() {
+        // 场景 5：多层嵌套继承
+        // C.parent=B, B.parent=A, A→X allowed
+        // → B→X 和 C→X 都应被展开
+        let mut children_map = HashMap::new();
+        children_map.insert("A".to_string(), vec!["B".to_string()]);
+        children_map.insert("B".to_string(), vec!["C".to_string()]);
+
+        let allow_edges = vec![Edge {
+            caller: "A".to_string(),
+            callee: "X".to_string(),
+            rationale: "from relations_expected".to_string(),
+        }];
+        let existing: HashSet<String> = allow_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+
+        // 第一轮展开：A→X → B→X
+        let expanded1 = expand_edges_to_children(&allow_edges, &children_map, &existing, false);
+        let mut all_allow = allow_edges.clone();
+        all_allow.extend(expanded1);
+
+        // 第二轮展开（B→X → C→X）
+        let keys2: HashSet<String> = all_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let expanded2 = expand_edges_to_children(&all_allow, &children_map, &keys2, false);
+        all_allow.extend(expanded2);
+
+        let final_keys: HashSet<String> = all_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        assert!(final_keys.contains(&edge_key("A", "X")));
+        assert!(final_keys.contains(&edge_key("B", "X")));
+        assert!(final_keys.contains(&edge_key("C", "X")));
     }
 }
