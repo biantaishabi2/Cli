@@ -27,12 +27,14 @@
   核心价值：
   - **代码知识图谱**：extract → SQLite 持久化 → 图搜索（caller/callee/继承/模块依赖）
   - **架构门禁**：arch validate 检测分层违规（如 api→dao 跳过 service），CI 自动拦截
+  - **[代码异味检测](compiler/bcc/README.md#bcc-analyze-smell)**：analyze smell 扫描 6 大类 19 项代码质量问题，支持 Python/Elixir/Rust/TypeScript 四语言。基于 tree-sitter AST 分析，检测复制粘贴式重复函数、空函数体/死分支/不可达代码等噪音、TODO 未清理和冗余防御性代码、吞没异常和过宽捕获、硬编码凭证和注入风险等安全隐患。可搭配 `--smell-gate` 做 CI 门禁。
   - **影响分析**：改动前预知影响范围，降低重构风险
   - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行验证
-  
+
   典型链路：
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
   - Brownfield：`extract -> graph-index build -> arch validate -> bugfix`
+  - 代码质量：`extract -> analyze smell [--smell-gate N]`
   - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/)
 
 ### `automation/`
