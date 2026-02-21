@@ -25,7 +25,7 @@ on:
       label_whitelist:
         description: "issues:labeled 允许触发的标签白名单（逗号分隔）"
         required: false
-        default: "bot:orchestrate,bot:queued"
+        default: "bot:orchestrate,bot:queued,bot:pr-reviewable"
         type: string
       enable_dispatch_wakeup:
         description: "是否允许 repository_dispatch 唤醒"
@@ -69,6 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ secrets.NIUMA_PAT || github.token }}
 
       - name: Resolve Trigger Context
