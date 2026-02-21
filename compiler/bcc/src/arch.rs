@@ -941,8 +941,11 @@ fn find_inherited_match(
     None
 }
 
-/// 判断两个模块是否共享同一直接 parent
+/// 判断两个模块是否共享同一直接 parent（自环边排除）
 fn are_siblings(a: &str, b: &str, parent_map: &HashMap<String, String>) -> Option<String> {
+    if a == b {
+        return None;
+    }
     let pa = parent_map.get(a);
     let pb = parent_map.get(b);
     match (pa, pb) {

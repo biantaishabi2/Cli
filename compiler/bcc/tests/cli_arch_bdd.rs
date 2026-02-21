@@ -3462,3 +3462,52 @@ fn max_depth_truncation_via_cli() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// BDD: 自环边 + parent_map 不应被误判为 sibling cohesion
+#[test]
+fn self_loop_edge_not_sibling_cohesion_via_cli() {
+    let root = temp_dir("bcc_self_loop_sibling");
+    let target = root.join("target.yaml");
+    let transition = root.join("transition.yaml");
+    let gates = root.join("gates.yaml");
+    let actual = root.join("actual.json");
+    let out = root.join("out");
+
+    // AGENT_HISTORY 有 parent AGENT，自环边 AGENT_HISTORY→AGENT_HISTORY 不应匹配 sibling cohesion
+    write_target_with_parent_map(
+        &target,
+        &[],
+        &[],
+        &[("AGENT_HISTORY", "AGENT")],
+    );
+    write_standard_transition(&transition);
+    write_standard_gates(&gates);
+    write_actual_edges(&actual, &[("AGENT_HISTORY", "AGENT_HISTORY")]);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+        ])
+        .status()
+        .expect("run validate");
+    assert!(status.success());
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("unexpected_edges_count: 1"),
+        "self-loop edge should be unexpected, not sibling cohesion"
+    );
+    assert!(
+        !report.contains("sibling cohesion"),
+        "self-loop edge should not be reported as sibling cohesion"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
