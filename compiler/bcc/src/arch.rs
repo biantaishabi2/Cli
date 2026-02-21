@@ -2669,6 +2669,51 @@ layer_rules:
             "target contract should contain allow edge GRANDCHILD→CHILD"
         );
 
+        // 反向验证：parent 继承语义集成到 matrix 流水线
+        // 构造含无效 parent 引用的 seed，验证 matrix_impl 拒绝处理
+        // 若 validate_parent_hierarchy 被从 matrix_impl 移除，此断言将失败
+        let bad_seed_path = root.join("bad_seed.yaml");
+        write(
+            &bad_seed_path,
+            r#"version: v3
+source_of_truth: test_integration
+modules:
+  - module_id: MOD_A
+    display_name: Module A
+    precedence: 10
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    display_name: Module B
+    parent: NONEXISTENT_PARENT
+    precedence: 20
+    path_rules:
+      include: ["src/b/**"]
+relations_expected: []
+"#,
+        );
+        let bad_matrix_out = root.join("bad_matrix_out");
+        let bad_result = matrix_impl(
+            &bad_seed_path.to_string_lossy(),
+            &ast_path.to_string_lossy(),
+            &bad_matrix_out.to_string_lossy(),
+            "v3",
+            "all",
+            false,
+            None,
+            true,
+        );
+        assert!(
+            bad_result.is_err(),
+            "matrix_impl should fail when parent references non-existent module"
+        );
+        let err_msg = bad_result.unwrap_err();
+        assert!(
+            err_msg.contains("NONEXISTENT_PARENT"),
+            "error should mention the invalid parent 'NONEXISTENT_PARENT', got: {}",
+            err_msg
+        );
+
         // 构造 actual relations JSON（infrastructure→application 边）
         let actual_path = root.join("actual.json");
         write(
