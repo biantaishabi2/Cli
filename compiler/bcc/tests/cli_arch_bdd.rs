@@ -3434,7 +3434,7 @@ layer_rules:
             "--fail-on-gate", "false",
             "--fail-on-forbidden", "false",
             "--seed-file", &seed.to_string_lossy(),
-            "--fail-on-layer-violation",
+            "--fail-on-layer-violation", "true",
         ])
         .status()
         .expect("run validate");
@@ -3629,6 +3629,68 @@ layer_rules:
     );
 
     // summary.json 的 layer_violation_count 应为 0
+    let summary_raw = fs::read_to_string(out.join("summary.json")).expect("read summary");
+    let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
+    assert_eq!(summary["layer_violation_count"], 0);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 测试11: seed 提供 layer_rules（仅 forbidden）时，默认 allowed_transitions 不被清空
+#[test]
+fn layer_violation_custom_rules_preserve_default_allowed() {
+    let root = temp_dir("bcc_layer_v11");
+    let (target, transition, gates) = setup_minimal_contracts(&root);
+    let actual = root.join("actual.json");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    // support → core 是默认 allowed，不应被误报
+    write(
+        &actual,
+        r#"[{"caller":"MOD_A","callee":"MOD_B","import_edges":1,"call_edges":0,"total_edges":1}]"#,
+    );
+    write(
+        &seed,
+        r#"version: v3
+modules:
+  - module_id: MOD_A
+    layer: support
+    path_rules:
+      include: ["src/a/**"]
+  - module_id: MOD_B
+    layer: core
+    path_rules:
+      include: ["src/b/**"]
+layer_rules:
+  forbidden_transitions:
+    - [infrastructure, application]
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch", "validate",
+            "--target", &target.to_string_lossy(),
+            "--transition", &transition.to_string_lossy(),
+            "--gates", &gates.to_string_lossy(),
+            "--actual", &actual.to_string_lossy(),
+            "--out-dir", &out.to_string_lossy(),
+            "--fail-on-gate", "false",
+            "--fail-on-forbidden", "false",
+            "--seed-file", &seed.to_string_lossy(),
+        ])
+        .status()
+        .expect("run validate");
+    assert_eq!(status.code(), Some(0));
+
+    let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
+    assert!(
+        report.contains("No layer violations detected."),
+        "support->core should be allowed by default even when layer_rules is provided: {}",
+        report
+    );
+
     let summary_raw = fs::read_to_string(out.join("summary.json")).expect("read summary");
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
     assert_eq!(summary["layer_violation_count"], 0);

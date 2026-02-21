@@ -57,6 +57,8 @@ struct SeedLayerRules {
     layers: Vec<score::config::LayerDefinition>,
     #[serde(default)]
     forbidden_transitions: Vec<(String, String)>,
+    #[serde(default)]
+    allowed_transitions: Vec<(String, String)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1341,10 +1343,11 @@ fn validate_impl(
                 Some(ref rules) => &rules.forbidden_transitions,
                 None => &default_config.forbidden_transitions,
             };
-            let empty_allowed: Vec<(String, String)> = vec![];
             let allowed = match seed.layer_rules {
-                Some(ref _rules) => &empty_allowed,
-                None => &default_config.allowed_transitions,
+                Some(ref rules) if !rules.allowed_transitions.is_empty() => {
+                    &rules.allowed_transitions
+                }
+                _ => &default_config.allowed_transitions,
             };
 
             struct LayerViolationRecord {

@@ -305,7 +305,7 @@ enum ArchAction {
         seed_file: Option<String>,
 
         /// 启用时 layer violation 导致 exit code 2
-        #[arg(long, default_value_t = false)]
+        #[arg(long, default_value_t = false, action = ArgAction::Set)]
         fail_on_layer_violation: bool,
     },
 
