@@ -31,6 +31,24 @@ static SENSITIVE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)(password|passwd|secret|api_key|api_token|auth_token|access_token|private_key|credential)"#
 ).unwrap());
 
+/// 判断匹配行的值部分是否为 UI 标签（纯自然语言文本，非真实凭证）
+fn is_ui_label_value(line: &str) -> bool {
+    // 提取引号内的值
+    if let Some(caps) = UI_LABEL_VALUE_RE.captures(line) {
+        if let Some(val) = caps.get(1) {
+            // 纯字母+空格+常见标点，无数字和特殊字符 → UI 标签
+            return val.as_str().chars().all(|c| {
+                c.is_ascii_alphabetic() || c == ' ' || c == '?' || c == '!' || c == '.' || c == ','
+            });
+        }
+    }
+    false
+}
+
+static UI_LABEL_VALUE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"[=:]\s*["']([^"']+)["']"#
+).unwrap());
+
 /// 硬编码凭证检测器
 ///
 /// 变量名含 key/secret/token/password + 赋值为字符串字面量
@@ -41,11 +59,22 @@ impl Detector for HardcodedCredentialDetector {
     fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
+        // 排除 i18n/locale/翻译文件（路径含 i18n/locale/lang/translation）
+        let fp = file_path.to_lowercase();
+        if fp.contains("/i18n/") || fp.contains("/locale") || fp.contains("/lang/")
+            || fp.contains("/translation") || fp.contains("/messages")
+        {
+            return Vec::new();
+        }
         let mut results = Vec::new();
         for (line_num, line) in source.lines().enumerate() {
             if CREDENTIAL_RE.is_match(line) {
                 // 排除从环境变量读取的模式
                 if CREDENTIAL_ENV_RE.is_match(line) {
+                    continue;
+                }
+                // 排除值为通用 UI 标签（纯字母/空格/标点，无数字/特殊字符）
+                if is_ui_label_value(line) {
                     continue;
                 }
                 let ln = line_num + 1;
@@ -270,6 +299,32 @@ mod tests {
         let source = r#"api_key = "test""#;
         let results = d.detect(source, "config.py", "python");
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hardcoded_credential_ignores_i18n_path() {
+        let d = HardcodedCredentialDetector;
+        let source = r#"password: 'Password'"#;
+        let results = d.detect(source, "src/i18n/languages/en.ts", "typescript");
+        assert!(results.is_empty(), "i18n 路径应跳过: {:?}", results);
+    }
+
+    #[test]
+    fn hardcoded_credential_ignores_ui_label() {
+        let d = HardcodedCredentialDetector;
+        // 值为纯自然语言 UI 标签，即使不在 i18n 路径下也应跳过
+        let source = r#"password: 'Enter your password'"#;
+        let results = d.detect(source, "components/login.ts", "typescript");
+        assert!(results.is_empty(), "UI 标签值应跳过: {:?}", results);
+    }
+
+    #[test]
+    fn hardcoded_credential_still_detects_real_secret() {
+        let d = HardcodedCredentialDetector;
+        // 值含数字和特殊字符 → 真实凭证
+        let source = r#"password = "p@ssw0rd_123!""#;
+        let results = d.detect(source, "config.py", "python");
+        assert_eq!(results.len(), 1, "真实凭证应检出");
     }
 
     // --- InjectionRiskDetector ---
