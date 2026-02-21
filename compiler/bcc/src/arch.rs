@@ -101,6 +101,8 @@ struct SeedRelation {
     caller: String,
     callee: String,
     allowed: bool,
+    #[serde(default)]
+    rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1678,31 +1680,57 @@ pub fn export_mermaid(seed_file: &str) {
         }
     };
 
-    // 按 layer 分组
-    let mut layer_groups: BTreeMap<String, Vec<&SeedModule>> = BTreeMap::new();
-    let mut no_layer: Vec<&SeedModule> = Vec::new();
-    // 只收集无 parent 的模块（顶层），子模块在父模块内嵌套
     let children_map = build_children_map(&seed);
-    for m in &seed.modules {
-        if m.parent.is_some() {
-            continue; // 子模块跳过，由父模块嵌套输出
-        }
-        if let Some(ref layer) = m.layer {
-            layer_groups
-                .entry(layer.clone())
-                .or_default()
-                .push(m);
-        } else {
-            no_layer.push(m);
-        }
-    }
-
-    // module_id → SeedModule 映射
     let module_map: HashMap<&str, &SeedModule> = seed
         .modules
         .iter()
         .map(|m| (m.module_id.as_str(), m))
         .collect();
+
+    // 构建 rationale 查找表：(caller, callee) → rationale
+    let mut rationale_map: HashMap<(String, String), String> = HashMap::new();
+    for rel in &seed.relations_expected {
+        if let Some(ref r) = rel.rationale {
+            rationale_map.insert((rel.caller.clone(), rel.callee.clone()), r.clone());
+        }
+    }
+
+    // === 总览图：只画父/顶层模块 ===
+    export_mermaid_overview(&seed, &children_map, &module_map, &rationale_map);
+
+    // === 子模块详情图：每个有子模块的父模块单独一张 ===
+    for (parent_id, kids) in &children_map {
+        export_mermaid_detail(
+            parent_id,
+            kids,
+            &seed,
+            &children_map,
+            &module_map,
+            &rationale_map,
+        );
+    }
+}
+
+/// 总览图：父/顶层模块之间的依赖，子模块嵌套在父模块 subgraph 内
+fn export_mermaid_overview(
+    seed: &SeedSpec,
+    children_map: &HashMap<String, Vec<String>>,
+    module_map: &HashMap<&str, &SeedModule>,
+    rationale_map: &HashMap<(String, String), String>,
+) {
+    // 按 layer 分组（只收集顶层模块）
+    let mut layer_groups: BTreeMap<String, Vec<&SeedModule>> = BTreeMap::new();
+    let mut no_layer: Vec<&SeedModule> = Vec::new();
+    for m in &seed.modules {
+        if m.parent.is_some() {
+            continue;
+        }
+        if let Some(ref layer) = m.layer {
+            layer_groups.entry(layer.clone()).or_default().push(m);
+        } else {
+            no_layer.push(m);
+        }
+    }
 
     println!("graph TD");
 
@@ -1710,23 +1738,17 @@ pub fn export_mermaid(seed_file: &str) {
     for (layer, modules) in &layer_groups {
         println!("  subgraph {}[\"{}\"]", layer, layer);
         for m in modules {
-            let label = m
-                .display_name
-                .as_deref()
-                .unwrap_or(&m.module_id);
-            // 检查是否有子模块
+            let label = m.display_name.as_deref().unwrap_or(&m.module_id);
             if let Some(kids) = children_map.get(&m.module_id) {
-                println!(
-                    "    subgraph {}[\"{}\"]",
-                    m.module_id, label
-                );
+                println!("    subgraph {}[\"{}\"]", m.module_id, label);
                 for kid_id in kids {
                     if let Some(kid) = module_map.get(kid_id.as_str()) {
-                        let kid_label = kid
-                            .display_name
-                            .as_deref()
-                            .unwrap_or(&kid.module_id);
-                        let shape = domain_kind_shape(&kid.module_id, kid_label, kid.domain_kind.as_deref());
+                        let kid_label = kid.display_name.as_deref().unwrap_or(&kid.module_id);
+                        let shape = domain_kind_shape(
+                            &kid.module_id,
+                            kid_label,
+                            kid.domain_kind.as_deref(),
+                        );
                         println!("      {}", shape);
                     }
                 }
@@ -1739,14 +1761,13 @@ pub fn export_mermaid(seed_file: &str) {
         println!("  end");
     }
 
-    // 无 layer 的模块
     for m in &no_layer {
         let label = m.display_name.as_deref().unwrap_or(&m.module_id);
         let shape = domain_kind_shape(&m.module_id, label, m.domain_kind.as_deref());
         println!("  {}", shape);
     }
 
-    // 父模块 subgraph 样式（加粗边框 + 浅蓝背景，突出显示）
+    // 父模块 subgraph 样式
     for parent_id in children_map.keys() {
         println!(
             "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none",
@@ -1756,94 +1777,207 @@ pub fn export_mermaid(seed_file: &str) {
 
     println!();
 
-    // 构建展开后的全部边（含继承 + 兄弟）
+    // 总览图只画 relations_expected 中的原始边（父/顶层级别）
+    let mut seen = HashSet::new();
+    for rel in &seed.relations_expected {
+        let key = edge_key(&rel.caller, &rel.callee);
+        if !seen.insert(key) {
+            continue;
+        }
+        let label_part = rel
+            .rationale
+            .as_deref()
+            .map(|r| format!(" -- \"{}\"", r))
+            .unwrap_or_default();
+        if rel.allowed {
+            println!("  {}{} --> {}", rel.caller, label_part, rel.callee);
+        } else {
+            println!("  {}{} -.-x {}", rel.caller, label_part, rel.callee);
+        }
+    }
+}
+
+/// 子模块详情图：展示父模块内部子模块 + 对外依赖（继承边）
+fn export_mermaid_detail(
+    parent_id: &str,
+    kids: &[String],
+    seed: &SeedSpec,
+    children_map: &HashMap<String, Vec<String>>,
+    module_map: &HashMap<&str, &SeedModule>,
+    rationale_map: &HashMap<(String, String), String>,
+) {
+    let parent_mod = match module_map.get(parent_id) {
+        Some(m) => m,
+        None => return,
+    };
+    let parent_label = parent_mod
+        .display_name
+        .as_deref()
+        .unwrap_or(parent_id);
+
+    println!();
+    println!("%% === {} 子模块详情 ===", parent_label);
+    println!("graph TD");
+
+    // 收集所有相关模块 ID（子模块 + 外部依赖目标）
+    let kid_set: HashSet<&str> = kids.iter().map(|s| s.as_str()).collect();
+
+    // 构建子模块展开后的边
     let mut allow_edges: Vec<Edge> = Vec::new();
     let mut forbid_edges: Vec<Edge> = Vec::new();
     for rel in &seed.relations_expected {
+        let r = rel.rationale.as_deref().unwrap_or("").to_string();
         if rel.allowed {
             allow_edges.push(Edge {
                 caller: rel.caller.clone(),
                 callee: rel.callee.clone(),
-                rationale: "from relations_expected".to_string(),
+                rationale: r,
             });
         } else {
             forbid_edges.push(Edge {
                 caller: rel.caller.clone(),
                 callee: rel.callee.clone(),
-                rationale: "from relations_expected".to_string(),
+                rationale: r,
             });
         }
     }
 
-    if !children_map.is_empty() {
-        let explicit_keys: HashSet<String> = allow_edges
-            .iter()
-            .chain(forbid_edges.iter())
-            .map(|e| edge_key(&e.caller, &e.callee))
-            .collect();
-        let expanded_forbid =
-            expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
-        forbid_edges.extend(expanded_forbid);
+    // 展开继承边
+    let explicit_keys: HashSet<String> = allow_edges
+        .iter()
+        .chain(forbid_edges.iter())
+        .map(|e| edge_key(&e.caller, &e.callee))
+        .collect();
+    let expanded_forbid =
+        expand_edges_to_children(&forbid_edges, children_map, &explicit_keys, true);
+    forbid_edges.extend(expanded_forbid);
 
-        let all_keys: HashSet<String> = allow_edges
-            .iter()
-            .chain(forbid_edges.iter())
-            .map(|e| edge_key(&e.caller, &e.callee))
-            .collect();
-        let expanded_allow =
-            expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
-        allow_edges.extend(expanded_allow);
+    let all_keys: HashSet<String> = allow_edges
+        .iter()
+        .chain(forbid_edges.iter())
+        .map(|e| edge_key(&e.caller, &e.callee))
+        .collect();
+    let expanded_allow =
+        expand_edges_to_children(&allow_edges, children_map, &all_keys, false);
+    allow_edges.extend(expanded_allow);
 
-        let final_keys: HashSet<String> = allow_edges
-            .iter()
-            .chain(forbid_edges.iter())
-            .map(|e| edge_key(&e.caller, &e.callee))
-            .collect();
-        let sibling_edges = sibling_default_allow_edges(&children_map, &final_keys);
-        allow_edges.extend(sibling_edges);
+    let final_keys: HashSet<String> = allow_edges
+        .iter()
+        .chain(forbid_edges.iter())
+        .map(|e| edge_key(&e.caller, &e.callee))
+        .collect();
+    let sibling_edges = sibling_default_allow_edges(children_map, &final_keys);
+    allow_edges.extend(sibling_edges);
+
+    // 只保留与本 parent 的子模块相关的边
+    let relevant_allow: Vec<&Edge> = allow_edges
+        .iter()
+        .filter(|e| kid_set.contains(e.caller.as_str()) || kid_set.contains(e.callee.as_str()))
+        .collect();
+    let relevant_forbid: Vec<&Edge> = forbid_edges
+        .iter()
+        .filter(|e| kid_set.contains(e.caller.as_str()) || kid_set.contains(e.callee.as_str()))
+        .collect();
+
+    // 收集出现的外部模块
+    let mut external_ids: BTreeSet<String> = BTreeSet::new();
+    for e in relevant_allow.iter().chain(relevant_forbid.iter()) {
+        if !kid_set.contains(e.caller.as_str()) {
+            external_ids.insert(e.caller.clone());
+        }
+        if !kid_set.contains(e.callee.as_str()) {
+            external_ids.insert(e.callee.clone());
+        }
     }
 
-    // 有子模块的父模块集合（用于跳过父级边，只画子模块边）
-    let parents_with_children: HashSet<&str> = children_map.keys().map(|s| s.as_str()).collect();
+    // 输出子模块节点（subgraph 包裹）
+    println!("  subgraph {}[\"{}\"]", parent_id, parent_label);
+    for kid_id in kids {
+        if let Some(kid) = module_map.get(kid_id.as_str()) {
+            let kid_label = kid.display_name.as_deref().unwrap_or(&kid.module_id);
+            let shape = domain_kind_shape(&kid.module_id, kid_label, kid.domain_kind.as_deref());
+            println!("    {}", shape);
+        }
+    }
+    println!("  end");
+    println!(
+        "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none",
+        parent_id
+    );
 
-    // 去重用
+    // 输出外部模块节点
+    for ext_id in &external_ids {
+        if let Some(ext) = module_map.get(ext_id.as_str()) {
+            let ext_label = ext.display_name.as_deref().unwrap_or(&ext.module_id);
+            let shape = domain_kind_shape(ext_id, ext_label, ext.domain_kind.as_deref());
+            println!("  {}", shape);
+        } else {
+            println!("  {}[\"{}\"]", ext_id, ext_id);
+        }
+    }
+
+    println!();
+
+    // 输出边（带标注）
     let mut seen = HashSet::new();
-
-    // 输出 allow 边
-    for e in &allow_edges {
-        // 如果 caller 和 callee 都是有子模块的父模块，保留（父→父的边不展开到子×子）
-        // 如果只有一端是父模块，跳过父级边（由子模块的继承边代替）
-        if (parents_with_children.contains(e.caller.as_str())
-            || parents_with_children.contains(e.callee.as_str()))
-            && e.rationale == "from relations_expected"
-        {
+    for e in &relevant_allow {
+        let key = edge_key(&e.caller, &e.callee);
+        if !seen.insert(key) {
             continue;
         }
-        let key = edge_key(&e.caller, &e.callee);
-        if seen.insert(key) {
-            if e.rationale.contains("sibling") {
-                println!("  {} <-.-> {}", e.caller, e.callee);
-            } else if e.rationale.contains("inherited") {
-                println!("  {} -.-> {}", e.caller, e.callee);
-            } else {
-                println!("  {} --> {}", e.caller, e.callee);
-            }
+        // 查找 rationale：优先用父级原始 rationale（继承边回溯到父关系）
+        let label = find_edge_rationale(e, parent_id, rationale_map);
+        let label_part = if !label.is_empty() {
+            format!(" -- \"{}\"", label)
+        } else {
+            String::new()
+        };
+        if e.rationale.contains("sibling") {
+            println!("  {}{} <-.-> {}", e.caller, label_part, e.callee);
+        } else if e.rationale.contains("inherited") {
+            println!("  {}{} -.-> {}", e.caller, label_part, e.callee);
+        } else {
+            println!("  {}{} --> {}", e.caller, label_part, e.callee);
         }
     }
-
-    // 输出 forbid 边
-    for e in &forbid_edges {
-        if (parents_with_children.contains(e.caller.as_str())
-            || parents_with_children.contains(e.callee.as_str()))
-            && e.rationale == "from relations_expected"
-        {
+    for e in &relevant_forbid {
+        let key = edge_key(&e.caller, &e.callee);
+        if !seen.insert(key) {
             continue;
         }
-        let key = edge_key(&e.caller, &e.callee);
-        if seen.insert(key) {
-            println!("  {} -.-x {}", e.caller, e.callee);
-        }
+        let label = find_edge_rationale(e, parent_id, rationale_map);
+        let label_part = if !label.is_empty() {
+            format!(" -- \"{}\"", label)
+        } else {
+            String::new()
+        };
+        println!("  {}{} -.-x {}", e.caller, label_part, e.callee);
     }
+}
+
+/// 查找边的 rationale：继承边回溯到父模块的原始 rationale
+fn find_edge_rationale(
+    edge: &Edge,
+    parent_id: &str,
+    rationale_map: &HashMap<(String, String), String>,
+) -> String {
+    // 直接匹配
+    if let Some(r) = rationale_map.get(&(edge.caller.clone(), edge.callee.clone())) {
+        return r.clone();
+    }
+    // 继承边：caller 是子模块 → 回溯到父模块
+    if let Some(r) = rationale_map.get(&(parent_id.to_string(), edge.callee.clone())) {
+        return r.clone();
+    }
+    // callee 是子模块 → 回溯
+    if let Some(r) = rationale_map.get(&(edge.caller.clone(), parent_id.to_string())) {
+        return r.clone();
+    }
+    // 兄弟模块
+    if edge.rationale.contains("sibling") {
+        return "兄弟模块".to_string();
+    }
+    String::new()
 }
 
 /// 根据 domain_kind 返回不同 Mermaid 节点形状
@@ -2935,6 +3069,7 @@ profiles:
                 caller: "AGENT".to_string(),
                 callee: "SESSION".to_string(),
                 allowed: true,
+                rationale: None,
             }],
             layer_rules: None,
         };
