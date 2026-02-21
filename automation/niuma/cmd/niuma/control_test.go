@@ -26,18 +26,29 @@ func TestExtractIntegratedIssueNumbers(t *testing.T) {
 		"Merge feat/214-close (issue #214)",
 	}
 
-	got := extractIntegratedIssueNumbers(messages)
+	got := extractIntegratedIssueNumbers("", "", messages)
 	assert.Equal(t, []int{214, 215}, got)
 }
 
-func TestExtractIntegratedIssueNumbers_IgnoreNonIntegrationPattern(t *testing.T) {
+func TestExtractIntegratedIssueNumbers_FromPRTextAndCommits(t *testing.T) {
+	prTitle := "fix: sub(#25): Gateway Session Coordinator (#25)"
+	prBody := "Closes #25\n\nparent(#24)"
 	messages := []string{
 		"Merge pull request #300 from foo/bar",
-		"Closes #214",
+		"chore: update docs",
 		"fix: test (#215)",
 	}
 
-	got := extractIntegratedIssueNumbers(messages)
+	got := extractIntegratedIssueNumbers(prTitle, prBody, messages)
+	assert.Equal(t, []int{24, 25, 215}, got)
+}
+
+func TestExtractIntegratedIssueNumbers_IgnorePRNumber(t *testing.T) {
+	messages := []string{
+		"Merge pull request #300 from foo/bar",
+	}
+
+	got := extractIntegratedIssueNumbers("", "", messages)
 	assert.Empty(t, got)
 }
 

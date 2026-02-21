@@ -52,7 +52,7 @@ var controlCheckCmd = &cobra.Command{
 
 var controlCloseMergedCmd = &cobra.Command{
 	Use:   "close-merged",
-	Short: "integration PR 合并后自动收口（关闭 sub/parent issue）",
+	Short: "PR 合并后自动收口（关闭 sub/parent issue）",
 	RunE:  runControlCloseMerged,
 }
 
@@ -636,10 +636,9 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 		fmt.Printf("PR #%d 未合并，跳过收口。\n", flagPR)
 		return nil
 	}
-	headRef := pr.GetHead().GetRef()
 	baseRef := pr.GetBase().GetRef()
-	if !strings.HasPrefix(headRef, "integration/") || baseRef != "master" {
-		fmt.Printf("PR #%d (%s -> %s) 非 integration 合并到 master，跳过收口。\n", flagPR, headRef, baseRef)
+	if baseRef != "master" {
+		fmt.Printf("PR #%d base=%s 非 master，跳过收口。\n", flagPR, baseRef)
 		return nil
 	}
 
@@ -647,9 +646,9 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	issueNums := extractIntegratedIssueNumbers(commitMessages)
+	issueNums := extractIntegratedIssueNumbers(pr.GetTitle(), pr.GetBody(), commitMessages)
 	if len(issueNums) == 0 {
-		fmt.Printf("PR #%d 未识别到 integration 子任务 issue，跳过收口。\n", flagPR)
+		fmt.Printf("PR #%d 未识别到可收口 issue，跳过收口。\n", flagPR)
 		return nil
 	}
 
@@ -783,22 +782,32 @@ func formatDagSyncResult(cmdName string, result control.DagSyncResult, dryRun bo
 	return lines
 }
 
-var integrationIssuePattern = regexp.MustCompile(`(?i)issue\s*#([0-9]+)`)
+var (
+	issueKeywordPattern = regexp.MustCompile(`(?i)\b(?:issue|closes?|closed|fixes?|fixed|resolves?|resolved)\s*#([0-9]+)\b`)
+	subPattern          = regexp.MustCompile(`(?i)\bsub\(\s*#([0-9]+)\s*\)`)
+	parentPattern       = regexp.MustCompile(`(?i)\bparent\(\s*#([0-9]+)\s*\)`)
+	parenPattern        = regexp.MustCompile(`\(\s*#([0-9]+)\s*\)`)
+	pullRequestPattern  = regexp.MustCompile(`(?i)pull request #([0-9]+)`)
+)
 
-func extractIntegratedIssueNumbers(messages []string) []int {
+func extractIntegratedIssueNumbers(prTitle, prBody string, messages []string) []int {
 	unique := make(map[int]struct{})
-	for _, message := range messages {
-		matches := integrationIssuePattern.FindAllStringSubmatch(message, -1)
-		for _, groups := range matches {
-			if len(groups) < 2 {
-				continue
-			}
-			num, err := strconv.Atoi(groups[1])
-			if err != nil || num <= 0 {
-				continue
-			}
-			unique[num] = struct{}{}
-		}
+
+	texts := make([]string, 0, len(messages)+2)
+	if strings.TrimSpace(prTitle) != "" {
+		texts = append(texts, prTitle)
+	}
+	if strings.TrimSpace(prBody) != "" {
+		texts = append(texts, prBody)
+	}
+	texts = append(texts, messages...)
+
+	for _, text := range texts {
+		cleaned := pullRequestPattern.ReplaceAllString(text, "")
+		collectIssueNumbers(unique, cleaned, issueKeywordPattern)
+		collectIssueNumbers(unique, cleaned, subPattern)
+		collectIssueNumbers(unique, cleaned, parentPattern)
+		collectIssueNumbers(unique, cleaned, parenPattern)
 	}
 
 	var result []int
@@ -807,4 +816,18 @@ func extractIntegratedIssueNumbers(messages []string) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+func collectIssueNumbers(dst map[int]struct{}, text string, pattern *regexp.Regexp) {
+	matches := pattern.FindAllStringSubmatch(text, -1)
+	for _, groups := range matches {
+		if len(groups) < 2 {
+			continue
+		}
+		num, err := strconv.Atoi(groups[1])
+		if err != nil || num <= 0 {
+			continue
+		}
+		dst[num] = struct{}{}
+	}
 }
