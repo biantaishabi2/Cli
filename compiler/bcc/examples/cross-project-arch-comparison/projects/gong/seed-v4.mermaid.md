@@ -4,7 +4,7 @@
 
 - 节点形状：`([圆角])` = core, `[方框]` = support, `[(圆柱)]` = generic
 - 边样式：`-->` = 显式 allowed, `-.->` = 继承 allowed, `<-.->` = 兄弟模块, `-.-x` = forbidden
-- 分组：按 layer 分 subgraph，子模块嵌套在父模块内
+- 分组：按 layer 分 subgraph，子模块嵌套在父模块内（蓝色边框高亮）
 
 ```mermaid
 graph TD
@@ -30,6 +30,7 @@ graph TD
     CLI[("命令行入口")]
     BDD[("BDD 测试基础设施")]
   end
+  style AGENT fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none
 
   SESSION --> STREAM
   SESSION --> RUNTIME

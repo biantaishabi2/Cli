@@ -1746,6 +1746,14 @@ pub fn export_mermaid(seed_file: &str) {
         println!("  {}", shape);
     }
 
+    // 父模块 subgraph 样式（加粗边框 + 浅蓝背景，突出显示）
+    for parent_id in children_map.keys() {
+        println!(
+            "  style {} fill:#e8f4fd,stroke:#1a73e8,stroke-width:2px,stroke-dasharray:none",
+            parent_id
+        );
+    }
+
     println!();
 
     // 构建展开后的全部边（含继承 + 兄弟）
