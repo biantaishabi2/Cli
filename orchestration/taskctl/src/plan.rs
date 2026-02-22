@@ -94,7 +94,7 @@ pub fn solve(input: PlanInput) -> Result<(PlanDecision, Diagnostics), CoreError>
             selected_edges,
             total_score: candidate.score,
             total_confidence: candidate.confidence,
-            trace: candidate.trace.clone(),
+            trace: candidate.trace,
         },
         Diagnostics {
             rules_hit: vec![
@@ -102,7 +102,7 @@ pub fn solve(input: PlanInput) -> Result<(PlanDecision, Diagnostics), CoreError>
                 "plan.solve.tie_break".to_string(),
             ],
             conflicts: Vec::new(),
-            warnings: candidate.trace,
+            warnings: Vec::new(),
         },
     ))
 }
@@ -213,8 +213,9 @@ fn solve_node(
             }
 
             let mut score = node.score;
-            let mut confidence_sum = node.confidence;
-            let mut confidence_count = 1usize;
+            // AND 节点 confidence = 所有子节点 confidence 的平均值（不含父节点自身）
+            let mut confidence_sum = 0.0_f64;
+            let mut confidence_count = 0usize;
             let mut tie_evidence_id = String::new();
             let mut nodes = BTreeSet::new();
             let mut edges = BTreeSet::new();
@@ -303,16 +304,31 @@ fn solve_node(
     result
 }
 
+const F64_EPSILON: f64 = 1e-9;
+
+fn f64_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() < F64_EPSILON
+}
+
 fn is_better(candidate: &Candidate, current: &Candidate) -> bool {
-    candidate.score > current.score
-        || (candidate.score == current.score && candidate.confidence > current.confidence)
-        || (candidate.score == current.score
-            && candidate.confidence == current.confidence
-            && candidate.tie_evidence_id < current.tie_evidence_id)
-        || (candidate.score == current.score
-            && candidate.confidence == current.confidence
-            && candidate.tie_evidence_id == current.tie_evidence_id
-            && candidate.tie_node_id < current.tie_node_id)
+    if candidate.score > current.score + F64_EPSILON {
+        return true;
+    }
+    if !f64_eq(candidate.score, current.score) {
+        return false;
+    }
+    // score 相等，比较 confidence
+    if candidate.confidence > current.confidence + F64_EPSILON {
+        return true;
+    }
+    if !f64_eq(candidate.confidence, current.confidence) {
+        return false;
+    }
+    // confidence 也相等，字典序 tie-break
+    if candidate.tie_evidence_id != current.tie_evidence_id {
+        return candidate.tie_evidence_id < current.tie_evidence_id;
+    }
+    candidate.tie_node_id < current.tie_node_id
 }
 
 #[cfg(test)]

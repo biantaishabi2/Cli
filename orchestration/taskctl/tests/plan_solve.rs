@@ -54,7 +54,8 @@ fn plan_decision_trace_is_diagnostic() {
 
     let (decision, diagnostics) = plan::solve(input).expect("solve");
     assert!(decision.trace.iter().any(|t| t.contains("or:g->a")));
-    assert!(diagnostics.warnings.iter().any(|t| t.contains("or:g->a")));
+    // trace 不再重复写入 warnings，warnings 应为空
+    assert!(diagnostics.warnings.is_empty());
 }
 
 #[test]
@@ -118,6 +119,27 @@ fn plan_cycle_returns_e0001_instead_of_recursive_overflow() {
 
     let err = plan::solve(input).expect_err("expected cycle error");
     assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn plan_and_node_confidence_averages_only_children() {
+    let input = serde_json::from_str::<PlanInput>(
+        r#"{
+            "root":"and_root",
+            "nodes":[
+                {"node_id":"and_root","node_type":"and","score":0.0,"confidence":0.0,"children":["c1","c2"]},
+                {"node_id":"c1","node_type":"leaf","score":1.0,"confidence":1.0},
+                {"node_id":"c2","node_type":"leaf","score":1.0,"confidence":0.6}
+            ]
+        }"#,
+    )
+    .expect("plan json");
+
+    let (decision, _) = plan::solve(input).expect("solve");
+    // AND confidence = average of children only: (1.0 + 0.6) / 2 = 0.8
+    // NOT (0.0 + 1.0 + 0.6) / 3 = 0.533
+    assert!((decision.total_confidence - 0.8).abs() < 1e-9);
+    assert_eq!(decision.total_score, 2.0); // 0.0 + 1.0 + 1.0
 }
 
 #[test]
