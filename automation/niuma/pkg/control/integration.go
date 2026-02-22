@@ -69,6 +69,15 @@ func (b *IntegrationBuilder) EnsureBranch(branchName, startPoint string) (string
 		return branchName, nil
 	}
 
+	// 远端已存在时，优先基于 origin/<branchName> 创建本地分支，
+	// 确保 integration 历史连续，避免 push non-fast-forward。
+	if b.remoteBranchExists(branchName) {
+		if err := b.git("branch", branchName, "origin/"+branchName); err != nil {
+			return "", fmt.Errorf("基于远端分支创建 %s 失败: %w", branchName, err)
+		}
+		return branchName, nil
+	}
+
 	// 决定创建起点
 	base := b.baseBranch
 	if startPoint != "" {
@@ -978,4 +987,13 @@ func (b *IntegrationBuilder) gitOutput(args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, string(out))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// remoteBranchExists 检查 origin/<branch> 是否存在。
+func (b *IntegrationBuilder) remoteBranchExists(branch string) bool {
+	if strings.TrimSpace(branch) == "" {
+		return false
+	}
+	out, err := b.gitOutput("branch", "--list", "--remote", "origin/"+branch)
+	return err == nil && strings.TrimSpace(out) != ""
 }
