@@ -2128,6 +2128,13 @@ func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task,
 	if err := c.markIntegrationGatePassed(task, attemptKey); err != nil {
 		return false, err
 	}
+	// builder 为空时（如单测注入最小 controller）跳过 push；
+	// 生产 orchestrate 路径会注入 builder 并执行远端同步。
+	if c.builder != nil {
+		if err := c.builder.PushBranch(outcome.IntegrationBranch); err != nil {
+			return false, err
+		}
+	}
 	if err := c.markTaskIntegrated(task, outcome); err != nil {
 		return false, err
 	}

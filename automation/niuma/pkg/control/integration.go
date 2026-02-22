@@ -103,6 +103,20 @@ func (b *IntegrationBuilder) MergeOne(integrationBranch string, bi BranchInfo, s
 	return nil
 }
 
+// PushBranch 将 integration 分支推送到远端 origin。
+// 约束：branch 不能为空。
+func (b *IntegrationBuilder) PushBranch(branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("integration 分支名为空，无法推送")
+	}
+
+	if err := b.git("push", "-u", "origin", branch); err != nil {
+		return fmt.Errorf("推送 %s 失败: %w", branch, err)
+	}
+	return nil
+}
+
 // ExecuteIntegrationMerge 执行统一 integration 合并流程。
 // 结果分为 merged / auto_resolved / escalated。
 // startPoint: 非空时传给 EnsureBranch 作为创建起点
