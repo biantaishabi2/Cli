@@ -21,6 +21,8 @@ const (
 	TypeDiscussionRoundLimitNotice Type = "BOT:DISCUSSION_ROUND_LIMIT_NOTICE"
 	TypeLabelGuard                 Type = "BOT:LABEL_GUARD"
 	TypeGateRetry                  Type = "BOT:GATE_RETRY"
+	TypeImplementProgress          Type = "BOT:IMPLEMENT_PROGRESS"
+	TypeIterateProgress            Type = "BOT:ITERATE_PROGRESS"
 )
 
 // AllTypes 返回所有有效的 Marker 类型
@@ -33,6 +35,8 @@ var AllTypes = []Type{
 	TypeDiscussionRoundLimitNotice,
 	TypeLabelGuard,
 	TypeGateRetry,
+	TypeImplementProgress,
+	TypeIterateProgress,
 }
 
 // Marker 表示一个嵌入在 GitHub 评论中的幂等标记

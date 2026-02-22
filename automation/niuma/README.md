@@ -263,6 +263,17 @@ Gate 日志固定字段（用于与 PR checks 对账）：
 - `head_sha=<sha>`
 - `merge_sha=<sha>`（可得时输出）
 
+### Implement/Iterate 元数据代办
+
+- implement/iterate 阶段会在 issue 上写入可见进展 marker：
+  - `BOT:IMPLEMENT_PROGRESS`
+  - `BOT:ITERATE_PROGRESS`
+- iterate 完成后会自动同步 PR 描述中的 `PLAN_FILES`：
+  - 数据源：`Plan Final` marker + PR 实际 diff 文件列表
+  - 行为：仅更新/补齐 `<!-- PLAN_FILES:... -->` 注释块，不覆盖人工正文
+  - 失败处理：不阻断主流程，但会在 issue 上输出结构化告警评论，提示人工检查
+- 设计约束：PR 元数据更新由 orchestrator + GitHub client 执行，不依赖 AI 子进程直接调用 `gh pr edit`
+
 ## Discussion 协议（当前）
 
 - 讨论模式：仅 `debate_ab`
