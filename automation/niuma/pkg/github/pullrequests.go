@@ -9,6 +9,12 @@ import (
 	"github.com/google/go-github/v68/github"
 )
 
+// PRFile 表示 PR 中一个变更文件（用于 plan_files 自动同步）。
+type PRFile struct {
+	Filename string
+	Status   string
+}
+
 // GetPR 获取指定 Pull Request
 func (c *Client) GetPR(ctx context.Context, number int) (*github.PullRequest, error) {
 	pr, _, err := c.gh.PullRequests.Get(ctx, c.owner, c.repo, number)
@@ -16,6 +22,17 @@ func (c *Client) GetPR(ctx context.Context, number int) (*github.PullRequest, er
 		return nil, fmt.Errorf("获取 PR #%d 失败: %w", number, err)
 	}
 	return pr, nil
+}
+
+// UpdatePRBody 更新 PR 描述正文。
+func (c *Client) UpdatePRBody(ctx context.Context, number int, body string) error {
+	_, _, err := c.gh.PullRequests.Edit(ctx, c.owner, c.repo, number, &github.PullRequest{
+		Body: github.Ptr(body),
+	})
+	if err != nil {
+		return fmt.Errorf("更新 PR #%d body 失败: %w", number, err)
+	}
+	return nil
 }
 
 // CreatePR 创建 Pull Request
@@ -85,6 +102,30 @@ func (c *Client) ListPRReviews(ctx context.Context, number int) ([]*github.PullR
 	}
 
 	return allReviews, nil
+}
+
+// ListPRFiles 列出 PR 当前变更文件（用于 PLAN_FILES 与实际 diff 对齐）。
+func (c *Client) ListPRFiles(ctx context.Context, number int) ([]PRFile, error) {
+	var out []PRFile
+	opts := &github.ListOptions{PerPage: 100}
+
+	for {
+		files, resp, err := c.gh.PullRequests.ListFiles(ctx, c.owner, c.repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("列出 PR #%d files 失败: %w", number, err)
+		}
+		for _, f := range files {
+			out = append(out, PRFile{
+				Filename: f.GetFilename(),
+				Status:   f.GetStatus(),
+			})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return out, nil
 }
 
 // ListPRCommitMessages 列出 PR 中所有 commit message（含标题+正文）

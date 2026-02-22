@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
+	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/google/go-github/v68/github"
@@ -703,6 +704,38 @@ func TestDoIterate_PostsOnPR(t *testing.T) {
 	for _, c := range issueComments {
 		assert.NotContains(t, c.GetBody(), "迭代修复", "issue 上不应该有迭代修复评论")
 	}
+}
+
+func TestDoIterate_AutoSyncsPlanFilesInPRBody(t *testing.T) {
+	mockAI := ai.NewMockProvider()
+	mockAI.SetExecuteResults("// 修复完成")
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix plan files", "Body")
+	mockGH.SetLabel(1, string(state.StatePRNeedsFix))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "## 最终方案\n\n<!-- PLAN_FILES:[{\"path\":\"src/a.go\",\"action\":\"modify\",\"description\":\"keep\"}] -->")
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 20,
+	}, "PR created")
+	mockGH.PRs = append(mockGH.PRs, &github.PullRequest{
+		Number: github.Ptr(20),
+		Body:   github.Ptr("Closes #1\n\n<!-- PLAN_FILES:[{\"path\":\"src/a.go\",\"action\":\"modify\",\"description\":\"keep\"}] -->"),
+	})
+	mockGH.PRFiles[20] = []gh.PRFile{
+		{Filename: "src/a.go", Status: "modified"},
+		{Filename: "src/b.go", Status: "modified"},
+	}
+
+	orch := NewOrchestrator(mockGH, mockAI, 1)
+	err := orch.DoIterate(context.Background(), 20, "/tmp/work")
+	require.NoError(t, err)
+
+	pr, err := mockGH.GetPR(context.Background(), 20)
+	require.NoError(t, err)
+	assert.Contains(t, pr.GetBody(), "src/b.go", "应自动补齐 missing PLAN_FILES 路径")
+	assert.Contains(t, pr.GetBody(), "自动同步：根据 PR 实际改动补齐")
 }
 
 func TestTransition_ImplementingWillNotDowngradeToFix(t *testing.T) {

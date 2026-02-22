@@ -202,6 +202,18 @@ func (m *flowGitHubMock) CreatePR(_ context.Context, _, _, _, _ string) (*ghapi.
 	return nil, fmt.Errorf("unexpected CreatePR call")
 }
 
+func (m *flowGitHubMock) GetPR(_ context.Context, _ int) (*ghapi.PullRequest, error) {
+	return nil, fmt.Errorf("unexpected GetPR call")
+}
+
+func (m *flowGitHubMock) UpdatePRBody(_ context.Context, _ int, _ string) error {
+	return fmt.Errorf("unexpected UpdatePRBody call")
+}
+
+func (m *flowGitHubMock) ListPRFiles(_ context.Context, _ int) ([]gh.PRFile, error) {
+	return nil, nil
+}
+
 func (m *flowGitHubMock) GetPRDiff(_ context.Context, _ int) (string, error) {
 	return "", nil
 }

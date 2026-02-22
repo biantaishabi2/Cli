@@ -477,6 +477,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if err := o.transition(ctx, state.StateImplementing); err != nil {
 		return err
 	}
+	o.upsertProgressMarker(ctx, marker.TypeImplementProgress, "diagnosis", "已进入 implementing，开始按方案执行代码改动。")
 
 	// 解析最终方案中的 FileChanges（用于 implement 后 diff 对比）
 	plannedChanges := ParseFileChangesFromComment(finalMC.Comment.GetBody())
@@ -486,6 +487,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if implErr != nil {
 		// 回滚状态并通知
 		_ = o.transitionFrom(ctx, state.StateImplementing, prevState, false)
+		o.upsertProgressMarker(ctx, marker.TypeImplementProgress, "handoff", "实现失败，已回滚状态，等待下一步处理。")
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			fmt.Sprintf("## ❌ 实现失败\n\n%s\n\n状态已回滚到 `%s`。", implErr.Error(), prevState))
 		return implErr
@@ -495,6 +497,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if prNumber == 0 {
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			"## ℹ️ 代码实现\n\nAI 执行完成，但 worktree 中无文件变更。状态已回滚。")
+		o.upsertProgressMarker(ctx, marker.TypeImplementProgress, "verify", "实现阶段无文件变更，已回滚到计划状态。")
 		_ = o.transitionFrom(ctx, state.StateImplementing, prevState, false)
 		return nil
 	}
@@ -509,6 +512,7 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, "PR 已创建"); err != nil {
 		return fmt.Errorf("创建 PR marker 失败: %w", err)
 	}
+	o.upsertProgressMarker(ctx, marker.TypeImplementProgress, "handoff", fmt.Sprintf("实现完成并创建 PR #%d，进入审查阶段。", prNumber))
 
 	// 转状态
 	return o.transition(ctx, state.StatePRCreated)
@@ -640,6 +644,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	}
 
 	// 读取 PR review 意见
+	o.upsertProgressMarker(ctx, marker.TypeIterateProgress, "diagnosis", "开始迭代修复，读取 review/gate 历史意见。")
 	reviews, err := o.github.ListPRReviews(ctx, prNumber)
 	if err != nil {
 		return fmt.Errorf("获取 PR reviews 失败: %w", err)
@@ -674,9 +679,16 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	iterateErr := o.doIterateInner(ctx, input, prNumber, workDir)
 	if iterateErr != nil {
 		_ = o.transitionFrom(ctx, state.StateIterating, prevState, false)
+		o.upsertProgressMarker(ctx, marker.TypeIterateProgress, "handoff", "迭代失败，状态已回滚，等待下一步处理。")
 		_, _ = o.github.AddComment(ctx, o.issueNumber,
 			fmt.Sprintf("## ❌ 迭代失败\n\n%s\n\n状态已回滚到 `%s`。", iterateErr.Error(), prevState))
 		return iterateErr
+	}
+
+	// 迭代后自动同步 PR 描述中的 PLAN_FILES，避免“代码已修复但元数据未闭环”。
+	if err := o.syncPRPlanFilesMarker(ctx, prNumber, finalMC.Comment.GetBody()); err != nil {
+		_, _ = o.github.AddComment(ctx, o.issueNumber,
+			fmt.Sprintf("## ⚠️ PLAN_FILES 自动同步失败\n\nPR #%d 元数据同步未完成：%v\n\n请人工检查 PR 描述中的 `PLAN_FILES`。", prNumber, err))
 	}
 
 	// 更新 PR marker revision
@@ -694,6 +706,7 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 	if err := o.github.CreateOrUpdateMarker(ctx, o.issueNumber, m, "PR 已更新"); err != nil {
 		return fmt.Errorf("更新 PR marker 失败: %w", err)
 	}
+	o.upsertProgressMarker(ctx, marker.TypeIterateProgress, "handoff", fmt.Sprintf("迭代完成，PR #%d 已更新并进入下一轮审查。", prNumber))
 
 	// 转状态回 pr-created
 	return o.transition(ctx, state.StatePRCreated)

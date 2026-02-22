@@ -21,6 +21,7 @@ type MockGitHub struct {
 	Markers  map[string]*gh.MarkerComment   // "type:issueNumber" → marker comment
 	PRs      []*github.PullRequest
 	PRDiffs  map[int]string                      // prNumber → diff
+	PRFiles  map[int][]gh.PRFile                 // prNumber → files
 	Reviews  map[int][]*github.PullRequestReview // prNumber → reviews
 
 	// 计数器
@@ -39,6 +40,7 @@ func NewMockGitHub() *MockGitHub {
 		Labels:   make(map[int][]string),
 		Markers:  make(map[string]*gh.MarkerComment),
 		PRDiffs:  make(map[int]string),
+		PRFiles:  make(map[int][]gh.PRFile),
 		Reviews:  make(map[int][]*github.PullRequestReview),
 	}
 }
@@ -256,6 +258,47 @@ func (m *MockGitHub) CreatePR(_ context.Context, title, body, head, base string)
 	}
 	m.PRs = append(m.PRs, pr)
 	return pr, nil
+}
+
+func (m *MockGitHub) GetPR(_ context.Context, number int) (*github.PullRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return nil, m.Error
+	}
+	for _, pr := range m.PRs {
+		if pr.GetNumber() == number {
+			return pr, nil
+		}
+	}
+	return nil, fmt.Errorf("pr #%d not found", number)
+}
+
+func (m *MockGitHub) UpdatePRBody(_ context.Context, number int, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return m.Error
+	}
+	for _, pr := range m.PRs {
+		if pr.GetNumber() == number {
+			pr.Body = github.Ptr(body)
+			return nil
+		}
+	}
+	return fmt.Errorf("pr #%d not found", number)
+}
+
+func (m *MockGitHub) ListPRFiles(_ context.Context, number int) ([]gh.PRFile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Error != nil {
+		return nil, m.Error
+	}
+	return append([]gh.PRFile(nil), m.PRFiles[number]...), nil
 }
 
 func (m *MockGitHub) GetPRDiff(_ context.Context, number int) (string, error) {

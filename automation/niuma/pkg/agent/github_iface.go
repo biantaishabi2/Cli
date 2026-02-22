@@ -34,7 +34,10 @@ type GitHubOps interface {
 	EnsureLabelsExist(ctx context.Context, labels []string) error
 
 	// PR 操作
+	GetPR(ctx context.Context, number int) (*github.PullRequest, error)
 	CreatePR(ctx context.Context, title, body, head, base string) (*github.PullRequest, error)
+	UpdatePRBody(ctx context.Context, number int, body string) error
+	ListPRFiles(ctx context.Context, number int) ([]gh.PRFile, error)
 	GetPRDiff(ctx context.Context, number int) (string, error)
 	CreatePRReview(ctx context.Context, number int, body, event string) (*github.PullRequestReview, error)
 	ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error)
