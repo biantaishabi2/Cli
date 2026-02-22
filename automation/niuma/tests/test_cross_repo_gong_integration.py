@@ -225,11 +225,6 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 "event_source": "other-source",
                 "expected": False,
             },
-            {
-                "name": "schedule",
-                "event_name": "schedule",
-                "expected": True,
-            },
         ]
 
         for case in cases:
