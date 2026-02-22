@@ -1,11 +1,15 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use taskctl::{
-    create_task, dag_graph, default_store_path, delete_task, get_task, list_tasks, load_store,
-    ready_tasks, save_store, update_task, validate_store, DagGraph, TaskCreate, TaskStatus,
-    TaskUpdate, UpdateStatus,
+    CoreError, CoreResponse, DagGraph, ExecuteInput, PlanInput, ResearchInput, TaskCreate,
+    TaskStatus, TaskUpdate, UpdateStatus, create_task, dag_graph, default_store_path, delete_task,
+    execute, get_task, list_tasks, load_store, plan, ready_tasks, research, save_store,
+    update_task, validate_store,
 };
 
 const EXAMPLES: &str = r#"Examples:
@@ -24,12 +28,18 @@ const EXAMPLES: &str = r#"Examples:
   taskctl --store ./tasks.json dag
   taskctl --store ./tasks.json dag-ascii
   taskctl --store ./tasks.json validate
+
+  taskctl research reduce --input ./research.json
+  taskctl plan solve --input ./plan.json
+  taskctl execute compile --input ./execute.json
 "#;
 
 #[derive(Parser, Debug)]
 #[command(name = "taskctl")]
 #[command(about = "Task DAG CLI for human/agent collaboration")]
-#[command(long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints.")]
+#[command(
+    long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints."
+)]
 #[command(after_help = EXAMPLES)]
 struct Cli {
     #[arg(long, global = true, help = "Path to task store JSON file")]
@@ -55,7 +65,10 @@ enum Commands {
     Update {
         #[arg(long, help = "Task ID")]
         task_id: String,
-        #[arg(long, help = "Status transition: pending -> in-progress -> completed, or deleted")]
+        #[arg(
+            long,
+            help = "Status transition: pending -> in-progress -> completed, or deleted"
+        )]
         status: Option<StatusArg>,
         #[arg(long, help = "Updated task title")]
         subject: Option<String>,
@@ -69,7 +82,11 @@ enum Commands {
         metadata: Option<String>,
         #[arg(long, value_delimiter = ',', help = "Task IDs blocked by this task")]
         add_blocks: Vec<String>,
-        #[arg(long, value_delimiter = ',', help = "Dependency task IDs that block this task")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Dependency task IDs that block this task"
+        )]
         add_blocked_by: Vec<String>,
     },
     #[command(about = "Delete task and clean reverse dependency links")]
@@ -93,10 +110,55 @@ enum Commands {
     Ready,
     #[command(about = "Validate graph integrity and acyclic DAG constraints")]
     Validate,
-    #[command(about = "Generate DAG JSON (topo_order, layers, nodes, edges)", alias = "generate")]
+    #[command(
+        about = "Generate DAG JSON (topo_order, layers, nodes, edges)",
+        alias = "generate"
+    )]
     Dag,
     #[command(about = "Render DAG in ASCII text for quick review", alias = "ascii")]
     DagAscii,
+    #[command(about = "Research graph computing commands")]
+    Research {
+        #[command(subcommand)]
+        command: ResearchCommands,
+    },
+    #[command(about = "Plan graph computing commands")]
+    Plan {
+        #[command(subcommand)]
+        command: PlanCommands,
+    },
+    #[command(about = "Execute graph computing commands")]
+    Execute {
+        #[command(subcommand)]
+        command: ExecuteCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ResearchCommands {
+    #[command(about = "Reduce research evidences into aggregated graph")]
+    Reduce {
+        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        input: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PlanCommands {
+    #[command(about = "Solve AND-OR plan graph")]
+    Solve {
+        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        input: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ExecuteCommands {
+    #[command(about = "Compile plan decision into executable DAG")]
+    Compile {
+        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        input: Option<PathBuf>,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -149,6 +211,23 @@ fn parse_metadata(raw: Option<String>) -> Result<Map<String, Value>, String> {
     }
 }
 
+fn parse_json_input<T: DeserializeOwned>(input: Option<PathBuf>) -> Result<T, CoreError> {
+    let raw = match input {
+        Some(path) => fs::read_to_string(path)
+            .map_err(|e| CoreError::invalid_input(format!("failed to read input file: {e}")))?,
+        None => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .map_err(|e| CoreError::invalid_input(format!("failed to read stdin: {e}")))?;
+            raw
+        }
+    };
+
+    serde_json::from_str::<T>(&raw)
+        .map_err(|e| CoreError::invalid_input(format!("invalid input json: {e}")))
+}
+
 fn print_json<T: serde::Serialize>(value: &T) {
     match serde_json::to_string_pretty(value) {
         Ok(raw) => println!("{raw}"),
@@ -197,14 +276,70 @@ fn render_dag_ascii(dag: &DagGraph) -> String {
 fn main() {
     let cli = Cli::parse();
     let store_path = cli.store.unwrap_or_else(default_store_path);
+    let code = run(cli.command, &store_path);
+    std::process::exit(code);
+}
 
-    if let Err(err) = run(cli.command, &store_path) {
-        eprintln!("error: {err}");
-        std::process::exit(1);
+fn run(command: Commands, store_path: &PathBuf) -> i32 {
+    match command {
+        Commands::Research { command } => {
+            let result = match command {
+                ResearchCommands::Reduce { input } => {
+                    let input: Result<ResearchInput, CoreError> = parse_json_input(input);
+                    input.and_then(research::reduce)
+                }
+            };
+            return print_core_result(
+                result.map(|(graph, diagnostics)| CoreResponse::ok_graph(graph, diagnostics)),
+            );
+        }
+        Commands::Plan { command } => {
+            let result = match command {
+                PlanCommands::Solve { input } => {
+                    let input: Result<PlanInput, CoreError> = parse_json_input(input);
+                    input.and_then(plan::solve)
+                }
+            };
+            return print_core_result(
+                result.map(|(decision, diagnostics)| CoreResponse::ok_plan(decision, diagnostics)),
+            );
+        }
+        Commands::Execute { command } => {
+            let result = match command {
+                ExecuteCommands::Compile { input } => {
+                    let input: Result<ExecuteInput, CoreError> = parse_json_input(input);
+                    input.and_then(execute::compile)
+                }
+            };
+            return print_core_result(
+                result.map(|(dag, diagnostics)| CoreResponse::ok_dag(dag, diagnostics)),
+            );
+        }
+        other => {
+            if let Err(err) = run_legacy(other, store_path) {
+                eprintln!("error: {err}");
+                return 1;
+            }
+            0
+        }
     }
 }
 
-fn run(command: Commands, store_path: &PathBuf) -> Result<(), String> {
+fn print_core_result(result: Result<CoreResponse, CoreError>) -> i32 {
+    match result {
+        Ok(response) => {
+            print_json(&response);
+            0
+        }
+        Err(err) => {
+            let response = CoreResponse::from_error(err.clone());
+            print_json(&response);
+            err.exit_code()
+        }
+    }
+}
+
+fn run_legacy(command: Commands, store_path: &PathBuf) -> Result<(), String> {
     match command {
         Commands::Create {
             subject,
@@ -306,6 +441,9 @@ fn run(command: Commands, store_path: &PathBuf) -> Result<(), String> {
             let store = load_store(store_path).map_err(|e| e.to_string())?;
             let dag = dag_graph(&store).map_err(|e| e.to_string())?;
             print!("{}", render_dag_ascii(&dag));
+        }
+        Commands::Research { .. } | Commands::Plan { .. } | Commands::Execute { .. } => {
+            unreachable!("core commands are handled before legacy dispatcher")
         }
     }
     Ok(())

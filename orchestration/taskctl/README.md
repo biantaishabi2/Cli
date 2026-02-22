@@ -10,6 +10,10 @@ Local Rust CLI for task orchestration with dependency DAG support.
 - Graph checks: `validate`
 - Graph export: `dag` / `generate`
 - Human-readable graph: `dag-ascii` / `ascii`
+- Three-graph compute core:
+  - `research reduce`
+  - `plan solve`
+  - `execute compile`
 
 ## Quick Start
 
@@ -35,6 +39,11 @@ cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json update \
 cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json validate
 cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json dag
 cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json dag-ascii
+
+# three-graph compute
+cargo run --manifest-path taskctl/Cargo.toml -- research reduce --input ./research.json
+cargo run --manifest-path taskctl/Cargo.toml -- plan solve --input ./plan.json
+cargo run --manifest-path taskctl/Cargo.toml -- execute compile --input ./execute.json
 ```
 
 ## Default Store
@@ -88,3 +97,36 @@ Fixtures and integration tests:
 cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json dag > dag.json
 cargo run --manifest-path taskctl/Cargo.toml -- --store ./tasks.json dag-ascii > dag.txt
 ```
+
+## Three-Graph Output Contract
+
+All `research/plan/execute` commands share a stable top-level contract:
+
+- `schema_version`: fixed `1.0`
+- `result`: `ok` or `error`
+- Core artifact (only one on success):
+  - `graph` (research)
+  - `plan_decision` (plan)
+  - `dag` (execute)
+- `diagnostics`:
+  - required: `rules_hit`, `conflicts`
+  - optional: `warnings`
+
+Error response adds `error`:
+
+- `error.code`
+- `error.message`
+- optional `error.cycle` (for DAG cycle diagnostics)
+
+## Error Codes
+
+- `E1001 DAG_CYCLE_DETECTED`
+  - phase: `execute compile`
+  - exit code: `2`
+  - payload includes cycle path, e.g. `["A","B","A"]`
+
+## Migration Strategy
+
+- Introduce `research reduce` / `plan solve` / `execute compile` in parallel with existing DAG commands.
+- Keep old DAG commands unchanged for backward compatibility.
+- Runtime side can migrate via feature flag or alias first, then switch default path after stability verification.

@@ -1,0 +1,22 @@
+{
+  "evidences": [
+    {
+      "evidence_id": "ev-100",
+      "conclusion_id": "c-service-ready",
+      "relation": "supports",
+      "confidence": 0.9
+    },
+    {
+      "evidence_id": "ev-101",
+      "conclusion_id": "c-service-ready",
+      "relation": "supports",
+      "confidence": 0.7
+    },
+    {
+      "evidence_id": "ev-102",
+      "conclusion_id": "c-service-ready",
+      "relation": "supports",
+      "confidence": 0.8
+    }
+  ]
+}
