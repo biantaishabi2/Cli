@@ -11,6 +11,7 @@ use taskctl::{
     create_task, dag_graph, default_store_path, delete_task, execute, get_task, list_tasks,
     load_store, ready_tasks, research, save_store, update_task, validate_store,
 };
+use taskctl::research::ReduceOptions;
 
 const EXAMPLES: &str = r#"Examples:
   taskctl --store ./tasks.json create \
@@ -148,10 +149,14 @@ enum ResearchCommands {
     },
     #[command(about = "List all evidences in the research store")]
     List,
-    #[command(about = "Reduce research evidences into aggregated graph")]
+    #[command(about = "Reduce research evidences into aggregated graph with verdict")]
     Reduce {
         #[arg(long, help = "JSON input file path; if omitted, reads from store")]
         input: Option<PathBuf>,
+        #[arg(long, default_value = "0.7", help = "Confidence threshold for 'act' verdict")]
+        act_threshold: f64,
+        #[arg(long, default_value = "0.3", help = "Confidence threshold below which verdict is 'investigate'")]
+        investigate_threshold: f64,
     },
 }
 
@@ -349,10 +354,11 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                 print_json(&evidences);
                 0
             }
-            ResearchCommands::Reduce { input } => {
+            ResearchCommands::Reduce { input, act_threshold, investigate_threshold } => {
+                let options = ReduceOptions { act_threshold, investigate_threshold };
                 let result = if let Some(path) = input {
                     let parsed: Result<ResearchInput, CoreError> = parse_json_input(Some(path));
-                    parsed.and_then(research::reduce)
+                    parsed.and_then(|i| research::reduce_with_options(i, options))
                 } else {
                     // 从 store 读取
                     let store = match load_store(store_path) {
@@ -360,7 +366,7 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                         Err(e) => { eprintln!("error: {e}"); return 1; }
                     };
                     let evidences: Vec<_> = store.research_evidences.values().cloned().collect();
-                    research::reduce(ResearchInput { evidences })
+                    research::reduce_with_options(ResearchInput { evidences }, options)
                 };
                 print_core_result(
                     result.map(|(graph, diagnostics)| CoreResponse::ok_graph(graph, diagnostics)),
