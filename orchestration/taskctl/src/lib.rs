@@ -8,11 +8,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod execute;
-pub mod plan;
 pub mod research;
 
 pub use execute::{ExecuteDag, ExecuteEdge, ExecuteInput, ExecuteNode};
-pub use plan::{PlanDecision, PlanEdge, PlanInput, PlanNode, PlanNodeType};
 pub use research::{
     EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph, ResearchInput,
 };
@@ -54,8 +52,6 @@ pub struct CoreResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graph: Option<ResearchGraph>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_decision: Option<PlanDecision>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dag: Option<ExecuteDag>,
     pub diagnostics: Diagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,19 +66,6 @@ impl CoreResponse {
             schema_version: Self::SCHEMA_VERSION.to_string(),
             result: ContractResult::Ok,
             graph: Some(graph),
-            plan_decision: None,
-            dag: None,
-            diagnostics,
-            error: None,
-        }
-    }
-
-    pub fn ok_plan(plan_decision: PlanDecision, diagnostics: Diagnostics) -> Self {
-        Self {
-            schema_version: Self::SCHEMA_VERSION.to_string(),
-            result: ContractResult::Ok,
-            graph: None,
-            plan_decision: Some(plan_decision),
             dag: None,
             diagnostics,
             error: None,
@@ -94,7 +77,6 @@ impl CoreResponse {
             schema_version: Self::SCHEMA_VERSION.to_string(),
             result: ContractResult::Ok,
             graph: None,
-            plan_decision: None,
             dag: Some(dag),
             diagnostics,
             error: None,
@@ -106,7 +88,6 @@ impl CoreResponse {
             schema_version: Self::SCHEMA_VERSION.to_string(),
             result: ContractResult::Error,
             graph: None,
-            plan_decision: None,
             dag: None,
             diagnostics: Diagnostics::default(),
             error: Some(error.to_payload()),
@@ -201,10 +182,6 @@ pub struct TaskStore {
     pub tasks: BTreeMap<String, Task>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub research_evidences: BTreeMap<String, research::ResearchEvidence>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_root: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plan_nodes: BTreeMap<String, plan::PlanNode>,
 }
 
 impl Default for TaskStore {
@@ -213,8 +190,6 @@ impl Default for TaskStore {
             version: default_version(),
             tasks: BTreeMap::new(),
             research_evidences: BTreeMap::new(),
-            plan_root: None,
-            plan_nodes: BTreeMap::new(),
         }
     }
 }
