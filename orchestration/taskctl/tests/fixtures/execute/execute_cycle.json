@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {
+      "node_id": "A",
+      "depends_on": ["B"]
+    },
+    {
+      "node_id": "B",
+      "depends_on": ["A"]
+    }
+  ]
+}

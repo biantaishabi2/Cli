@@ -118,7 +118,38 @@ bcc arch validate \
   --out-dir /tmp/validate
 ```
 
+## taskctl research — 假设驱动研究推理
+
+在调查 bug、做架构决策、需求调研等不确定场景时，使用 `taskctl research` 进行结构化推理。
+
+### 核心流程
+
+**靠直觉 → 大胆假设 → 小心求证 → 更新判断 → 收敛到结论**
+
+1. **声明假设**：`taskctl research hypothesis add --id <ID> --prior <0.0~1.0>`
+2. **添加证据**：`taskctl research add --evidence-id <EID> --conclusion-id <HID> --relation <supports/conflicts> --confidence <0.0~1.0> --bond <deduction/verification/exploration>`
+3. **查看状态**：`taskctl research hypothesis list` / `taskctl research list`
+4. **根据 verdict 行动**：act（可行动）/ investigate（继续调查）/ contested（证据冲突）
+
+### 证据类型（bond_type）
+
+| bond | 权重 | 含义 | 使用场景 |
+|------|------|------|---------|
+| `deduction` | ×1.0 | 逻辑推导 | 读了代码、跑了测试、查了数据 |
+| `verification` | ×0.7 | 交叉验证 | 文档、日志、第二来源确认 |
+| `exploration` | ×0.3 | 试探猜测 | 直觉推断、模式匹配 |
+
+### 关键原则
+
+- 先假设再求证（prior=0.5 = "完全不确定"也是合法起点）
+- 诚实声明 confidence 和 bond_type
+- posterior >= 0.7 → verdict: act → 可以行动
+- verdict: contested → 先厘清矛盾，不要堆支持证据
+
+详见 `orchestration/taskctl/README.md` 的 Research 工具使用指南。
+
 ## 参考
 
 - Issue 列表: https://github.com/biantaishabi2/Cli/issues
 - 项目 README: ./README.md
+- taskctl 文档: ./orchestration/taskctl/README.md

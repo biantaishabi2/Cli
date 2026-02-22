@@ -1,12 +1,18 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use taskctl::{
-    create_task, dag_graph, default_store_path, delete_task, get_task, list_tasks, load_store,
-    ready_tasks, save_store, update_task, validate_store, DagGraph, TaskCreate, TaskStatus,
-    TaskUpdate, UpdateStatus,
+    BondType, CoreError, CoreResponse, DagGraph, EvidenceRelation, ExecuteInput,
+    ResearchEvidence, ResearchHypothesis, ResearchInput, TaskCreate, TaskStatus, TaskUpdate,
+    UpdateStatus,
+    create_task, dag_graph, default_store_path, delete_task, execute, get_task, list_tasks,
+    load_store, ready_tasks, research, save_store, update_task, validate_store,
 };
+use taskctl::research::{ReduceOptions, bayesian_update, classify_verdict};
 
 const EXAMPLES: &str = r#"Examples:
   taskctl --store ./tasks.json create \
@@ -24,12 +30,17 @@ const EXAMPLES: &str = r#"Examples:
   taskctl --store ./tasks.json dag
   taskctl --store ./tasks.json dag-ascii
   taskctl --store ./tasks.json validate
+
+  taskctl research reduce --input ./research.json
+  taskctl execute compile --input ./execute.json
 "#;
 
 #[derive(Parser, Debug)]
 #[command(name = "taskctl")]
 #[command(about = "Task DAG CLI for human/agent collaboration")]
-#[command(long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints.")]
+#[command(
+    long_about = "Task DAG CLI for human/agent collaboration.\n\nUse this tool to create/update tasks, manage dependencies, compute ready tasks, and validate DAG constraints."
+)]
 #[command(after_help = EXAMPLES)]
 struct Cli {
     #[arg(long, global = true, help = "Path to task store JSON file")]
@@ -55,7 +66,10 @@ enum Commands {
     Update {
         #[arg(long, help = "Task ID")]
         task_id: String,
-        #[arg(long, help = "Status transition: pending -> in-progress -> completed, or deleted")]
+        #[arg(
+            long,
+            help = "Status transition: pending -> in-progress -> completed, or deleted"
+        )]
         status: Option<StatusArg>,
         #[arg(long, help = "Updated task title")]
         subject: Option<String>,
@@ -69,7 +83,11 @@ enum Commands {
         metadata: Option<String>,
         #[arg(long, value_delimiter = ',', help = "Task IDs blocked by this task")]
         add_blocks: Vec<String>,
-        #[arg(long, value_delimiter = ',', help = "Dependency task IDs that block this task")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Dependency task IDs that block this task"
+        )]
         add_blocked_by: Vec<String>,
     },
     #[command(about = "Delete task and clean reverse dependency links")]
@@ -93,10 +111,106 @@ enum Commands {
     Ready,
     #[command(about = "Validate graph integrity and acyclic DAG constraints")]
     Validate,
-    #[command(about = "Generate DAG JSON (topo_order, layers, nodes, edges)", alias = "generate")]
+    #[command(
+        about = "Generate DAG JSON (topo_order, layers, nodes, edges)",
+        alias = "generate"
+    )]
     Dag,
     #[command(about = "Render DAG in ASCII text for quick review", alias = "ascii")]
     DagAscii,
+    #[command(about = "Research graph computing commands")]
+    Research {
+        #[command(subcommand)]
+        command: ResearchCommands,
+    },
+    #[command(about = "Execute graph computing commands")]
+    Execute {
+        #[command(subcommand)]
+        command: ExecuteCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ResearchCommands {
+    #[command(about = "Declare a hypothesis with prior belief")]
+    Hypothesis {
+        #[command(subcommand)]
+        command: HypothesisCommands,
+    },
+    #[command(about = "Add evidence and auto-update hypothesis posterior")]
+    Add {
+        #[arg(long)]
+        evidence_id: String,
+        #[arg(long)]
+        conclusion_id: String,
+        #[arg(long, value_enum)]
+        relation: RelationArg,
+        #[arg(long, allow_hyphen_values = true)]
+        confidence: f64,
+        #[arg(long, value_enum, default_value = "deduction",
+              help = "Evidence source type: deduction (×1.0), verification (×0.7), exploration (×0.3)")]
+        bond: BondTypeArg,
+    },
+    #[command(about = "Remove an evidence from the research store")]
+    Remove {
+        #[arg(long)]
+        evidence_id: String,
+    },
+    #[command(about = "List all hypotheses with current posteriors")]
+    List,
+    #[command(about = "Reduce research evidences into aggregated graph with verdict")]
+    Reduce {
+        #[arg(long, help = "JSON input file path; if omitted, reads from store")]
+        input: Option<PathBuf>,
+        #[arg(long, default_value = "0.7", help = "Confidence threshold for 'act' verdict")]
+        act_threshold: f64,
+        #[arg(long, default_value = "0.3", help = "Confidence threshold below which verdict is 'investigate'")]
+        investigate_threshold: f64,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum RelationArg {
+    Supports,
+    Conflicts,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum BondTypeArg {
+    /// 共价键：逻辑推导（权重 ×1.0）
+    Deduction,
+    /// 氢键：回检校验（权重 ×0.7）
+    Verification,
+    /// 范德华力：试探猜测（权重 ×0.3）
+    Exploration,
+}
+
+#[derive(Subcommand, Debug)]
+enum HypothesisCommands {
+    #[command(about = "Declare a new hypothesis with prior belief")]
+    Add {
+        #[arg(long, help = "Hypothesis ID (same as conclusion_id for evidence)")]
+        id: String,
+        #[arg(long, default_value = "0.5", allow_hyphen_values = true,
+              help = "Prior belief [0.0, 1.0], default 0.5 (no opinion)")]
+        prior: f64,
+    },
+    #[command(about = "Remove a hypothesis")]
+    Remove {
+        #[arg(long)]
+        id: String,
+    },
+    #[command(about = "List all hypotheses")]
+    List,
+}
+
+#[derive(Subcommand, Debug)]
+enum ExecuteCommands {
+    #[command(about = "Compile plan decision into executable DAG")]
+    Compile {
+        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        input: Option<PathBuf>,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -149,6 +263,23 @@ fn parse_metadata(raw: Option<String>) -> Result<Map<String, Value>, String> {
     }
 }
 
+fn parse_json_input<T: DeserializeOwned>(input: Option<PathBuf>) -> Result<T, CoreError> {
+    let raw = match input {
+        Some(path) => fs::read_to_string(path)
+            .map_err(|e| CoreError::invalid_input(format!("failed to read input file: {e}")))?,
+        None => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .map_err(|e| CoreError::invalid_input(format!("failed to read stdin: {e}")))?;
+            raw
+        }
+    };
+
+    serde_json::from_str::<T>(&raw)
+        .map_err(|e| CoreError::invalid_input(format!("invalid input json: {e}")))
+}
+
 fn print_json<T: serde::Serialize>(value: &T) {
     match serde_json::to_string_pretty(value) {
         Ok(raw) => println!("{raw}"),
@@ -197,14 +328,220 @@ fn render_dag_ascii(dag: &DagGraph) -> String {
 fn main() {
     let cli = Cli::parse();
     let store_path = cli.store.unwrap_or_else(default_store_path);
+    let code = run(cli.command, &store_path);
+    std::process::exit(code);
+}
 
-    if let Err(err) = run(cli.command, &store_path) {
-        eprintln!("error: {err}");
-        std::process::exit(1);
+fn run(command: Commands, store_path: &PathBuf) -> i32 {
+    match command {
+        Commands::Research { command } => match command {
+            ResearchCommands::Hypothesis { command: hyp_cmd } => match hyp_cmd {
+                HypothesisCommands::Add { id, prior } => {
+                    if !(0.0..=1.0).contains(&prior) {
+                        eprintln!("error: prior must be within [0.0, 1.0], got {prior}");
+                        return 1;
+                    }
+                    let mut store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let options = ReduceOptions::default();
+                    let verdict = classify_verdict(prior, &options);
+                    store.research_hypotheses.insert(
+                        id.clone(),
+                        ResearchHypothesis {
+                            conclusion_id: id.clone(),
+                            prior,
+                            posterior: prior,
+                            verdict,
+                            evidence_count: 0,
+                        },
+                    );
+                    if let Err(e) = save_store(store_path, &store) {
+                        eprintln!("error: {e}"); return 1;
+                    }
+                    print_json(&serde_json::json!({
+                        "ok": true,
+                        "hypothesis": id,
+                        "prior": prior,
+                        "posterior": prior,
+                        "verdict": format!("{:?}", verdict).to_lowercase(),
+                    }));
+                    0
+                }
+                HypothesisCommands::Remove { id } => {
+                    let mut store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    if store.research_hypotheses.remove(&id).is_none() {
+                        eprintln!("error: hypothesis '{}' not found", id);
+                        return 1;
+                    }
+                    if let Err(e) = save_store(store_path, &store) {
+                        eprintln!("error: {e}"); return 1;
+                    }
+                    print_json(&serde_json::json!({"deleted": id}));
+                    0
+                }
+                HypothesisCommands::List => {
+                    let store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let hypotheses: Vec<_> = store.research_hypotheses.values().collect();
+                    print_json(&hypotheses);
+                    0
+                }
+            },
+            ResearchCommands::Add {
+                evidence_id,
+                conclusion_id,
+                relation,
+                confidence,
+                bond,
+            } => {
+                if !(0.0..=1.0).contains(&confidence) {
+                    eprintln!("error: confidence must be within [0.0, 1.0], got {confidence}");
+                    return 1;
+                }
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                let rel = match relation {
+                    RelationArg::Supports => EvidenceRelation::Supports,
+                    RelationArg::Conflicts => EvidenceRelation::Conflicts,
+                };
+                let bt = match bond {
+                    BondTypeArg::Deduction => BondType::Deduction,
+                    BondTypeArg::Verification => BondType::Verification,
+                    BondTypeArg::Exploration => BondType::Exploration,
+                };
+                let ev = ResearchEvidence {
+                    evidence_id: evidence_id.clone(),
+                    conclusion_id: conclusion_id.clone(),
+                    relation: rel,
+                    confidence,
+                    bond_type: bt,
+                };
+
+                // 自动更新 hypothesis posterior（没有 hypothesis 则自动创建 prior=0.5）
+                let options = ReduceOptions::default();
+                let hyp = store.research_hypotheses
+                    .entry(conclusion_id.clone())
+                    .or_insert_with(|| {
+                        let verdict = classify_verdict(0.5, &options);
+                        ResearchHypothesis {
+                            conclusion_id: conclusion_id.clone(),
+                            prior: 0.5,
+                            posterior: 0.5,
+                            verdict,
+                            evidence_count: 0,
+                        }
+                    });
+                bayesian_update(hyp, &ev, &options);
+                let posterior = hyp.posterior;
+                let verdict = hyp.verdict;
+
+                store.research_evidences.insert(evidence_id.clone(), ev);
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({
+                    "ok": true,
+                    "evidence_id": evidence_id,
+                    "conclusion_id": conclusion_id,
+                    "posterior": posterior,
+                    "verdict": format!("{:?}", verdict).to_lowercase(),
+                    "evidence_count": store.research_evidences.len(),
+                }));
+                0
+            }
+            ResearchCommands::Remove { evidence_id } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                if store.research_evidences.remove(&evidence_id).is_none() {
+                    eprintln!("error: evidence '{}' not found", evidence_id);
+                    return 1;
+                }
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({"deleted": evidence_id}));
+                0
+            }
+            ResearchCommands::List => {
+                let store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                // 显示 hypotheses（带 posterior + verdict）+ evidences
+                let hypotheses: Vec<_> = store.research_hypotheses.values().collect();
+                let evidences: Vec<_> = store.research_evidences.values().collect();
+                print_json(&serde_json::json!({
+                    "hypotheses": hypotheses,
+                    "evidences": evidences,
+                }));
+                0
+            }
+            ResearchCommands::Reduce { input, act_threshold, investigate_threshold } => {
+                let options = ReduceOptions { act_threshold, investigate_threshold };
+                let result = if let Some(path) = input {
+                    let parsed: Result<ResearchInput, CoreError> = parse_json_input(Some(path));
+                    parsed.and_then(|i| research::reduce_with_options(i, options))
+                } else {
+                    // 从 store 读取
+                    let store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let evidences: Vec<_> = store.research_evidences.values().cloned().collect();
+                    research::reduce_with_options(ResearchInput { evidences }, options)
+                };
+                print_core_result(
+                    result.map(|(graph, diagnostics)| CoreResponse::ok_graph(graph, diagnostics)),
+                )
+            }
+        },
+        Commands::Execute { command } => {
+            let result = match command {
+                ExecuteCommands::Compile { input } => {
+                    let input: Result<ExecuteInput, CoreError> = parse_json_input(input);
+                    input.and_then(execute::compile)
+                }
+            };
+            print_core_result(
+                result.map(|(dag, diagnostics)| CoreResponse::ok_dag(dag, diagnostics)),
+            )
+        }
+        other => {
+            if let Err(err) = run_legacy(other, store_path) {
+                eprintln!("error: {err}");
+                return 1;
+            }
+            0
+        }
     }
 }
 
-fn run(command: Commands, store_path: &PathBuf) -> Result<(), String> {
+fn print_core_result(result: Result<CoreResponse, CoreError>) -> i32 {
+    match result {
+        Ok(response) => {
+            print_json(&response);
+            0
+        }
+        Err(err) => {
+            let response = CoreResponse::from_error(err.clone());
+            print_json(&response);
+            err.exit_code()
+        }
+    }
+}
+
+fn run_legacy(command: Commands, store_path: &PathBuf) -> Result<(), String> {
     match command {
         Commands::Create {
             subject,
@@ -306,6 +643,9 @@ fn run(command: Commands, store_path: &PathBuf) -> Result<(), String> {
             let store = load_store(store_path).map_err(|e| e.to_string())?;
             let dag = dag_graph(&store).map_err(|e| e.to_string())?;
             print!("{}", render_dag_ascii(&dag));
+        }
+        Commands::Research { .. } | Commands::Execute { .. } => {
+            unreachable!("core commands are handled before legacy dispatcher")
         }
     }
     Ok(())
