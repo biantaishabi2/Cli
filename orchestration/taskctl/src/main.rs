@@ -6,10 +6,10 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use taskctl::{
-    CoreError, CoreResponse, DagGraph, ExecuteInput, PlanInput, ResearchInput, TaskCreate,
-    TaskStatus, TaskUpdate, UpdateStatus, create_task, dag_graph, default_store_path, delete_task,
-    execute, get_task, list_tasks, load_store, plan, ready_tasks, research, save_store,
-    update_task, validate_store,
+    CoreError, CoreResponse, DagGraph, EvidenceRelation, ExecuteInput, PlanInput, PlanNode,
+    PlanNodeType, ResearchEvidence, ResearchInput, TaskCreate, TaskStatus, TaskUpdate, UpdateStatus,
+    create_task, dag_graph, default_store_path, delete_task, execute, get_task, list_tasks,
+    load_store, plan, ready_tasks, research, save_store, update_task, validate_store,
 };
 
 const EXAMPLES: &str = r#"Examples:
@@ -136,20 +136,78 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum ResearchCommands {
+    #[command(about = "Add an evidence to the research store")]
+    Add {
+        #[arg(long)]
+        evidence_id: String,
+        #[arg(long)]
+        conclusion_id: String,
+        #[arg(long, value_enum)]
+        relation: RelationArg,
+        #[arg(long)]
+        confidence: f64,
+    },
+    #[command(about = "Remove an evidence from the research store")]
+    Remove {
+        #[arg(long)]
+        evidence_id: String,
+    },
+    #[command(about = "List all evidences in the research store")]
+    List,
     #[command(about = "Reduce research evidences into aggregated graph")]
     Reduce {
-        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        #[arg(long, help = "JSON input file path; if omitted, reads from store")]
         input: Option<PathBuf>,
     },
 }
 
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum RelationArg {
+    Supports,
+    Conflicts,
+}
+
 #[derive(Subcommand, Debug)]
 enum PlanCommands {
+    #[command(about = "Add or update a node in the plan store")]
+    Add {
+        #[arg(long)]
+        node_id: String,
+        #[arg(long, value_enum)]
+        node_type: PlanNodeTypeArg,
+        #[arg(long)]
+        score: f64,
+        #[arg(long)]
+        confidence: f64,
+        #[arg(long, value_delimiter = ',', help = "Child node IDs")]
+        children: Vec<String>,
+        #[arg(long)]
+        evidence_id: Option<String>,
+    },
+    #[command(about = "Remove a node from the plan store")]
+    Remove {
+        #[arg(long)]
+        node_id: String,
+    },
+    #[command(about = "Set the root node for plan solve")]
+    SetRoot {
+        #[arg(long)]
+        node_id: String,
+    },
+    #[command(about = "List all nodes in the plan store")]
+    List,
     #[command(about = "Solve AND-OR plan graph")]
     Solve {
-        #[arg(long, help = "JSON input file path; defaults to STDIN")]
+        #[arg(long, help = "JSON input file path; if omitted, reads from store")]
         input: Option<PathBuf>,
     },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum PlanNodeTypeArg {
+    And,
+    Or,
+    Leaf,
 }
 
 #[derive(Subcommand, Debug)]
@@ -282,28 +340,182 @@ fn main() {
 
 fn run(command: Commands, store_path: &PathBuf) -> i32 {
     match command {
-        Commands::Research { command } => {
-            let result = match command {
-                ResearchCommands::Reduce { input } => {
-                    let input: Result<ResearchInput, CoreError> = parse_json_input(input);
-                    input.and_then(research::reduce)
+        Commands::Research { command } => match command {
+            ResearchCommands::Add {
+                evidence_id,
+                conclusion_id,
+                relation,
+                confidence,
+            } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                let rel = match relation {
+                    RelationArg::Supports => EvidenceRelation::Supports,
+                    RelationArg::Conflicts => EvidenceRelation::Conflicts,
+                };
+                store.research_evidences.insert(
+                    evidence_id.clone(),
+                    ResearchEvidence {
+                        evidence_id,
+                        conclusion_id,
+                        relation: rel,
+                        confidence,
+                    },
+                );
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
                 }
-            };
-            return print_core_result(
-                result.map(|(graph, diagnostics)| CoreResponse::ok_graph(graph, diagnostics)),
-            );
-        }
-        Commands::Plan { command } => {
-            let result = match command {
-                PlanCommands::Solve { input } => {
-                    let input: Result<PlanInput, CoreError> = parse_json_input(input);
-                    input.and_then(plan::solve)
+                print_json(&serde_json::json!({"ok": true, "evidence_count": store.research_evidences.len()}));
+                0
+            }
+            ResearchCommands::Remove { evidence_id } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                if store.research_evidences.remove(&evidence_id).is_none() {
+                    eprintln!("error: evidence '{}' not found", evidence_id);
+                    return 1;
                 }
-            };
-            return print_core_result(
-                result.map(|(decision, diagnostics)| CoreResponse::ok_plan(decision, diagnostics)),
-            );
-        }
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({"deleted": evidence_id}));
+                0
+            }
+            ResearchCommands::List => {
+                let store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                let evidences: Vec<_> = store.research_evidences.values().collect();
+                print_json(&evidences);
+                0
+            }
+            ResearchCommands::Reduce { input } => {
+                let result = if let Some(path) = input {
+                    let parsed: Result<ResearchInput, CoreError> = parse_json_input(Some(path));
+                    parsed.and_then(research::reduce)
+                } else {
+                    // 从 store 读取
+                    let store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let evidences: Vec<_> = store.research_evidences.values().cloned().collect();
+                    research::reduce(ResearchInput { evidences })
+                };
+                print_core_result(
+                    result.map(|(graph, diagnostics)| CoreResponse::ok_graph(graph, diagnostics)),
+                )
+            }
+        },
+        Commands::Plan { command } => match command {
+            PlanCommands::Add {
+                node_id,
+                node_type,
+                score,
+                confidence,
+                children,
+                evidence_id,
+            } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                let nt = match node_type {
+                    PlanNodeTypeArg::And => PlanNodeType::And,
+                    PlanNodeTypeArg::Or => PlanNodeType::Or,
+                    PlanNodeTypeArg::Leaf => PlanNodeType::Leaf,
+                };
+                store.plan_nodes.insert(
+                    node_id.clone(),
+                    PlanNode {
+                        node_id,
+                        node_type: nt,
+                        score,
+                        confidence,
+                        children,
+                        evidence_id,
+                    },
+                );
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({"ok": true, "node_count": store.plan_nodes.len()}));
+                0
+            }
+            PlanCommands::Remove { node_id } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                if store.plan_nodes.remove(&node_id).is_none() {
+                    eprintln!("error: plan node '{}' not found", node_id);
+                    return 1;
+                }
+                // 如果删的是 root，清空 root
+                if store.plan_root.as_deref() == Some(&node_id) {
+                    store.plan_root = None;
+                }
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({"deleted": node_id}));
+                0
+            }
+            PlanCommands::SetRoot { node_id } => {
+                let mut store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                if !store.plan_nodes.contains_key(&node_id) {
+                    eprintln!("error: plan node '{}' not found in store", node_id);
+                    return 1;
+                }
+                store.plan_root = Some(node_id.clone());
+                if let Err(e) = save_store(store_path, &store) {
+                    eprintln!("error: {e}"); return 1;
+                }
+                print_json(&serde_json::json!({"ok": true, "root": node_id}));
+                0
+            }
+            PlanCommands::List => {
+                let store = match load_store(store_path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: {e}"); return 1; }
+                };
+                let nodes: Vec<_> = store.plan_nodes.values().collect();
+                print_json(&serde_json::json!({"root": store.plan_root, "nodes": nodes}));
+                0
+            }
+            PlanCommands::Solve { input } => {
+                let result = if let Some(path) = input {
+                    let parsed: Result<PlanInput, CoreError> = parse_json_input(Some(path));
+                    parsed.and_then(plan::solve)
+                } else {
+                    // 从 store 读取
+                    let store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let root = match store.plan_root {
+                        Some(r) => r,
+                        None => {
+                            eprintln!("error: no plan root set; use 'plan set-root --node-id <ID>' or 'plan solve --input <FILE>'");
+                            return 1;
+                        }
+                    };
+                    let nodes: Vec<_> = store.plan_nodes.values().cloned().collect();
+                    plan::solve(PlanInput { root, nodes })
+                };
+                print_core_result(
+                    result.map(|(decision, diagnostics)| CoreResponse::ok_plan(decision, diagnostics)),
+                )
+            }
+        },
         Commands::Execute { command } => {
             let result = match command {
                 ExecuteCommands::Compile { input } => {
@@ -311,9 +523,9 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                     input.and_then(execute::compile)
                 }
             };
-            return print_core_result(
+            print_core_result(
                 result.map(|(dag, diagnostics)| CoreResponse::ok_dag(dag, diagnostics)),
-            );
+            )
         }
         other => {
             if let Err(err) = run_legacy(other, store_path) {

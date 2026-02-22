@@ -199,6 +199,12 @@ pub struct TaskStore {
     pub version: u32,
     #[serde(default)]
     pub tasks: BTreeMap<String, Task>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub research_evidences: BTreeMap<String, research::ResearchEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_root: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plan_nodes: BTreeMap<String, plan::PlanNode>,
 }
 
 impl Default for TaskStore {
@@ -206,6 +212,9 @@ impl Default for TaskStore {
         Self {
             version: default_version(),
             tasks: BTreeMap::new(),
+            research_evidences: BTreeMap::new(),
+            plan_root: None,
+            plan_nodes: BTreeMap::new(),
         }
     }
 }
