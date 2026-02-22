@@ -268,6 +268,53 @@ func TestIntegrationBuilder_PushBranch_EmptyBranch(t *testing.T) {
 	assert.Contains(t, err.Error(), "分支名为空")
 }
 
+func TestIntegrationBuilder_EnsureBranch_UsesRemoteIntegrationAsBase(t *testing.T) {
+	// 第一次：在 repo A 中完成一轮 integration 合入并推送。
+	repoA, remoteDir := setupGitRepoWithBareRemote(t)
+	createBranch(t, repoA, "feat/40-auth", "auth.go", "package auth\n")
+	runGit(t, repoA, "push", "-u", "origin", "feat/40-auth")
+
+	builderA := NewIntegrationBuilder(repoA, "master")
+	outcomeA, err := builderA.ExecuteIntegrationMerge("integration/main", BranchInfo{
+		Branch:   "feat/40-auth",
+		IssueNum: 40,
+		PRNum:    400,
+	}, "")
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusMerged, outcomeA.Status)
+	require.NoError(t, builderA.PushBranch("integration/main"))
+
+	// 第二次：在 repo B（新工作目录）中继续合入下一条分支。
+	repoB := filepath.Join(t.TempDir(), "repo-b")
+	runGit(t, "", "clone", remoteDir, repoB)
+	runGit(t, repoB, "config", "user.email", "test@test.com")
+	runGit(t, repoB, "config", "user.name", "Test")
+
+	createBranch(t, repoB, "feat/41-payment", "payment.go", "package payment\n")
+	runGit(t, repoB, "push", "-u", "origin", "feat/41-payment")
+
+	builderB := NewIntegrationBuilder(repoB, "master")
+	outcomeB, err := builderB.ExecuteIntegrationMerge("integration/main", BranchInfo{
+		Branch:   "feat/41-payment",
+		IssueNum: 41,
+		PRNum:    401,
+	}, "")
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusMerged, outcomeB.Status)
+	require.NoError(t, builderB.PushBranch("integration/main"))
+
+	// 验证远端 integration/main 已连续包含两次合入结果。
+	cmd := exec.Command("git", "--git-dir", remoteDir, "show", "refs/heads/integration/main:auth.go")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), "package auth")
+
+	cmd = exec.Command("git", "--git-dir", remoteDir, "show", "refs/heads/integration/main:payment.go")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), "package payment")
+}
+
 func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConflict(t *testing.T) {
 	dir := setupGitRepo(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
