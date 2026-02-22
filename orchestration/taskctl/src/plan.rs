@@ -56,6 +56,13 @@ struct Candidate {
     trace: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    NotVisited,
+    Visiting,
+    Visited,
+}
+
 pub fn solve(input: PlanInput) -> Result<(PlanDecision, Diagnostics), CoreError> {
     let node_map = build_node_map(input.nodes)?;
     if !node_map.contains_key(&input.root) {
@@ -65,7 +72,13 @@ pub fn solve(input: PlanInput) -> Result<(PlanDecision, Diagnostics), CoreError>
         )));
     }
 
-    let candidate = solve_node(&input.root, &node_map)?;
+    let mut states = node_map
+        .keys()
+        .map(|k| (k.clone(), VisitState::NotVisited))
+        .collect::<BTreeMap<_, _>>();
+    let mut memo = BTreeMap::new();
+    let mut stack = Vec::new();
+    let candidate = solve_node(&input.root, &node_map, &mut states, &mut memo, &mut stack)?;
 
     let selected_nodes = candidate.nodes.into_iter().collect::<Vec<_>>();
     let selected_edges = candidate
@@ -97,9 +110,21 @@ pub fn solve(input: PlanInput) -> Result<(PlanDecision, Diagnostics), CoreError>
 fn build_node_map(nodes: Vec<PlanNode>) -> Result<BTreeMap<String, PlanNode>, CoreError> {
     let mut node_map = BTreeMap::new();
     for node in nodes {
+        if node_map.contains_key(&node.node_id) {
+            return Err(CoreError::invalid_input(format!(
+                "duplicate node_id '{}'",
+                node.node_id
+            )));
+        }
         if !(0.0..=1.0).contains(&node.confidence) {
             return Err(CoreError::invalid_input(format!(
                 "node '{}' confidence must be within [0,1]",
+                node.node_id
+            )));
+        }
+        if matches!(node.node_type, PlanNodeType::Leaf) && !node.children.is_empty() {
+            return Err(CoreError::invalid_input(format!(
+                "leaf node '{}' must not have children",
                 node.node_id
             )));
         }
@@ -123,12 +148,45 @@ fn build_node_map(nodes: Vec<PlanNode>) -> Result<BTreeMap<String, PlanNode>, Co
 fn solve_node(
     node_id: &str,
     node_map: &BTreeMap<String, PlanNode>,
+    states: &mut BTreeMap<String, VisitState>,
+    memo: &mut BTreeMap<String, Candidate>,
+    stack: &mut Vec<String>,
 ) -> Result<Candidate, CoreError> {
+    match states
+        .get(node_id)
+        .copied()
+        .unwrap_or(VisitState::NotVisited)
+    {
+        VisitState::Visited => {
+            return memo.get(node_id).cloned().ok_or_else(|| {
+                CoreError::invalid_input(format!("missing memoized node '{node_id}'"))
+            });
+        }
+        VisitState::Visiting => {
+            if let Some(pos) = stack.iter().position(|n| n == node_id) {
+                let mut cycle = stack[pos..].to_vec();
+                cycle.push(node_id.to_string());
+                return Err(CoreError::invalid_input(format!(
+                    "cycle detected in plan graph: {}",
+                    cycle.join("->")
+                )));
+            }
+            return Err(CoreError::invalid_input(format!(
+                "cycle detected in plan graph at node '{}'",
+                node_id
+            )));
+        }
+        VisitState::NotVisited => {}
+    }
+
+    states.insert(node_id.to_string(), VisitState::Visiting);
+    stack.push(node_id.to_string());
+
     let node = node_map
         .get(node_id)
         .ok_or_else(|| CoreError::invalid_input(format!("missing node '{node_id}'")))?;
 
-    match node.node_type {
+    let result = match node.node_type {
         PlanNodeType::Leaf => {
             let tie_evidence_id = node
                 .evidence_id
@@ -165,7 +223,7 @@ fn solve_node(
             nodes.insert(node.node_id.clone());
 
             for child in &node.children {
-                let child_candidate = solve_node(child, node_map)?;
+                let child_candidate = solve_node(child, node_map, states, memo, stack)?;
                 score += child_candidate.score;
                 confidence_sum += child_candidate.confidence;
                 confidence_count += 1;
@@ -199,7 +257,7 @@ fn solve_node(
             let mut best: Option<(String, Candidate)> = None;
 
             for child in &node.children {
-                let child_candidate = solve_node(child, node_map)?;
+                let child_candidate = solve_node(child, node_map, states, memo, stack)?;
                 match &best {
                     None => best = Some((child.clone(), child_candidate)),
                     Some((_, current)) => {
@@ -230,7 +288,19 @@ fn solve_node(
                 trace,
             })
         }
+    };
+
+    stack.pop();
+    match &result {
+        Ok(candidate) => {
+            states.insert(node_id.to_string(), VisitState::Visited);
+            memo.insert(node_id.to_string(), candidate.clone());
+        }
+        Err(_) => {
+            states.insert(node_id.to_string(), VisitState::NotVisited);
+        }
     }
+    result
 }
 
 fn is_better(candidate: &Candidate, current: &Candidate) -> bool {

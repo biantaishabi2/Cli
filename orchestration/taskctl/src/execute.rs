@@ -33,6 +33,12 @@ pub fn compile(input: ExecuteInput) -> Result<(ExecuteDag, Diagnostics), CoreErr
     let mut node_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for node in input.nodes {
+        if node_map.contains_key(&node.node_id) {
+            return Err(CoreError::invalid_input(format!(
+                "duplicate node_id '{}'",
+                node.node_id
+            )));
+        }
         let deps = node.depends_on.into_iter().collect::<BTreeSet<_>>();
         node_map.insert(node.node_id, deps);
     }

@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use taskctl::{ExecuteInput, execute};
+use taskctl::{execute, ExecuteInput};
 
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -57,4 +57,33 @@ fn execute_cycle_error_returns_e1001_and_cycle_path() {
     assert_eq!(json["result"], Value::String("error".to_string()));
     assert_eq!(json["error"]["code"], Value::String("E1001".to_string()));
     assert_eq!(json["error"]["cycle"], serde_json::json!(["A", "B", "A"]));
+}
+
+#[test]
+fn execute_rejects_duplicate_node_id() {
+    let input = ExecuteInput {
+        nodes: vec![
+            taskctl::ExecuteNode {
+                node_id: "A".to_string(),
+                depends_on: vec![],
+            },
+            taskctl::ExecuteNode {
+                node_id: "A".to_string(),
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    let err = execute::compile(input).expect_err("expected duplicate id error");
+    assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn execute_empty_input_returns_empty_dag() {
+    let input = ExecuteInput { nodes: Vec::new() };
+    let (dag, _) = execute::compile(input).expect("compile empty");
+    assert!(dag.topo_order.is_empty());
+    assert!(dag.layers.is_empty());
+    assert!(dag.nodes.is_empty());
+    assert!(dag.edges.is_empty());
 }

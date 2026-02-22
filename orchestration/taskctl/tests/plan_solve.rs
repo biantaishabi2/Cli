@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use taskctl::{PlanInput, plan};
+use taskctl::{plan, PlanInput};
 
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -55,4 +55,101 @@ fn plan_decision_trace_is_diagnostic() {
     let (decision, diagnostics) = plan::solve(input).expect("solve");
     assert!(decision.trace.iter().any(|t| t.contains("or:g->a")));
     assert!(diagnostics.warnings.iter().any(|t| t.contains("or:g->a")));
+}
+
+#[test]
+fn plan_empty_nodes_returns_e0001() {
+    let input = PlanInput {
+        root: "missing".to_string(),
+        nodes: Vec::new(),
+    };
+
+    let err = plan::solve(input).expect_err("expected invalid input");
+    assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn plan_rejects_duplicate_node_id() {
+    let input = serde_json::from_str::<PlanInput>(
+        r#"{
+            "root":"root",
+            "nodes":[
+                {"node_id":"root","node_type":"or","score":0.0,"confidence":1.0,"children":["a"]},
+                {"node_id":"a","node_type":"leaf","score":0.5,"confidence":0.8},
+                {"node_id":"a","node_type":"leaf","score":0.6,"confidence":0.7}
+            ]
+        }"#,
+    )
+    .expect("plan json");
+
+    let err = plan::solve(input).expect_err("expected duplicate id error");
+    assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn plan_rejects_leaf_with_children() {
+    let input = serde_json::from_str::<PlanInput>(
+        r#"{
+            "root":"leaf-root",
+            "nodes":[
+                {"node_id":"leaf-root","node_type":"leaf","score":0.2,"confidence":0.8,"children":["x"]},
+                {"node_id":"x","node_type":"leaf","score":0.1,"confidence":0.7}
+            ]
+        }"#,
+    )
+    .expect("plan json");
+
+    let err = plan::solve(input).expect_err("expected invalid leaf");
+    assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn plan_cycle_returns_e0001_instead_of_recursive_overflow() {
+    let input = serde_json::from_str::<PlanInput>(
+        r#"{
+            "root":"a",
+            "nodes":[
+                {"node_id":"a","node_type":"and","score":0.0,"confidence":1.0,"children":["b"]},
+                {"node_id":"b","node_type":"and","score":0.0,"confidence":1.0,"children":["a"]}
+            ]
+        }"#,
+    )
+    .expect("plan json");
+
+    let err = plan::solve(input).expect_err("expected cycle error");
+    assert_eq!(err.code(), "E0001");
+}
+
+#[test]
+fn plan_deep_chain_solves_without_panic() {
+    let depth = 256usize;
+    let mut nodes = Vec::new();
+    for i in 0..depth {
+        let id = format!("n{i}");
+        let children = if i + 1 < depth {
+            vec![format!("n{}", i + 1)]
+        } else {
+            Vec::new()
+        };
+        let node_type = if children.is_empty() { "leaf" } else { "and" };
+        nodes.push(serde_json::json!({
+            "node_id": id,
+            "node_type": node_type,
+            "score": 0.1,
+            "confidence": 0.9,
+            "children": children
+        }));
+    }
+
+    let input = PlanInput {
+        root: "n0".to_string(),
+        nodes: nodes
+            .into_iter()
+            .map(|v| serde_json::from_value(v).expect("node json"))
+            .collect(),
+    };
+
+    let (decision, _) = plan::solve(input).expect("solve deep chain");
+    assert!(decision.selected_nodes.contains(&"n0".to_string()));
+    assert!(decision.selected_nodes.contains(&format!("n{}", depth - 1)));
 }

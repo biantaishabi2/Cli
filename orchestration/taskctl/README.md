@@ -120,6 +120,11 @@ Error response adds `error`:
 
 ## Error Codes
 
+- `E0001 INVALID_INPUT`
+  - phase: `research reduce` / `plan solve` / `execute compile`
+  - exit code: `2`
+  - used for schema/semantic validation failures (e.g. duplicate node id, leaf with children, missing refs, plan cycle)
+
 - `E1001 DAG_CYCLE_DETECTED`
   - phase: `execute compile`
   - exit code: `2`
