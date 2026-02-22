@@ -369,12 +369,8 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 path_prefix=empty_path_dir,
                 isolate_path=True,
             )
-            fallback_binary = pathlib.Path("/usr/local/bin/niuma")
-            if fallback_binary.exists():
-                self.assertEqual(failure_run.returncode, 0, msg=failure_run.stderr + failure_run.stdout)
-            else:
-                self.assertNotEqual(failure_run.returncode, 0)
-                self.assertIn("找不到 niuma 二进制", failure_run.stderr + failure_run.stdout)
+            self.assertNotEqual(failure_run.returncode, 0)
+            self.assertIn("找不到 niuma 二进制", failure_run.stderr + failure_run.stdout)
 
 
 if __name__ == "__main__":
