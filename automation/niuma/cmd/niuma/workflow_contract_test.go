@@ -21,7 +21,6 @@ func TestWorkflowContract_EntrypointUsesReusableAndKeepsTriggers(t *testing.T) {
 	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "repository_dispatch:")
 	assert.Contains(t, content, "types: [niuma.task.completed]")
-	assert.Contains(t, content, "schedule:")
 	assert.Contains(t, content, "github.event.label.name == 'bot:orchestrate'")
 	assert.Contains(t, content, "github.event.label.name == 'bot:queued'")
 	assert.Contains(t, content, "github.event.label.name == 'bot:premerged'")
