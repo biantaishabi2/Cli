@@ -2309,33 +2309,124 @@ fn generate_crud_mix_command(
     )
 }
 
-/// 从 seed 生成所有代码产出（CRUD 命令 + 复杂业务分类报告）
+/// 将 seed 类型映射为 Elixir typespec
+fn seed_type_to_elixir_typespec(t: &str) -> &str {
+    match t {
+        "string" | "text" | "uuid" => "String.t()",
+        "integer" | "int" => "integer()",
+        "float" | "double" | "decimal" | "money" => "float()",
+        "boolean" | "bool" => "boolean()",
+        "map" | "json" | "object" => "map()",
+        "list" | "array" => "list()",
+        "timestamp" | "datetime" => "DateTime.t()",
+        _ => "any()",
+    }
+}
+
+/// 从 boundary contracts 生成 Elixir 模块骨架源码
+fn generate_elixir_skeleton(
+    module_id: &str,
+    contracts: &[&BoundaryContract],
+    complexity: &ContractComplexity,
+) -> String {
+    let module_name = to_pascal_case(module_id);
+    let mut out = String::new();
+
+    out.push_str(&format!("defmodule MyApp.{} do\n", module_name));
+    out.push_str(&format!(
+        "  @moduledoc \"\"\"\n  {} 模块骨架（{:?}）\n\n  由 bcc arch generate 自动生成\n  \"\"\"\n\n",
+        module_name, complexity
+    ));
+
+    for contract in contracts {
+        let kind = contract.kind.as_str();
+
+        // 参数列表
+        let param_names: Vec<&String> = contract.input.keys().collect::<Vec<_>>();
+        let mut sorted_params = param_names.clone();
+        sorted_params.sort();
+
+        // @spec
+        let spec_params: Vec<String> = sorted_params
+            .iter()
+            .map(|k| {
+                let t = contract.input.get(*k).map(|s| s.as_str()).unwrap_or("any");
+                seed_type_to_elixir_typespec(t).to_string()
+            })
+            .collect();
+        let return_type = match kind {
+            "query" => "{:ok, map()} | {:error, :not_found}",
+            _ => "{:ok, map()} | {:error, term()}",
+        };
+        out.push_str(&format!(
+            "  @spec {}({}) :: {}\n",
+            contract.name,
+            spec_params.join(", "),
+            return_type
+        ));
+
+        // def
+        let param_str = sorted_params
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("  def {}({}) do\n", contract.name, param_str));
+        out.push_str("    # TODO: 实现业务逻辑\n");
+        out.push_str("    {:ok, nil}\n");
+        out.push_str("  end\n\n");
+    }
+
+    let out = out.trim_end().to_string();
+    format!("{}\nend\n", out)
+}
+
+/// 从 seed 生成所有代码产出（CRUD 命令 + Elixir 骨架）
 fn generate_from_seed(seed: &SeedSpec) -> Vec<(String, String, ContractComplexity, String)> {
     // 返回 (module_id, contract_name, complexity, output)
     let mut results = Vec::new();
+
+    // 先按 module_id 分组非 CRUD contracts，合并生成一个模块文件
+    let mut skeleton_groups: HashMap<String, (ContractComplexity, Vec<&BoundaryContract>)> =
+        HashMap::new();
+
     for boundary in &seed.boundaries {
         for contract in &boundary.contracts {
             let complexity = classify_contract(contract, &boundary.module_id, seed);
-            let output = match complexity {
+            match complexity {
                 ContractComplexity::Crud => {
-                    generate_crud_mix_command(&boundary.module_id, contract)
+                    let output = generate_crud_mix_command(&boundary.module_id, contract);
+                    results.push((
+                        boundary.module_id.clone(),
+                        contract.name.clone(),
+                        complexity,
+                        output,
+                    ));
                 }
                 _ => {
-                    // 非 CRUD：输出分类信息，后续 #460 实现骨架生成
-                    format!(
-                        "# {}.{}: {:?} — 需要骨架生成（见 #460）",
-                        boundary.module_id, contract.name, complexity
-                    )
+                    let entry = skeleton_groups
+                        .entry(boundary.module_id.clone())
+                        .or_insert_with(|| (complexity.clone(), Vec::new()));
+                    entry.1.push(contract);
                 }
-            };
-            results.push((
-                boundary.module_id.clone(),
-                contract.name.clone(),
-                complexity,
-                output,
-            ));
+            }
         }
     }
+
+    // 为每个非 CRUD 模块生成合并的骨架
+    let mut sorted_modules: Vec<_> = skeleton_groups.into_iter().collect();
+    sorted_modules.sort_by(|a, b| a.0.cmp(&b.0));
+    for (module_id, (complexity, contracts)) in sorted_modules {
+        let skeleton = generate_elixir_skeleton(&module_id, &contracts, &complexity);
+        let names: Vec<&str> = contracts.iter().map(|c| c.name.as_str()).collect();
+        results.push((
+            module_id,
+            names.join("+"),
+            complexity,
+            skeleton,
+        ));
+    }
+
     results
 }
 
@@ -2366,31 +2457,8 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
     // 按 emit 模式输出
     match emit {
         "code" | "all" => {
-            let mut crud_count = 0;
-            let mut other_count = 0;
-            let mut lines = Vec::new();
-
-            for (module_id, name, complexity, output) in &results {
-                match complexity {
-                    ContractComplexity::Crud => {
-                        lines.push(format!("# [CRUD] {}.{}", module_id, name));
-                        lines.push(output.clone());
-                        lines.push(String::new());
-                        crud_count += 1;
-                    }
-                    _ => {
-                        lines.push(format!(
-                            "# [{:?}] {}.{}",
-                            complexity, module_id, name
-                        ));
-                        lines.push(output.clone());
-                        lines.push(String::new());
-                        other_count += 1;
-                    }
-                }
-            }
-
-            let content = lines.join("\n");
+            let crud_count = results.iter().filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud)).count();
+            let other_count = results.len() - crud_count;
 
             if let Some(dir) = output_dir {
                 let out_path = Path::new(dir);
@@ -2398,21 +2466,55 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
                     eprintln!("create output dir failed: {}", e);
                     std::process::exit(1);
                 });
-                let file_path = out_path.join("generate-commands.sh");
-                if let Err(e) = fs::write(&file_path, &content) {
-                    eprintln!("write failed: {}", e);
-                    std::process::exit(1);
+
+                // CRUD 命令写到 generate-commands.sh
+                let mut crud_lines = Vec::new();
+                for (module_id, name, complexity, output) in &results {
+                    if matches!(complexity, ContractComplexity::Crud) {
+                        crud_lines.push(format!("# [CRUD] {}.{}", module_id, name));
+                        crud_lines.push(output.clone());
+                        crud_lines.push(String::new());
+                    }
                 }
+                if !crud_lines.is_empty() {
+                    let cmd_path = out_path.join("generate-commands.sh");
+                    if let Err(e) = fs::write(&cmd_path, crud_lines.join("\n")) {
+                        eprintln!("write commands failed: {}", e);
+                    }
+                }
+
+                // 非 CRUD 骨架写到单独 .ex 文件
+                for (module_id, _name, complexity, output) in &results {
+                    if !matches!(complexity, ContractComplexity::Crud) {
+                        let file_name = format!("{}.ex", module_id);
+                        let file_path = out_path.join(&file_name);
+                        if let Err(e) = fs::write(&file_path, output) {
+                            eprintln!("write {} failed: {}", file_name, e);
+                        }
+                    }
+                }
+
                 eprintln!(
-                    "[generate] 已输出到 {}（CRUD: {}, 其他: {}）",
-                    file_path.display(),
+                    "[generate] 已输出到 {}（CRUD: {}, 骨架: {}）",
+                    out_path.display(),
                     crud_count,
                     other_count
                 );
             } else {
-                println!("{}", content);
+                // stdout 模式：混合输出所有内容
+                for (module_id, name, complexity, output) in &results {
+                    match complexity {
+                        ContractComplexity::Crud => {
+                            println!("# [CRUD] {}.{}", module_id, name);
+                        }
+                        _ => {
+                            println!("# [{:?}] {}.{}", complexity, module_id, name);
+                        }
+                    }
+                    println!("{}\n", output);
+                }
                 eprintln!(
-                    "[generate] CRUD: {}, 其他: {}",
+                    "[generate] CRUD: {}, 骨架: {}",
                     crud_count, other_count
                 );
             }
@@ -6108,8 +6210,119 @@ boundaries:
         assert_eq!(results[0].2, ContractComplexity::Crud);
         assert!(results[0].3.starts_with("mix phx.gen.context"));
 
-        // create_order → SimpleCommand（无 flow/event，出边 0）
+        // create_order → SimpleCommand（无 flow/event，出边 0），生成 Elixir 骨架
         assert_eq!(results[1].2, ContractComplexity::SimpleCommand);
-        assert!(results[1].3.contains("#460"));
+        assert!(results[1].3.contains("defmodule MyApp.Shop do"));
+        assert!(results[1].3.contains("def create_order("));
+        assert!(results[1].3.contains("@spec create_order("));
+    }
+
+    #[test]
+    fn generate_elixir_skeleton_basic() {
+        let c1 = BoundaryContract {
+            name: "process_message".to_string(),
+            kind: "command".to_string(),
+            input: [("user_id".to_string(), "uuid".to_string()), ("content".to_string(), "string".to_string())].into(),
+            output: [("message_id".to_string(), "uuid".to_string())].into(),
+            errors: vec!["invalid_content".to_string()],
+            fields: HashMap::new(),
+        };
+        let skeleton = generate_elixir_skeleton("agent_runtime", &[&c1], &ContractComplexity::SimpleCommand);
+        assert!(skeleton.contains("defmodule MyApp.AgentRuntime do"));
+        assert!(skeleton.contains("@moduledoc"));
+        assert!(skeleton.contains("@spec process_message("));
+        assert!(skeleton.contains("String.t()"));  // uuid → String.t()
+        assert!(skeleton.contains("def process_message(content, user_id)"));
+        assert!(skeleton.contains("{:ok, nil}"));
+        assert!(skeleton.contains("end\n"));
+    }
+
+    #[test]
+    fn generate_elixir_skeleton_multiple_contracts() {
+        let c1 = BoundaryContract {
+            name: "send".to_string(),
+            kind: "command".to_string(),
+            input: [("msg".to_string(), "string".to_string())].into(),
+            output: HashMap::new(),
+            errors: vec![],
+            fields: HashMap::new(),
+        };
+        let c2 = BoundaryContract {
+            name: "query_status".to_string(),
+            kind: "query".to_string(),
+            input: [("id".to_string(), "integer".to_string())].into(),
+            output: [("status".to_string(), "string".to_string())].into(),
+            errors: vec![],
+            fields: HashMap::new(),
+        };
+        let skeleton = generate_elixir_skeleton("channel_ingress", &[&c1, &c2], &ContractComplexity::ComplexOrchestration);
+        // 两个 def 都在
+        assert!(skeleton.contains("def send(msg)"));
+        assert!(skeleton.contains("def query_status(id)"));
+        // query 返回类型
+        assert!(skeleton.contains("{:ok, map()} | {:error, :not_found}"));
+        // command 返回类型
+        assert!(skeleton.contains("{:ok, map()} | {:error, term()}"));
+    }
+
+    #[test]
+    fn generate_elixir_skeleton_no_params() {
+        let c = BoundaryContract {
+            name: "health_check".to_string(),
+            kind: "query".to_string(),
+            input: HashMap::new(),
+            output: [("ok".to_string(), "boolean".to_string())].into(),
+            errors: vec![],
+            fields: HashMap::new(),
+        };
+        let skeleton = generate_elixir_skeleton("gateway", &[&c], &ContractComplexity::SimpleCommand);
+        assert!(skeleton.contains("def health_check()"));
+        assert!(skeleton.contains("@spec health_check()"));
+    }
+
+    #[test]
+    fn seed_type_to_elixir_typespec_coverage() {
+        assert_eq!(seed_type_to_elixir_typespec("string"), "String.t()");
+        assert_eq!(seed_type_to_elixir_typespec("integer"), "integer()");
+        assert_eq!(seed_type_to_elixir_typespec("boolean"), "boolean()");
+        assert_eq!(seed_type_to_elixir_typespec("map"), "map()");
+        assert_eq!(seed_type_to_elixir_typespec("list"), "list()");
+        assert_eq!(seed_type_to_elixir_typespec("timestamp"), "DateTime.t()");
+        assert_eq!(seed_type_to_elixir_typespec("xyz"), "any()");
+    }
+
+    #[test]
+    fn generate_from_seed_groups_non_crud_per_module() {
+        let yaml = r#"
+version: v1
+modules:
+  - module_id: gateway
+    precedence: 1
+    path_rules:
+      include: ["src/gw/**"]
+relations_expected: []
+boundaries:
+  - module_id: gateway
+    contracts:
+      - name: route_request
+        kind: command
+        input:
+          path: string
+        output:
+          handler: string
+      - name: dispatch
+        kind: command
+        input:
+          target: string
+        output:
+          result: string
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        let results = generate_from_seed(&seed);
+        // 两个 command（SimpleCommand）→ 合并成一个模块骨架
+        assert_eq!(results.len(), 1);
+        assert!(results[0].3.contains("defmodule MyApp.Gateway do"));
+        assert!(results[0].3.contains("def route_request("));
+        assert!(results[0].3.contains("def dispatch("));
     }
 }
