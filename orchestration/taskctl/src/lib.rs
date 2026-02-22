@@ -12,7 +12,8 @@ pub mod research;
 
 pub use execute::{ExecuteDag, ExecuteEdge, ExecuteInput, ExecuteNode};
 pub use research::{
-    BondType, EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph, ResearchInput,
+    BondType, EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph,
+    ResearchHypothesis, ResearchInput, Verdict,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +182,8 @@ pub struct TaskStore {
     #[serde(default)]
     pub tasks: BTreeMap<String, Task>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub research_hypotheses: BTreeMap<String, research::ResearchHypothesis>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub research_evidences: BTreeMap<String, research::ResearchEvidence>,
 }
 
@@ -189,6 +192,7 @@ impl Default for TaskStore {
         Self {
             version: default_version(),
             tasks: BTreeMap::new(),
+            research_hypotheses: BTreeMap::new(),
             research_evidences: BTreeMap::new(),
         }
     }

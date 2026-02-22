@@ -89,12 +89,59 @@ pub struct ResearchConclusion {
     pub verdict: Verdict,
 }
 
+/// 假设：先验 + 后验 + verdict
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResearchHypothesis {
+    pub conclusion_id: String,
+    pub prior: f64,
+    pub posterior: f64,
+    pub verdict: Verdict,
+    pub evidence_count: usize,
+}
+
+/// 贝叶斯更新：用一条新 evidence 更新 hypothesis 的 posterior
+pub fn bayesian_update(
+    hypothesis: &mut ResearchHypothesis,
+    evidence: &ResearchEvidence,
+    options: &ReduceOptions,
+) {
+    let effective = evidence.confidence * evidence.bond_type.weight();
+    let effective = effective.clamp(0.0, 1.0);
+    let prior = hypothesis.posterior.clamp(0.01, 0.99);
+
+    // 映射 effective 到 likelihood：supports 推高，conflicts 推低
+    // supports: likelihood = 0.5 + effective/2（范围 0.5~1.0）
+    // conflicts: likelihood = 0.5 - effective/2（范围 0.0~0.5）
+    let likelihood = match evidence.relation {
+        EvidenceRelation::Supports => (0.5 + effective / 2.0).clamp(0.01, 0.99),
+        EvidenceRelation::Conflicts => (0.5 - effective / 2.0).clamp(0.01, 0.99),
+    };
+
+    // P(H|E) = P(H) × L / (P(H) × L + (1-P(H)) × (1-L))
+    let posterior = (prior * likelihood)
+        / (prior * likelihood + (1.0 - prior) * (1.0 - likelihood));
+    hypothesis.posterior = posterior.clamp(0.0, 1.0);
+    hypothesis.evidence_count += 1;
+    hypothesis.verdict = classify_verdict(hypothesis.posterior, options);
+}
+
+/// 根据 posterior 判定 verdict
+pub fn classify_verdict(posterior: f64, options: &ReduceOptions) -> Verdict {
+    if posterior >= options.act_threshold {
+        Verdict::Act
+    } else if posterior <= options.investigate_threshold {
+        Verdict::Investigate
+    } else {
+        Verdict::Investigate
+    }
+}
+
 /// reduce 的配置参数
 #[derive(Debug, Clone)]
 pub struct ReduceOptions {
-    /// confidence >= 此值且无冲突 → Act（默认 0.7）
+    /// posterior >= 此值 → Act（默认 0.7）
     pub act_threshold: f64,
-    /// confidence < 此值 → Investigate（默认 0.3）
+    /// posterior <= 此值 → Investigate（默认 0.3）
     pub investigate_threshold: f64,
 }
 
@@ -396,13 +443,6 @@ mod tests {
 
     #[test]
     fn verification_conflicts_amplify_doubt() {
-        // 2 条 deduction supports(0.8) + 1 条 verification conflicts(0.8)
-        // supports: 0.8×1.0 + 0.8×1.0 = 1.6, weight = 2.0
-        // conflicts: 0.8×0.7 = 0.56, weight = 0.7
-        // total_weight = 2.7
-        // drift = (1.6 - 0.56) / (2 × 2.7) = 1.04/5.4 ≈ 0.193
-        // confidence = 0.5 + 0.193 ≈ 0.693
-        // 一条 verification conflicts 把两条 deduction supports 拉到了 contested + 低于 act
         let input = ResearchInput {
             evidences: vec![
                 ev_bond("d1", "c1", EvidenceRelation::Supports, 0.8, BondType::Deduction),
@@ -412,7 +452,88 @@ mod tests {
         };
         let (graph, _) = reduce(input).expect("reduce");
         assert_eq!(graph.conclusions[0].verdict, Verdict::Contested);
-        // confidence 被拉低到 ~0.69，低于 act 阈值 0.7
         assert!(graph.conclusions[0].confidence < 0.7);
+    }
+
+    // ========= 贝叶斯增量更新测试 =========
+
+    fn mk_hyp(prior: f64) -> ResearchHypothesis {
+        let options = ReduceOptions::default();
+        ResearchHypothesis {
+            conclusion_id: "h1".to_string(),
+            prior,
+            posterior: prior,
+            verdict: classify_verdict(prior, &options),
+            evidence_count: 0,
+        }
+    }
+
+    #[test]
+    fn bayesian_supports_increases_posterior() {
+        let mut hyp = mk_hyp(0.5);
+        let e = ev("e1", "h1", EvidenceRelation::Supports, 0.9);
+        let options = ReduceOptions::default();
+        bayesian_update(&mut hyp, &e, &options);
+        // 强支持证据应该大幅提升 posterior
+        assert!(hyp.posterior > 0.8);
+        assert_eq!(hyp.evidence_count, 1);
+    }
+
+    #[test]
+    fn bayesian_conflicts_decreases_posterior() {
+        let mut hyp = mk_hyp(0.5);
+        let e = ev("e1", "h1", EvidenceRelation::Conflicts, 0.9);
+        let options = ReduceOptions::default();
+        bayesian_update(&mut hyp, &e, &options);
+        // 强反对证据应该大幅降低 posterior
+        assert!(hyp.posterior < 0.2);
+        assert_eq!(hyp.evidence_count, 1);
+    }
+
+    #[test]
+    fn bayesian_incremental_converges() {
+        // 从 0.5 开始，逐步加 supports → posterior 逐步上升
+        let mut hyp = mk_hyp(0.5);
+        let options = ReduceOptions::default();
+
+        let e1 = ev("e1", "h1", EvidenceRelation::Supports, 0.7);
+        bayesian_update(&mut hyp, &e1, &options);
+        let p1 = hyp.posterior;
+        assert!(p1 > 0.5); // 上升了
+
+        let e2 = ev("e2", "h1", EvidenceRelation::Supports, 0.7);
+        bayesian_update(&mut hyp, &e2, &options);
+        let p2 = hyp.posterior;
+        assert!(p2 > p1); // 继续上升
+
+        let e3 = ev("e3", "h1", EvidenceRelation::Supports, 0.7);
+        bayesian_update(&mut hyp, &e3, &options);
+        let p3 = hyp.posterior;
+        assert!(p3 > p2); // 继续上升
+        assert!(p3 > 0.7); // 3 条中等支持 → 应该够 act 了
+        assert_eq!(hyp.verdict, Verdict::Act);
+    }
+
+    #[test]
+    fn bayesian_exploration_weak_impact() {
+        // exploration 的 supports 对 posterior 影响很小
+        let mut hyp = mk_hyp(0.5);
+        let options = ReduceOptions::default();
+        let e = ev_bond("e1", "h1", EvidenceRelation::Supports, 0.8, BondType::Exploration);
+        bayesian_update(&mut hyp, &e, &options);
+        // exploration weight=0.3, effective=0.24 → likelihood=0.62 → posterior≈0.62
+        assert!(hyp.posterior > 0.5);
+        assert!(hyp.posterior < 0.65); // 弱证据拉升有限
+    }
+
+    #[test]
+    fn bayesian_high_prior_plus_conflicts_drops() {
+        // 先验很高(0.9)，一条强 conflicts 能拉下来
+        let mut hyp = mk_hyp(0.9);
+        let options = ReduceOptions::default();
+        let e = ev("e1", "h1", EvidenceRelation::Conflicts, 0.9);
+        bayesian_update(&mut hyp, &e, &options);
+        // 0.9 被强反对拉下来
+        assert!(hyp.posterior < 0.5);
     }
 }

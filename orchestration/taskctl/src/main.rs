@@ -7,11 +7,12 @@ use std::io::Read;
 use std::path::PathBuf;
 use taskctl::{
     BondType, CoreError, CoreResponse, DagGraph, EvidenceRelation, ExecuteInput,
-    ResearchEvidence, ResearchInput, TaskCreate, TaskStatus, TaskUpdate, UpdateStatus,
+    ResearchEvidence, ResearchHypothesis, ResearchInput, TaskCreate, TaskStatus, TaskUpdate,
+    UpdateStatus,
     create_task, dag_graph, default_store_path, delete_task, execute, get_task, list_tasks,
     load_store, ready_tasks, research, save_store, update_task, validate_store,
 };
-use taskctl::research::ReduceOptions;
+use taskctl::research::{ReduceOptions, bayesian_update, classify_verdict};
 
 const EXAMPLES: &str = r#"Examples:
   taskctl --store ./tasks.json create \
@@ -131,7 +132,12 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum ResearchCommands {
-    #[command(about = "Add an evidence to the research store")]
+    #[command(about = "Declare a hypothesis with prior belief")]
+    Hypothesis {
+        #[command(subcommand)]
+        command: HypothesisCommands,
+    },
+    #[command(about = "Add evidence and auto-update hypothesis posterior")]
     Add {
         #[arg(long)]
         evidence_id: String,
@@ -150,7 +156,7 @@ enum ResearchCommands {
         #[arg(long)]
         evidence_id: String,
     },
-    #[command(about = "List all evidences in the research store")]
+    #[command(about = "List all hypotheses with current posteriors")]
     List,
     #[command(about = "Reduce research evidences into aggregated graph with verdict")]
     Reduce {
@@ -177,6 +183,25 @@ enum BondTypeArg {
     Verification,
     /// 范德华力：试探猜测（权重 ×0.3）
     Exploration,
+}
+
+#[derive(Subcommand, Debug)]
+enum HypothesisCommands {
+    #[command(about = "Declare a new hypothesis with prior belief")]
+    Add {
+        #[arg(long, help = "Hypothesis ID (same as conclusion_id for evidence)")]
+        id: String,
+        #[arg(long, default_value = "0.5", allow_hyphen_values = true,
+              help = "Prior belief [0.0, 1.0], default 0.5 (no opinion)")]
+        prior: f64,
+    },
+    #[command(about = "Remove a hypothesis")]
+    Remove {
+        #[arg(long)]
+        id: String,
+    },
+    #[command(about = "List all hypotheses")]
+    List,
 }
 
 #[derive(Subcommand, Debug)]
@@ -310,6 +335,65 @@ fn main() {
 fn run(command: Commands, store_path: &PathBuf) -> i32 {
     match command {
         Commands::Research { command } => match command {
+            ResearchCommands::Hypothesis { command: hyp_cmd } => match hyp_cmd {
+                HypothesisCommands::Add { id, prior } => {
+                    if !(0.0..=1.0).contains(&prior) {
+                        eprintln!("error: prior must be within [0.0, 1.0], got {prior}");
+                        return 1;
+                    }
+                    let mut store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let options = ReduceOptions::default();
+                    let verdict = classify_verdict(prior, &options);
+                    store.research_hypotheses.insert(
+                        id.clone(),
+                        ResearchHypothesis {
+                            conclusion_id: id.clone(),
+                            prior,
+                            posterior: prior,
+                            verdict,
+                            evidence_count: 0,
+                        },
+                    );
+                    if let Err(e) = save_store(store_path, &store) {
+                        eprintln!("error: {e}"); return 1;
+                    }
+                    print_json(&serde_json::json!({
+                        "ok": true,
+                        "hypothesis": id,
+                        "prior": prior,
+                        "posterior": prior,
+                        "verdict": format!("{:?}", verdict).to_lowercase(),
+                    }));
+                    0
+                }
+                HypothesisCommands::Remove { id } => {
+                    let mut store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    if store.research_hypotheses.remove(&id).is_none() {
+                        eprintln!("error: hypothesis '{}' not found", id);
+                        return 1;
+                    }
+                    if let Err(e) = save_store(store_path, &store) {
+                        eprintln!("error: {e}"); return 1;
+                    }
+                    print_json(&serde_json::json!({"deleted": id}));
+                    0
+                }
+                HypothesisCommands::List => {
+                    let store = match load_store(store_path) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("error: {e}"); return 1; }
+                    };
+                    let hypotheses: Vec<_> = store.research_hypotheses.values().collect();
+                    print_json(&hypotheses);
+                    0
+                }
+            },
             ResearchCommands::Add {
                 evidence_id,
                 conclusion_id,
@@ -334,20 +418,44 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                     BondTypeArg::Verification => BondType::Verification,
                     BondTypeArg::Exploration => BondType::Exploration,
                 };
-                store.research_evidences.insert(
-                    evidence_id.clone(),
-                    ResearchEvidence {
-                        evidence_id,
-                        conclusion_id,
-                        relation: rel,
-                        confidence,
-                        bond_type: bt,
-                    },
-                );
+                let ev = ResearchEvidence {
+                    evidence_id: evidence_id.clone(),
+                    conclusion_id: conclusion_id.clone(),
+                    relation: rel,
+                    confidence,
+                    bond_type: bt,
+                };
+
+                // 自动更新 hypothesis posterior（没有 hypothesis 则自动创建 prior=0.5）
+                let options = ReduceOptions::default();
+                let hyp = store.research_hypotheses
+                    .entry(conclusion_id.clone())
+                    .or_insert_with(|| {
+                        let verdict = classify_verdict(0.5, &options);
+                        ResearchHypothesis {
+                            conclusion_id: conclusion_id.clone(),
+                            prior: 0.5,
+                            posterior: 0.5,
+                            verdict,
+                            evidence_count: 0,
+                        }
+                    });
+                bayesian_update(hyp, &ev, &options);
+                let posterior = hyp.posterior;
+                let verdict = hyp.verdict;
+
+                store.research_evidences.insert(evidence_id.clone(), ev);
                 if let Err(e) = save_store(store_path, &store) {
                     eprintln!("error: {e}"); return 1;
                 }
-                print_json(&serde_json::json!({"ok": true, "evidence_count": store.research_evidences.len()}));
+                print_json(&serde_json::json!({
+                    "ok": true,
+                    "evidence_id": evidence_id,
+                    "conclusion_id": conclusion_id,
+                    "posterior": posterior,
+                    "verdict": format!("{:?}", verdict).to_lowercase(),
+                    "evidence_count": store.research_evidences.len(),
+                }));
                 0
             }
             ResearchCommands::Remove { evidence_id } => {
@@ -370,8 +478,13 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                     Ok(s) => s,
                     Err(e) => { eprintln!("error: {e}"); return 1; }
                 };
+                // 显示 hypotheses（带 posterior + verdict）+ evidences
+                let hypotheses: Vec<_> = store.research_hypotheses.values().collect();
                 let evidences: Vec<_> = store.research_evidences.values().collect();
-                print_json(&evidences);
+                print_json(&serde_json::json!({
+                    "hypotheses": hypotheses,
+                    "evidences": evidences,
+                }));
                 0
             }
             ResearchCommands::Reduce { input, act_threshold, investigate_threshold } => {
