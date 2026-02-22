@@ -52,6 +52,70 @@ func TestExtractIntegratedIssueNumbers_IgnorePRNumber(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+type premergedMarkerMock struct {
+	issueNums []int
+	trigger   string
+	reason    string
+	callCount int
+}
+
+func (m *premergedMarkerMock) MarkIssuesPremerged(_ context.Context, issueNums []int, trigger, reason string) error {
+	m.callCount++
+	m.issueNums = append([]int(nil), issueNums...)
+	m.trigger = trigger
+	m.reason = reason
+	return nil
+}
+
+func TestApplyPremergedTransitionFromEvent_TransitionsMatchedIssues(t *testing.T) {
+	flagRepo = ""
+	t.Setenv("GITHUB_EVENT_NAME", "pull_request")
+	eventPath := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(eventPath, []byte(`{
+  "action": "closed",
+  "pull_request": {
+    "number": 501,
+    "title": "feat: stabilize adapter (refs #321)",
+    "body": "Closes #322",
+    "merged": true,
+    "base": {"ref": "integration/main"}
+  }
+}`), 0o644))
+	t.Setenv("GITHUB_EVENT_PATH", eventPath)
+
+	marker := &premergedMarkerMock{}
+
+	err := applyPremergedTransitionFromEvent(context.Background(), marker)
+	require.NoError(t, err)
+	assert.Equal(t, 1, marker.callCount)
+	assert.Equal(t, []int{321, 322}, marker.issueNums)
+	assert.Equal(t, "pull_request.closed", marker.trigger)
+	assert.Equal(t, "merged_to_integration_main", marker.reason)
+}
+
+func TestApplyPremergedTransitionFromEvent_SkipsNonIntegrationMain(t *testing.T) {
+	flagRepo = ""
+	t.Setenv("GITHUB_EVENT_NAME", "pull_request")
+	eventPath := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(eventPath, []byte(`{
+  "action": "closed",
+  "pull_request": {
+    "number": 502,
+    "title": "feat: stabilize adapter (refs #321)",
+    "body": "",
+    "merged": true,
+    "base": {"ref": "feature/x"}
+  }
+}`), 0o644))
+	t.Setenv("GITHUB_EVENT_PATH", eventPath)
+
+	marker := &premergedMarkerMock{}
+
+	err := applyPremergedTransitionFromEvent(context.Background(), marker)
+	require.NoError(t, err)
+	assert.Equal(t, 0, marker.callCount)
+}
+
 func TestGitHubControlOps_ResolvePRMetadata_Success(t *testing.T) {
 	client := &stubGitHubControlClient{
 		findMarkerResp: &gh.MarkerComment{

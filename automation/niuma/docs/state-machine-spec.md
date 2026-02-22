@@ -12,6 +12,9 @@
 - `from` 可选：
   - 非空：CAS 语义，当前状态必须等于 `from`。
   - 为空：不做前置状态约束，直接迁移到 `to`。
+- 审计字段约定（建议）：
+  - `trigger`：触发源（如 `pull_request.closed` / `manual`）
+  - `reason`：迁移原因（自由文本，可为空）
 - 写入策略：一次 `ReplaceLabels` 原子替换，不允许散落 `add/remove` 组合。
 - 幂等：当前已是 `to` 且无其他 `bot:*` 时直接成功，不写入。
 
@@ -81,3 +84,12 @@ niuma state-label clear --repo owner/repo --issue 325
 - 多状态自愈与去重：`pkg/control/controller_test.go`
 - discuss 入口自愈：`pkg/agent/orchestrator_test.go`
 - 端到端：`tests/integration/discuss_flow_test.go`
+
+## 新增中间态 `bot:premerged`
+
+- 语义：PR 已合入 `integration/main`，但尚未进入 `master`，不能与 `bot:done` 混淆。
+- 允许迁移：
+  - `bot:pr-reviewable -> bot:premerged`（自动）
+  - `bot:premerged -> bot:done`（主干收口）
+  - `bot:premerged -> bot:fix|bot:queued`（人工回退）
+- 队列约束：DAG 放行仍只消费 `bot:queued`，`bot:premerged` 不参与待开发放行。

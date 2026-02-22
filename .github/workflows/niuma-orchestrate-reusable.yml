@@ -25,7 +25,7 @@ on:
       label_whitelist:
         description: "issues:labeled 允许触发的标签白名单（逗号分隔）"
         required: false
-        default: "bot:orchestrate,bot:queued,bot:pr-reviewable"
+        default: "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged"
         type: string
       enable_dispatch_wakeup:
         description: "是否允许 repository_dispatch 唤醒"

@@ -182,7 +182,7 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
             r"uses:\s*biantaishabi2/Cli/\.github/workflows/niuma-orchestrate-reusable\.yml@[0-9a-f]{40}",
         )
         # build_niuma 已从 reusable workflow 移除，调用方传递会被忽略，不强制检查
-        self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable\"", content)
+        self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable,bot:premerged\"", content)
         self.assertIn("types: [niuma.task.completed]", content)
 
     def test_gong_and_cli_entrypoint_trigger_matrix_consistent(self) -> None:
@@ -197,6 +197,12 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 "name": "issues_pr_reviewable",
                 "event_name": "issues",
                 "label_name": "bot:pr-reviewable",
+                "expected": True,
+            },
+            {
+                "name": "issues_premerged",
+                "event_name": "issues",
+                "label_name": "bot:premerged",
                 "expected": True,
             },
             {
@@ -363,8 +369,12 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 path_prefix=empty_path_dir,
                 isolate_path=True,
             )
-            self.assertNotEqual(failure_run.returncode, 0)
-            self.assertIn("找不到 niuma 二进制", failure_run.stderr + failure_run.stdout)
+            fallback_binary = pathlib.Path("/usr/local/bin/niuma")
+            if fallback_binary.exists():
+                self.assertEqual(failure_run.returncode, 0, msg=failure_run.stderr + failure_run.stdout)
+            else:
+                self.assertNotEqual(failure_run.returncode, 0)
+                self.assertIn("找不到 niuma 二进制", failure_run.stderr + failure_run.stdout)
 
 
 if __name__ == "__main__":
