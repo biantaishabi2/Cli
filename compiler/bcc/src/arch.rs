@@ -129,10 +129,74 @@ struct SeedBoundary {
 #[derive(Debug, Deserialize)]
 struct BoundaryContract {
     name: String,
+    /// 契约类型：command / query / crud（默认 command）
+    #[serde(default = "default_contract_kind")]
+    kind: String,
     #[serde(default)]
     input: HashMap<String, String>,
     #[serde(default)]
     output: HashMap<String, String>,
+    /// 错误码列表（如 ["ORDER-CREATE-001"]）
+    #[serde(default)]
+    errors: Vec<String>,
+    /// CRUD 字段声明（kind=crud 时使用，字段名→类型）
+    #[serde(default)]
+    fields: HashMap<String, String>,
+}
+
+fn default_contract_kind() -> String {
+    "command".to_string()
+}
+
+/// 契约复杂度分类
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContractComplexity {
+    /// 简单 CRUD，可委托 mix phx.gen
+    Crud,
+    /// 简单命令，单模块骨架 + BDD
+    SimpleCommand,
+    /// 流程参与者，骨架 + flow BDD
+    FlowParticipant,
+    /// 事件参与者，骨架 + 事件 BDD
+    EventParticipant,
+    /// 复杂编排，骨架 + 完整 BDD
+    ComplexOrchestration,
+}
+
+/// 根据 seed 上下文自动判定 contract 复杂度
+fn classify_contract(
+    contract: &BoundaryContract,
+    module_id: &str,
+    seed: &SeedSpec,
+) -> ContractComplexity {
+    // kind=crud 直接判定
+    if contract.kind == "crud" {
+        return ContractComplexity::Crud;
+    }
+
+    let in_flow = seed.flows.iter().any(|f| {
+        f.steps
+            .iter()
+            .any(|s| s.from == module_id || s.to == module_id)
+    });
+    let in_event = seed.events.iter().any(|e| {
+        e.producers.iter().any(|p| p == module_id)
+            || e.consumers.iter().any(|c| c == module_id)
+    });
+    let out_edges = seed
+        .relations_expected
+        .iter()
+        .filter(|r| r.caller == module_id && r.allowed)
+        .count();
+
+    match (contract.kind.as_str(), in_flow, in_event, out_edges) {
+        ("query", false, false, 0..=1) => ContractComplexity::Crud,
+        ("command", false, false, 0..=1) => ContractComplexity::SimpleCommand,
+        (_, true, _, _) => ContractComplexity::FlowParticipant,
+        (_, _, true, _) => ContractComplexity::EventParticipant,
+        (_, _, _, 2..) => ContractComplexity::ComplexOrchestration,
+        _ => ContractComplexity::SimpleCommand,
+    }
 }
 
 /// 边界校验结果
@@ -5358,6 +5422,7 @@ events:
                 public_paths: vec![],
                 contracts: vec![BoundaryContract {
                     name: "callX".to_string(),
+                    kind: "command".to_string(),
                     input: {
                         let mut m = HashMap::new();
                         m.insert("id".to_string(), "string".to_string());
@@ -5368,6 +5433,8 @@ events:
                         m.insert("ok".to_string(), "bool".to_string());
                         m
                     },
+                    errors: vec![],
+                    fields: HashMap::new(),
                 }],
             }],
             events: vec![SeedEvent {
@@ -5457,5 +5524,257 @@ events:
         assert_eq!(ec, 0);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // === classify_contract 分流测试 ===
+
+    fn make_seed_for_classify(
+        flows: Vec<SeedFlow>,
+        events: Vec<SeedEvent>,
+        relations: Vec<SeedRelation>,
+    ) -> SeedSpec {
+        SeedSpec {
+            version: None,
+            source_of_truth: None,
+            modules: vec![
+                SeedModule {
+                    module_id: "mod_a".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "mod_b".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+                SeedModule {
+                    module_id: "mod_c".to_string(),
+                    display_name: None,
+                    layer: None,
+                    domain_kind: None,
+                    parent: None,
+                    precedence: None,
+                    path_rules: None,
+                },
+            ],
+            relations_expected: relations,
+            layer_rules: None,
+            flows,
+            boundaries: vec![],
+            events,
+        }
+    }
+
+    fn make_contract(kind: &str) -> BoundaryContract {
+        BoundaryContract {
+            name: "test".to_string(),
+            kind: kind.to_string(),
+            input: HashMap::new(),
+            output: HashMap::new(),
+            errors: vec![],
+            fields: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn classify_contract_crud_by_kind() {
+        let seed = make_seed_for_classify(vec![], vec![], vec![]);
+        let contract = make_contract("crud");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::Crud
+        );
+    }
+
+    #[test]
+    fn classify_contract_query_no_flow_is_crud() {
+        let seed = make_seed_for_classify(vec![], vec![], vec![]);
+        let contract = make_contract("query");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::Crud
+        );
+    }
+
+    #[test]
+    fn classify_contract_command_no_flow_is_simple() {
+        let seed = make_seed_for_classify(vec![], vec![], vec![]);
+        let contract = make_contract("command");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::SimpleCommand
+        );
+    }
+
+    #[test]
+    fn classify_contract_in_flow_is_flow_participant() {
+        let seed = make_seed_for_classify(
+            vec![SeedFlow {
+                name: "f1".to_string(),
+                steps: vec![SeedFlowStep {
+                    from: "mod_a".to_string(),
+                    to: "mod_b".to_string(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                }],
+            }],
+            vec![],
+            vec![],
+        );
+        let contract = make_contract("command");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::FlowParticipant
+        );
+    }
+
+    #[test]
+    fn classify_contract_in_event_is_event_participant() {
+        let seed = make_seed_for_classify(
+            vec![],
+            vec![SeedEvent {
+                name: "evt".to_string(),
+                producers: vec!["mod_a".to_string()],
+                consumers: vec!["mod_b".to_string()],
+                payload: HashMap::new(),
+            }],
+            vec![],
+        );
+        let contract = make_contract("command");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::EventParticipant
+        );
+    }
+
+    #[test]
+    fn classify_contract_many_out_edges_is_complex() {
+        let seed = make_seed_for_classify(
+            vec![],
+            vec![],
+            vec![
+                SeedRelation {
+                    caller: "mod_a".to_string(),
+                    callee: "mod_b".to_string(),
+                    allowed: true,
+                    rationale: None,
+                },
+                SeedRelation {
+                    caller: "mod_a".to_string(),
+                    callee: "mod_c".to_string(),
+                    allowed: true,
+                    rationale: None,
+                },
+            ],
+        );
+        let contract = make_contract("command");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::ComplexOrchestration
+        );
+    }
+
+    #[test]
+    fn classify_contract_flow_trumps_out_edges() {
+        // 同时在 flow 中且有多条出边，flow 优先
+        let seed = make_seed_for_classify(
+            vec![SeedFlow {
+                name: "f".to_string(),
+                steps: vec![SeedFlowStep {
+                    from: "mod_a".to_string(),
+                    to: "mod_b".to_string(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                }],
+            }],
+            vec![],
+            vec![
+                SeedRelation {
+                    caller: "mod_a".to_string(),
+                    callee: "mod_b".to_string(),
+                    allowed: true,
+                    rationale: None,
+                },
+                SeedRelation {
+                    caller: "mod_a".to_string(),
+                    callee: "mod_c".to_string(),
+                    allowed: true,
+                    rationale: None,
+                },
+            ],
+        );
+        let contract = make_contract("command");
+        assert_eq!(
+            classify_contract(&contract, "mod_a", &seed),
+            ContractComplexity::FlowParticipant
+        );
+    }
+
+    #[test]
+    fn contract_kind_errors_fields_parse_from_yaml() {
+        let yaml = r#"
+version: v1
+modules:
+  - module_id: A
+    precedence: 1
+    path_rules:
+      include: ["src/a/**"]
+relations_expected: []
+boundaries:
+  - module_id: A
+    public_paths: ["src/a/api/**"]
+    contracts:
+      - name: "create_order"
+        kind: command
+        input:
+          user_id: uuid
+        output:
+          order_id: uuid
+        errors:
+          - "ORDER-001"
+          - "ORDER-002"
+      - name: "order"
+        kind: crud
+        fields:
+          status: string
+          total: decimal
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        let c0 = &seed.boundaries[0].contracts[0];
+        assert_eq!(c0.kind, "command");
+        assert_eq!(c0.errors, vec!["ORDER-001", "ORDER-002"]);
+
+        let c1 = &seed.boundaries[0].contracts[1];
+        assert_eq!(c1.kind, "crud");
+        assert_eq!(c1.fields.get("status"), Some(&"string".to_string()));
+        assert_eq!(c1.fields.get("total"), Some(&"decimal".to_string()));
+    }
+
+    #[test]
+    fn contract_kind_defaults_to_command() {
+        let yaml = r#"
+version: v1
+modules: []
+relations_expected: []
+boundaries:
+  - module_id: X
+    contracts:
+      - name: "no_kind"
+        input: { a: string }
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(seed.boundaries[0].contracts[0].kind, "command");
+        assert!(seed.boundaries[0].contracts[0].errors.is_empty());
+        assert!(seed.boundaries[0].contracts[0].fields.is_empty());
     }
 }

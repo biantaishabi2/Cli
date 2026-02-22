@@ -846,6 +846,7 @@ boundaries:
       - "src/agents/types.*"
     contracts:
       - name: "createAgentTurn"
+        kind: command
         input:
           session_id: string
           message: string
@@ -853,7 +854,11 @@ boundaries:
         output:
           turn_id: string
           status: string
+        errors:
+          - "AGENT-TURN-001"
+          - "AGENT-TURN-002"
       - name: "getAgentStatus"
+        kind: query
         input:
           agent_id: string
         output:
@@ -865,12 +870,15 @@ boundaries:
       - "src/gateway/server/index.*"
     contracts:
       - name: "routeMessage"
+        kind: command
         input:
           raw_message: string
           channel_id: string
         output:
           target_agent: string
           session_key: string
+        errors:
+          - "ROUTE-001"
 
 events:
   - name: "消息处理完成"
