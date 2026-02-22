@@ -7,8 +7,6 @@ on:
     types: [closed]
   repository_dispatch:
     types: [niuma.task.completed]
-  schedule:
-    - cron: "*/5 * * * *"
 
 permissions:
   issues: write
@@ -19,8 +17,7 @@ jobs:
     if: >
       (github.event_name == 'issues' && (github.event.label.name == 'bot:orchestrate' || github.event.label.name == 'bot:queued' || github.event.label.name == 'bot:pr-reviewable' || github.event.label.name == 'bot:premerged')) ||
       (github.event_name == 'repository_dispatch' && github.event.action == 'niuma.task.completed' && github.event.client_payload.event_source == 'close-after-integration-merge') ||
-      (github.event_name == 'pull_request' && github.event.action == 'closed') ||
-      github.event_name == 'schedule'
+      (github.event_name == 'pull_request' && github.event.action == 'closed')
     uses: ./.github/workflows/niuma-orchestrate-reusable.yml
     secrets: inherit
     with:
