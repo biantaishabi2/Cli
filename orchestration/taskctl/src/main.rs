@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use taskctl::{
-    CoreError, CoreResponse, DagGraph, EvidenceRelation, ExecuteInput,
+    BondType, CoreError, CoreResponse, DagGraph, EvidenceRelation, ExecuteInput,
     ResearchEvidence, ResearchInput, TaskCreate, TaskStatus, TaskUpdate, UpdateStatus,
     create_task, dag_graph, default_store_path, delete_task, execute, get_task, list_tasks,
     load_store, ready_tasks, research, save_store, update_task, validate_store,
@@ -141,6 +141,9 @@ enum ResearchCommands {
         relation: RelationArg,
         #[arg(long, allow_hyphen_values = true)]
         confidence: f64,
+        #[arg(long, value_enum, default_value = "deduction",
+              help = "Evidence source type: deduction (×1.0), verification (×0.7), exploration (×0.3)")]
+        bond: BondTypeArg,
     },
     #[command(about = "Remove an evidence from the research store")]
     Remove {
@@ -164,6 +167,16 @@ enum ResearchCommands {
 enum RelationArg {
     Supports,
     Conflicts,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum BondTypeArg {
+    /// 共价键：逻辑推导（权重 ×1.0）
+    Deduction,
+    /// 氢键：回检校验（权重 ×0.7）
+    Verification,
+    /// 范德华力：试探猜测（权重 ×0.3）
+    Exploration,
 }
 
 #[derive(Subcommand, Debug)]
@@ -302,6 +315,7 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                 conclusion_id,
                 relation,
                 confidence,
+                bond,
             } => {
                 if !(0.0..=1.0).contains(&confidence) {
                     eprintln!("error: confidence must be within [0.0, 1.0], got {confidence}");
@@ -315,6 +329,11 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                     RelationArg::Supports => EvidenceRelation::Supports,
                     RelationArg::Conflicts => EvidenceRelation::Conflicts,
                 };
+                let bt = match bond {
+                    BondTypeArg::Deduction => BondType::Deduction,
+                    BondTypeArg::Verification => BondType::Verification,
+                    BondTypeArg::Exploration => BondType::Exploration,
+                };
                 store.research_evidences.insert(
                     evidence_id.clone(),
                     ResearchEvidence {
@@ -322,6 +341,7 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                         conclusion_id,
                         relation: rel,
                         confidence,
+                        bond_type: bt,
                     },
                 );
                 if let Err(e) = save_store(store_path, &store) {

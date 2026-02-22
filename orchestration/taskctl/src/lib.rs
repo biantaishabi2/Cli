@@ -12,7 +12,7 @@ pub mod research;
 
 pub use execute::{ExecuteDag, ExecuteEdge, ExecuteInput, ExecuteNode};
 pub use research::{
-    EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph, ResearchInput,
+    BondType, EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph, ResearchInput,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

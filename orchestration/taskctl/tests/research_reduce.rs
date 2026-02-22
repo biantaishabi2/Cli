@@ -2,7 +2,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use taskctl::{
-    research, ContractResult, CoreResponse, EvidenceRelation, ResearchEvidence, ResearchInput,
+    research, BondType, ContractResult, CoreResponse, EvidenceRelation, ResearchEvidence,
+    ResearchInput,
 };
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -49,12 +50,14 @@ fn research_conflict_produces_diagnostics() {
                 conclusion_id: "c1".to_string(),
                 relation: EvidenceRelation::Supports,
                 confidence: 0.9,
+                bond_type: BondType::Deduction,
             },
             ResearchEvidence {
                 evidence_id: "ev-conflict".to_string(),
                 conclusion_id: "c1".to_string(),
                 relation: EvidenceRelation::Conflicts,
                 confidence: 0.7,
+                bond_type: BondType::Deduction,
             },
         ],
     };
