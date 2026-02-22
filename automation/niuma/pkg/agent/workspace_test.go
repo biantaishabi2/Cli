@@ -72,13 +72,13 @@ func TestWorkspace_CreateAndRemove(t *testing.T) {
 	ws := NewWorkspace(repoDir)
 
 	// 创建 worktree（默认从 master）
-	wtPath, err := ws.Create(1, "test-fix")
+	wtPath, err := ws.Create(1, "test-fix", "")
 	require.NoError(t, err)
 	assert.DirExists(t, wtPath)
 	assert.True(t, ws.Exists(1))
 
 	// 重复创建应幂等
-	wtPath2, err := ws.Create(1, "test-fix")
+	wtPath2, err := ws.Create(1, "test-fix", "")
 	require.NoError(t, err)
 	assert.Equal(t, wtPath, wtPath2)
 
@@ -90,6 +90,44 @@ func TestWorkspace_CreateAndRemove(t *testing.T) {
 	// 重复移除应幂等
 	err = ws.Remove(1)
 	require.NoError(t, err)
+}
+
+func TestWorkspace_CreateWithIntegrationBase(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+
+	// 准备 integration/main 分支，并写入仅该分支存在的文件。
+	cmd := exec.Command(git, "checkout", "-b", "integration/main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "INTEGRATION_ONLY.txt"), []byte("from integration"), 0644))
+	cmd = exec.Command(git, "add", "INTEGRATION_ONLY.txt")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "commit", "-m", "integration base commit")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 回到 master，确保 master 上没有该文件。
+	cmd = exec.Command(git, "checkout", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	_, err := os.Stat(filepath.Join(repoDir, "INTEGRATION_ONLY.txt"))
+	assert.True(t, os.IsNotExist(err))
+
+	wtPath, err := ws.Create(2, "from-integration", "integration/main")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(wtPath, "INTEGRATION_ONLY.txt"))
+}
+
+func TestWorkspace_CreateWithMissingBase_ReturnsError(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+
+	_, err := ws.Create(3, "missing-base", "integration/not-exists")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "基线分支不存在")
 }
 
 func TestWorkspace_Checkout(t *testing.T) {

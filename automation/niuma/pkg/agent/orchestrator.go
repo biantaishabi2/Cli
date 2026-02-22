@@ -36,8 +36,8 @@ type OrchestratorConfig struct {
 	MaxDiscussionRounds int  // discuss 单次 run 内最大轮数（0=默认5）
 
 	// plan-final 重试与降级
-	PlanFinalProviders []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
-	PlanFinalMaxRetries int          // 每个 provider 的重试次数（0=默认1）
+	PlanFinalProviders  []ai.Provider // 降级 provider 列表（为空则使用默认 provider）
+	PlanFinalMaxRetries int           // 每个 provider 的重试次数（0=默认1）
 
 	// review 重试与降级
 	ReviewProviders  []ai.Provider // review 降级 provider 列表（为空则使用 ImplementProvider）
@@ -527,11 +527,12 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 	var branchName string
 
 	var cleanupWorktree func() // worktree 清理函数（失败时调用）
+	implementBaseBranch := selectImplementBaseBranch(input.IssueBody)
 	if o.config != nil && o.config.RepoDir != "" {
 		// 使用 worktree 隔离
 		ws := NewWorkspace(o.config.RepoDir)
 		slug := slugFromTitle(input.IssueTitle)
-		wtPath, err := ws.Create(o.issueNumber, slug)
+		wtPath, err := ws.Create(o.issueNumber, slug, implementBaseBranch)
 		if err != nil {
 			return 0, fmt.Errorf("创建 worktree 失败: %w", err)
 		}
@@ -580,7 +581,7 @@ func (o *Orchestrator) doImplementInner(ctx context.Context, input *PromptInput,
 
 			prTitle := fmt.Sprintf("fix: %s (#%d)", input.IssueTitle, o.issueNumber)
 			prBody := fmt.Sprintf("Closes #%d\n\n## Summary\n\n%s", o.issueNumber, input.FinalPlan)
-			pr, err := o.github.CreatePR(ctx, prTitle, prBody, branchName, "master")
+			pr, err := o.github.CreatePR(ctx, prTitle, prBody, branchName, implementBaseBranch)
 			if err != nil {
 				return 0, fmt.Errorf("创建 PR 失败: %w", err)
 			}
@@ -947,11 +948,11 @@ func (o *Orchestrator) currentState(ctx context.Context) (state.State, error) {
 				_, _ = o.github.AddComment(ctx, o.issueNumber,
 					"## ⚠️ 状态自愈失败\n\n检测到多个 `bot:*` 状态标签，自动收敛失败，请人工处理后重试。")
 				return "", nerr
-				}
-				if changed {
-					marker := fmt.Sprintf("<!-- BOT:STATE_CONVERGED issue=%d target=%s -->", o.issueNumber, target)
-					comments, _ := o.github.ListComments(ctx, o.issueNumber)
-					duplicated := false
+			}
+			if changed {
+				marker := fmt.Sprintf("<!-- BOT:STATE_CONVERGED issue=%d target=%s -->", o.issueNumber, target)
+				comments, _ := o.github.ListComments(ctx, o.issueNumber)
+				duplicated := false
 				for _, c := range comments {
 					if strings.Contains(c.GetBody(), marker) {
 						duplicated = true
@@ -1257,6 +1258,25 @@ func slugFromTitle(title string) string {
 		slug = slug[:30]
 	}
 	return slug
+}
+
+// selectImplementBaseBranch 根据 issue body 选择 implement 阶段的基线分支。
+// DAG 子 issue（包含 parent:）走 integration/main，其余保持 master。
+func selectImplementBaseBranch(issueBody string) string {
+	if hasParentDirective(issueBody) {
+		return "integration/main"
+	}
+	return "master"
+}
+
+func hasParentDirective(issueBody string) bool {
+	for _, line := range strings.Split(issueBody, "\n") {
+		trimmed := strings.TrimSpace(strings.ToLower(line))
+		if strings.HasPrefix(trimmed, "parent:") {
+			return true
+		}
+	}
+	return false
 }
 
 // recoverableKind 从 error 中提取 RecoverableErrorKind，未匹配时返回 "Unknown"
