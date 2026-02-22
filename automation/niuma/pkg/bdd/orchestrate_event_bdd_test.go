@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -290,6 +291,12 @@ func TestBDD_QueuedLabelEventIsAllowedByWorkflowContract(t *testing.T) {
 	assert.Contains(t, content, "github.event.label.name == 'bot:queued'")
 }
 
+// Given issue 被标记为 bot:premerged，When issues:labeled 触发 orchestrate，Then 入口白名单应允许该标签。
+func TestBDD_PremergedLabelEventIsAllowedByWorkflowContract(t *testing.T) {
+	content := loadOrchestrateWorkflowContent(t)
+	assert.Contains(t, content, "github.event.label.name == 'bot:premerged'")
+}
+
 // Given schedule 通道暂不可用，When completed 事件主动唤醒 orchestrate，Then 流程仍可推进。
 func TestBDD_EventDrivenPathProgressesWithoutSchedule(t *testing.T) {
 	const issueNumber = 531
@@ -320,6 +327,36 @@ func TestBDD_RepeatedWakeupIsIdempotent(t *testing.T) {
 
 	assert.Equal(t, 1, mockGH.transitionCount())
 	assert.Equal(t, 1, mockGH.replaceCount())
+}
+
+// Given 同时存在 queued 与 premerged，When control run 触发调度，Then premerged 不应被推进为开发中状态。
+func TestBDD_PremergedIssueIsQueueIsolated(t *testing.T) {
+	const issueNumber = 533
+
+	taskctl, _ := newBDDEventTaskCtlClient(t, issueNumber, "premerged-isolation")
+	mockGH := newBDDEventGitHubMock(issueNumber)
+	mockGH.labels[issueNumber] = []string{"bot:premerged"}
+	mockGH.issue.Labels = []string{"bot:premerged"}
+	ctrl := newBDDEventController(taskctl, mockGH)
+
+	require.NoError(t, ctrl.Run(context.Background()))
+	assert.Equal(t, 0, mockGH.transitionCount())
+}
+
+// Given issue 处于 bot:premerged，When 人工回退到 bot:queued，Then 状态迁移应成功。
+func TestBDD_PremergedManualRollbackToQueued(t *testing.T) {
+	const issueNumber = 534
+
+	mockGH := newBDDEventGitHubMock(issueNumber)
+	mockGH.labels[issueNumber] = []string{"bot:premerged"}
+	mockGH.issue.Labels = []string{"bot:premerged"}
+
+	err := state.Transition(context.Background(), mockGH, issueNumber, state.StatePremerged, state.StateQueued)
+	require.NoError(t, err)
+
+	labels, err := mockGH.ListLabels(context.Background(), issueNumber)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:queued"}, labels)
 }
 
 func newBDDEventController(taskctl *control.TaskCtlClient, github control.GitHubOps) *control.Controller {

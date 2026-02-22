@@ -23,6 +23,7 @@ func TestWorkflowContract_EntrypointUsesReusableAndKeepsTriggers(t *testing.T) {
 	assert.Contains(t, content, "types: [niuma.task.completed]")
 	assert.Contains(t, content, "github.event.label.name == 'bot:orchestrate'")
 	assert.Contains(t, content, "github.event.label.name == 'bot:queued'")
+	assert.Contains(t, content, "github.event.label.name == 'bot:premerged'")
 	assert.Contains(t, content, "github.event.client_payload.event_source == 'close-after-integration-merge'")
 	assert.Contains(t, content, "uses: ./.github/workflows/niuma-orchestrate-reusable.yml")
 }
@@ -37,7 +38,7 @@ func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
 	assert.Contains(t, content, "default: \".\"")
 	assert.NotContains(t, content, "build_niuma:")
 	assert.Contains(t, content, "label_whitelist:")
-	assert.Contains(t, content, "default: \"bot:orchestrate,bot:queued,bot:pr-reviewable\"")
+	assert.Contains(t, content, "default: \"bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged\"")
 	assert.Contains(t, content, "enable_dispatch_wakeup:")
 	assert.Contains(t, content, "event_id:")
 	assert.Contains(t, content, "default: \"\"")
@@ -122,7 +123,7 @@ func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
 // ─── YAML 结构体定义 ───
 
 type workflowFile struct {
-	On   interface{}            `yaml:"on"`   // map 或 list
+	On   interface{}            `yaml:"on"` // map 或 list
 	Jobs map[string]workflowJob `yaml:"jobs"`
 }
 

@@ -3156,6 +3156,59 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 	assert.NotContains(t, mockGH.closeIssueCalls, 210)
 }
 
+func TestMarkIssuesPremerged_TransitionsFromPRReviewable(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 214, State: "open", Labels: []string{"bot:pr-reviewable"}},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.MarkIssuesPremerged(context.Background(), []int{214}, "pull_request.closed", "merged_to_integration_main")
+	require.NoError(t, err)
+
+	labels, err := mockGH.ListLabels(context.Background(), 214)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:premerged")
+	assert.NotContains(t, labels, "bot:pr-reviewable")
+}
+
+func TestMarkIssuesPremerged_IdempotentWhenAlreadyPremerged(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 214, State: "open", Labels: []string{"bot:premerged"}},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.MarkIssuesPremerged(context.Background(), []int{214}, "pull_request.closed", "merged_to_integration_main")
+	require.NoError(t, err)
+
+	labels, err := mockGH.ListLabels(context.Background(), 214)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:premerged"}, labels)
+}
+
+func TestMarkIssuesPremerged_MultiIssueSkipsFromMismatch(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{Number: 321, State: "open", Labels: []string{"bot:pr-reviewable"}},
+		IssueInfo{Number: 322, State: "open", Labels: []string{"bot:fix"}},
+		IssueInfo{Number: 323, State: "open", Labels: []string{"bot:premerged"}},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	err := ctrl.MarkIssuesPremerged(context.Background(), []int{321, 322, 323}, "pull_request.closed", "merged_to_integration_main")
+	require.NoError(t, err)
+
+	labels321, err := mockGH.ListLabels(context.Background(), 321)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:premerged"}, labels321)
+
+	labels322, err := mockGH.ListLabels(context.Background(), 322)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:fix"}, labels322)
+
+	labels323, err := mockGH.ListLabels(context.Background(), 323)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bot:premerged"}, labels323)
+}
+
 func TestSyncIssueStateLabel_SkipsSelfReplacement(t *testing.T) {
 	mockGH := newMockGitHubOps()
 	mockGH.replaceLabelPairError["bot:fix=>bot:fix"] = errors.New("self replacement should not happen")

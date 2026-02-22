@@ -158,7 +158,7 @@ class TestOrchestrateContract(unittest.TestCase):
         props = schema["properties"]
         self.assertEqual(props["repo_dir"]["default"], ".")
         self.assertNotIn("build_niuma", props)
-        self.assertEqual(props["label_whitelist"]["default"], "bot:orchestrate,bot:queued,bot:pr-reviewable")
+        self.assertEqual(props["label_whitelist"]["default"], "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged")
         self.assertTrue(props["enable_dispatch_wakeup"]["default"])
         self.assertEqual(props["event_id"]["default"], "")
         self.assertEqual(props["dedup_window_hours"]["default"], 24)
@@ -178,7 +178,7 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertIn("types: [labeled]", content)
         self.assertIn("types: [niuma.task.completed]", content)
         self.assertIn("uses: ./.github/workflows/niuma-orchestrate-reusable.yml", content)
-        self.assertIn("label_whitelist: \"bot:orchestrate,bot:queued,bot:pr-reviewable\"", content)
+        self.assertIn("label_whitelist: \"bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged\"", content)
         self.assertNotIn("control close-merged", content)
 
     def test_entrypoint_trigger_matrix_uses_real_if_expression(self) -> None:
@@ -193,6 +193,12 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "issues_pr_reviewable",
                 "event_name": "issues",
                 "label_name": "bot:pr-reviewable",
+                "expected": True,
+            },
+            {
+                "name": "issues_premerged",
+                "event_name": "issues",
+                "label_name": "bot:premerged",
                 "expected": True,
             },
             {
@@ -215,11 +221,6 @@ class TestOrchestrateContract(unittest.TestCase):
                 "event_source": "other-source",
                 "expected": False,
             },
-            {
-                "name": "schedule",
-                "event_name": "schedule",
-                "expected": True,
-            },
         ]
 
         for case in cases:
@@ -239,7 +240,7 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "issues_queued",
                 "env": {
                     "GITHUB_EVENT_NAME": "issues",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable",
+                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
                     "EVENT_LABEL_NAME": "bot:queued",
                     "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
                     "EVENT_ACTION": "",
@@ -252,7 +253,7 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "issues_not_whitelisted",
                 "env": {
                     "GITHUB_EVENT_NAME": "issues",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable",
+                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
                     "EVENT_LABEL_NAME": "bot:blocked",
                     "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
                     "EVENT_ACTION": "",
@@ -265,7 +266,7 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "dispatch_accepted",
                 "env": {
                     "GITHUB_EVENT_NAME": "repository_dispatch",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable",
+                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
                     "EVENT_LABEL_NAME": "",
                     "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
                     "EVENT_ACTION": "niuma.task.completed",
@@ -278,7 +279,7 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "dispatch_disabled",
                 "env": {
                     "GITHUB_EVENT_NAME": "repository_dispatch",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable",
+                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
                     "EVENT_LABEL_NAME": "",
                     "INPUT_ENABLE_DISPATCH_WAKEUP": "false",
                     "EVENT_ACTION": "niuma.task.completed",
@@ -291,7 +292,7 @@ class TestOrchestrateContract(unittest.TestCase):
                 "name": "schedule_accepted",
                 "env": {
                     "GITHUB_EVENT_NAME": "schedule",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable",
+                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
                     "EVENT_LABEL_NAME": "",
                     "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
                     "EVENT_ACTION": "",
