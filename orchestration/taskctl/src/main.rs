@@ -144,7 +144,7 @@ enum ResearchCommands {
         conclusion_id: String,
         #[arg(long, value_enum)]
         relation: RelationArg,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         confidence: f64,
     },
     #[command(about = "Remove an evidence from the research store")]
@@ -175,9 +175,9 @@ enum PlanCommands {
         node_id: String,
         #[arg(long, value_enum)]
         node_type: PlanNodeTypeArg,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         score: f64,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         confidence: f64,
         #[arg(long, value_delimiter = ',', help = "Child node IDs")]
         children: Vec<String>,
@@ -347,6 +347,10 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                 relation,
                 confidence,
             } => {
+                if !(0.0..=1.0).contains(&confidence) {
+                    eprintln!("error: confidence must be within [0.0, 1.0], got {confidence}");
+                    return 1;
+                }
                 let mut store = match load_store(store_path) {
                     Ok(s) => s,
                     Err(e) => { eprintln!("error: {e}"); return 1; }
@@ -421,6 +425,10 @@ fn run(command: Commands, store_path: &PathBuf) -> i32 {
                 children,
                 evidence_id,
             } => {
+                if !(0.0..=1.0).contains(&confidence) {
+                    eprintln!("error: confidence must be within [0.0, 1.0], got {confidence}");
+                    return 1;
+                }
                 let mut store = match load_store(store_path) {
                     Ok(s) => s,
                     Err(e) => { eprintln!("error: {e}"); return 1; }
