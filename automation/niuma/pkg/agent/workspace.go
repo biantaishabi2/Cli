@@ -26,8 +26,8 @@ func NewWorkspace(repoDir string) *Workspace {
 }
 
 // Create 创建 worktree 并切出新分支
-// 返回 worktree 的绝对路径
-func (w *Workspace) Create(issueNum int, slug string) (string, error) {
+// base 为空时默认使用 master，返回 worktree 的绝对路径
+func (w *Workspace) Create(issueNum int, slug, base string) (string, error) {
 	wtPath := w.Path(issueNum)
 	branch := w.branchName(issueNum, slug)
 
@@ -41,17 +41,14 @@ func (w *Workspace) Create(issueNum int, slug string) (string, error) {
 		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
 	}
 
-	// 确保 base 是最新的：有 origin 时用 origin/master，否则用本地 master
-	base := "master"
-	if w.hasOrigin() {
-		if err := w.fetchRef("master"); err != nil {
-			return "", fmt.Errorf("fetch master 失败: %w", err)
-		}
-		base = "origin/master"
+	// 解析创建分支的基线；有 origin 时优先使用 origin/<base>
+	baseRef, err := w.resolveWorktreeBaseRef(base)
+	if err != nil {
+		return "", err
 	}
 
 	// 基于 base 创建新分支的 worktree
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, base)
+	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, baseRef)
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -178,6 +175,30 @@ func (w *Workspace) branchName(issueNum int, slug string) string {
 	return fmt.Sprintf("fix/%d-%s", issueNum, slug)
 }
 
+// resolveWorktreeBaseRef 解析 worktree 创建时使用的基线引用。
+// 有 origin 时优先 fetch 并使用 origin/<base>，否则回退到本地分支。
+func (w *Workspace) resolveWorktreeBaseRef(base string) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "master"
+	}
+
+	if w.hasOrigin() {
+		if err := w.fetchRef(base); err == nil {
+			return "origin/" + base, nil
+		}
+		if w.branchExists(base) {
+			return base, nil
+		}
+		return "", fmt.Errorf("基线分支不存在: %s", base)
+	}
+
+	if !w.branchExists(base) {
+		return "", fmt.Errorf("基线分支不存在: %s", base)
+	}
+	return base, nil
+}
+
 // hasOrigin 检查是否存在 origin remote
 func (w *Workspace) hasOrigin() bool {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
@@ -194,4 +215,11 @@ func (w *Workspace) fetchRef(ref string) error {
 		return fmt.Errorf("git fetch origin %s: %w\n%s", ref, err, string(out))
 	}
 	return nil
+}
+
+// branchExists 检查本地分支是否存在。
+func (w *Workspace) branchExists(branch string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = w.RepoDir
+	return cmd.Run() == nil
 }

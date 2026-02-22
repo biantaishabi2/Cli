@@ -5,6 +5,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,7 +178,7 @@ func TestDoIterate_WithWorktree(t *testing.T) {
 
 	// 先创建 worktree（模拟 implement 阶段已创建）
 	ws := NewWorkspace(repoDir)
-	_, err := ws.Create(1, "login")
+	_, err := ws.Create(1, "login", "")
 	require.NoError(t, err)
 	require.True(t, ws.Exists(1))
 
@@ -205,6 +208,81 @@ func TestDoIterate_WithWorktree(t *testing.T) {
 	expectedWT := ws.Path(1)
 	assert.Equal(t, expectedWT, mockAI.LastWorkDir())
 	assert.Contains(t, expectedWT, ".worktrees/fix-1")
+}
+
+type writeFileProvider struct {
+	repoDir   string
+	issueNum  int
+	fileName  string
+	writeBody string
+}
+
+func (p *writeFileProvider) Name() string { return "write-file-provider" }
+
+func (p *writeFileProvider) Complete(_ context.Context, _ string, _ ...ai.Option) (string, error) {
+	return "unused", nil
+}
+
+func (p *writeFileProvider) Execute(_ context.Context, _ string, _ ...ai.Option) (string, error) {
+	wtPath := NewWorkspace(p.repoDir).Path(p.issueNum)
+	if err := os.WriteFile(filepath.Join(wtPath, p.fileName), []byte(p.writeBody), 0644); err != nil {
+		return "", err
+	}
+	return "file written", nil
+}
+
+func TestDoImplement_SubIssueCreatePR_BaseIntegrationMain(t *testing.T) {
+	repoDir := initTestRepo(t)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	// 预置 integration/main 分支，确保 DAG 子 issue 可从该基线创建 worktree。
+	cmd := exec.Command(git, "init", "--bare", remoteDir)
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.Command(git, "checkout", "-b", "integration/main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "integration/main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "checkout", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix gateway chain", "parent: #24\ndepends-on: #26")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		ImplementProvider: &writeFileProvider{
+			repoDir:   repoDir,
+			issueNum:  1,
+			fileName:  "sub_issue_change.txt",
+			writeBody: "changed",
+		},
+		RepoDir: repoDir,
+	})
+
+	err := orch.DoImplement(context.Background(), "/tmp/fallback")
+	require.NoError(t, err)
+	require.NotEmpty(t, mockGH.PRs)
+	assert.Equal(t, "integration/main", mockGH.PRs[0].GetBase().GetRef())
+}
+
+func TestSelectImplementBaseBranch(t *testing.T) {
+	assert.Equal(t, "master", selectImplementBaseBranch("no parent"))
+	assert.Equal(t, "integration/main", selectImplementBaseBranch("parent: #24"))
+	assert.Equal(t, "integration/main", selectImplementBaseBranch("  Parent: #99  "))
 }
 
 func TestDoIterate_HappyPath(t *testing.T) {
