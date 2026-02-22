@@ -839,21 +839,121 @@ relations_expected:
     allowed: false
     rationale: "infra 不应依赖 plugin 实现层"
 
+boundaries:
+  - module_id: agent_runtime
+    public_paths:
+      - "src/agents/index.*"
+      - "src/agents/types.*"
+    contracts:
+      - name: "createAgentTurn"
+        kind: command
+        input:
+          session_id: string
+          message: string
+          channel: string
+        output:
+          turn_id: string
+          status: string
+        errors:
+          - "AGENT-TURN-001"
+          - "AGENT-TURN-002"
+      - name: "getAgentStatus"
+        kind: query
+        input:
+          agent_id: string
+        output:
+          status: string
+          last_active: timestamp
+  - module_id: gateway_control_plane
+    public_paths:
+      - "src/gateway/protocol/**"
+      - "src/gateway/server/index.*"
+    contracts:
+      - name: "routeMessage"
+        kind: command
+        input:
+          raw_message: string
+          channel_id: string
+        output:
+          target_agent: string
+          session_key: string
+        errors:
+          - "ROUTE-001"
+  # CRUD 示例：独立模块，不参与 flow/event
+  - module_id: infra_config
+    public_paths:
+      - "src/config/**"
+    contracts:
+      - name: "config_entry"
+        kind: crud
+        fields:
+          key: string
+          value: string
+          scope: string
+
+events:
+  - name: "消息处理完成"
+    producers:
+      - agent_runtime
+    consumers:
+      - channel_ingress
+      - agent_memory
+    payload:
+      turn_id: string
+      result: string
+      channel_id: string
+  - name: "插件执行结果"
+    producers:
+      - plugin_tool_extension
+    consumers:
+      - agent_runtime
+    payload:
+      plugin_id: string
+      output: json
+      success: boolean
+
 flows:
   - name: "消息处理主流程"
     steps:
       - from: channel_ingress
         to: gateway_control_plane
         action: "路由解析"
+        input:
+          raw_message: string
+          channel_id: string
+        output:
+          target_agent: string
+          session_key: string
       - from: gateway_control_plane
         to: agent_runtime
         action: "分发到 Agent"
+        input:
+          target_agent: string
+          session_key: string
+        output:
+          turn_id: string
+          status: string
       - from: agent_runtime
         to: plugin_tool_extension
         action: "工具调用"
+        input:
+          turn_id: string
+          tool_name: string
+        output:
+          tool_result: json
       - from: agent_runtime
         to: external_dependencies
         action: "LLM 调用"
+        input:
+          prompt: string
+          model: string
+        output:
+          completion: string
       - from: agent_runtime
         to: channel_ingress
         action: "回复发送"
+        input:
+          turn_id: string
+          reply: string
+        output:
+          delivered: boolean
