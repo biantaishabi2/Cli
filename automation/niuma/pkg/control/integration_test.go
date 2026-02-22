@@ -30,6 +30,19 @@ func setupGitRepo(t *testing.T) string {
 	return dir
 }
 
+// setupGitRepoWithBareRemote 创建带 bare origin 的测试仓库，返回工作仓库路径与远端路径。
+func setupGitRepoWithBareRemote(t *testing.T) (string, string) {
+	t.Helper()
+
+	remoteDir := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "", "init", "--bare", remoteDir)
+
+	workDir := setupGitRepo(t)
+	runGit(t, workDir, "remote", "add", "origin", remoteDir)
+	runGit(t, workDir, "push", "-u", "origin", "master")
+	return workDir, remoteDir
+}
+
 // createBranch 在仓库中创建分支并添加文件
 func createBranch(t *testing.T, dir, branch, filename, content string) {
 	t.Helper()
@@ -222,6 +235,37 @@ func TestIntegrationBuilder_ExecuteIntegrationMerge_AutoResolvedForWhitelistedFi
 
 	content := runGitOutput(t, dir, "show", "integration/test-auto:docs/guide.md")
 	assert.Contains(t, content, "line from B")
+}
+
+func TestIntegrationBuilder_PushBranch_Success(t *testing.T) {
+	dir, remoteDir := setupGitRepoWithBareRemote(t)
+	createBranch(t, dir, "feat/40-auth", "auth.go", "package auth\n")
+
+	builder := NewIntegrationBuilder(dir, "master")
+	outcome, err := builder.ExecuteIntegrationMerge("integration/main", BranchInfo{
+		Branch:   "feat/40-auth",
+		IssueNum: 40,
+		PRNum:    400,
+	}, "")
+	require.NoError(t, err)
+	assert.Equal(t, MergeStatusMerged, outcome.Status)
+
+	err = builder.PushBranch("integration/main")
+	require.NoError(t, err)
+
+	cmd := exec.Command("git", "--git-dir", remoteDir, "rev-parse", "refs/heads/integration/main")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.NotEmpty(t, strings.TrimSpace(string(out)))
+}
+
+func TestIntegrationBuilder_PushBranch_EmptyBranch(t *testing.T) {
+	dir := setupGitRepo(t)
+	builder := NewIntegrationBuilder(dir, "master")
+
+	err := builder.PushBranch("   ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "分支名为空")
 }
 
 func TestIntegrationBuilder_ExecuteIntegrationMerge_EscalatedForCoreSemanticConflict(t *testing.T) {
