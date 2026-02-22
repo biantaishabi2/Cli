@@ -4250,3 +4250,98 @@ func TestHandleIntegrationConflictRetry_MarkerWriteFailEscalates(t *testing.T) {
 			"retry marker 写入失败时不应写 retry comment")
 	}
 }
+
+// --- pruneClosedIssueTasks 测试 ---
+
+// pruneInMem 使用 mockTaskCtl 模拟 pruneClosedIssueTasks 的核心逻辑
+func (c *inMemController) pruneInMem(allIssues []IssueInfo, tasks []Task) int {
+	closedIssues := make(map[int]bool, len(allIssues))
+	for _, issue := range allIssues {
+		if strings.EqualFold(issue.State, "closed") {
+			closedIssues[issue.Number] = true
+		}
+	}
+	if len(closedIssues) == 0 {
+		return 0
+	}
+
+	pruned := 0
+	for _, task := range tasks {
+		issueNum := task.IssueNum()
+		if issueNum == 0 || !closedIssues[issueNum] || !isTaskActiveStatus(task.Status) {
+			continue
+		}
+		status := TaskStatusCompleted
+		if err := c.mockTaskCtl.update(task.ID, UpdateOpts{Status: &status}); err != nil {
+			continue
+		}
+		pruned++
+	}
+	return pruned
+}
+
+func TestPruneClosedIssueTasks_basic(t *testing.T) {
+	// open issue #10, closed issue #20
+	ctrl := newInMemController([]IssueInfo{
+		{Number: 10, Title: "open issue", State: "open", Labels: []string{"bot:fix"}},
+		{Number: 20, Title: "closed issue", State: "closed", Labels: []string{"bot:fix"}},
+	}, "")
+
+	// 预置 tasks: #10 pending(active), #20 in-progress(active)
+	ctrl.mockTaskCtl.tasks = []Task{
+		{ID: "t-10", Subject: "task for #10", Status: TaskStatusPending, Metadata: map[string]string{"issue_num": "10"}},
+		{ID: "t-20", Subject: "task for #20", Status: TaskStatusInProgress, Metadata: map[string]string{"issue_num": "20"}},
+	}
+
+	allIssues, _ := ctrl.mockGitHub.ListIssuesByState(context.Background(), "all")
+	pruned := ctrl.pruneInMem(allIssues, ctrl.mockTaskCtl.tasks)
+
+	assert.Equal(t, 1, pruned, "只有 closed issue #20 的 task 被裁剪")
+
+	// 验证 #10 仍为 pending，#20 变为 completed
+	for _, task := range ctrl.mockTaskCtl.tasks {
+		switch task.ID {
+		case "t-10":
+			assert.Equal(t, TaskStatusPending, task.Status, "open issue 的 task 不应被裁剪")
+		case "t-20":
+			assert.Equal(t, TaskStatusCompleted, task.Status, "closed issue 的 task 应被裁剪为 completed")
+		}
+	}
+}
+
+func TestPruneClosedIssueTasks_already_completed(t *testing.T) {
+	// closed issue #30，但 task 已经是 completed
+	ctrl := newInMemController([]IssueInfo{
+		{Number: 30, Title: "closed issue", State: "closed", Labels: []string{"bot:fix"}},
+	}, "")
+
+	ctrl.mockTaskCtl.tasks = []Task{
+		{ID: "t-30", Subject: "task for #30", Status: TaskStatusCompleted, Metadata: map[string]string{"issue_num": "30"}},
+	}
+
+	allIssues, _ := ctrl.mockGitHub.ListIssuesByState(context.Background(), "all")
+	pruned := ctrl.pruneInMem(allIssues, ctrl.mockTaskCtl.tasks)
+
+	assert.Equal(t, 0, pruned, "已 completed 的 task 不应重复裁剪")
+	assert.Equal(t, TaskStatusCompleted, ctrl.mockTaskCtl.tasks[0].Status)
+}
+
+func TestPruneClosedIssueTasks_no_closed(t *testing.T) {
+	// 全部 open
+	ctrl := newInMemController([]IssueInfo{
+		{Number: 10, Title: "open #10", State: "open", Labels: []string{"bot:fix"}},
+		{Number: 20, Title: "open #20", State: "open", Labels: []string{"bot:queued"}},
+	}, "")
+
+	ctrl.mockTaskCtl.tasks = []Task{
+		{ID: "t-10", Subject: "task for #10", Status: TaskStatusPending, Metadata: map[string]string{"issue_num": "10"}},
+		{ID: "t-20", Subject: "task for #20", Status: TaskStatusInProgress, Metadata: map[string]string{"issue_num": "20"}},
+	}
+
+	allIssues, _ := ctrl.mockGitHub.ListIssuesByState(context.Background(), "all")
+	pruned := ctrl.pruneInMem(allIssues, ctrl.mockTaskCtl.tasks)
+
+	assert.Equal(t, 0, pruned, "没有 closed issue 时不应裁剪任何 task")
+	assert.Equal(t, TaskStatusPending, ctrl.mockTaskCtl.tasks[0].Status)
+	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[1].Status)
+}
