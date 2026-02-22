@@ -879,6 +879,17 @@ boundaries:
           session_key: string
         errors:
           - "ROUTE-001"
+  # CRUD 示例：独立模块，不参与 flow/event
+  - module_id: infra_config
+    public_paths:
+      - "src/config/**"
+    contracts:
+      - name: "config_entry"
+        kind: crud
+        fields:
+          key: string
+          value: string
+          scope: string
 
 events:
   - name: "消息处理完成"

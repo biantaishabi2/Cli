@@ -2221,6 +2221,209 @@ fn format_fields(fields: &HashMap<String, String>) -> String {
     pairs.join(", ")
 }
 
+/// 将 seed 字段类型映射为 Phoenix/Ecto 字段类型
+fn map_field_type_to_ecto(ty: &str) -> &str {
+    match ty {
+        "string" | "text" => "string",
+        "integer" | "int" => "integer",
+        "float" | "double" => "float",
+        "decimal" | "money" => "decimal",
+        "boolean" | "bool" => "boolean",
+        "date" => "date",
+        "time" => "time",
+        "datetime" | "timestamp" => "utc_datetime",
+        "uuid" => "uuid",
+        "map" | "json" | "object" => "map",
+        "list" | "array" => "array",
+        "binary" | "blob" => "binary",
+        _ => "string",
+    }
+}
+
+/// 从 module_id 推导 Phoenix context/schema 名称
+/// 例：order_service → (Orders, Order, orders)
+fn derive_phoenix_names(module_id: &str, contract_name: &str) -> (String, String, String) {
+    // schema 名称：contract name 首字母大写，单数
+    let schema = to_pascal_case(contract_name);
+    // context 名称：schema + "s" 首字母大写
+    let context = format!("{}s", schema);
+    // 表名：module_id 作为前缀的复数小写
+    let table = format!("{}s", contract_name.to_lowercase());
+    let _ = module_id; // 预留 module_id 用于更智能的推导
+    (context, schema, table)
+}
+
+fn to_pascal_case(s: &str) -> String {
+    s.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().to_string() + &c.as_str().to_lowercase(),
+            }
+        })
+        .collect()
+}
+
+/// 从 CRUD contract 生成 mix phx.gen.context 命令
+fn generate_crud_mix_command(
+    module_id: &str,
+    contract: &BoundaryContract,
+) -> String {
+    let (context, schema, table) = derive_phoenix_names(module_id, &contract.name);
+
+    // 优先用 fields，没有则从 input+output 合并
+    let fields: BTreeMap<String, String> = if !contract.fields.is_empty() {
+        contract.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    } else {
+        let mut merged = BTreeMap::new();
+        for (k, v) in &contract.input {
+            merged.insert(k.clone(), v.clone());
+        }
+        for (k, v) in &contract.output {
+            merged.insert(k.clone(), v.clone());
+        }
+        merged
+    };
+
+    let field_args: Vec<String> = fields
+        .iter()
+        .filter(|(k, _)| *k != "id" && !k.ends_with("_at"))
+        .map(|(k, v)| {
+            // uuid 且以 _id 结尾 → references
+            if v == "uuid" && k.ends_with("_id") {
+                let ref_table = k.trim_end_matches("_id");
+                format!("{}:references:{}s", k, ref_table)
+            } else {
+                format!("{}:{}", k, map_field_type_to_ecto(v))
+            }
+        })
+        .collect();
+
+    format!(
+        "mix phx.gen.context {} {} {} {}",
+        context,
+        schema,
+        table,
+        field_args.join(" ")
+    )
+}
+
+/// 从 seed 生成所有代码产出（CRUD 命令 + 复杂业务分类报告）
+fn generate_from_seed(seed: &SeedSpec) -> Vec<(String, String, ContractComplexity, String)> {
+    // 返回 (module_id, contract_name, complexity, output)
+    let mut results = Vec::new();
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            let complexity = classify_contract(contract, &boundary.module_id, seed);
+            let output = match complexity {
+                ContractComplexity::Crud => {
+                    generate_crud_mix_command(&boundary.module_id, contract)
+                }
+                _ => {
+                    // 非 CRUD：输出分类信息，后续 #460 实现骨架生成
+                    format!(
+                        "# {}.{}: {:?} — 需要骨架生成（见 #460）",
+                        boundary.module_id, contract.name, complexity
+                    )
+                }
+            };
+            results.push((
+                boundary.module_id.clone(),
+                contract.name.clone(),
+                complexity,
+                output,
+            ));
+        }
+    }
+    results
+}
+
+/// 公共入口：从 seed 生成代码
+pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
+    let seed_raw = match fs::read_to_string(seed_file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("read seed_file failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let seed: SeedSpec = match serde_yaml::from_str(&seed_raw) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("parse seed yaml failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let results = generate_from_seed(&seed);
+
+    if results.is_empty() {
+        eprintln!("[generate] seed 中没有 boundary contracts，无产出");
+        return;
+    }
+
+    // 按 emit 模式输出
+    match emit {
+        "code" | "all" => {
+            let mut crud_count = 0;
+            let mut other_count = 0;
+            let mut lines = Vec::new();
+
+            for (module_id, name, complexity, output) in &results {
+                match complexity {
+                    ContractComplexity::Crud => {
+                        lines.push(format!("# [CRUD] {}.{}", module_id, name));
+                        lines.push(output.clone());
+                        lines.push(String::new());
+                        crud_count += 1;
+                    }
+                    _ => {
+                        lines.push(format!(
+                            "# [{:?}] {}.{}",
+                            complexity, module_id, name
+                        ));
+                        lines.push(output.clone());
+                        lines.push(String::new());
+                        other_count += 1;
+                    }
+                }
+            }
+
+            let content = lines.join("\n");
+
+            if let Some(dir) = output_dir {
+                let out_path = Path::new(dir);
+                fs::create_dir_all(out_path).unwrap_or_else(|e| {
+                    eprintln!("create output dir failed: {}", e);
+                    std::process::exit(1);
+                });
+                let file_path = out_path.join("generate-commands.sh");
+                if let Err(e) = fs::write(&file_path, &content) {
+                    eprintln!("write failed: {}", e);
+                    std::process::exit(1);
+                }
+                eprintln!(
+                    "[generate] 已输出到 {}（CRUD: {}, 其他: {}）",
+                    file_path.display(),
+                    crud_count,
+                    other_count
+                );
+            } else {
+                println!("{}", content);
+                eprintln!(
+                    "[generate] CRUD: {}, 其他: {}",
+                    crud_count, other_count
+                );
+            }
+        }
+        other => {
+            eprintln!("[generate] 未知 emit 模式: {}", other);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// 从 seed 契约声明导出 BDD source YAML 文件
 fn export_bdd_sources_from_contracts(
     dir: &Path,
@@ -5776,5 +5979,137 @@ boundaries:
         assert_eq!(seed.boundaries[0].contracts[0].kind, "command");
         assert!(seed.boundaries[0].contracts[0].errors.is_empty());
         assert!(seed.boundaries[0].contracts[0].fields.is_empty());
+    }
+
+    // === CRUD mix 命令生成测试 ===
+
+    #[test]
+    fn crud_mix_command_from_fields() {
+        let contract = BoundaryContract {
+            name: "order".to_string(),
+            kind: "crud".to_string(),
+            input: HashMap::new(),
+            output: HashMap::new(),
+            errors: vec![],
+            fields: {
+                let mut m = HashMap::new();
+                m.insert("status".to_string(), "string".to_string());
+                m.insert("total".to_string(), "decimal".to_string());
+                m
+            },
+        };
+        let cmd = generate_crud_mix_command("order_service", &contract);
+        assert!(cmd.starts_with("mix phx.gen.context"));
+        assert!(cmd.contains("Orders"));
+        assert!(cmd.contains("Order"));
+        assert!(cmd.contains("orders"));
+        assert!(cmd.contains("status:string"));
+        assert!(cmd.contains("total:decimal"));
+    }
+
+    #[test]
+    fn crud_mix_command_uuid_ref() {
+        let contract = BoundaryContract {
+            name: "order".to_string(),
+            kind: "crud".to_string(),
+            input: HashMap::new(),
+            output: HashMap::new(),
+            errors: vec![],
+            fields: {
+                let mut m = HashMap::new();
+                m.insert("user_id".to_string(), "uuid".to_string());
+                m.insert("amount".to_string(), "decimal".to_string());
+                m
+            },
+        };
+        let cmd = generate_crud_mix_command("shop", &contract);
+        assert!(cmd.contains("user_id:references:users"));
+        assert!(cmd.contains("amount:decimal"));
+    }
+
+    #[test]
+    fn crud_mix_command_fallback_to_input_output() {
+        // 没有 fields 时从 input+output 合并
+        let contract = BoundaryContract {
+            name: "product".to_string(),
+            kind: "crud".to_string(),
+            input: {
+                let mut m = HashMap::new();
+                m.insert("name".to_string(), "string".to_string());
+                m
+            },
+            output: {
+                let mut m = HashMap::new();
+                m.insert("price".to_string(), "decimal".to_string());
+                m
+            },
+            errors: vec![],
+            fields: HashMap::new(),
+        };
+        let cmd = generate_crud_mix_command("catalog", &contract);
+        assert!(cmd.contains("name:string"));
+        assert!(cmd.contains("price:decimal"));
+    }
+
+    #[test]
+    fn crud_mix_type_mapping() {
+        assert_eq!(map_field_type_to_ecto("string"), "string");
+        assert_eq!(map_field_type_to_ecto("integer"), "integer");
+        assert_eq!(map_field_type_to_ecto("int"), "integer");
+        assert_eq!(map_field_type_to_ecto("boolean"), "boolean");
+        assert_eq!(map_field_type_to_ecto("bool"), "boolean");
+        assert_eq!(map_field_type_to_ecto("decimal"), "decimal");
+        assert_eq!(map_field_type_to_ecto("money"), "decimal");
+        assert_eq!(map_field_type_to_ecto("datetime"), "utc_datetime");
+        assert_eq!(map_field_type_to_ecto("timestamp"), "utc_datetime");
+        assert_eq!(map_field_type_to_ecto("uuid"), "uuid");
+        assert_eq!(map_field_type_to_ecto("json"), "map");
+        assert_eq!(map_field_type_to_ecto("map"), "map");
+        assert_eq!(map_field_type_to_ecto("unknown_type"), "string");
+    }
+
+    #[test]
+    fn to_pascal_case_basic() {
+        assert_eq!(to_pascal_case("order"), "Order");
+        assert_eq!(to_pascal_case("order_item"), "OrderItem");
+        assert_eq!(to_pascal_case("user"), "User");
+    }
+
+    #[test]
+    fn generate_from_seed_classifies_and_generates() {
+        let yaml = r#"
+version: v1
+modules:
+  - module_id: shop
+    precedence: 1
+    path_rules:
+      include: ["src/shop/**"]
+relations_expected: []
+boundaries:
+  - module_id: shop
+    contracts:
+      - name: product
+        kind: crud
+        fields:
+          name: string
+          price: decimal
+      - name: create_order
+        kind: command
+        input:
+          user_id: uuid
+        output:
+          order_id: uuid
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        let results = generate_from_seed(&seed);
+        assert_eq!(results.len(), 2);
+
+        // product → CRUD
+        assert_eq!(results[0].2, ContractComplexity::Crud);
+        assert!(results[0].3.starts_with("mix phx.gen.context"));
+
+        // create_order → SimpleCommand（无 flow/event，出边 0）
+        assert_eq!(results[1].2, ContractComplexity::SimpleCommand);
+        assert!(results[1].3.contains("#460"));
     }
 }
