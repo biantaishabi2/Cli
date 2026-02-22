@@ -350,9 +350,15 @@ enum ArchAction {
     ExportMermaid {
         #[arg(long)]
         seed_file: String,
+        /// AST JSON 文件路径（用于文件级接口边界泄漏检测）
+        #[arg(long)]
+        ast_file: Option<String>,
         /// 输出 .md 文件路径（自动拆分超阈值的 detail 图到 -detail2.md）
         #[arg(long, short)]
         output: Option<String>,
+        /// 导出行为契约 BDD source YAML 到指定目录
+        #[arg(long)]
+        export_bdd_source: Option<String>,
     },
 
     /// 架构健康度评分
@@ -718,8 +724,8 @@ fn main() {
                     &format,
                 );
             }
-            ArchAction::ExportMermaid { seed_file, output } => {
-                arch::export_mermaid(&seed_file, output.as_deref());
+            ArchAction::ExportMermaid { seed_file, ast_file, output, export_bdd_source } => {
+                arch::export_mermaid(&seed_file, ast_file.as_deref(), output.as_deref(), export_bdd_source.as_deref());
             }
             ArchAction::Score { action } => {
                 action.execute();
