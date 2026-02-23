@@ -105,7 +105,7 @@ CI 联合验证（检测冲突）
 为避免 `queued` 在 cron 延迟/失败时卡住，`orchestrate` 采用“双通道”触发：
 
 ```text
-issues:labeled(bot:queued/bot:orchestrate/bot:pr-reviewable)
+issues:labeled(bot:queued/bot:orchestrate/bot:pr-reviewable/bot:premerged)
                           \
                            +--> niuma-orchestrate(control run)
                           /
@@ -206,9 +206,15 @@ control:
 | `bot:implementing` | 正在改代码 |
 | `bot:pr-created` | PR 已创建，等待自检 |
 | `bot:pr-reviewable` | 自检通过，可人工审核 |
+| `bot:premerged` | 已合入 `integration/main`，等待进入 `master` 收口 |
 | `bot:pr-needs-fix` | 自检/审核失败，需修复 |
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
+
+`bot:premerged` 运维约定：
+- 自动迁移：`pull_request.closed && merged=true && base.ref=integration/main` 时，`bot:pr-reviewable -> bot:premerged`
+- 主干收口：变更进入 `master` 后由 `niuma control close-merged` 收口到 `bot:done` 并关闭 issue
+- 人工回退：`niuma state-label set --repo <owner/repo> --issue <N> --from bot:premerged --to bot:queued --reason premerge_rollback`
 
 ### 状态标签管控（受控单值）
 

@@ -113,6 +113,7 @@ const (
 	integrationGateFailLabel = "integration-gate-failed"
 	needsHumanLabel          = "needs-human"
 	botDoneLabel             = "bot:done"
+	botPremergedLabel        = "bot:premerged"
 
 	metaKeyIntegrated                     = "integrated"
 	metaKeyIntegrationMergeStatus         = "integration_merge_status"
@@ -1886,6 +1887,74 @@ func (c *Controller) FinalizeIntegratedIssues(ctx context.Context, issueNums []i
 	return firstErr
 }
 
+// MarkIssuesPremerged 在 integration/main 预合并完成后，将 issue 从 pr-reviewable 迁移为 premerged。
+// 幂等：若已是 premerged 则 no-op；若当前不在 pr-reviewable 则跳过并记录日志。
+func (c *Controller) MarkIssuesPremerged(ctx context.Context, issueNums []int, trigger, reason string) error {
+	targets := uniquePositiveIssueNumbers(issueNums)
+	if len(targets) == 0 {
+		fmt.Printf("[control] action=state_transition skip_reason=no_issue issue=0 from= to=%s trigger=%s reason=%s\n",
+			botPremergedLabel, strings.TrimSpace(trigger), strings.TrimSpace(reason))
+		return nil
+	}
+
+	trigger = strings.TrimSpace(trigger)
+	reason = strings.TrimSpace(reason)
+	if trigger == "" {
+		trigger = "unknown"
+	}
+
+	var firstErr error
+	for _, issueNum := range targets {
+		labels, err := c.github.ListLabels(ctx, issueNum)
+		if err != nil {
+			fmt.Printf("[control] action=state_transition issue=%d from= to=%s trigger=%s reason=%s error=%v\n",
+				issueNum, botPremergedLabel, trigger, reason, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		current, found, err := state.CurrentBotState(labels)
+		if err != nil {
+			fmt.Printf("[control] action=state_transition issue=%d from= to=%s trigger=%s reason=%s error=%v\n",
+				issueNum, botPremergedLabel, trigger, reason, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !found {
+			fmt.Printf("[control] action=state_transition issue=%d from=none to=%s trigger=%s reason=%s decision=skip_no_state\n",
+				issueNum, botPremergedLabel, trigger, reason)
+			continue
+		}
+		if current == state.StatePremerged {
+			fmt.Printf("[control] action=state_transition issue=%d from=%s to=%s trigger=%s reason=%s decision=noop_already_target\n",
+				issueNum, current, state.StatePremerged, trigger, reason)
+			continue
+		}
+		if current != state.StatePRReviewable {
+			fmt.Printf("[control] action=state_transition issue=%d from=%s to=%s trigger=%s reason=%s decision=skip_from_mismatch\n",
+				issueNum, current, state.StatePremerged, trigger, reason)
+			continue
+		}
+
+		if err := c.transitionWithSelfHeal(ctx, issueNum, state.StatePRReviewable, state.StatePremerged); err != nil {
+			fmt.Printf("[control] action=state_transition issue=%d from=%s to=%s trigger=%s reason=%s error=%v\n",
+				issueNum, state.StatePRReviewable, state.StatePremerged, trigger, reason, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		fmt.Printf("[control] action=state_transition issue=%d from=%s to=%s trigger=%s reason=%s decision=applied\n",
+			issueNum, state.StatePRReviewable, state.StatePremerged, trigger, reason)
+	}
+
+	return firstErr
+}
+
 // closeParentIssuesIfReady 当 parent 的 sub-issue 全部关闭时，自动关闭 parent。
 func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums map[int]struct{}) error {
 	if len(parentNums) == 0 {
@@ -2150,6 +2219,7 @@ var integrationAutomationLabels = []string{
 	"bot:implementing",
 	"bot:pr-created",
 	"bot:pr-reviewable",
+	"bot:premerged",
 	"bot:pr-needs-fix",
 	"bot:iterating",
 	integrationConflictLabel,
@@ -2179,6 +2249,13 @@ func (c *Controller) runIntegrationGateAndDecide(ctx context.Context, task Task,
 
 	if err := c.markIntegrationGatePassed(task, attemptKey); err != nil {
 		return false, err
+	}
+	// builder 为空时（如单测注入最小 controller）跳过 push；
+	// 生产 orchestrate 路径会注入 builder 并执行远端同步。
+	if c.builder != nil {
+		if err := c.builder.PushBranch(outcome.IntegrationBranch); err != nil {
+			return false, err
+		}
 	}
 	if err := c.markTaskIntegrated(task, outcome); err != nil {
 		return false, err

@@ -22,7 +22,8 @@ func TestIsValidTransition_HappyPath(t *testing.T) {
 		{StatePlanFinal, StateImplementing},
 		{StateImplementing, StatePRCreated},
 		{StatePRCreated, StatePRReviewable},
-		{StatePRReviewable, StateDone},
+		{StatePRReviewable, StatePremerged},
+		{StatePremerged, StateDone},
 	}
 	for _, tt := range transitions {
 		assert.True(t, IsValidTransition(tt.from, tt.to),
@@ -46,6 +47,8 @@ func TestIsValidTransition_PlanApproval(t *testing.T) {
 func TestIsValidTransition_PRNeedsFix(t *testing.T) {
 	assert.True(t, IsValidTransition(StatePRCreated, StatePRNeedsFix))
 	assert.True(t, IsValidTransition(StatePRReviewable, StatePRNeedsFix))
+	assert.True(t, IsValidTransition(StatePremerged, StateFixRequested))
+	assert.True(t, IsValidTransition(StatePremerged, StateQueued))
 	assert.True(t, IsValidTransition(StatePRNeedsFix, StateIterating))
 	assert.True(t, IsValidTransition(StateIterating, StatePRCreated))
 }
@@ -103,12 +106,12 @@ func TestParseState_Invalid(t *testing.T) {
 }
 
 func TestAllStates_Count(t *testing.T) {
-	assert.Len(t, AllStates, 13)
+	assert.Len(t, AllStates, 14)
 }
 
 func TestAllBotLabels(t *testing.T) {
 	labels := AllBotLabels()
-	assert.Len(t, labels, 13)
+	assert.Len(t, labels, 14)
 	assert.Equal(t, "bot:orchestrate", labels[0])
 }
 

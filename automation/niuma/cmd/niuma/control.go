@@ -4,11 +4,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	ghapi "github.com/google/go-github/v68/github"
 	"github.com/spf13/cobra"
 )
@@ -68,7 +68,7 @@ var controlDagReconcileCmd = &cobra.Command{
 	RunE:  runControlDagReconcile,
 }
 
-var flagDispatchWakeup bool   // --dispatch-wakeup
+var flagDispatchWakeup bool  // --dispatch-wakeup
 var flagControlIssues string // --issues "40,41,42"
 var flagIntegrationGateMaxRetries int
 var flagControlDagDryRun bool
@@ -507,6 +507,9 @@ func runControlRun(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	if err := applyPremergedTransitionFromEvent(ctx, ctrl); err != nil {
+		return err
+	}
 	fmt.Println("开始协调循环...")
 	if err := ctrl.Run(ctx); err != nil {
 		return fmt.Errorf("协调循环失败: %w", err)
@@ -514,6 +517,79 @@ func runControlRun(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("协调循环完成。")
 	return nil
+}
+
+type pullRequestClosedEvent struct {
+	Action      string `json:"action"`
+	PullRequest struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		Merged bool   `json:"merged"`
+		Base   struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	} `json:"pull_request"`
+}
+
+type premergedMarker interface {
+	MarkIssuesPremerged(ctx context.Context, issueNums []int, trigger, reason string) error
+}
+
+func applyPremergedTransitionFromEvent(ctx context.Context, marker premergedMarker) error {
+	eventName := strings.TrimSpace(os.Getenv("GITHUB_EVENT_NAME"))
+	if eventName != "pull_request" {
+		return nil
+	}
+
+	eventPath := strings.TrimSpace(os.Getenv("GITHUB_EVENT_PATH"))
+	if eventPath == "" {
+		fmt.Println("[control] action=premerged_transition skip_reason=missing_event_path")
+		return nil
+	}
+
+	raw, err := os.ReadFile(eventPath)
+	if err != nil {
+		return fmt.Errorf("读取 GITHUB_EVENT_PATH 失败: %w", err)
+	}
+
+	var event pullRequestClosedEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return fmt.Errorf("解析 pull_request 事件失败: %w", err)
+	}
+	if event.Action != "closed" {
+		fmt.Printf("[control] action=premerged_transition skip_reason=action_mismatch action=%s\n", event.Action)
+		return nil
+	}
+	if !event.PullRequest.Merged {
+		fmt.Println("[control] action=premerged_transition skip_reason=pr_not_merged")
+		return nil
+	}
+	if strings.TrimSpace(event.PullRequest.Base.Ref) != "integration/main" {
+		fmt.Printf("[control] action=premerged_transition skip_reason=base_not_target base=%s\n", strings.TrimSpace(event.PullRequest.Base.Ref))
+		return nil
+	}
+
+	var commitMessages []string
+	if flagRepo != "" && event.PullRequest.Number > 0 {
+		client, err := gh.NewClientFromEnv(flagRepo)
+		if err != nil {
+			return err
+		}
+		commitMessages, err = client.ListPRCommitMessages(ctx, event.PullRequest.Number)
+		if err != nil {
+			// commit messages 仅用于增强 issue 识别，失败时回退 title/body 解析，不阻断主流程。
+			fmt.Printf("[control] action=premerged_transition warning=commit_messages_unavailable pr=%d err=%v\n", event.PullRequest.Number, err)
+		}
+	}
+
+	issueNums := extractIntegratedIssueNumbers(event.PullRequest.Title, event.PullRequest.Body, commitMessages)
+	if len(issueNums) == 0 {
+		fmt.Printf("[control] action=premerged_transition skip_reason=no_issue_refs pr=%d\n", event.PullRequest.Number)
+		return nil
+	}
+
+	return marker.MarkIssuesPremerged(ctx, issueNums, "pull_request.closed", "merged_to_integration_main")
 }
 
 func runControlStatus(cmd *cobra.Command, args []string) error {
@@ -782,52 +858,6 @@ func formatDagSyncResult(cmdName string, result control.DagSyncResult, dryRun bo
 	return lines
 }
 
-var (
-	issueKeywordPattern = regexp.MustCompile(`(?i)\b(?:issue|closes?|closed|fixes?|fixed|resolves?|resolved)\s*#([0-9]+)\b`)
-	subPattern          = regexp.MustCompile(`(?i)\bsub\(\s*#([0-9]+)\s*\)`)
-	parentPattern       = regexp.MustCompile(`(?i)\bparent\(\s*#([0-9]+)\s*\)`)
-	parenPattern        = regexp.MustCompile(`\(\s*#([0-9]+)\s*\)`)
-	pullRequestPattern  = regexp.MustCompile(`(?i)pull request #([0-9]+)`)
-)
-
 func extractIntegratedIssueNumbers(prTitle, prBody string, messages []string) []int {
-	unique := make(map[int]struct{})
-
-	texts := make([]string, 0, len(messages)+2)
-	if strings.TrimSpace(prTitle) != "" {
-		texts = append(texts, prTitle)
-	}
-	if strings.TrimSpace(prBody) != "" {
-		texts = append(texts, prBody)
-	}
-	texts = append(texts, messages...)
-
-	for _, text := range texts {
-		cleaned := pullRequestPattern.ReplaceAllString(text, "")
-		collectIssueNumbers(unique, cleaned, issueKeywordPattern)
-		collectIssueNumbers(unique, cleaned, subPattern)
-		collectIssueNumbers(unique, cleaned, parentPattern)
-		collectIssueNumbers(unique, cleaned, parenPattern)
-	}
-
-	var result []int
-	for num := range unique {
-		result = append(result, num)
-	}
-	sort.Ints(result)
-	return result
-}
-
-func collectIssueNumbers(dst map[int]struct{}, text string, pattern *regexp.Regexp) {
-	matches := pattern.FindAllStringSubmatch(text, -1)
-	for _, groups := range matches {
-		if len(groups) < 2 {
-			continue
-		}
-		num, err := strconv.Atoi(groups[1])
-		if err != nil || num <= 0 {
-			continue
-		}
-		dst[num] = struct{}{}
-	}
+	return state.ParseIssueRefsFromPR(prTitle, prBody, messages)
 }

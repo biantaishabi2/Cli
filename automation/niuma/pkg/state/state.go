@@ -21,6 +21,7 @@ const (
 	StateImplementing    State = "bot:implementing"
 	StatePRCreated       State = "bot:pr-created"
 	StatePRReviewable    State = "bot:pr-reviewable"
+	StatePremerged       State = "bot:premerged"
 	StatePRNeedsFix      State = "bot:pr-needs-fix"
 	StateIterating       State = "bot:iterating"
 	StateDone            State = "bot:done"
@@ -38,6 +39,7 @@ var AllStates = []State{
 	StateImplementing,
 	StatePRCreated,
 	StatePRReviewable,
+	StatePremerged,
 	StatePRNeedsFix,
 	StateIterating,
 	StateDone,
@@ -51,6 +53,7 @@ var DefaultStatePriority = []State{
 	StateImplementing,
 	StateIterating,
 	StateFixRequested,
+	StatePremerged,
 	StatePRReviewable,
 	StateDone,
 	StateOrchestrate,
@@ -86,7 +89,8 @@ var validTransitions = map[State][]State{
 	StatePlanApproved:    {StateImplementing},
 	StateImplementing:    {StatePRCreated},
 	StatePRCreated:       {StatePRReviewable, StatePRNeedsFix},
-	StatePRReviewable:    {StatePRNeedsFix, StateDone},
+	StatePRReviewable:    {StatePRNeedsFix, StatePremerged},
+	StatePremerged:       {StateDone, StateFixRequested, StateQueued},
 	StatePRNeedsFix:      {StateIterating},
 	StateIterating:       {StatePRCreated},
 	StateDone:            {},

@@ -7,6 +7,146 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod execute;
+pub mod research;
+
+pub use execute::{ExecuteDag, ExecuteEdge, ExecuteInput, ExecuteNode};
+pub use research::{
+    BondType, EvidenceRelation, ResearchConclusion, ResearchEvidence, ResearchGraph,
+    ResearchHypothesis, ResearchInput, Verdict,
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractResult {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Diagnostics {
+    pub rules_hit: Vec<String>,
+    pub conflicts: Vec<ConflictDiagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConflictDiagnostic {
+    pub item_id: String,
+    pub left: String,
+    pub right: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CoreErrorPayload {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CoreResponse {
+    pub schema_version: String,
+    pub result: ContractResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<ResearchGraph>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dag: Option<ExecuteDag>,
+    pub diagnostics: Diagnostics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<CoreErrorPayload>,
+}
+
+impl CoreResponse {
+    const SCHEMA_VERSION: &'static str = "1.0";
+
+    pub fn ok_graph(graph: ResearchGraph, diagnostics: Diagnostics) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            result: ContractResult::Ok,
+            graph: Some(graph),
+            dag: None,
+            diagnostics,
+            error: None,
+        }
+    }
+
+    pub fn ok_dag(dag: ExecuteDag, diagnostics: Diagnostics) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            result: ContractResult::Ok,
+            graph: None,
+            dag: Some(dag),
+            diagnostics,
+            error: None,
+        }
+    }
+
+    pub fn from_error(error: CoreError) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            result: ContractResult::Error,
+            graph: None,
+            dag: None,
+            diagnostics: Diagnostics::default(),
+            error: Some(error.to_payload()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum CoreError {
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("E1001 DAG_CYCLE_DETECTED: {0}")]
+    DagCycleDetected(String, Vec<String>),
+}
+
+impl CoreError {
+    pub fn invalid_input(message: String) -> Self {
+        Self::InvalidInput(message)
+    }
+
+    pub fn dag_cycle_detected(cycle: Vec<String>) -> Self {
+        let cycle_text = cycle.join("->");
+        Self::DagCycleDetected(
+            format!("cycle detected in dag compile: {cycle_text}"),
+            cycle,
+        )
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) => "E0001",
+            Self::DagCycleDetected(_, _) => "E1001",
+        }
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::InvalidInput(_) => 2,
+            Self::DagCycleDetected(_, _) => 2,
+        }
+    }
+
+    pub fn to_payload(&self) -> CoreErrorPayload {
+        match self {
+            Self::InvalidInput(message) => CoreErrorPayload {
+                code: self.code().to_string(),
+                message: message.clone(),
+                cycle: None,
+            },
+            Self::DagCycleDetected(message, cycle) => CoreErrorPayload {
+                code: self.code().to_string(),
+                message: message.clone(),
+                cycle: Some(cycle.clone()),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -41,6 +181,10 @@ pub struct TaskStore {
     pub version: u32,
     #[serde(default)]
     pub tasks: BTreeMap<String, Task>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub research_hypotheses: BTreeMap<String, research::ResearchHypothesis>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub research_evidences: BTreeMap<String, research::ResearchEvidence>,
 }
 
 impl Default for TaskStore {
@@ -48,6 +192,8 @@ impl Default for TaskStore {
         Self {
             version: default_version(),
             tasks: BTreeMap::new(),
+            research_hypotheses: BTreeMap::new(),
+            research_evidences: BTreeMap::new(),
         }
     }
 }
@@ -159,7 +305,10 @@ fn parse_update_status(s: UpdateStatus) -> Option<TaskStatus> {
 
 pub fn default_store_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("cli").join("taskctl").join("tasks.json")
+    PathBuf::from(home)
+        .join("cli")
+        .join("taskctl")
+        .join("tasks.json")
 }
 
 pub fn load_store(path: &Path) -> Result<TaskStore, TaskError> {
@@ -244,11 +393,7 @@ pub fn update_task(
         return Err(TaskError::SelfDependency);
     }
 
-    for dep in patch
-        .add_blocks
-        .iter()
-        .chain(patch.add_blocked_by.iter())
-    {
+    for dep in patch.add_blocks.iter().chain(patch.add_blocked_by.iter()) {
         if !store.tasks.contains_key(dep) {
             return Err(TaskError::MissingDependency(dep.clone()));
         }
@@ -335,7 +480,9 @@ pub fn update_task(
             });
         }
 
-        if matches!(target, TaskStatus::InProgress | TaskStatus::Completed) && !unresolved.is_empty() {
+        if matches!(target, TaskStatus::InProgress | TaskStatus::Completed)
+            && !unresolved.is_empty()
+        {
             return Err(TaskError::BlockedTransition(target, unresolved.join(",")));
         }
 
@@ -376,10 +523,9 @@ pub fn ready_tasks(store: &TaskStore) -> Result<Vec<Task>, TaskError> {
 pub fn validate_store(store: &TaskStore) -> Result<(), TaskError> {
     for (task_id, task) in &store.tasks {
         for dep in &task.blocked_by {
-            let dep_task = store
-                .tasks
-                .get(dep)
-                .ok_or_else(|| TaskError::StoreValidation(format!("{task_id} blocked_by missing {dep}")))?;
+            let dep_task = store.tasks.get(dep).ok_or_else(|| {
+                TaskError::StoreValidation(format!("{task_id} blocked_by missing {dep}"))
+            })?;
             if !dep_task.blocks.contains(task_id) {
                 return Err(TaskError::StoreValidation(format!(
                     "{task_id}<->{dep} relation is not symmetric"
@@ -387,10 +533,9 @@ pub fn validate_store(store: &TaskStore) -> Result<(), TaskError> {
             }
         }
         for blocked in &task.blocks {
-            let blocked_task = store
-                .tasks
-                .get(blocked)
-                .ok_or_else(|| TaskError::StoreValidation(format!("{task_id} blocks missing {blocked}")))?;
+            let blocked_task = store.tasks.get(blocked).ok_or_else(|| {
+                TaskError::StoreValidation(format!("{task_id} blocks missing {blocked}"))
+            })?;
             if !blocked_task.blocked_by.contains(task_id) {
                 return Err(TaskError::StoreValidation(format!(
                     "{task_id}<->{blocked} relation is not symmetric"
@@ -845,11 +990,8 @@ mod tests {
         let mut store = TaskStore::default();
         let mut ids = HashSet::new();
         for idx in 0..3 {
-            let task = create_task(
-                &mut store,
-                mk_create(&format!("parallel-task-{idx}")),
-            )
-            .expect("create task");
+            let task = create_task(&mut store, mk_create(&format!("parallel-task-{idx}")))
+                .expect("create task");
             ids.insert(task.id);
         }
 
@@ -867,7 +1009,10 @@ mod tests {
         // Given: create dependency chain and write to disk
         let mut store = TaskStore::default();
         let mut meta = serde_json::Map::new();
-        meta.insert("priority".to_string(), serde_json::Value::String("P0".to_string()));
+        meta.insert(
+            "priority".to_string(),
+            serde_json::Value::String("P0".to_string()),
+        );
 
         let design = create_task(
             &mut store,
@@ -879,11 +1024,8 @@ mod tests {
             },
         )
         .expect("create design");
-        let implement = create_task(
-            &mut store,
-            mk_create("Implement API"),
-        )
-        .expect("create implement");
+        let implement =
+            create_task(&mut store, mk_create("Implement API")).expect("create implement");
         update_task(
             &mut store,
             &implement.id,
@@ -913,7 +1055,10 @@ mod tests {
             parsed["tasks"][&design.id]["status"],
             serde_json::Value::String("pending".to_string())
         );
-        assert_eq!(parsed["tasks"][&implement.id]["blocked_by"][0], design.id.clone());
+        assert_eq!(
+            parsed["tasks"][&implement.id]["blocked_by"][0],
+            design.id.clone()
+        );
 
         let loaded = load_store(&path).expect("load");
         let ready = ready_tasks(&loaded).expect("ready");
@@ -926,7 +1071,10 @@ mod tests {
                 "status".to_string(),
                 serde_json::Value::String("in_progress".to_string()),
             ),
-            ("module".to_string(), serde_json::Value::String("api".to_string())),
+            (
+                "module".to_string(),
+                serde_json::Value::String("api".to_string()),
+            ),
         ]);
         let maybe_err = update_task(
             &mut store,

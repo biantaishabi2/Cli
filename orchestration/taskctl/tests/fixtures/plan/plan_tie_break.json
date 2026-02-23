@@ -1,0 +1,26 @@
+{
+  "root": "goal",
+  "nodes": [
+    {
+      "node_id": "goal",
+      "node_type": "or",
+      "score": 0.0,
+      "confidence": 1.0,
+      "children": ["path-b", "path-a"]
+    },
+    {
+      "node_id": "path-a",
+      "node_type": "leaf",
+      "score": 0.8,
+      "confidence": 0.9,
+      "evidence_id": "ev-a"
+    },
+    {
+      "node_id": "path-b",
+      "node_type": "leaf",
+      "score": 0.8,
+      "confidence": 0.9,
+      "evidence_id": "ev-b"
+    }
+  ]
+}

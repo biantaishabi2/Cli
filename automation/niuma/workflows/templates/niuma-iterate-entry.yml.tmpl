@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  # AI 自审不通过 → 自动迭代
+  # AI 自审不通过 -> 自动迭代
   call-iterate-from-review:
     if: >
       github.event_name == 'issues' &&
@@ -26,37 +26,16 @@ jobs:
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
     secrets: inherit
 
-  # 人工 PR review changes_requested → 提取 issue 号
-  extract-issue-from-pr:
-    runs-on: self-hosted
+  # 人工 PR review changes_requested -> 直接透传上下文给 Go 处理
+  call-iterate-from-human:
     if: >
       github.event_name == 'pull_request_review' &&
-      github.event.review.state == 'changes_requested' &&
-      github.event.pull_request.state == 'open'
-    outputs:
-      issue_number: ${{ steps.extract.outputs.issue_number }}
-    permissions:
-      pull-requests: read
-    steps:
-      - name: Extract Issue Number from PR
-        id: extract
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
-          ISSUE_NUMBER=$(echo "$BODY" | grep -Eo 'Closes #[0-9]+' | sed 's/Closes #//' | head -1)
-          echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-
-  # 人工 PR review changes_requested → 调用 reusable 迭代
-  call-iterate-from-human:
-    needs: extract-issue-from-pr
-    if: needs.extract-issue-from-pr.outputs.issue_number != ''
+      github.event.review.state == 'changes_requested'
     uses: ./.github/workflows/niuma-iterate-reusable.yml
     with:
       repo: ${{ github.repository }}
-      issue_number: ${{ needs.extract-issue-from-pr.outputs.issue_number }}
       pr_number: ${{ format('{0}', github.event.pull_request.number) }}
       trigger_source: human
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      initial_pr_state: ${{ github.event.pull_request.state }}
     secrets: inherit

@@ -16,6 +16,7 @@ var (
 	flagStateFrom     string
 	flagStateTo       string
 	flagStatePriority string
+	flagStateReason   string
 )
 
 const (
@@ -51,6 +52,7 @@ var stateLabelClearCmd = &cobra.Command{
 func init() {
 	stateLabelSetCmd.Flags().StringVar(&flagStateFrom, "from", "", "前置状态（可选，CAS 语义）")
 	stateLabelSetCmd.Flags().StringVar(&flagStateTo, "to", "", "目标状态（必填，bot:*）")
+	stateLabelSetCmd.Flags().StringVar(&flagStateReason, "reason", "", "迁移原因（可选，用于审计日志）")
 	_ = stateLabelSetCmd.MarkFlagRequired("to")
 
 	stateLabelNormalizeCmd.Flags().StringVar(&flagStatePriority, "priority", "", "状态优先级，逗号分隔")
@@ -89,7 +91,15 @@ func runStateLabelSet(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("issue #%d 状态已迁移到 %s\n", flagIssue, to)
+	fmt.Printf("[state-label] issue=%d from=%s to=%s reason=%s\n", flagIssue, fromOrDefault(from), to, strings.TrimSpace(flagStateReason))
 	return nil
+}
+
+func fromOrDefault(from state.State) string {
+	if from == "" {
+		return "<any>"
+	}
+	return string(from)
 }
 
 func runStateLabelNormalize(cmd *cobra.Command, args []string) error {

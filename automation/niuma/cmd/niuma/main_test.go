@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +96,57 @@ func TestValidateMaxDiscussionRounds(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestEvaluateDiscussDecision(t *testing.T) {
+	decision, reason, action := evaluateDiscussDecision([]string{"bug"})
+	assert.Equal(t, control.DecisionSkip, decision)
+	assert.Equal(t, control.ReasonSkipStateNotApplicable, reason)
+	assert.Equal(t, control.ActionNone, action)
+
+	decision, reason, action = evaluateDiscussDecision([]string{"bug", string(state.StateNeedsDiscussion)})
+	assert.Equal(t, control.DecisionRun, decision)
+	assert.Equal(t, control.ReasonRunRoutable, reason)
+	assert.Equal(t, control.ActionDiscuss, action)
+}
+
+func TestShouldUpgradeIterateToNeedsHuman(t *testing.T) {
+	assert.True(t, shouldUpgradeIterateToNeedsHuman("review", "closed"))
+	assert.True(t, shouldUpgradeIterateToNeedsHuman("human", "closed"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("review", "open"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("human", "open"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("human", ""))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("unknown", "closed"))
+}
+
+func TestPickIterateIssue(t *testing.T) {
+	t.Run("human path without issue refs should skip", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, nil, 42, "human")
+		require.NoError(t, err)
+		assert.True(t, skipNoop)
+		assert.Equal(t, 0, issue)
+	})
+
+	t.Run("review path without issue refs should fail", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, nil, 42, "review")
+		require.Error(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 0, issue)
+	})
+
+	t.Run("explicit issue should take priority", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(99, []int{1, 2}, 42, "human")
+		require.NoError(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 99, issue)
+	})
+
+	t.Run("parse refs should pick smallest issue", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, []int{14, 12, 13}, 42, "human")
+		require.NoError(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 12, issue)
+	})
 }
 
 func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
@@ -259,4 +314,177 @@ func snapshotCLIFlags() func() {
 		flagStateTo = prevStateTo
 		flagStatePriority = prevStatePriority
 	}
+}
+
+func TestBuildWorkflowAudit_ContainsRequiredFields(t *testing.T) {
+	t.Setenv("GITHUB_WORKFLOW", "niuma - Iterate")
+	t.Setenv("GITHUB_EVENT_NAME", "pull_request_review")
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+
+	audit := buildWorkflowAudit(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, 11, 22)
+
+	assert.Equal(t, "niuma - Iterate", audit["workflow"])
+	assert.Equal(t, "pull_request_review", audit["event_name"])
+	assert.Equal(t, string(control.ActionIterate), audit["action"])
+	assert.Equal(t, string(control.DecisionSkip), audit["decision"])
+	assert.Equal(t, string(control.ReasonSkipStateNotApplicable), audit["reason"])
+	assert.Equal(t, "run-123-attempt-2", audit["correlation_id"])
+	assert.Equal(t, "11", audit["issue"])
+	assert.Equal(t, "22", audit["pr"])
+}
+
+func TestPrintWorkflowDecision_EmitsStructuredAuditAndKV(t *testing.T) {
+	t.Setenv("GITHUB_WORKFLOW", "niuma - Discuss")
+	t.Setenv("GITHUB_EVENT_NAME", "issues")
+	t.Setenv("GITHUB_RUN_ID", "88")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, 9, 0)
+	})
+
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=discuss")
+	assert.Contains(t, stdout, "issue=9")
+
+	var audit map[string]string
+	line := bytes.TrimSpace([]byte(stderr))
+	line = bytes.TrimPrefix(line, []byte("[control.workflow] "))
+	require.NoError(t, json.Unmarshal(line, &audit))
+	assert.Equal(t, "niuma - Discuss", audit["workflow"])
+	assert.Equal(t, "issues", audit["event_name"])
+	assert.Equal(t, "discuss", audit["action"])
+	assert.Equal(t, "fail", audit["decision"])
+	assert.Equal(t, "fail_internal_error", audit["reason"])
+	assert.Equal(t, "run-88-attempt-1", audit["correlation_id"])
+}
+
+func TestRunDiscuss_PrintsFailDecisionOnClientInitError(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = "owner/repo"
+	flagIssue = 9
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var runErr error
+	stdout, _ := captureStdoutStderr(t, func() {
+		runErr = runDiscuss(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=discuss")
+}
+
+func TestRunIterate_PrintsFailDecisionOnClientInitError(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = "owner/repo"
+	flagIssue = 0
+	flagPR = 22
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var runErr error
+	stdout, _ := captureStdoutStderr(t, func() {
+		runErr = runIterate(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=iterate")
+	assert.Contains(t, stdout, "pr=22")
+}
+
+func TestRunDiscuss_PrintsFailDecisionOnMissingRequiredFlags(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = ""
+	flagIssue = 0
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = runDiscuss(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_invalid_event_payload")
+	assert.Contains(t, stdout, "action=discuss")
+	assert.Contains(t, stderr, "[control.workflow] ")
+}
+
+func TestRunIterate_PrintsFailDecisionOnMissingRequiredFlags(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = ""
+	flagIssue = 0
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = runIterate(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_invalid_event_payload")
+	assert.Contains(t, stdout, "action=iterate")
+	assert.Contains(t, stderr, "[control.workflow] ")
+}
+
+func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
+	t.Helper()
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	require.NoError(t, err)
+	stderrReader, stderrWriter, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	defer func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	}()
+
+	fn()
+
+	require.NoError(t, stdoutWriter.Close())
+	require.NoError(t, stderrWriter.Close())
+
+	stdoutBytes, err := io.ReadAll(stdoutReader)
+	require.NoError(t, err)
+	stderrBytes, err := io.ReadAll(stderrReader)
+	require.NoError(t, err)
+	return string(stdoutBytes), string(stderrBytes)
 }

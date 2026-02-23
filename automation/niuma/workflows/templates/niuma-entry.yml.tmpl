@@ -1,0 +1,55 @@
+# __NAME__ 入口模板
+# 使用: automation/niuma/scripts/render_workflows.sh
+name: __DISPLAY_NAME__
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+__PERMISSIONS__
+
+jobs:
+  route-event:
+    runs-on: self-hosted
+    outputs:
+      decision: ${{ steps.route.outputs.decision }}
+      reason: ${{ steps.route.outputs.reason }}
+      action: ${{ steps.route.outputs.action }}
+    steps:
+      - name: Setup niuma binary
+        run: |
+          niuma_path="$(command -v niuma || true)"
+          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
+            niuma_path="/usr/local/bin/niuma"
+          fi
+          if [ -z "$niuma_path" ]; then
+            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
+            exit 1
+          fi
+          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
+
+      - name: Route Event
+        id: route
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          output="$($NIUMA_BIN control route-event \
+            --repo "$REPO" \
+            --workflow "__WORKFLOW__" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH")"
+          echo "$output"
+          echo "decision=$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
+          echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
+          echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
+
+  __JOB_NAME__:
+    needs: route-event
+    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == '__ACTION__'
+    uses: ./.github/workflows/__REUSABLE__
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+__WITH_EXTRA__
+    secrets: inherit

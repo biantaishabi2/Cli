@@ -166,7 +166,7 @@ def run_shell_script(
 class TestCrossRepoGongIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.cli_entrypoint_if = extract_job_if_expression(CLI_ENTRYPOINT_PATH, "orchestrate")
+        cls.cli_entrypoint_content = CLI_ENTRYPOINT_PATH.read_text(encoding="utf-8")
         cls.gong_entrypoint_if = extract_job_if_expression(GONG_ORCHESTRATE_PATH, "orchestrate")
         cls.dispatch_script = extract_step_run_script(GONG_DISPATCH_PATH, "Dispatch orchestrate wakeup")
         cls.warn_dispatch_script = extract_step_run_script(GONG_DISPATCH_PATH, "Warn Dispatch Failure").replace(
@@ -182,10 +182,15 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
             r"uses:\s*biantaishabi2/Cli/\.github/workflows/niuma-orchestrate-reusable\.yml@[0-9a-f]{40}",
         )
         # build_niuma 已从 reusable workflow 移除，调用方传递会被忽略，不强制检查
-        self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable\"", content)
+        self.assertIn("label_whitelist: \"bot:queued,bot:pr-reviewable,bot:premerged\"", content)
         self.assertIn("types: [niuma.task.completed]", content)
 
-    def test_gong_and_cli_entrypoint_trigger_matrix_consistent(self) -> None:
+    def test_cli_entrypoint_is_thin_wrapper_without_job_if(self) -> None:
+        content = self.cli_entrypoint_content
+        self.assertIn("orchestrate:\n    uses: ./.github/workflows/niuma-orchestrate-reusable.yml", content)
+        self.assertNotIn("orchestrate:\n    if:", content)
+
+    def test_gong_entrypoint_trigger_matrix_matches_expected(self) -> None:
         cases = [
             {
                 "name": "issues_queued",
@@ -197,6 +202,12 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 "name": "issues_pr_reviewable",
                 "event_name": "issues",
                 "label_name": "bot:pr-reviewable",
+                "expected": True,
+            },
+            {
+                "name": "issues_premerged",
+                "event_name": "issues",
+                "label_name": "bot:premerged",
                 "expected": True,
             },
             {
@@ -219,22 +230,10 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                 "event_source": "other-source",
                 "expected": False,
             },
-            {
-                "name": "schedule",
-                "event_name": "schedule",
-                "expected": True,
-            },
         ]
 
         for case in cases:
             with self.subTest(case=case["name"]):
-                cli_result = evaluate_entrypoint_if(
-                    self.cli_entrypoint_if,
-                    event_name=case["event_name"],
-                    label_name=case.get("label_name", ""),
-                    action=case.get("action", ""),
-                    event_source=case.get("event_source", ""),
-                )
                 gong_result = evaluate_entrypoint_if(
                     self.gong_entrypoint_if,
                     event_name=case["event_name"],
@@ -242,7 +241,6 @@ class TestCrossRepoGongIntegration(unittest.TestCase):
                     action=case.get("action", ""),
                     event_source=case.get("event_source", ""),
                 )
-                self.assertEqual(cli_result, case["expected"])
                 self.assertEqual(gong_result, case["expected"])
 
     def test_dispatch_step_builds_completed_payload_from_real_script(self) -> None:

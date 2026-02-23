@@ -22,16 +22,6 @@ on:
         required: false
         default: "."
         type: string
-      label_whitelist:
-        description: "issues:labeled 允许触发的标签白名单（逗号分隔）"
-        required: false
-        default: "bot:orchestrate,bot:queued,bot:pr-reviewable"
-        type: string
-      enable_dispatch_wakeup:
-        description: "是否允许 repository_dispatch 唤醒"
-        required: false
-        default: true
-        type: boolean
       event_id:
         description: "外部事件唯一标识；为空时退化到 run 级唯一键"
         required: false
@@ -65,9 +55,6 @@ permissions:
 jobs:
   orchestrate:
     runs-on: self-hosted
-    if: >
-      (github.event_name == 'issues' || github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'pull_request') &&
-      (github.event_name != 'repository_dispatch' || inputs.enable_dispatch_wakeup)
     concurrency:
       group: ${{ inputs.concurrency_key == 'niuma-orchestrate-${repo}' && format('niuma-orchestrate-{0}', inputs.repo) || inputs.concurrency_key }}
       cancel-in-progress: false
@@ -137,52 +124,36 @@ jobs:
           printf '[orchestrate.trigger] {"trigger_source":"%s","issue":"%s","event_id":"%s","triggered_at":"%s"}\n' \
             "$trigger_source" "$issue" "$event_id" "$triggered_at"
 
-      - name: Enforce Trigger Gate
-        id: trigger_gate
+      - name: Setup niuma binary
         run: |
-          should_run="true"
-          reason="accepted"
-
-          if [ "$GITHUB_EVENT_NAME" = "issues" ]; then
-            whitelist="${{ inputs.label_whitelist }}"
-            label_name="${{ github.event.label.name }}"
-            matched="false"
-            IFS=',' read -r -a labels <<<"$whitelist"
-            for item in "${labels[@]}"; do
-              trimmed="$(echo "$item" | xargs)"
-              if [ "$trimmed" = "$label_name" ]; then
-                matched="true"
-                break
-              fi
-            done
-            if [ "$matched" != "true" ]; then
-              should_run="false"
-              reason="label_not_whitelisted"
-            fi
-          elif [ "$GITHUB_EVENT_NAME" = "repository_dispatch" ]; then
-            if [ "${{ inputs.enable_dispatch_wakeup }}" != "true" ]; then
-              should_run="false"
-              reason="dispatch_disabled"
-            elif [ "${{ github.event.action }}" != "niuma.task.completed" ]; then
-              should_run="false"
-              reason="dispatch_type_mismatch"
-            elif [ "${{ github.event.client_payload.event_source }}" != "close-after-integration-merge" ]; then
-              should_run="false"
-              reason="dispatch_source_mismatch"
-            fi
-          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            if [ "${{ github.event.action }}" != "closed" ]; then
-              should_run="false"
-              reason="pr_action_mismatch"
-            elif [ "${{ github.event.pull_request.merged }}" != "true" ]; then
-              should_run="false"
-              reason="pr_not_merged"
-            fi
+          niuma_path="$(command -v niuma || true)"
+          # 某些 self-hosted runner 服务环境 PATH 不含 /usr/local/bin，补绝对路径兜底。
+          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
+            niuma_path="/usr/local/bin/niuma"
           fi
+          if [ -z "$niuma_path" ]; then
+            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
+            exit 1
+          fi
+          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
 
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+      - name: Route Event in Control
+        id: route_event
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          output="$("$NIUMA_BIN" control route-event \
+            --repo "$REPO" \
+            --workflow "orchestrate" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH")"
+          echo "$output"
+          decision="$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')"
+          reason="$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')"
+          action="$(echo "$output" | awk -F= '/^action=/{print $2; exit}')"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
-          printf '[orchestrate.gate] {"should_run":"%s","reason":"%s"}\n' "$should_run" "$reason"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
 
       - name: Loop Guard
         id: loop_guard
@@ -247,23 +218,9 @@ jobs:
           printf '[orchestrate.idempotency] {"event_id":"%s","duplicate_event":"%s","reason":"%s"}\n' \
             "${{ steps.trigger_context.outputs.event_id }}" "$duplicate_event" "$dedup_reason"
 
-      - name: Setup niuma binary
-        if: steps.trigger_gate.outputs.should_run == 'true' && steps.loop_guard.outputs.blocked != 'true' && steps.idempotency_guard.outputs.duplicate_event != 'true'
-        run: |
-          niuma_path="$(command -v niuma || true)"
-          # 某些 self-hosted runner 服务环境 PATH 不含 /usr/local/bin，补绝对路径兜底。
-          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
-            niuma_path="/usr/local/bin/niuma"
-          fi
-          if [ -z "$niuma_path" ]; then
-            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
-            exit 1
-          fi
-          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
-
       - name: Run Orchestration
         id: control_run
-        if: steps.trigger_gate.outputs.should_run == 'true' && steps.loop_guard.outputs.blocked != 'true' && steps.idempotency_guard.outputs.duplicate_event != 'true'
+        if: steps.route_event.outputs.decision == 'run' && steps.route_event.outputs.action == 'orchestrate' && steps.loop_guard.outputs.blocked != 'true' && steps.idempotency_guard.outputs.duplicate_event != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT || github.token }}
           REPO: ${{ inputs.repo }}
@@ -330,8 +287,8 @@ jobs:
         if: always()
         run: |
           result="success"
-          if [ "${{ steps.trigger_gate.outputs.should_run }}" != "true" ]; then
-            result="skipped_${{ steps.trigger_gate.outputs.reason }}"
+          if [ "${{ steps.route_event.outputs.decision }}" != "run" ]; then
+            result="skipped_${{ steps.route_event.outputs.reason }}"
           elif [ "${{ steps.loop_guard.outputs.blocked }}" = "true" ]; then
             result="skipped_${{ steps.loop_guard.outputs.reason }}"
           elif [ "${{ steps.idempotency_guard.outputs.duplicate_event }}" = "true" ]; then

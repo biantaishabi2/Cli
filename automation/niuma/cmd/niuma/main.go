@@ -5,14 +5,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/agent"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/config"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
@@ -20,12 +24,14 @@ import (
 )
 
 var (
-	flagRepo                string
-	flagIssue               int
-	flagPR                  int
-	flagWorkDir             string
-	flagRepoDir             string // 主仓库本地路径（用于 worktree）
-	flagMaxDiscussionRounds int    // discuss 最大轮次（0=使用配置）
+	flagRepo                 string
+	flagIssue                int
+	flagPR                   int
+	flagWorkDir              string
+	flagRepoDir              string // 主仓库本地路径（用于 worktree）
+	flagMaxDiscussionRounds  int    // discuss 最大轮次（0=使用配置）
+	flagIterateTriggerSource string
+	flagIteratePRState       string
 )
 
 func main() {
@@ -104,6 +110,8 @@ func init() {
 
 	// discuss 特有 flags
 	discussCmd.Flags().IntVar(&flagMaxDiscussionRounds, "max-discussion-rounds", 0, "讨论最大轮次（1-20，0 表示使用配置）")
+	iterateCmd.Flags().StringVar(&flagIterateTriggerSource, "trigger-source", "", "iterate 触发来源（review/human）")
+	iterateCmd.Flags().StringVar(&flagIteratePRState, "pr-state", "", "触发时 PR 状态（OPEN/CLOSED/MERGED）")
 }
 
 // ===== status 命令：完整实现 =====
@@ -222,6 +230,7 @@ var discussCmd = &cobra.Command{
 
 func runDiscuss(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionDiscuss, flagIssue, flagPR)
 		return fmt.Errorf("必须指定 --repo 和 --issue")
 	}
 
@@ -237,23 +246,38 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
+	}
+	labels, err := client.ListLabels(ctx, flagIssue)
+	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
+		return err
+	}
+	decision, reason, action := evaluateDiscussDecision(labels)
+	if decision == control.DecisionSkip {
+		printWorkflowDecision(decision, reason, action, flagIssue, flagPR)
+		return nil
 	}
 
 	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 
 	if err := validateMaxDiscussionRounds(flagMaxDiscussionRounds); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 
 	maxRounds := resolveDiscussMaxRounds(flagMaxDiscussionRounds, cfg.Workflow.GetMaxDiscussionRounds())
+	printWorkflowDecision(decision, reason, action, flagIssue, flagPR)
 
 	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d timeout=%s）...\n", flagIssue, maxRounds, discussTimeout)
 
 	if err := orch.DoDiscuss(ctx, maxRounds); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return fmt.Errorf("讨论检查失败: %w", err)
 	}
 
@@ -338,24 +362,56 @@ var iterateCmd = &cobra.Command{
 }
 
 func runIterate(cmd *cobra.Command, args []string) error {
-	if flagRepo == "" || flagIssue == 0 || flagPR == 0 {
-		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
+	if flagRepo == "" || flagPR == 0 {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
+		return fmt.Errorf("必须指定 --repo 和 --pr")
 	}
 
 	ctx := context.Background()
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, flagIssue, flagPR)
 		return err
 	}
 
-	orch, err := buildOrchestrator(client, flagIssue)
+	effectiveIssue, skipNoop, err := resolveIterateIssue(ctx, client, flagIssue, flagPR, flagIterateTriggerSource)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
 		return err
 	}
+	if skipNoop {
+		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, 0, flagPR)
+		return nil
+	}
+	if shouldUpgradeIterateToNeedsHuman(flagIterateTriggerSource, flagIteratePRState) {
+		err := control.UpgradeIterateToNeedsHuman(ctx, effectiveIssue, flagPR, flagIterateTriggerSource, flagIteratePRState, control.IterateUpgradeOps{
+			ListLabels:    client.ListLabels,
+			ReplaceLabels: client.ReplaceLabels,
+			AddLabel:      client.AddLabel,
+			AddComment: func(ctx context.Context, issueNumber int, body string) error {
+				_, addErr := client.AddComment(ctx, issueNumber, body)
+				return addErr
+			},
+		})
+		if err != nil {
+			printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
+			return err
+		}
+		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, effectiveIssue, flagPR)
+		return nil
+	}
 
-	fmt.Printf("正在为 issue #%d / PR #%d 迭代修改...\n", flagIssue, flagPR)
+	orch, err := buildOrchestrator(client, effectiveIssue)
+	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
+		return err
+	}
+	printWorkflowDecision(control.DecisionRun, control.ReasonRunRoutable, control.ActionIterate, effectiveIssue, flagPR)
+
+	fmt.Printf("正在为 issue #%d / PR #%d 迭代修改...\n", effectiveIssue, flagPR)
 
 	if err := orch.DoIterate(ctx, flagPR, flagWorkDir); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
 		return fmt.Errorf("迭代修改失败: %w", err)
 	}
 
@@ -496,4 +552,111 @@ func validateMaxDiscussionRounds(rounds int) error {
 		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
 	}
 	return nil
+}
+
+func containsLabel(labels []string, target string) bool {
+	for _, label := range labels {
+		if label == target {
+			return true
+		}
+	}
+	return false
+}
+
+func evaluateDiscussDecision(labels []string) (control.Decision, control.Reason, control.Action) {
+	if !containsLabel(labels, string(state.StateNeedsDiscussion)) {
+		return control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionNone
+	}
+	return control.DecisionRun, control.ReasonRunRoutable, control.ActionDiscuss
+}
+
+func shouldUpgradeIterateToNeedsHuman(triggerSource, prState string) bool {
+	source := strings.ToLower(strings.TrimSpace(triggerSource))
+	if source != "review" && source != "human" {
+		return false
+	}
+	normalizedState := strings.ToUpper(strings.TrimSpace(prState))
+	if normalizedState == "" {
+		return false
+	}
+	return normalizedState != "OPEN"
+}
+
+func resolveIterateIssue(ctx context.Context, client *gh.Client, issueNumber, prNumber int, triggerSource string) (int, bool, error) {
+	if issueNumber > 0 {
+		return issueNumber, false, nil
+	}
+	pr, err := client.GetPR(ctx, prNumber)
+	if err != nil {
+		return 0, false, fmt.Errorf("获取 PR #%d 失败: %w", prNumber, err)
+	}
+	issueRefs := state.ParseIssueRefs(pr.GetTitle(), pr.GetBody())
+	effectiveIssue, skipNoop, resolveErr := pickIterateIssue(issueNumber, issueRefs, prNumber, triggerSource)
+	if resolveErr != nil {
+		return 0, false, resolveErr
+	}
+	if skipNoop {
+		return 0, true, nil
+	}
+	return effectiveIssue, false, nil
+}
+
+func pickIterateIssue(issueNumber int, issueRefs []int, prNumber int, triggerSource string) (int, bool, error) {
+	if issueNumber > 0 {
+		return issueNumber, false, nil
+	}
+	if len(issueRefs) == 0 {
+		if strings.EqualFold(strings.TrimSpace(triggerSource), "human") {
+			return 0, true, nil
+		}
+		return 0, false, fmt.Errorf("PR #%d 未解析到 issue 引用", prNumber)
+	}
+	sort.Ints(issueRefs)
+	if len(issueRefs) > 1 {
+		fmt.Printf("WARNING: PR #%d 解析到多个 issue 引用 %v，默认使用 #%d\n", prNumber, issueRefs, issueRefs[0])
+	}
+	return issueRefs[0], false, nil
+}
+
+func printWorkflowDecision(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) {
+	audit := buildWorkflowAudit(decision, reason, action, issue, pr)
+	encoded, _ := json.Marshal(audit)
+	fmt.Fprintf(os.Stderr, "[control.workflow] %s\n", string(encoded))
+
+	fmt.Printf("decision=%s\n", decision)
+	fmt.Printf("reason=%s\n", reason)
+	fmt.Printf("action=%s\n", action)
+	if issue > 0 {
+		fmt.Printf("issue=%d\n", issue)
+	}
+	if pr > 0 {
+		fmt.Printf("pr=%d\n", pr)
+	}
+}
+
+func buildWorkflowAudit(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) map[string]string {
+	workflow := strings.TrimSpace(os.Getenv("GITHUB_WORKFLOW"))
+	if workflow == "" {
+		workflow = "niuma-cli"
+	}
+	eventName := strings.TrimSpace(os.Getenv("GITHUB_EVENT_NAME"))
+	if eventName == "" {
+		eventName = "manual"
+	}
+
+	audit := map[string]string{
+		"workflow":       workflow,
+		"event_name":     eventName,
+		"action":         string(action),
+		"decision":       string(decision),
+		"reason":         string(reason),
+		"correlation_id": resolveCorrelationID(),
+	}
+	if issue > 0 {
+		audit["issue"] = fmt.Sprintf("%d", issue)
+	}
+	if pr > 0 {
+		audit["pr"] = fmt.Sprintf("%d", pr)
+	}
+	return audit
 }
