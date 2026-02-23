@@ -7,16 +7,16 @@
 >
 > 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
 
-## 先看怎么用（不是先看工具）
+## 使用导向概览
 
-你可以把这个仓库理解为一条标准工程链路：
+本仓库按以下标准工程链路组织：
 
 1. 用契约描述系统和目标（seed/issue/workflow）
 2. 自动做结构校验和门禁（架构、分层、事件、代码质量）
 3. 自动生成并执行行为测试（BDD）
 4. 在多任务场景下编排执行与合并（DAG + 自动化流程）
 
-核心不是“有几个工具”，而是“这条链路能不能闭环跑通”。
+本文档以工作流闭环为主线，工具章节用于实现映射。
 
 ## 标准工作流（契约 -> 校验 -> 测试）
 
@@ -31,7 +31,7 @@ bcc bdd seed --source <bdd-source-dir> --output <seed-out> -s organize
 bddc check --in <seed-out>/features --out test/bdd_generated --instructions <instructions.exs>
 ```
 
-这条链路对应你们最近推进的重点：
+当前链路覆盖的关键能力：
 - 子模块层级 + `layer/domain_kind` 治理
 - `flow/boundary/event` 多视图结构校验
 - 行为契约导出并打通 BDDC
@@ -110,7 +110,7 @@ mix escript.build
 - BDD 执行与指令集：[`compiler/bddc/README.md`](compiler/bddc/README.md)
 - 多 Issue 自动化执行：[`automation/niuma/README.md`](automation/niuma/README.md)
 
-## 工具映射（最后看）
+## 工具与目录映射
 
 承载多个命令行工具的 monorepo，按职责分类管理。
 
