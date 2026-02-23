@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -311,4 +314,78 @@ func snapshotCLIFlags() func() {
 		flagStateTo = prevStateTo
 		flagStatePriority = prevStatePriority
 	}
+}
+
+func TestBuildWorkflowAudit_ContainsRequiredFields(t *testing.T) {
+	t.Setenv("GITHUB_WORKFLOW", "niuma - Iterate")
+	t.Setenv("GITHUB_EVENT_NAME", "pull_request_review")
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+
+	audit := buildWorkflowAudit(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, 11, 22)
+
+	assert.Equal(t, "niuma - Iterate", audit["workflow"])
+	assert.Equal(t, "pull_request_review", audit["event_name"])
+	assert.Equal(t, string(control.ActionIterate), audit["action"])
+	assert.Equal(t, string(control.DecisionSkip), audit["decision"])
+	assert.Equal(t, string(control.ReasonSkipStateNotApplicable), audit["reason"])
+	assert.Equal(t, "run-123-attempt-2", audit["correlation_id"])
+	assert.Equal(t, "11", audit["issue"])
+	assert.Equal(t, "22", audit["pr"])
+}
+
+func TestPrintWorkflowDecision_EmitsStructuredAuditAndKV(t *testing.T) {
+	t.Setenv("GITHUB_WORKFLOW", "niuma - Discuss")
+	t.Setenv("GITHUB_EVENT_NAME", "issues")
+	t.Setenv("GITHUB_RUN_ID", "88")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, 9, 0)
+	})
+
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=discuss")
+	assert.Contains(t, stdout, "issue=9")
+
+	var audit map[string]string
+	line := bytes.TrimSpace([]byte(stderr))
+	line = bytes.TrimPrefix(line, []byte("[control.workflow] "))
+	require.NoError(t, json.Unmarshal(line, &audit))
+	assert.Equal(t, "niuma - Discuss", audit["workflow"])
+	assert.Equal(t, "issues", audit["event_name"])
+	assert.Equal(t, "discuss", audit["action"])
+	assert.Equal(t, "fail", audit["decision"])
+	assert.Equal(t, "fail_internal_error", audit["reason"])
+	assert.Equal(t, "run-88-attempt-1", audit["correlation_id"])
+}
+
+func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
+	t.Helper()
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	require.NoError(t, err)
+	stderrReader, stderrWriter, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	defer func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	}()
+
+	fn()
+
+	require.NoError(t, stdoutWriter.Close())
+	require.NoError(t, stderrWriter.Close())
+
+	stdoutBytes, err := io.ReadAll(stdoutReader)
+	require.NoError(t, err)
+	stderrBytes, err := io.ReadAll(stderrReader)
+	require.NoError(t, err)
+	return string(stdoutBytes), string(stderrBytes)
 }

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -258,6 +259,7 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 
 	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 
@@ -395,6 +397,7 @@ func runIterate(cmd *cobra.Command, args []string) error {
 
 	orch, err := buildOrchestrator(client, effectiveIssue)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
 		return err
 	}
 	printWorkflowDecision(control.DecisionRun, control.ReasonRunRoutable, control.ActionIterate, effectiveIssue, flagPR)
@@ -610,6 +613,10 @@ func pickIterateIssue(issueNumber int, issueRefs []int, prNumber int, triggerSou
 }
 
 func printWorkflowDecision(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) {
+	audit := buildWorkflowAudit(decision, reason, action, issue, pr)
+	encoded, _ := json.Marshal(audit)
+	fmt.Fprintf(os.Stderr, "[control.workflow] %s\n", string(encoded))
+
 	fmt.Printf("decision=%s\n", decision)
 	fmt.Printf("reason=%s\n", reason)
 	fmt.Printf("action=%s\n", action)
@@ -619,4 +626,31 @@ func printWorkflowDecision(decision control.Decision, reason control.Reason, act
 	if pr > 0 {
 		fmt.Printf("pr=%d\n", pr)
 	}
+}
+
+func buildWorkflowAudit(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) map[string]string {
+	workflow := strings.TrimSpace(os.Getenv("GITHUB_WORKFLOW"))
+	if workflow == "" {
+		workflow = "niuma-cli"
+	}
+	eventName := strings.TrimSpace(os.Getenv("GITHUB_EVENT_NAME"))
+	if eventName == "" {
+		eventName = "manual"
+	}
+
+	audit := map[string]string{
+		"workflow":       workflow,
+		"event_name":     eventName,
+		"action":         string(action),
+		"decision":       string(decision),
+		"reason":         string(reason),
+		"correlation_id": resolveCorrelationID(),
+	}
+	if issue > 0 {
+		audit["issue"] = fmt.Sprintf("%d", issue)
+	}
+	if pr > 0 {
+		audit["pr"] = fmt.Sprintf("%d", pr)
+	}
+	return audit
 }
