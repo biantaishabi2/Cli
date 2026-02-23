@@ -186,8 +186,9 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertIn("decision=", content)
         self.assertIn("reason=", content)
         self.assertIn("action=", content)
-        self.assertIn("steps.route_event.outputs.decision == run", content)
-        self.assertIn("steps.route_event.outputs.action == orchestrate", content)
+        self.assertIn("steps.route_event.outputs.decision == 'run'", content)
+        self.assertIn("steps.route_event.outputs.action == 'orchestrate'", content)
 
-    if __name__ == "__main__":
+
+if __name__ == "__main__":
     unittest.main()
