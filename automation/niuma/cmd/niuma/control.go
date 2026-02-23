@@ -713,8 +713,8 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	baseRef := pr.GetBase().GetRef()
-	if baseRef != "master" {
-		fmt.Printf("PR #%d base=%s 非 master，跳过收口。\n", flagPR, baseRef)
+	if !isCloseMergedBaseRef(baseRef) {
+		fmt.Printf("PR #%d base=%s 非 master/integration/*，跳过收口。\n", flagPR, baseRef)
 		return nil
 	}
 
@@ -744,6 +744,16 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// isCloseMergedBaseRef 判断 close-merged 是否应执行收口。
+// 当前允许 master 与 integration/*，覆盖 DAG 子任务先合入 integration 再收口的路径。
+func isCloseMergedBaseRef(baseRef string) bool {
+	baseRef = strings.TrimSpace(baseRef)
+	if baseRef == "master" {
+		return true
+	}
+	return strings.HasPrefix(baseRef, "integration/")
 }
 
 // handleCloseMergedDispatch 处理 close-merged 的 dispatch-wakeup 逻辑。
