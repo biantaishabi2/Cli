@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/agent"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/config"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
@@ -20,12 +23,14 @@ import (
 )
 
 var (
-	flagRepo                string
-	flagIssue               int
-	flagPR                  int
-	flagWorkDir             string
-	flagRepoDir             string // 主仓库本地路径（用于 worktree）
-	flagMaxDiscussionRounds int    // discuss 最大轮次（0=使用配置）
+	flagRepo                 string
+	flagIssue                int
+	flagPR                   int
+	flagWorkDir              string
+	flagRepoDir              string // 主仓库本地路径（用于 worktree）
+	flagMaxDiscussionRounds  int    // discuss 最大轮次（0=使用配置）
+	flagIterateTriggerSource string
+	flagIteratePRState       string
 )
 
 func main() {
@@ -104,6 +109,8 @@ func init() {
 
 	// discuss 特有 flags
 	discussCmd.Flags().IntVar(&flagMaxDiscussionRounds, "max-discussion-rounds", 0, "讨论最大轮次（1-20，0 表示使用配置）")
+	iterateCmd.Flags().StringVar(&flagIterateTriggerSource, "trigger-source", "", "iterate 触发来源（review/human）")
+	iterateCmd.Flags().StringVar(&flagIteratePRState, "pr-state", "", "触发时 PR 状态（OPEN/CLOSED/MERGED）")
 }
 
 // ===== status 命令：完整实现 =====
@@ -239,6 +246,14 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	labels, err := client.ListLabels(ctx, flagIssue)
+	if err != nil {
+		return err
+	}
+	if !containsLabel(labels, string(state.StateNeedsDiscussion)) {
+		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionNone, flagIssue, flagPR)
+		return nil
+	}
 
 	orch, err := buildOrchestrator(client, flagIssue)
 	if err != nil {
@@ -250,10 +265,12 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 	}
 
 	maxRounds := resolveDiscussMaxRounds(flagMaxDiscussionRounds, cfg.Workflow.GetMaxDiscussionRounds())
+	printWorkflowDecision(control.DecisionRun, control.ReasonRunRoutable, control.ActionDiscuss, flagIssue, flagPR)
 
 	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d timeout=%s）...\n", flagIssue, maxRounds, discussTimeout)
 
 	if err := orch.DoDiscuss(ctx, maxRounds); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return fmt.Errorf("讨论检查失败: %w", err)
 	}
 
@@ -338,8 +355,8 @@ var iterateCmd = &cobra.Command{
 }
 
 func runIterate(cmd *cobra.Command, args []string) error {
-	if flagRepo == "" || flagIssue == 0 || flagPR == 0 {
-		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
+	if flagRepo == "" || flagPR == 0 {
+		return fmt.Errorf("必须指定 --repo 和 --pr")
 	}
 
 	ctx := context.Background()
@@ -348,14 +365,39 @@ func runIterate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	orch, err := buildOrchestrator(client, flagIssue)
+	effectiveIssue, err := resolveIterateIssue(ctx, client, flagIssue, flagPR)
+	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(flagIterateTriggerSource), "review") && !strings.EqualFold(strings.TrimSpace(flagIteratePRState), "OPEN") {
+		err := control.UpgradeIterateToNeedsHuman(ctx, effectiveIssue, flagPR, flagIterateTriggerSource, flagIteratePRState, control.IterateUpgradeOps{
+			ListLabels:    client.ListLabels,
+			ReplaceLabels: client.ReplaceLabels,
+			AddLabel:      client.AddLabel,
+			AddComment: func(ctx context.Context, issueNumber int, body string) error {
+				_, addErr := client.AddComment(ctx, issueNumber, body)
+				return addErr
+			},
+		})
+		if err != nil {
+			printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
+			return err
+		}
+		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, effectiveIssue, flagPR)
+		return nil
+	}
+
+	orch, err := buildOrchestrator(client, effectiveIssue)
 	if err != nil {
 		return err
 	}
+	printWorkflowDecision(control.DecisionRun, control.ReasonRunRoutable, control.ActionIterate, effectiveIssue, flagPR)
 
-	fmt.Printf("正在为 issue #%d / PR #%d 迭代修改...\n", flagIssue, flagPR)
+	fmt.Printf("正在为 issue #%d / PR #%d 迭代修改...\n", effectiveIssue, flagPR)
 
 	if err := orch.DoIterate(ctx, flagPR, flagWorkDir); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, effectiveIssue, flagPR)
 		return fmt.Errorf("迭代修改失败: %w", err)
 	}
 
@@ -496,4 +538,44 @@ func validateMaxDiscussionRounds(rounds int) error {
 		return fmt.Errorf("--max-discussion-rounds 必须在 1-20，或使用 0 表示走配置默认值")
 	}
 	return nil
+}
+
+func containsLabel(labels []string, target string) bool {
+	for _, label := range labels {
+		if label == target {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveIterateIssue(ctx context.Context, client *gh.Client, issueNumber, prNumber int) (int, error) {
+	if issueNumber > 0 {
+		return issueNumber, nil
+	}
+	pr, err := client.GetPR(ctx, prNumber)
+	if err != nil {
+		return 0, fmt.Errorf("获取 PR #%d 失败: %w", prNumber, err)
+	}
+	issueRefs := state.ParseIssueRefs(pr.GetTitle(), pr.GetBody())
+	if len(issueRefs) == 0 {
+		return 0, fmt.Errorf("PR #%d 未解析到 issue 引用", prNumber)
+	}
+	sort.Ints(issueRefs)
+	if len(issueRefs) > 1 {
+		fmt.Printf("WARNING: PR #%d 解析到多个 issue 引用 %v，默认使用 #%d\n", prNumber, issueRefs, issueRefs[0])
+	}
+	return issueRefs[0], nil
+}
+
+func printWorkflowDecision(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) {
+	fmt.Printf("decision=%s\n", decision)
+	fmt.Printf("reason=%s\n", reason)
+	fmt.Printf("action=%s\n", action)
+	if issue > 0 {
+		fmt.Printf("issue=%d\n", issue)
+	}
+	if pr > 0 {
+		fmt.Printf("pr=%d\n", pr)
+	}
 }

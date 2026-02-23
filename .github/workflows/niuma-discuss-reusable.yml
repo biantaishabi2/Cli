@@ -70,6 +70,7 @@ jobs:
 
       # 事件驱动启动一次 discuss，后续轮次在进程内循环推进
       - name: Check Discussion
+        id: discuss
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
@@ -78,14 +79,12 @@ jobs:
           NIUMA_VISIBLE_ROUND_INTERVAL: ${{ inputs.visible_round_interval }}
           NIUMA_VISIBLE_ONLY_ON_DIFF: ${{ inputs.visible_only_on_diff }}
         run: |
-          LABELS=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels -q '.labels[].name')
-          if echo "$LABELS" | grep -q "bot:needs-discussion"; then
-            EXTRA_ARGS=()
-            if [ -n "$MAX_DISCUSSION_ROUNDS" ]; then
-              EXTRA_ARGS+=(--max-discussion-rounds "$MAX_DISCUSSION_ROUNDS")
-            fi
-            "$NIUMA_BIN" discuss \
-              --repo "$REPO" \
-              --issue "$ISSUE_NUMBER" \
-              "${EXTRA_ARGS[@]}"
+          EXTRA_ARGS=()
+          if [ -n "$MAX_DISCUSSION_ROUNDS" ]; then
+            EXTRA_ARGS+=(--max-discussion-rounds "$MAX_DISCUSSION_ROUNDS")
           fi
+          output="$("$NIUMA_BIN" discuss \
+            --repo "$REPO" \
+            --issue "$ISSUE_NUMBER" \
+            "${EXTRA_ARGS[@]}")"
+          echo "$output"

@@ -21,11 +21,22 @@ func TestWorkflowContract_EntrypointUsesReusableAndKeepsTriggers(t *testing.T) {
 	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "repository_dispatch:")
 	assert.Contains(t, content, "types: [niuma.task.completed]")
-	assert.Contains(t, content, "github.event.label.name == 'bot:orchestrate'")
-	assert.Contains(t, content, "github.event.label.name == 'bot:queued'")
-	assert.Contains(t, content, "github.event.label.name == 'bot:premerged'")
-	assert.Contains(t, content, "github.event.client_payload.event_source == 'close-after-integration-merge'")
+	assert.NotContains(t, content, "github.event.label.name == 'bot:orchestrate'")
+	assert.NotContains(t, content, "github.event.client_payload.event_source == 'close-after-integration-merge'")
 	assert.Contains(t, content, "uses: ./.github/workflows/niuma-orchestrate-reusable.yml")
+}
+
+func TestWorkflowContract_EntryWorkflowsUseControlRouteEvent(t *testing.T) {
+	files := []string{
+		"niuma-plan.yml",
+		"niuma-implement.yml",
+		"niuma-review.yml",
+	}
+	for _, file := range files {
+		content := loadWorkflowFile(t, file)
+		assert.Contains(t, content, "control route-event")
+		assert.Contains(t, content, "needs.route-event.outputs.decision == 'run'")
+	}
 }
 
 func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
@@ -37,9 +48,8 @@ func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
 	assert.Contains(t, content, "repo_dir:")
 	assert.Contains(t, content, "default: \".\"")
 	assert.NotContains(t, content, "build_niuma:")
-	assert.Contains(t, content, "label_whitelist:")
-	assert.Contains(t, content, "default: \"bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged\"")
-	assert.Contains(t, content, "enable_dispatch_wakeup:")
+	assert.NotContains(t, content, "label_whitelist:")
+	assert.NotContains(t, content, "enable_dispatch_wakeup:")
 	assert.Contains(t, content, "event_id:")
 	assert.Contains(t, content, "default: \"\"")
 	assert.Contains(t, content, "dedup_window_hours:")
@@ -53,8 +63,8 @@ func TestWorkflowContract_ReusableHasIdempotencyLoopGuardAndConcurrency(t *testi
 
 	assert.Contains(t, content, "concurrency:")
 	assert.Contains(t, content, "cancel-in-progress: false")
-	assert.Contains(t, content, "github.event_name == 'pull_request'")
-	assert.Contains(t, content, "reason=\"pr_not_merged\"")
+	assert.Contains(t, content, "Route Event in Control")
+	assert.Contains(t, content, "control route-event")
 	assert.Contains(t, content, "Idempotency Guard")
 	assert.Contains(t, content, "/tmp/niuma-orchestrate-dedup")
 	assert.Contains(t, content, "duplicate_event")

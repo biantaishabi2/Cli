@@ -1,4 +1,6 @@
-name: niuma - Review
+# {{.Name}} 入口模板
+# 使用: automation/niuma/scripts/render_workflows.sh
+name: {{.DisplayName}}
 
 on:
   issues:
@@ -6,7 +8,7 @@ on:
 
 permissions:
   issues: write
-  pull-requests: write
+  contents: read
 
 jobs:
   route-event:
@@ -35,7 +37,7 @@ jobs:
         run: |
           output="$($NIUMA_BIN control route-event \
             --repo "$REPO" \
-            --workflow "review" \
+            --workflow "{{.Workflow}}" \
             --event-name "$GITHUB_EVENT_NAME" \
             --event-path "$GITHUB_EVENT_PATH")"
           echo "$output"
@@ -43,10 +45,10 @@ jobs:
           echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
           echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
 
-  review:
+  run-reusable:
     needs: route-event
-    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == 'review'
-    uses: ./.github/workflows/niuma-review-reusable.yml
+    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == '{{.Action}}'
+    uses: ./.github/workflows/{{.Reusable}}
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ format('{0}', github.event.issue.number) }}

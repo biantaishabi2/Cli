@@ -8,8 +8,9 @@ on:
         required: true
         type: string
       issue_number:
-        description: "Issue 编号"
-        required: true
+        description: "Issue 编号（review 路径必填，human 路径可空由 Go 自动解析）"
+        required: false
+        default: ""
         type: string
       pr_number:
         description: "PR 编号（human 路径传入，review 路径自动解析）"
@@ -39,6 +40,11 @@ on:
         description: "Gate 最大重试次数"
         required: false
         default: "2"
+        type: string
+      initial_pr_state:
+        description: "caller 透传的 PR 初始状态"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -85,7 +91,6 @@ jobs:
           fi
           echo "repo_dir=$resolved_repo_dir" >> "$GITHUB_OUTPUT"
 
-      # === Review 路径：AI 自审不通过，从 issue 解析 PR ===
       - name: Find PR Number
         id: find_pr
         if: inputs.trigger_source == 'review'
@@ -94,12 +99,11 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           REPO: ${{ inputs.repo }}
         run: |
-          # 分页解析 BOT:PR_CREATED marker，取最新 open PR 号
           if PR_NUMBER=$("$NIUMA_BIN" resolve-pr --repo "$REPO" --issue "$ISSUE_NUMBER"); then
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::未在 issue #${ISSUE_NUMBER} 的评论中找到可用 PR 号"
-            echo "pr_number=" >> $GITHUB_OUTPUT
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Check PR State
@@ -110,42 +114,38 @@ jobs:
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state -q '.state')
-          echo "pr_state=$PR_STATE" >> $GITHUB_OUTPUT
-
-      - name: Escalate Human When PR Not Open
-        if: inputs.trigger_source == 'review' && steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state != 'OPEN'
-        env:
-          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
-          REPO: ${{ inputs.repo }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
-          PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-        run: |
-          "$NIUMA_BIN" state-label clear --repo "$REPO" --issue "$ISSUE_NUMBER" || true
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label needs-human || true
-          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "## ⚠️ 自动迭代已停止\n\n检测到 PR #$PR_NUMBER 当前状态不是 OPEN，已转人工处理（\`needs-human\`）。"
-          exit 1
+          echo "pr_state=$PR_STATE" >> "$GITHUB_OUTPUT"
 
       - name: Iterate on Review (from bot review)
-        if: inputs.trigger_source == 'review' && steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
+        id: iterate_review
+        if: inputs.trigger_source == 'review' && steps.find_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+          PR_STATE: ${{ steps.pr_state.outputs.pr_state }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
         run: |
-          "$NIUMA_BIN" iterate \
+          output="$("$NIUMA_BIN" iterate \
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE"
+            --repo-dir "$WORKSPACE" \
+            --trigger-source review \
+            --pr-state "$PR_STATE")"
+          echo "$output"
+          decision="$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')"
+          issue="$(echo "$output" | awk -F= '/^issue=/{print $2; exit}')"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$issue" >> "$GITHUB_OUTPUT"
 
       - name: Run PR Gate (from bot review)
-        if: inputs.trigger_source == 'review' && steps.find_pr.outputs.pr_number != '' && steps.pr_state.outputs.pr_state == 'OPEN'
+        if: steps.iterate_review.outputs.decision == 'run' && steps.find_pr.outputs.pr_number != '' && steps.iterate_review.outputs.issue_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ISSUE_NUMBER: ${{ steps.iterate_review.outputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
         run: |
@@ -163,28 +163,40 @@ jobs:
             --repo-dir "$WORKSPACE" \
             --max-retries "$GATE_MAX_RETRIES"
 
-      # === Human 路径：人工 changes_requested，PR 号由 caller 传入 ===
       - name: Iterate on Review (from human)
+        id: iterate_human
         if: inputs.trigger_source == 'human' && inputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          PR_STATE: ${{ inputs.initial_pr_state }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
         run: |
-          "$NIUMA_BIN" iterate \
+          extra_issue_args=()
+          if [ -n "$ISSUE_NUMBER" ]; then
+            extra_issue_args+=(--issue "$ISSUE_NUMBER")
+          fi
+          output="$("$NIUMA_BIN" iterate \
             --repo "$REPO" \
-            --issue "$ISSUE_NUMBER" \
             --pr "$PR_NUMBER" \
-            --repo-dir "$WORKSPACE"
+            --repo-dir "$WORKSPACE" \
+            --trigger-source human \
+            --pr-state "$PR_STATE" \
+            "${extra_issue_args[@]}")"
+          echo "$output"
+          decision="$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')"
+          issue="$(echo "$output" | awk -F= '/^issue=/{print $2; exit}')"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$issue" >> "$GITHUB_OUTPUT"
 
       - name: Run PR Gate (from human)
-        if: inputs.trigger_source == 'human' && inputs.pr_number != ''
+        if: steps.iterate_human.outputs.decision == 'run' && inputs.pr_number != '' && steps.iterate_human.outputs.issue_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ISSUE_NUMBER: ${{ steps.iterate_human.outputs.issue_number }}
           PR_NUMBER: ${{ inputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
         run: |
