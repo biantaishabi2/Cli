@@ -568,6 +568,16 @@ func TestDispatchTaskCompleted_TimestampFallback(t *testing.T) {
 	assert.Equal(t, "timestamp", sender.payload["event_id_source"])
 }
 
+func TestIsCloseMergedBaseRef(t *testing.T) {
+	assert.True(t, isCloseMergedBaseRef("master"))
+	assert.True(t, isCloseMergedBaseRef("integration/main"))
+	assert.True(t, isCloseMergedBaseRef("integration/feature-x"))
+	assert.True(t, isCloseMergedBaseRef(" integration/main "))
+	assert.False(t, isCloseMergedBaseRef("main"))
+	assert.False(t, isCloseMergedBaseRef("feature/foo"))
+	assert.False(t, isCloseMergedBaseRef(""))
+}
+
 type stubGitHubControlClient struct {
 	findMarkerResp *gh.MarkerComment
 	findMarkerErr  error
