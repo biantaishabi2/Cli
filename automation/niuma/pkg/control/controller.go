@@ -1860,16 +1860,21 @@ func (c *Controller) FinalizeIntegratedIssues(ctx context.Context, issueNums []i
 			parentNums[parentNum] = struct{}{}
 		}
 
-		if strings.EqualFold(issue.State, "closed") {
-			fmt.Printf("[control] issue #%d 已关闭，跳过重复收口\n", issueNum)
-			continue
-		}
-
 		if err := c.syncIssueStateLabel(ctx, issueNum, botDoneLabel); err != nil {
 			fmt.Printf("[control] issue #%d 打标 %s 失败: %v\n", issueNum, botDoneLabel, err)
 			if firstErr == nil {
 				firstErr = err
 			}
+		}
+		if err := c.normalizeDoneAuxLabels(ctx, issueNum); err != nil {
+			fmt.Printf("[control] issue #%d 清理残留辅助标签失败: %v\n", issueNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if strings.EqualFold(issue.State, "closed") {
+			fmt.Printf("[control] issue #%d 已关闭，完成标签归一后跳过重复关闭\n", issueNum)
+			continue
 		}
 		if err := c.github.CloseIssue(ctx, issueNum); err != nil {
 			fmt.Printf("[control] 关闭 issue #%d 失败: %v\n", issueNum, err)
@@ -2012,6 +2017,12 @@ func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums ma
 				firstErr = err
 			}
 		}
+		if err := c.normalizeDoneAuxLabels(ctx, parentNum); err != nil {
+			fmt.Printf("[control] parent issue #%d 清理残留辅助标签失败: %v\n", parentNum, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := c.github.CloseIssue(ctx, parentNum); err != nil {
 			fmt.Printf("[control] 关闭 parent issue #%d 失败: %v\n", parentNum, err)
 			if firstErr == nil {
@@ -2022,6 +2033,26 @@ func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums ma
 		fmt.Printf("[control] 已关闭 parent issue #%d（sub-issue 全部完成）\n", parentNum)
 	}
 
+	return firstErr
+}
+
+// normalizeDoneAuxLabels 在 issue 进入 done 收口时清理非终态辅助标签。
+// 这些标签不是 bot:*，不会被 state transition 自动清理，需要显式归一。
+func (c *Controller) normalizeDoneAuxLabels(ctx context.Context, issueNum int) error {
+	auxLabels := []string{
+		integrationConflictLabel,
+		integrationGateFailLabel,
+		needsHumanLabel,
+	}
+
+	var firstErr error
+	for _, oldLabel := range auxLabels {
+		if _, err := c.github.ReplaceLabelIfPresent(ctx, issueNum, oldLabel, botDoneLabel); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
 	return firstErr
 }
 

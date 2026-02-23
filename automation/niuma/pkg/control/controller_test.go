@@ -3144,7 +3144,13 @@ func TestFinalizeIntegratedIssues_ParentRemainsOpenWhenSubNotAllClosed(t *testin
 func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 	mockGH := newMockGitHubOps(
 		IssueInfo{Number: 210, Title: "parent", State: "open"},
-		IssueInfo{Number: 214, Title: "sub-214", Body: "parent: #210", State: "closed"},
+		IssueInfo{
+			Number: 214,
+			Title:  "sub-214",
+			Body:   "parent: #210",
+			State:  "closed",
+			Labels: []string{"bot:iterating", "needs-human", "integration-gate-failed"},
+		},
 		IssueInfo{Number: 215, Title: "sub-215", Body: "parent: #210", State: "open"},
 	)
 
@@ -3154,6 +3160,12 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 
 	assert.NotContains(t, mockGH.closeIssueCalls, 214)
 	assert.NotContains(t, mockGH.closeIssueCalls, 210)
+	labels214, err := mockGH.ListLabels(context.Background(), 214)
+	require.NoError(t, err)
+	assert.Contains(t, labels214, botDoneLabel)
+	assert.NotContains(t, labels214, "bot:iterating")
+	assert.NotContains(t, labels214, "needs-human")
+	assert.NotContains(t, labels214, "integration-gate-failed")
 }
 
 func TestMarkIssuesPremerged_TransitionsFromPRReviewable(t *testing.T) {
