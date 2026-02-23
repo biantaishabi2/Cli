@@ -33,3 +33,6 @@ compiler/bcc/scripts/node_modules/
 
 # niuma worktrees
 .worktrees/
+
+# niuma lock
+.niuma/tasks.json.lock
