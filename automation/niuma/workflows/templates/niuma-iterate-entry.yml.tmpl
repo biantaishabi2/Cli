@@ -1,0 +1,41 @@
+name: niuma - Iterate
+
+on:
+  issues:
+    types: [labeled]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  # AI 自审不通过 -> 自动迭代
+  call-iterate-from-review:
+    if: >
+      github.event_name == 'issues' &&
+      github.event.label.name == 'bot:pr-needs-fix' &&
+      github.event.issue.state == 'open'
+    uses: ./.github/workflows/niuma-iterate-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+      trigger_source: review
+      gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+    secrets: inherit
+
+  # 人工 PR review changes_requested -> 直接透传上下文给 Go 处理
+  call-iterate-from-human:
+    if: >
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested'
+    uses: ./.github/workflows/niuma-iterate-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
+      trigger_source: human
+      gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      initial_pr_state: ${{ github.event.pull_request.state }}
+    secrets: inherit
