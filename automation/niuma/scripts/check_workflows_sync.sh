@@ -12,6 +12,7 @@ FILES=(
   .github/workflows/niuma-orchestrate.yml
   .github/workflows/niuma-iterate.yml
   .github/workflows/niuma-discuss.yml
+  .github/workflows/niuma-dispatch-completed.yml
 )
 
 before_hash="$(git ls-files "${FILES[@]}" | xargs sha256sum | sha256sum | awk '{print $1}')"

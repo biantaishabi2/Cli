@@ -47,7 +47,7 @@ automation/niuma/
 │   └── marker/          # 幂等 Marker 管理
 ├── templates/           # Final Plan 模板
 ├── workflows/
-│   └── templates/       # 6 个入口 workflow 模板（*-entry.yml.tmpl）
+│   └── templates/       # 7 个托管 workflow 模板
 ├── .github/workflows/   # GitHub Actions 工作流（入口 + reusable）
 └── README.md
 ```
@@ -422,8 +422,8 @@ Final Plan 必须包含可执行的测试：
 
 说明：
 - 以上是运行期触发语义。
-- 入口 workflow 文件（`niuma-plan/implement/review/orchestrate/iterate/discuss.yml`）已改为模板化维护。
-- 不再建议手工直接改这 6 个入口文件，统一通过脚本渲染/校验/下发。
+- 托管 workflow 文件（`niuma-plan/implement/review/orchestrate/iterate/discuss/dispatch-completed.yml`）已改为模板化维护。
+- 不再建议手工直接改这些托管文件，统一通过脚本渲染/校验/下发。
 
 ## 幂等机制
 
@@ -558,7 +558,7 @@ MIT
 
 ## Workflow 模板脚本
 
-统一入口 workflow（`plan/implement/review/orchestrate/iterate/discuss`）已支持模板化渲染、同步检查、跨仓库一键下发。
+统一托管 workflow（`plan/implement/review/orchestrate/iterate/discuss/dispatch-completed`）已支持模板化渲染、同步检查、跨仓库一键下发。
 
 标准流程（建议）：
 1. 在模板仓库更新 `automation/niuma/workflows/templates/*-entry.yml.tmpl`
@@ -604,7 +604,7 @@ bash automation/niuma/scripts/workflows.sh publish \
 - 通过 GitHub Contents API 下发 workflow 文件到目标仓库
 - `--repo` 必填；`--branch` 不填则走目标仓库默认分支
 - `--mode` 可选（默认 `entry`）：
-  - `entry`：仅下发 6 个入口 workflow
+  - `entry`：下发 7 个托管 workflow（含 `niuma-dispatch-completed.yml`）
   - `full`：下发入口 + reusable + `niuma-dispatch-completed.yml` + `.github/scripts/niuma-test-gate.sh`（若源仓库存在）
 
 模式建议：

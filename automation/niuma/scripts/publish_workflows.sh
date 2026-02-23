@@ -57,6 +57,7 @@ ENTRY_FILES=(
   "niuma-orchestrate.yml"
   "niuma-iterate.yml"
   "niuma-discuss.yml"
+  "niuma-dispatch-completed.yml"
 )
 
 REUSABLE_FILES=(
@@ -66,7 +67,6 @@ REUSABLE_FILES=(
   "niuma-orchestrate-reusable.yml"
   "niuma-iterate-reusable.yml"
   "niuma-discuss-reusable.yml"
-  "niuma-dispatch-completed.yml"
 )
 
 put_file() {

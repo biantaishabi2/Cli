@@ -6,6 +6,7 @@ TEMPLATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-entry.yml.tmpl"
 TEMPLATE_ORCHESTRATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-orchestrate-entry.yml.tmpl"
 TEMPLATE_ITERATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-iterate-entry.yml.tmpl"
 TEMPLATE_DISCUSS="$ROOT_DIR/automation/niuma/workflows/templates/niuma-discuss-entry.yml.tmpl"
+TEMPLATE_DISPATCH="$ROOT_DIR/automation/niuma/workflows/templates/niuma-dispatch-completed.yml.tmpl"
 
 if [ ! -f "$TEMPLATE" ]; then
   echo "template not found: $TEMPLATE" >&2
@@ -87,6 +88,7 @@ render_entry_workflow \
 cp "$TEMPLATE_ORCHESTRATE" "$ROOT_DIR/.github/workflows/niuma-orchestrate.yml"
 cp "$TEMPLATE_ITERATE" "$ROOT_DIR/.github/workflows/niuma-iterate.yml"
 cp "$TEMPLATE_DISCUSS" "$ROOT_DIR/.github/workflows/niuma-discuss.yml"
+cp "$TEMPLATE_DISPATCH" "$ROOT_DIR/.github/workflows/niuma-dispatch-completed.yml"
 
 echo "rendered: .github/workflows/niuma-plan.yml"
 echo "rendered: .github/workflows/niuma-implement.yml"
@@ -94,3 +96,4 @@ echo "rendered: .github/workflows/niuma-review.yml"
 echo "rendered: .github/workflows/niuma-orchestrate.yml"
 echo "rendered: .github/workflows/niuma-iterate.yml"
 echo "rendered: .github/workflows/niuma-discuss.yml"
+echo "rendered: .github/workflows/niuma-dispatch-completed.yml"
