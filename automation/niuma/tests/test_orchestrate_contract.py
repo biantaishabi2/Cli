@@ -171,7 +171,7 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertIn("types: [labeled]", content)
         self.assertIn("types: [niuma.task.completed]", content)
         self.assertIn("uses: ./.github/workflows/niuma-orchestrate-reusable.yml", content)
-        self.assertIn("label_whitelist: \"bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged\"", content)
+        self.assertNotIn("label_whitelist:", content)
         self.assertNotIn("control close-merged", content)
 
     def test_entrypoint_is_routed_by_reusable_without_job_if(self) -> None:
