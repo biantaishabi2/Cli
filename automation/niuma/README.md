@@ -46,7 +46,9 @@ automation/niuma/
 │   ├── state/           # Label 状态机
 │   └── marker/          # 幂等 Marker 管理
 ├── templates/           # Final Plan 模板
-├── .github/workflows/   # 4 个自动化 workflow
+├── workflows/
+│   └── templates/       # 6 个入口 workflow 模板（*-entry.yml.tmpl）
+├── .github/workflows/   # GitHub Actions 工作流（入口 + reusable）
 └── README.md
 ```
 
@@ -412,6 +414,11 @@ Final Plan 必须包含可执行的测试：
 | PR created (`bot:pr-created`) | Self-Check（测试 + 规范） |
 | PR Review (`changes_requested`) | Iterate（自动修复意见） |
 
+说明：
+- 以上是运行期触发语义。
+- 入口 workflow 文件（`niuma-plan/implement/review/orchestrate/iterate/discuss.yml`）已改为模板化维护。
+- 不再建议手工直接改这 6 个入口文件，统一通过脚本渲染/校验/下发。
+
 ## 幂等机制
 
 用 **Marker 注释** 保证不重复执行：
@@ -542,3 +549,71 @@ MIT
 ---
 
 🐮🐴 **niuma** - 让机器人做牛马，人做决策
+
+## Workflow 模板脚本
+
+统一入口 workflow（`plan/implement/review/orchestrate/iterate/discuss`）已支持模板化渲染、同步检查、跨仓库一键下发。
+
+标准流程（建议）：
+1. 在模板仓库更新 `automation/niuma/workflows/templates/*-entry.yml.tmpl`
+2. 执行渲染：`workflows.sh render`
+3. 执行校验：`workflows.sh check`
+4. 发布到目标仓库：`workflows.sh publish --repo <owner/repo>`
+
+旧方式说明：
+- 旧的“直接手改目标仓库 `.github/workflows/niuma-*.yml`”方式已废弃。
+- 若发现漂移，优先回改模板并重新 `render`，不要直接改生成结果。
+
+### 1) 渲染到当前仓库
+
+```bash
+bash automation/niuma/scripts/workflows.sh render
+```
+
+作用：
+- 将 `automation/niuma/workflows/templates/*-entry.yml.tmpl` 渲染（当前为直接拷贝）到 `.github/workflows/*.yml`
+
+### 2) 检查是否漂移
+
+```bash
+bash automation/niuma/scripts/workflows.sh check
+```
+
+作用：
+- 对比模板与当前仓库 `.github/workflows/*.yml` 是否一致
+- 不一致时返回非 0，便于接入 CI
+
+### 3) 一键发布到目标仓库
+
+```bash
+bash automation/niuma/scripts/workflows.sh publish \
+  --repo <owner/repo> \
+  --branch <branch可选> \
+  --message "chore: sync niuma workflow entries" \
+  --source-dir .github/workflows
+```
+
+作用：
+- 通过 GitHub Contents API 将 6 个入口 workflow 下发到目标仓库
+- `--repo` 必填；`--branch` 不填则走目标仓库默认分支
+
+常用示例：
+
+```bash
+# 发布到默认分支
+bash automation/niuma/scripts/workflows.sh publish --repo biantaishabi2/Cli-niuma-test
+
+# 发布到指定分支
+bash automation/niuma/scripts/workflows.sh publish \
+  --repo biantaishabi2/Cli-niuma-test \
+  --branch feat/sync-niuma-workflows
+```
+
+底层脚本：
+- `automation/niuma/scripts/render_workflows.sh`
+- `automation/niuma/scripts/check_workflows_sync.sh`
+- `automation/niuma/scripts/publish_workflows.sh`
+
+前置条件：
+- 本地已登录 `gh auth login`
+- 对目标仓库有写权限

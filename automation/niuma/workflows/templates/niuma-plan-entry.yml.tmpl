@@ -1,0 +1,18 @@
+name: niuma - Plan Draft
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  plan-draft:
+    if: github.event.label.name == 'bot:fix'
+    uses: ./.github/workflows/niuma-plan-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+    secrets: inherit

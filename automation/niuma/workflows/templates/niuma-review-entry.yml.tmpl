@@ -1,0 +1,18 @@
+name: niuma - Review
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.label.name == 'bot:pr-created'
+    uses: ./.github/workflows/niuma-review-reusable.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+    secrets: inherit
