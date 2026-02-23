@@ -230,6 +230,7 @@ var discussCmd = &cobra.Command{
 
 func runDiscuss(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagIssue == 0 {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionDiscuss, flagIssue, flagPR)
 		return fmt.Errorf("必须指定 --repo 和 --issue")
 	}
 
@@ -362,6 +363,7 @@ var iterateCmd = &cobra.Command{
 
 func runIterate(cmd *cobra.Command, args []string) error {
 	if flagRepo == "" || flagPR == 0 {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
 		return fmt.Errorf("必须指定 --repo 和 --pr")
 	}
 

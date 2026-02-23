@@ -412,6 +412,54 @@ func TestRunIterate_PrintsFailDecisionOnClientInitError(t *testing.T) {
 	assert.Contains(t, stdout, "pr=22")
 }
 
+func TestRunDiscuss_PrintsFailDecisionOnMissingRequiredFlags(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = ""
+	flagIssue = 0
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = runDiscuss(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_invalid_event_payload")
+	assert.Contains(t, stdout, "action=discuss")
+	assert.Contains(t, stderr, "[control.workflow] ")
+}
+
+func TestRunIterate_PrintsFailDecisionOnMissingRequiredFlags(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = ""
+	flagIssue = 0
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = runIterate(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_invalid_event_payload")
+	assert.Contains(t, stdout, "action=iterate")
+	assert.Contains(t, stderr, "[control.workflow] ")
+}
+
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	t.Helper()
 
