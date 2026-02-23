@@ -279,6 +279,49 @@ func TestDoImplement_SubIssueCreatePR_BaseIntegrationMain(t *testing.T) {
 	assert.Equal(t, "integration/main", mockGH.PRs[0].GetBase().GetRef())
 }
 
+func TestDoImplement_SubIssueCreatePR_AutoEnsureIntegrationMain(t *testing.T) {
+	repoDir := initTestRepo(t)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	// 仅准备远端 master，故意不创建 integration/main。
+	cmd := exec.Command(git, "init", "--bare", remoteDir)
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix gateway chain", "parent: #24\ndepends-on: #26")
+	mockGH.SetLabel(1, string(state.StatePlanFinal))
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+
+	orch := NewOrchestratorWithConfig(mockGH, 1, &OrchestratorConfig{
+		ImplementProvider: &writeFileProvider{
+			repoDir:   repoDir,
+			issueNum:  1,
+			fileName:  "sub_issue_change_auto_base.txt",
+			writeBody: "changed",
+		},
+		RepoDir: repoDir,
+	})
+
+	err := orch.DoImplement(context.Background(), "/tmp/fallback")
+	require.NoError(t, err)
+	require.NotEmpty(t, mockGH.PRs)
+	assert.Equal(t, "integration/main", mockGH.PRs[0].GetBase().GetRef())
+
+	// 远端基线分支应已被自动创建。
+	cmd = exec.Command(git, "--git-dir", remoteDir, "rev-parse", "--verify", "refs/heads/integration/main")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
+
 func TestSelectImplementBaseBranch(t *testing.T) {
 	assert.Equal(t, "master", selectImplementBaseBranch("no parent"))
 	assert.Equal(t, "integration/main", selectImplementBaseBranch("parent: #24"))

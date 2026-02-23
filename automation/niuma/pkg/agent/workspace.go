@@ -187,6 +187,16 @@ func (w *Workspace) resolveWorktreeBaseRef(base string) (string, error) {
 		if err := w.fetchRef(base); err == nil {
 			return "origin/" + base, nil
 		}
+		// DAG 子 issue 使用 integration/main 作为实现基线。
+		// 当远端尚未初始化该分支时，自动从默认分支创建并推送，避免实现阶段循环失败。
+		if base == "integration/main" {
+			if err := w.ensureRemoteBaselineBranch(base); err != nil {
+				return "", err
+			}
+			if err := w.fetchRef(base); err == nil {
+				return "origin/" + base, nil
+			}
+		}
 		if w.branchExists(base) {
 			return base, nil
 		}
@@ -220,6 +230,58 @@ func (w *Workspace) fetchRef(ref string) error {
 // branchExists 检查本地分支是否存在。
 func (w *Workspace) branchExists(branch string) bool {
 	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = w.RepoDir
+	return cmd.Run() == nil
+}
+
+// ensureRemoteBaselineBranch 确保远端基线分支存在（幂等）。
+// 策略：
+// 1. 已存在（fetch 成功）则直接返回；
+// 2. 不存在时，从远端默认分支（回退 master）创建并推送。
+func (w *Workspace) ensureRemoteBaselineBranch(base string) error {
+	if err := w.fetchRef(base); err == nil {
+		return nil
+	}
+
+	defaultBranch := w.remoteDefaultBranch()
+	if err := w.fetchRef(defaultBranch); err != nil && !w.branchExists(defaultBranch) {
+		return fmt.Errorf("无法获取默认分支 %s 用于创建 %s: %w", defaultBranch, base, err)
+	}
+
+	sourceRef := defaultBranch
+	if w.hasRemoteBranch(defaultBranch) {
+		sourceRef = "origin/" + defaultBranch
+	}
+
+	cmd := exec.Command("git", "push", "origin", sourceRef+":refs/heads/"+base)
+	cmd.Dir = w.RepoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("自动创建基线分支失败: %w\n%s", err, string(out))
+	}
+	return nil
+}
+
+// remoteDefaultBranch 返回远端默认分支名，失败时回退 master。
+func (w *Workspace) remoteDefaultBranch() string {
+	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd.Dir = w.RepoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "master"
+	}
+	ref := strings.TrimSpace(string(out))
+	parts := strings.Split(ref, "/")
+	branch := strings.TrimSpace(parts[len(parts)-1])
+	if branch == "" {
+		return "master"
+	}
+	return branch
+}
+
+// hasRemoteBranch 检查远端分支 refs/remotes/origin/<branch> 是否存在。
+func (w *Workspace) hasRemoteBranch(branch string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
 	cmd.Dir = w.RepoDir
 	return cmd.Run() == nil
 }

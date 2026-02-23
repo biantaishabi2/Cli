@@ -130,6 +130,33 @@ func TestWorkspace_CreateWithMissingBase_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "基线分支不存在")
 }
 
+func TestWorkspace_CreateWithMissingIntegrationBase_AutoCreatesFromDefaultBranch(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	// 准备远端，仅推送 master，不创建 integration/main。
+	cmd := exec.Command(git, "init", "--bare", remoteDir)
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 从缺失的 integration/main 创建 worktree，预期自动创建基线后成功。
+	wtPath, err := ws.Create(9, "auto-integration-base", "integration/main")
+	require.NoError(t, err)
+	assert.DirExists(t, wtPath)
+
+	// 验证远端 integration/main 已被自动创建。
+	cmd = exec.Command(git, "--git-dir", remoteDir, "rev-parse", "--verify", "refs/heads/integration/main")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
+
 func TestWorkspace_Checkout(t *testing.T) {
 	repoDir := initTestRepo(t)
 	ws := NewWorkspace(repoDir)
