@@ -38,10 +38,25 @@ AST / 代码结构
 
 ## 核心价值
 
-1. **代码知识图谱**：持久化代码结构，支持跨版本查询
-2. **架构门禁**：CI 中自动检测架构违规，防止技术债务
-3. **影响分析**：改动前预知影响范围，降低重构风险
-4. **测试生成**：从 bugfix 历史自动生成回归测试
+1. **seed 契约建模**：以 seed 作为架构真相源，统一描述模块关系与治理约束
+2. **层级与分层治理**：支持子模块层级（`parent`）与分层约束（`layer` / `domain_kind`）校验
+3. **多视图架构检查**：覆盖 `flow` / `boundary` / `event` 三类视图，而不只是依赖边
+4. **行为契约测试闭环**：从 seed 合同导出 BDD source，进入 `bcc bdd seed -> bddc check`
+5. **代码知识图谱**：持久化代码结构，支持跨版本查询
+6. **架构门禁**：CI 中自动检测架构违规，防止技术债务
+7. **影响分析**：改动前预知影响范围，降低重构风险
+8. **测试生成**：从 bugfix 历史自动生成回归测试
+
+## Seed 能力（近期增强）
+
+- `modules[].parent`：表达子模块嵌套关系，支撑模块层级治理。
+- `modules[].layer` / `modules[].domain_kind`：表达层归属与域归类，进入 validate 主流程。
+- `flows`：关键调用链/时序路径约束（防跳层、防捷径）。
+- `boundaries`：公共 API 与内部实现边界约束（防绕过边界直接调用内部实现）。
+- `events`：事件生产/消费约束（防孤儿事件、幽灵消费者）。
+- `boundaries.contracts` + flow/event 行为字段：行为契约输入，支持导出 BDD source。
+
+可视化（`arch export-mermaid`）定位为评审和对账辅助，不是核心门禁本身。
 
 ## 与 BDDC 的关系
 
@@ -51,7 +66,20 @@ BCC (架构编译器)          BDDC (测试运行时)
    docs/bdd/**/*.dsl  →    ExUnit 测试报告
 ```
 
-BCC 生成测试场景，BDDC 执行验证，形成"架构约束 → 测试验证"的闭环。
+BCC 负责“从架构契约和代码结构生成可验证场景”，BDDC 负责“把场景编译并执行”。
+
+标准链路：
+
+```bash
+# 1) seed + 实际关系 -> 结构/行为校验（并可导出 bdd source）
+bcc arch validate --target ... --transition ... --gates ... --actual ... --out-dir ...
+
+# 2) bdd source -> 可执行 BDD 场景种子
+bcc bdd seed --source <bdd-source-dir> --output <seed-out> -s organize
+
+# 3) BDDC 编译执行
+bddc check --in <seed-out>/features --out test/bdd_generated --instructions <instructions.exs>
+```
 
 ## 安装
 
