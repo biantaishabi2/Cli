@@ -7,47 +7,21 @@
 >
 > 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
 
-## 使用导向概览
+## 项目定位
 
-本仓库按以下标准工程链路组织：
+本仓库提供一套面向工程自动化的命令行体系，覆盖以下能力：
 
-1. 用契约描述系统和目标（seed/issue/workflow）
-2. 自动做结构校验和门禁（架构、分层、事件、代码质量）
-3. 自动生成并执行行为测试（BDD）
-4. 在多任务场景下编排执行与合并（DAG + 自动化流程）
+- 架构契约建模与校验（模块层级、分层、flow、boundary、event）
+- 行为场景生成与执行（BCC 产出场景，BDDC 执行验收）
+- 多任务依赖编排与执行（DAG 调度与状态推进）
+- Issue 到合并的自动化研发流程
 
-本文档以工作流闭环为主线，工具章节用于实现映射。
+## 文档导航
 
-## 标准工作流（契约 -> 校验 -> 测试）
-
-```bash
-# 1) 从 seed + 实际关系做结构/行为校验
-bcc arch validate --target ... --transition ... --gates ... --actual ... --out-dir ...
-
-# 2) 将行为来源组织为可执行 BDD 场景
-bcc bdd seed --source <bdd-source-dir> --output <seed-out> -s organize
-
-# 3) 执行行为测试验收
-bddc check --in <seed-out>/features --out test/bdd_generated --instructions <instructions.exs>
-```
-
-当前链路覆盖的关键能力：
-- 子模块层级 + `layer/domain_kind` 治理
-- `flow/boundary/event` 多视图结构校验
-- 行为契约导出并打通 BDDC
-- seed 统一入口（持续推进）
-
-关联 issue：
-- [#427](https://github.com/biantaishabi2/Cli/issues/427)
-- [#446](https://github.com/biantaishabi2/Cli/issues/446)
-- [#451](https://github.com/biantaishabi2/Cli/issues/451)
-- [#453](https://github.com/biantaishabi2/Cli/issues/453)
-
-相关文档：
-- BCC 详细用法：[`compiler/bcc/README.md`](compiler/bcc/README.md)
-- BDDC 详细用法：[`compiler/bddc/README.md`](compiler/bddc/README.md)
-- Niuma 自动化流程：[`automation/niuma/README.md`](automation/niuma/README.md)
-- Task 编排：[`orchestration/taskctl/README.md`](orchestration/taskctl/README.md)
+- BCC（架构契约、校验与场景生成）：[`compiler/bcc/README.md`](compiler/bcc/README.md)
+- BDDC（场景编译与执行）：[`compiler/bddc/README.md`](compiler/bddc/README.md)
+- Niuma（自动化研发流程）：[`automation/niuma/README.md`](automation/niuma/README.md)
+- Taskctl（任务编排与 DAG）：[`orchestration/taskctl/README.md`](orchestration/taskctl/README.md)
 
 ## 快速上手
 
