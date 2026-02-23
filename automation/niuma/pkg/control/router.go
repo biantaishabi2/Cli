@@ -73,6 +73,8 @@ func routeOrchestrate(eventName string, payload []byte) (RouteDecision, error) {
 			return NewSkipDecision(wf, eventName, ActionNone, ReasonSkipStateNotApplicable), nil
 		}
 		return NewRunDecision(wf, eventName, ActionOrchestrate, ReasonRunRoutable), nil
+	case "schedule":
+		return NewRunDecision(wf, eventName, ActionOrchestrate, ReasonRunRoutable), nil
 	default:
 		return NewSkipDecision(wf, eventName, ActionNone, ReasonSkipEventNotSupported), nil
 	}

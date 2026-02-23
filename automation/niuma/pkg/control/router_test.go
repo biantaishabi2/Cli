@@ -34,6 +34,14 @@ func TestRouteEvent_OrchestrateDispatchSourceGate(t *testing.T) {
 	assert.Equal(t, ReasonSkipDispatchSourceNotAllowed, decision.Reason)
 }
 
+func TestRouteEvent_OrchestrateScheduleRoutable(t *testing.T) {
+	decision, err := RouteEvent("orchestrate", "schedule", []byte(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, DecisionRun, decision.Decision)
+	assert.Equal(t, ReasonRunRoutable, decision.Reason)
+	assert.Equal(t, ActionOrchestrate, decision.Action)
+}
+
 func TestRouteEvent_P1IssueLabelWorkflow(t *testing.T) {
 	decision, err := RouteEvent("plan", "issues", []byte(`{"label":{"name":"bot:fix"}}`))
 	require.NoError(t, err)

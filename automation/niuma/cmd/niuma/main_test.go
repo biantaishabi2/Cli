@@ -361,6 +361,57 @@ func TestPrintWorkflowDecision_EmitsStructuredAuditAndKV(t *testing.T) {
 	assert.Equal(t, "run-88-attempt-1", audit["correlation_id"])
 }
 
+func TestRunDiscuss_PrintsFailDecisionOnClientInitError(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = "owner/repo"
+	flagIssue = 9
+	flagPR = 0
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var runErr error
+	stdout, _ := captureStdoutStderr(t, func() {
+		runErr = runDiscuss(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=discuss")
+}
+
+func TestRunIterate_PrintsFailDecisionOnClientInitError(t *testing.T) {
+	prevRepo := flagRepo
+	prevIssue := flagIssue
+	prevPR := flagPR
+	flagRepo = "owner/repo"
+	flagIssue = 0
+	flagPR = 22
+	defer func() {
+		flagRepo = prevRepo
+		flagIssue = prevIssue
+		flagPR = prevPR
+	}()
+
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var runErr error
+	stdout, _ := captureStdoutStderr(t, func() {
+		runErr = runIterate(nil, nil)
+	})
+	require.Error(t, runErr)
+	assert.Contains(t, stdout, "decision=fail")
+	assert.Contains(t, stdout, "reason=fail_internal_error")
+	assert.Contains(t, stdout, "action=iterate")
+	assert.Contains(t, stdout, "pr=22")
+}
+
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	t.Helper()
 

@@ -245,10 +245,12 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 	labels, err := client.ListLabels(ctx, flagIssue)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 	decision, reason, action := evaluateDiscussDecision(labels)
@@ -264,6 +266,7 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := validateMaxDiscussionRounds(flagMaxDiscussionRounds); err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionDiscuss, flagIssue, flagPR)
 		return err
 	}
 
@@ -365,6 +368,7 @@ func runIterate(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
+		printWorkflowDecision(control.DecisionFail, control.ReasonFailInternalError, control.ActionIterate, flagIssue, flagPR)
 		return err
 	}
 
