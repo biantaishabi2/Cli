@@ -16,22 +16,68 @@
 代码行为由测试代码验证；结构与约束由契约校验。两条验证链共同形成闭环。
 
 ```mermaid
-flowchart LR
-    A[需求]
-    B[行为契约 / DSL]
-    C[测试代码]
-    D[代码实现]
-    E[架构与实现契约]
-    G[CI门禁]
-    R[反馈迭代]
+flowchart TB
+    subgraph DSL层["📜 DSL 层"]
+        BEHAVIOR[("行为契约 DSL")]
+        ARCH[("架构实现 DSL")]
+    end
 
-    A --> B --> C
-    A --> E
-    D --> G
-    C -->|执行并验证代码行为| G
-    E -->|编译器/校验器检查代码| G
-    G -->|通过/失败| R
-    R --> A
+    subgraph 自研工具层["🔧 自研工具层"]
+        BDDC[("BDDC<br/>行为测试生成器")]
+        BCC[("BCC<br/>架构契约编译器")]
+        NIUMA[("🐂 牛马<br/>LLM代码生成")]
+    end
+
+    GEN_IMPL[("实现代码")]
+
+    subgraph CI门禁["⛔ CI 门禁"]
+        direction TB
+        style CI门禁 fill:#f5f5f5,stroke:#666,stroke-width:2px,stroke-dasharray: 5 5
+
+        IN[/"入口"/]
+
+        subgraph 并行验证["并行验证"]
+            direction LR
+            RUN_TEST[/执行测试/]
+            CHECK[/架构契约校验/]
+        end
+
+        OUT[/"出口<br/>统一结果"/]
+
+        IN --> RUN_TEST
+        IN --> CHECK
+        RUN_TEST --> OUT
+        CHECK --> OUT
+    end
+
+    PASS{通过?}
+    MERGE[("合并入库")]
+
+    BEHAVIOR --> BDDC
+    ARCH --> BCC
+
+    BEHAVIOR --> NIUMA
+    ARCH --> NIUMA
+
+    BDDC -.->|生成测试代码| RUN_TEST
+    BCC -.->|编译校验| CHECK
+
+    NIUMA --> GEN_IMPL
+    GEN_IMPL --> IN
+
+    OUT --> PASS
+    PASS -->|是| MERGE
+    PASS -->|否| NIUMA
+
+    MERGE -.->|持续迭代<br/>更新DSL| DSL层
+
+    style BEHAVIOR fill:#e3f2fd
+    style ARCH fill:#e8f5e9
+    style BDDC fill:#fff3e0
+    style BCC fill:#fce4ec
+    style NIUMA fill:#ffccbc
+    style GEN_IMPL fill:#f3e5f5
+    style CI门禁 fill:#fafafa
 ```
 
 ## 文档导航
