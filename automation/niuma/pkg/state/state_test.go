@@ -49,6 +49,10 @@ func TestIsValidTransition_PRNeedsFix(t *testing.T) {
 	assert.True(t, IsValidTransition(StatePRReviewable, StatePRNeedsFix))
 	assert.True(t, IsValidTransition(StatePremerged, StateFixRequested))
 	assert.True(t, IsValidTransition(StatePremerged, StateQueued))
+	assert.True(t, IsValidTransition(StatePRReviewable, StatePremerged))
+	assert.True(t, IsValidTransition(StatePRReviewable, StateDone))
+	assert.True(t, IsValidTransition(StatePremerged, StatePRNeedsFix))
+	assert.True(t, IsValidTransition(StatePremerged, StateDone))
 	assert.True(t, IsValidTransition(StatePRNeedsFix, StateIterating))
 	assert.True(t, IsValidTransition(StateIterating, StatePRCreated))
 }
@@ -252,7 +256,7 @@ func TestTransitionBotState_DirtyMultipleStatesRejected(t *testing.T) {
 	assert.Equal(t, []string{string(StateFixRequested), string(StateImplementing)}, mock.labels[1])
 }
 
-func TestTransitionBotState_BootstrapOnlyQueued(t *testing.T) {
+func TestTransitionBotState_BootstrapQueuedOrPremerged(t *testing.T) {
 	mock := newTransitionLabelOpsMock(1)
 	err := TransitionBotState(context.Background(), mock, 1, "", StateFixRequested)
 	require.Error(t, err)
@@ -261,6 +265,11 @@ func TestTransitionBotState_BootstrapOnlyQueued(t *testing.T) {
 	err = TransitionBotState(context.Background(), mock, 1, "", StateQueued)
 	require.NoError(t, err)
 	assert.Equal(t, []string{string(StateQueued)}, mock.labels[1])
+
+	mock = newTransitionLabelOpsMock(2)
+	err = TransitionBotState(context.Background(), mock, 2, "", StatePremerged)
+	require.NoError(t, err)
+	assert.Equal(t, []string{string(StatePremerged)}, mock.labels[2])
 }
 
 func TestTransition_AtomicReplaceKeepsNonBotLabels(t *testing.T) {

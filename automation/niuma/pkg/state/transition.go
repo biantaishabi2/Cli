@@ -22,7 +22,7 @@ var (
 	// ErrInvalidTransition 保持兼容：from->to 不在状态机允许边中。
 	ErrInvalidTransition = errors.New("invalid state transition")
 	// ErrBootstrapTarget 保持兼容：无状态 bootstrap 目标非法。
-	ErrBootstrapTarget = errors.New("bootstrap target must be bot:queued")
+	ErrBootstrapTarget = errors.New("bootstrap target must be bot:queued or bot:premerged")
 )
 
 // BotStateLabelOps 定义状态迁移所需的最小 label 操作集合。
@@ -225,7 +225,7 @@ func TransitionBotState(ctx context.Context, ops BotStateLabelOps, issueNumber i
 
 	if enforce {
 		if from == "" {
-			if to != StateQueued {
+			if to != StateQueued && to != StatePremerged {
 				return fmt.Errorf("迁移 issue #%d 状态失败: %w (to=%s)", issueNumber, ErrBootstrapTarget, to)
 			}
 			return Transition(ctx, ops, issueNumber, "", to)
