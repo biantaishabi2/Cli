@@ -36,6 +36,14 @@ func init() {
 func runControlRouteEvent(cmd *cobra.Command, args []string) error {
 	payload, err := os.ReadFile(strings.TrimSpace(flagRouteEventPath))
 	if err != nil {
+		decision := control.NewFailDecision(
+			strings.TrimSpace(flagRouteWorkflow),
+			strings.TrimSpace(flagRouteEventName),
+			control.ActionNone,
+			control.ReasonFailInvalidEventPayload,
+		)
+		decision.CorrelationID = resolveCorrelationID()
+		printControlRouteDecision(decision)
 		return withExitCode(1, fmt.Errorf("读取 event payload 失败: %w", err))
 	}
 
@@ -47,7 +55,18 @@ func runControlRouteEvent(cmd *cobra.Command, args []string) error {
 	if err := decision.Validate(); err != nil {
 		return withExitCode(1, err)
 	}
+	printControlRouteDecision(decision)
 
+	if routeErr != nil {
+		return withExitCode(1, routeErr)
+	}
+	if decision.Decision == control.DecisionFail {
+		return withExitCode(decision.ExitCode(), fmt.Errorf("route-event 判定失败: %s", decision.Reason))
+	}
+	return nil
+}
+
+func printControlRouteDecision(decision control.RouteDecision) {
 	audit := map[string]string{
 		"ts":             time.Now().UTC().Format(time.RFC3339),
 		"workflow":       decision.Workflow,
@@ -63,14 +82,6 @@ func runControlRouteEvent(cmd *cobra.Command, args []string) error {
 	fmt.Printf("decision=%s\n", decision.Decision)
 	fmt.Printf("reason=%s\n", decision.Reason)
 	fmt.Printf("action=%s\n", decision.Action)
-
-	if routeErr != nil {
-		return withExitCode(1, routeErr)
-	}
-	if decision.Decision == control.DecisionFail {
-		return withExitCode(decision.ExitCode(), fmt.Errorf("route-event 判定失败: %s", decision.Reason))
-	}
-	return nil
 }
 
 func resolveCorrelationID() string {
