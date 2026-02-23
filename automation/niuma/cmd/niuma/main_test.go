@@ -116,6 +116,36 @@ func TestShouldUpgradeIterateToNeedsHuman(t *testing.T) {
 	assert.False(t, shouldUpgradeIterateToNeedsHuman("unknown", "closed"))
 }
 
+func TestPickIterateIssue(t *testing.T) {
+	t.Run("human path without issue refs should skip", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, nil, 42, "human")
+		require.NoError(t, err)
+		assert.True(t, skipNoop)
+		assert.Equal(t, 0, issue)
+	})
+
+	t.Run("review path without issue refs should fail", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, nil, 42, "review")
+		require.Error(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 0, issue)
+	})
+
+	t.Run("explicit issue should take priority", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(99, []int{1, 2}, 42, "human")
+		require.NoError(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 99, issue)
+	})
+
+	t.Run("parse refs should pick smallest issue", func(t *testing.T) {
+		issue, skipNoop, err := pickIterateIssue(0, []int{14, 12, 13}, 42, "human")
+		require.NoError(t, err)
+		assert.False(t, skipNoop)
+		assert.Equal(t, 12, issue)
+	})
+}
+
 func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {
 	tests := []struct {
 		name     string

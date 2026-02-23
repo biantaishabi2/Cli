@@ -366,10 +366,14 @@ func runIterate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	effectiveIssue, err := resolveIterateIssue(ctx, client, flagIssue, flagPR)
+	effectiveIssue, skipNoop, err := resolveIterateIssue(ctx, client, flagIssue, flagPR, flagIterateTriggerSource)
 	if err != nil {
 		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
 		return err
+	}
+	if skipNoop {
+		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionIterate, 0, flagPR)
+		return nil
 	}
 	if shouldUpgradeIterateToNeedsHuman(flagIterateTriggerSource, flagIteratePRState) {
 		err := control.UpgradeIterateToNeedsHuman(ctx, effectiveIssue, flagPR, flagIterateTriggerSource, flagIteratePRState, control.IterateUpgradeOps{
@@ -569,23 +573,40 @@ func shouldUpgradeIterateToNeedsHuman(triggerSource, prState string) bool {
 	return normalizedState != "OPEN"
 }
 
-func resolveIterateIssue(ctx context.Context, client *gh.Client, issueNumber, prNumber int) (int, error) {
+func resolveIterateIssue(ctx context.Context, client *gh.Client, issueNumber, prNumber int, triggerSource string) (int, bool, error) {
 	if issueNumber > 0 {
-		return issueNumber, nil
+		return issueNumber, false, nil
 	}
 	pr, err := client.GetPR(ctx, prNumber)
 	if err != nil {
-		return 0, fmt.Errorf("获取 PR #%d 失败: %w", prNumber, err)
+		return 0, false, fmt.Errorf("获取 PR #%d 失败: %w", prNumber, err)
 	}
 	issueRefs := state.ParseIssueRefs(pr.GetTitle(), pr.GetBody())
+	effectiveIssue, skipNoop, resolveErr := pickIterateIssue(issueNumber, issueRefs, prNumber, triggerSource)
+	if resolveErr != nil {
+		return 0, false, resolveErr
+	}
+	if skipNoop {
+		return 0, true, nil
+	}
+	return effectiveIssue, false, nil
+}
+
+func pickIterateIssue(issueNumber int, issueRefs []int, prNumber int, triggerSource string) (int, bool, error) {
+	if issueNumber > 0 {
+		return issueNumber, false, nil
+	}
 	if len(issueRefs) == 0 {
-		return 0, fmt.Errorf("PR #%d 未解析到 issue 引用", prNumber)
+		if strings.EqualFold(strings.TrimSpace(triggerSource), "human") {
+			return 0, true, nil
+		}
+		return 0, false, fmt.Errorf("PR #%d 未解析到 issue 引用", prNumber)
 	}
 	sort.Ints(issueRefs)
 	if len(issueRefs) > 1 {
 		fmt.Printf("WARNING: PR #%d 解析到多个 issue 引用 %v，默认使用 #%d\n", prNumber, issueRefs, issueRefs[0])
 	}
-	return issueRefs[0], nil
+	return issueRefs[0], false, nil
 }
 
 func printWorkflowDecision(decision control.Decision, reason control.Reason, action control.Action, issue, pr int) {
