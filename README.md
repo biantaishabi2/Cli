@@ -7,18 +7,33 @@
 >
 > 📖 详细哲学阐述见 [`PHILOSOPHY.md`](PHILOSOPHY.md)
 
-## 项目定位
+## 最终结果
 
-本仓库提供一套面向工程自动化的命令行体系，覆盖以下能力：
+本仓库交付一条可执行的软件工程闭环，输出以下结果：
 
-- 架构契约建模与校验（模块层级、分层、flow、boundary、event）
-- 行为场景生成与执行（BCC 产出场景，BDDC 执行验收）
-- 多任务依赖编排与执行（DAG 调度与状态推进）
-- Issue 到合并的自动化研发流程
+- 可验证的架构契约：模块层级、分层规则、flow、boundary、event
+- 可执行的行为验收：从契约生成场景并运行测试，输出通过/失败结果
+- 可编排的任务执行：基于 DAG 的任务依赖、调度与推进
+- 可自动化的研发流程：Issue 到代码、PR、迭代与合并
+
+## 实现方式
+
+标准执行链路：
+
+```bash
+# 1) 架构与行为校验
+bcc arch validate --target ... --transition ... --gates ... --actual ... --out-dir ...
+
+# 2) 场景生成
+bcc bdd seed --source <bdd-source-dir> --output <seed-out> -s organize
+
+# 3) 行为验收执行
+bddc check --in <seed-out>/features --out test/bdd_generated --instructions <instructions.exs>
+```
 
 ## 文档导航
 
-- BCC（架构契约、校验与场景生成）：[`compiler/bcc/README.md`](compiler/bcc/README.md)
+- BCC（架构契约、校验、场景生成）：[`compiler/bcc/README.md`](compiler/bcc/README.md)
 - BDDC（场景编译与执行）：[`compiler/bddc/README.md`](compiler/bddc/README.md)
 - Niuma（自动化研发流程）：[`automation/niuma/README.md`](automation/niuma/README.md)
 - Taskctl（任务编排与 DAG）：[`orchestration/taskctl/README.md`](orchestration/taskctl/README.md)
