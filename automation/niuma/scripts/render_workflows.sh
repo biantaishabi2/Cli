@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEMPLATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-entry.yml.tmpl"
+TEMPLATE_ORCHESTRATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-orchestrate-entry.yml.tmpl"
+TEMPLATE_ITERATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-iterate-entry.yml.tmpl"
+TEMPLATE_DISCUSS="$ROOT_DIR/automation/niuma/workflows/templates/niuma-discuss-entry.yml.tmpl"
 
 if [ ! -f "$TEMPLATE" ]; then
   echo "template not found: $TEMPLATE" >&2
@@ -54,10 +57,10 @@ render_entry_workflow \
   "plan-draft" \
   $'  issues: write\n  contents: read'
 
-implement_with_extra="$(cat <<'EOF'
+implement_with_extra="$(cat <<'EOT'
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
       trigger_label: ${{ github.event.label.name }}
-EOF
+EOT
 )"
 
 render_entry_workflow \
@@ -81,6 +84,13 @@ render_entry_workflow \
   "review" \
   $'  issues: write\n  pull-requests: write'
 
+cp "$TEMPLATE_ORCHESTRATE" "$ROOT_DIR/.github/workflows/niuma-orchestrate.yml"
+cp "$TEMPLATE_ITERATE" "$ROOT_DIR/.github/workflows/niuma-iterate.yml"
+cp "$TEMPLATE_DISCUSS" "$ROOT_DIR/.github/workflows/niuma-discuss.yml"
+
 echo "rendered: .github/workflows/niuma-plan.yml"
 echo "rendered: .github/workflows/niuma-implement.yml"
 echo "rendered: .github/workflows/niuma-review.yml"
+echo "rendered: .github/workflows/niuma-orchestrate.yml"
+echo "rendered: .github/workflows/niuma-iterate.yml"
+echo "rendered: .github/workflows/niuma-discuss.yml"
