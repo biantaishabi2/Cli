@@ -250,8 +250,9 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if !containsLabel(labels, string(state.StateNeedsDiscussion)) {
-		printWorkflowDecision(control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionNone, flagIssue, flagPR)
+	decision, reason, action := evaluateDiscussDecision(labels)
+	if decision == control.DecisionSkip {
+		printWorkflowDecision(decision, reason, action, flagIssue, flagPR)
 		return nil
 	}
 
@@ -265,7 +266,7 @@ func runDiscuss(cmd *cobra.Command, args []string) error {
 	}
 
 	maxRounds := resolveDiscussMaxRounds(flagMaxDiscussionRounds, cfg.Workflow.GetMaxDiscussionRounds())
-	printWorkflowDecision(control.DecisionRun, control.ReasonRunRoutable, control.ActionDiscuss, flagIssue, flagPR)
+	printWorkflowDecision(decision, reason, action, flagIssue, flagPR)
 
 	fmt.Printf("正在为 issue #%d 进行讨论检查（max_rounds=%d timeout=%s）...\n", flagIssue, maxRounds, discussTimeout)
 
@@ -370,7 +371,7 @@ func runIterate(cmd *cobra.Command, args []string) error {
 		printWorkflowDecision(control.DecisionFail, control.ReasonFailInvalidEventPayload, control.ActionIterate, flagIssue, flagPR)
 		return err
 	}
-	if strings.EqualFold(strings.TrimSpace(flagIterateTriggerSource), "review") && !strings.EqualFold(strings.TrimSpace(flagIteratePRState), "OPEN") {
+	if shouldUpgradeIterateToNeedsHuman(flagIterateTriggerSource, flagIteratePRState) {
 		err := control.UpgradeIterateToNeedsHuman(ctx, effectiveIssue, flagPR, flagIterateTriggerSource, flagIteratePRState, control.IterateUpgradeOps{
 			ListLabels:    client.ListLabels,
 			ReplaceLabels: client.ReplaceLabels,
@@ -547,6 +548,25 @@ func containsLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func evaluateDiscussDecision(labels []string) (control.Decision, control.Reason, control.Action) {
+	if !containsLabel(labels, string(state.StateNeedsDiscussion)) {
+		return control.DecisionSkip, control.ReasonSkipStateNotApplicable, control.ActionNone
+	}
+	return control.DecisionRun, control.ReasonRunRoutable, control.ActionDiscuss
+}
+
+func shouldUpgradeIterateToNeedsHuman(triggerSource, prState string) bool {
+	source := strings.ToLower(strings.TrimSpace(triggerSource))
+	if source != "review" && source != "human" {
+		return false
+	}
+	normalizedState := strings.ToUpper(strings.TrimSpace(prState))
+	if normalizedState == "" {
+		return false
+	}
+	return normalizedState != "OPEN"
 }
 
 func resolveIterateIssue(ctx context.Context, client *gh.Client, issueNumber, prNumber int) (int, error) {

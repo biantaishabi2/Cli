@@ -2,177 +2,84 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+TEMPLATE="$ROOT_DIR/automation/niuma/workflows/templates/niuma-entry.yml.tmpl"
 
-cat > "$ROOT_DIR/.github/workflows/niuma-plan.yml" <<'YAML'
-name: niuma - Plan Draft
+if [ ! -f "$TEMPLATE" ]; then
+  echo "template not found: $TEMPLATE" >&2
+  exit 1
+fi
 
-on:
-  issues:
-    types: [labeled]
+render_entry_workflow() {
+  local output="$1"
+  local name="$2"
+  local display_name="$3"
+  local workflow="$4"
+  local action="$5"
+  local reusable="$6"
+  local job_name="$7"
+  local permissions="$8"
+  local with_extra="${9:-}"
 
-permissions:
-  issues: write
-  contents: read
+  python3 - "$TEMPLATE" "$output" "$name" "$display_name" "$workflow" "$action" "$reusable" "$job_name" "$permissions" "$with_extra" <<'PY'
+import pathlib
+import sys
 
-jobs:
-  route-event:
-    runs-on: self-hosted
-    outputs:
-      decision: ${{ steps.route.outputs.decision }}
-      reason: ${{ steps.route.outputs.reason }}
-      action: ${{ steps.route.outputs.action }}
-    steps:
-      - name: Setup niuma binary
-        run: |
-          niuma_path="$(command -v niuma || true)"
-          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
-            niuma_path="/usr/local/bin/niuma"
-          fi
-          if [ -z "$niuma_path" ]; then
-            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
-            exit 1
-          fi
-          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
+template_path = pathlib.Path(sys.argv[1])
+output_path = pathlib.Path(sys.argv[2])
 
-      - name: Route Event
-        id: route
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          output="$($NIUMA_BIN control route-event \
-            --repo "$REPO" \
-            --workflow "plan" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --event-path "$GITHUB_EVENT_PATH")"
-          echo "$output"
-          echo "decision=$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
+content = template_path.read_text(encoding="utf-8")
+replacements = {
+    "__NAME__": sys.argv[3],
+    "__DISPLAY_NAME__": sys.argv[4],
+    "__WORKFLOW__": sys.argv[5],
+    "__ACTION__": sys.argv[6],
+    "__REUSABLE__": sys.argv[7],
+    "__JOB_NAME__": sys.argv[8],
+    "__PERMISSIONS__": sys.argv[9],
+    "__WITH_EXTRA__": sys.argv[10],
+}
+for key, value in replacements.items():
+    content = content.replace(key, value)
+output_path.write_text(content, encoding="utf-8")
+PY
+}
 
-  plan-draft:
-    needs: route-event
-    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == 'plan'
-    uses: ./.github/workflows/niuma-plan-reusable.yml
-    with:
-      repo: ${{ github.repository }}
-      issue_number: ${{ format('{0}', github.event.issue.number) }}
-    secrets: inherit
-YAML
+render_entry_workflow \
+  "$ROOT_DIR/.github/workflows/niuma-plan.yml" \
+  "plan" \
+  "niuma - Plan Draft" \
+  "plan" \
+  "plan" \
+  "niuma-plan-reusable.yml" \
+  "plan-draft" \
+  $'  issues: write\n  contents: read'
 
-cat > "$ROOT_DIR/.github/workflows/niuma-implement.yml" <<'YAML'
-name: niuma - Implement
-
-on:
-  issues:
-    types: [labeled]
-
-permissions:
-  issues: write
-  pull-requests: write
-  contents: write
-
-jobs:
-  route-event:
-    runs-on: self-hosted
-    outputs:
-      decision: ${{ steps.route.outputs.decision }}
-      reason: ${{ steps.route.outputs.reason }}
-      action: ${{ steps.route.outputs.action }}
-    steps:
-      - name: Setup niuma binary
-        run: |
-          niuma_path="$(command -v niuma || true)"
-          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
-            niuma_path="/usr/local/bin/niuma"
-          fi
-          if [ -z "$niuma_path" ]; then
-            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
-            exit 1
-          fi
-          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
-
-      - name: Route Event
-        id: route
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          output="$($NIUMA_BIN control route-event \
-            --repo "$REPO" \
-            --workflow "implement" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --event-path "$GITHUB_EVENT_PATH")"
-          echo "$output"
-          echo "decision=$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-
-  implement:
-    needs: route-event
-    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == 'implement'
-    uses: ./.github/workflows/niuma-implement-reusable.yml
-    with:
-      repo: ${{ github.repository }}
-      issue_number: ${{ format('{0}', github.event.issue.number) }}
+implement_with_extra="$(cat <<'EOF'
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
       trigger_label: ${{ github.event.label.name }}
-    secrets: inherit
-YAML
+EOF
+)"
 
-cat > "$ROOT_DIR/.github/workflows/niuma-review.yml" <<'YAML'
-name: niuma - Review
+render_entry_workflow \
+  "$ROOT_DIR/.github/workflows/niuma-implement.yml" \
+  "implement" \
+  "niuma - Implement" \
+  "implement" \
+  "implement" \
+  "niuma-implement-reusable.yml" \
+  "implement" \
+  $'  issues: write\n  pull-requests: write\n  contents: write' \
+  "$implement_with_extra"
 
-on:
-  issues:
-    types: [labeled]
-
-permissions:
-  issues: write
-  pull-requests: write
-
-jobs:
-  route-event:
-    runs-on: self-hosted
-    outputs:
-      decision: ${{ steps.route.outputs.decision }}
-      reason: ${{ steps.route.outputs.reason }}
-      action: ${{ steps.route.outputs.action }}
-    steps:
-      - name: Setup niuma binary
-        run: |
-          niuma_path="$(command -v niuma || true)"
-          if [ -z "$niuma_path" ] && [ -x "/usr/local/bin/niuma" ]; then
-            niuma_path="/usr/local/bin/niuma"
-          fi
-          if [ -z "$niuma_path" ]; then
-            echo "::error::找不到 niuma 二进制，请确保 runner 上已安装 niuma（PATH=$PATH）"
-            exit 1
-          fi
-          echo "NIUMA_BIN=$niuma_path" >> "$GITHUB_ENV"
-
-      - name: Route Event
-        id: route
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          output="$($NIUMA_BIN control route-event \
-            --repo "$REPO" \
-            --workflow "review" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --event-path "$GITHUB_EVENT_PATH")"
-          echo "$output"
-          echo "decision=$(echo "$output" | awk -F= '/^decision=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-          echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
-
-  review:
-    needs: route-event
-    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == 'review'
-    uses: ./.github/workflows/niuma-review-reusable.yml
-    with:
-      repo: ${{ github.repository }}
-      issue_number: ${{ format('{0}', github.event.issue.number) }}
-    secrets: inherit
-YAML
+render_entry_workflow \
+  "$ROOT_DIR/.github/workflows/niuma-review.yml" \
+  "review" \
+  "niuma - Review" \
+  "review" \
+  "review" \
+  "niuma-review-reusable.yml" \
+  "review" \
+  $'  issues: write\n  pull-requests: write'
 
 echo "rendered: .github/workflows/niuma-plan.yml"
 echo "rendered: .github/workflows/niuma-implement.yml"

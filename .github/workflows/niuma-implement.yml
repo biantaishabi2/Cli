@@ -1,3 +1,5 @@
+# implement 入口模板
+# 使用: automation/niuma/scripts/render_workflows.sh
 name: niuma - Implement
 
 on:

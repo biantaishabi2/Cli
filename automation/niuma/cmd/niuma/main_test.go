@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +93,27 @@ func TestValidateMaxDiscussionRounds(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestEvaluateDiscussDecision(t *testing.T) {
+	decision, reason, action := evaluateDiscussDecision([]string{"bug"})
+	assert.Equal(t, control.DecisionSkip, decision)
+	assert.Equal(t, control.ReasonSkipStateNotApplicable, reason)
+	assert.Equal(t, control.ActionNone, action)
+
+	decision, reason, action = evaluateDiscussDecision([]string{"bug", string(state.StateNeedsDiscussion)})
+	assert.Equal(t, control.DecisionRun, decision)
+	assert.Equal(t, control.ReasonRunRoutable, reason)
+	assert.Equal(t, control.ActionDiscuss, action)
+}
+
+func TestShouldUpgradeIterateToNeedsHuman(t *testing.T) {
+	assert.True(t, shouldUpgradeIterateToNeedsHuman("review", "closed"))
+	assert.True(t, shouldUpgradeIterateToNeedsHuman("human", "closed"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("review", "open"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("human", "open"))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("human", ""))
+	assert.False(t, shouldUpgradeIterateToNeedsHuman("unknown", "closed"))
 }
 
 func TestResolveIntegrationGateMaxRetries_Priority(t *testing.T) {

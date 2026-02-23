@@ -39,6 +39,12 @@ func TestWorkflowContract_EntryWorkflowsUseControlRouteEvent(t *testing.T) {
 	}
 }
 
+func TestWorkflowContract_RenderScriptUsesTemplateSource(t *testing.T) {
+	content := loadRepoFile(t, filepath.Join("automation", "niuma", "scripts", "render_workflows.sh"))
+	assert.Contains(t, content, "automation/niuma/workflows/templates/niuma-entry.yml.tmpl")
+	assert.NotContains(t, content, "<<'YAML'")
+}
+
 func TestWorkflowContract_ReusableWorkflowCallInputDefaults(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-orchestrate-reusable.yml")
 
@@ -444,5 +450,35 @@ func findWorkflowPath(t *testing.T, workflowName string) string {
 	}
 
 	t.Fatalf("未找到 .github/workflows/%s", workflowName)
+	return ""
+}
+
+func loadRepoFile(t *testing.T, relativePath string) string {
+	t.Helper()
+	root := findRepoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, relativePath))
+	require.NoError(t, err)
+	return string(raw)
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		candidate := filepath.Join(dir, ".github", "workflows")
+		if stat, statErr := os.Stat(candidate); statErr == nil && stat.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	t.Fatal("未找到仓库根目录")
 	return ""
 }

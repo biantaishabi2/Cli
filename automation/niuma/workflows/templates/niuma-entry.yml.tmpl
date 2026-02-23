@@ -1,14 +1,13 @@
-# {{.Name}} 入口模板
+# __NAME__ 入口模板
 # 使用: automation/niuma/scripts/render_workflows.sh
-name: {{.DisplayName}}
+name: __DISPLAY_NAME__
 
 on:
   issues:
     types: [labeled]
 
 permissions:
-  issues: write
-  contents: read
+__PERMISSIONS__
 
 jobs:
   route-event:
@@ -37,7 +36,7 @@ jobs:
         run: |
           output="$($NIUMA_BIN control route-event \
             --repo "$REPO" \
-            --workflow "{{.Workflow}}" \
+            --workflow "__WORKFLOW__" \
             --event-name "$GITHUB_EVENT_NAME" \
             --event-path "$GITHUB_EVENT_PATH")"
           echo "$output"
@@ -45,11 +44,12 @@ jobs:
           echo "reason=$(echo "$output" | awk -F= '/^reason=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
           echo "action=$(echo "$output" | awk -F= '/^action=/{print $2; exit}')" >> "$GITHUB_OUTPUT"
 
-  run-reusable:
+  __JOB_NAME__:
     needs: route-event
-    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == '{{.Action}}'
-    uses: ./.github/workflows/{{.Reusable}}
+    if: needs.route-event.outputs.decision == 'run' && needs.route-event.outputs.action == '__ACTION__'
+    uses: ./.github/workflows/__REUSABLE__
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ format('{0}', github.event.issue.number) }}
+__WITH_EXTRA__
     secrets: inherit
