@@ -10,7 +10,7 @@ usage() {
 usage:
   bash automation/niuma/scripts/workflows.sh render
   bash automation/niuma/scripts/workflows.sh check
-  bash automation/niuma/scripts/workflows.sh publish --repo <owner/repo> [--branch <name>] [--message <msg>] [--source-dir <dir>]
+  bash automation/niuma/scripts/workflows.sh publish --repo <owner/repo> [--mode entry|full] [--branch <name>] [--message <msg>] [--source-dir <dir>]
 EOF
 }
 
@@ -38,4 +38,3 @@ case "$cmd" in
     exit 1
     ;;
 esac
-

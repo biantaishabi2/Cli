@@ -558,7 +558,7 @@ MIT
 1. 在模板仓库更新 `automation/niuma/workflows/templates/*-entry.yml.tmpl`
 2. 执行渲染：`workflows.sh render`
 3. 执行校验：`workflows.sh check`
-4. 发布到目标仓库：`workflows.sh publish --repo <owner/repo>`
+4. 发布到目标仓库：`workflows.sh publish --repo <owner/repo> --mode full`
 
 旧方式说明：
 - 旧的“直接手改目标仓库 `.github/workflows/niuma-*.yml`”方式已废弃。
@@ -588,24 +588,35 @@ bash automation/niuma/scripts/workflows.sh check
 ```bash
 bash automation/niuma/scripts/workflows.sh publish \
   --repo <owner/repo> \
+  --mode <entry|full> \
   --branch <branch可选> \
-  --message "chore: sync niuma workflow entries" \
+  --message "chore: sync niuma workflows" \
   --source-dir .github/workflows
 ```
 
 作用：
-- 通过 GitHub Contents API 将 6 个入口 workflow 下发到目标仓库
+- 通过 GitHub Contents API 下发 workflow 文件到目标仓库
 - `--repo` 必填；`--branch` 不填则走目标仓库默认分支
+- `--mode` 可选（默认 `entry`）：
+  - `entry`：仅下发 6 个入口 workflow
+  - `full`：下发入口 + reusable + `niuma-dispatch-completed.yml` + `.github/scripts/niuma-test-gate.sh`（若源仓库存在）
+
+模式建议：
+- 目标仓库已经具备 `niuma-*-reusable.yml` 和 `.github/scripts/niuma-test-gate.sh` 时，可用 `entry`
+- 新仓库首次接入或不确定依赖是否齐全时，必须用 `full`
 
 常用示例：
 
 ```bash
 # 发布到默认分支
-bash automation/niuma/scripts/workflows.sh publish --repo biantaishabi2/Cli-niuma-test
+bash automation/niuma/scripts/workflows.sh publish \
+  --repo biantaishabi2/Cli-niuma-test \
+  --mode full
 
 # 发布到指定分支
 bash automation/niuma/scripts/workflows.sh publish \
   --repo biantaishabi2/Cli-niuma-test \
+  --mode full \
   --branch feat/sync-niuma-workflows
 ```
 

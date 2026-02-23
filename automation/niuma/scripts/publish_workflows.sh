@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 一键发布入口工作流到目标仓库（通过 GitHub Contents API）
+# 一键发布 workflow 到目标仓库（通过 GitHub Contents API）
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SOURCE_DIR="$ROOT_DIR/.github/workflows"
+GITHUB_SCRIPTS_DIR="$ROOT_DIR/.github/scripts"
 
 REPO=""
 BRANCH=""
-MESSAGE="chore: sync niuma workflow entries from Cli"
+MODE="entry"
+MESSAGE="chore: sync niuma workflows from Cli"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,6 +25,10 @@ while [[ $# -gt 0 ]]; do
       MESSAGE="${2:-}"
       shift 2
       ;;
+    --mode)
+      MODE="${2:-}"
+      shift 2
+      ;;
     --source-dir)
       SOURCE_DIR="${2:-}"
       shift 2
@@ -35,17 +41,32 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPO" ]]; then
-  echo "usage: $0 --repo <owner/repo> [--branch <name>] [--message <msg>] [--source-dir <dir>]" >&2
+  echo "usage: $0 --repo <owner/repo> [--mode entry|full] [--branch <name>] [--message <msg>] [--source-dir <dir>]" >&2
   exit 1
 fi
 
-FILES=(
+if [[ "$MODE" != "entry" && "$MODE" != "full" ]]; then
+  echo "invalid --mode: $MODE (expected: entry|full)" >&2
+  exit 1
+fi
+
+ENTRY_FILES=(
   "niuma-plan.yml"
   "niuma-implement.yml"
   "niuma-review.yml"
   "niuma-orchestrate.yml"
   "niuma-iterate.yml"
   "niuma-discuss.yml"
+)
+
+REUSABLE_FILES=(
+  "niuma-plan-reusable.yml"
+  "niuma-implement-reusable.yml"
+  "niuma-review-reusable.yml"
+  "niuma-orchestrate-reusable.yml"
+  "niuma-iterate-reusable.yml"
+  "niuma-discuss-reusable.yml"
+  "niuma-dispatch-completed.yml"
 )
 
 put_file() {
@@ -84,7 +105,18 @@ put_file() {
   echo "published: $REPO/$remote_path"
 }
 
-for file in "${FILES[@]}"; do
+for file in "${ENTRY_FILES[@]}"; do
   put_file "$SOURCE_DIR/$file" ".github/workflows/$file"
 done
 
+if [[ "$MODE" == "full" ]]; then
+  for file in "${REUSABLE_FILES[@]}"; do
+    put_file "$SOURCE_DIR/$file" ".github/workflows/$file"
+  done
+
+  if [[ -f "$GITHUB_SCRIPTS_DIR/niuma-test-gate.sh" ]]; then
+    put_file "$GITHUB_SCRIPTS_DIR/niuma-test-gate.sh" ".github/scripts/niuma-test-gate.sh"
+  else
+    echo "warning: skip .github/scripts/niuma-test-gate.sh (not found in source repo)" >&2
+  fi
+fi
