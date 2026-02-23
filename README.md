@@ -80,9 +80,9 @@ flowchart TB
     style CI门禁 fill:#fafafa
 ```
 
-## 文档导航
+## 工具介绍
 
-- BCC：[`compiler/bcc/README.md`](compiler/bcc/README.md)
-- BDDC：[`compiler/bddc/README.md`](compiler/bddc/README.md)
-- Niuma：[`automation/niuma/README.md`](automation/niuma/README.md)
-- Taskctl：[`orchestration/taskctl/README.md`](orchestration/taskctl/README.md)
+- [**BCC（Architecture Compiler）**](compiler/bcc/README.md)：把架构与行为契约编译为可校验工件，覆盖模块层级、分层规则、`flow/boundary/event` 三视图；并产出供 BDDC 生成测试代码的输入。BCC 自身的架构契约校验也是 CI 门禁的一部分。
+- [**BDDC（BDD Test Runtime）**](compiler/bddc/README.md)：基于 BCC 输入生成测试代码并执行；测试通过后形成验收结果，作为 CI 门禁结果的一部分。
+- [**Niuma（自动化研发引擎）**](automation/niuma/README.md)：单 Issue 流程包含前期讨论收敛与方案定稿，自动推进实现与 PR 迭代；PR review 阶段由人参与决策；同时支持多 Issue DAG 协调。
+- [**taskctl（Research/Plan/Execute Orchestration）**](orchestration/taskctl/README.md)：不仅提供执行期 DAG 编排，还支持研究期与/或图建模，用于从研究到执行的统一任务编排。
