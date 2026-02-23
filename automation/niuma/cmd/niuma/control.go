@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/control"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/marker"
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/state"
 	ghapi "github.com/google/go-github/v68/github"
 	"github.com/spf13/cobra"
 )
@@ -859,52 +858,6 @@ func formatDagSyncResult(cmdName string, result control.DagSyncResult, dryRun bo
 	return lines
 }
 
-var (
-	issueKeywordPattern = regexp.MustCompile(`(?i)\b(?:issue|closes?|closed|fixes?|fixed|resolves?|resolved|refs?)\s*#([0-9]+)\b`)
-	subPattern          = regexp.MustCompile(`(?i)\bsub\(\s*#([0-9]+)\s*\)`)
-	parentPattern       = regexp.MustCompile(`(?i)\bparent\(\s*#([0-9]+)\s*\)`)
-	parenPattern        = regexp.MustCompile(`\(\s*#([0-9]+)\s*\)`)
-	pullRequestPattern  = regexp.MustCompile(`(?i)pull request #([0-9]+)`)
-)
-
 func extractIntegratedIssueNumbers(prTitle, prBody string, messages []string) []int {
-	unique := make(map[int]struct{})
-
-	texts := make([]string, 0, len(messages)+2)
-	if strings.TrimSpace(prTitle) != "" {
-		texts = append(texts, prTitle)
-	}
-	if strings.TrimSpace(prBody) != "" {
-		texts = append(texts, prBody)
-	}
-	texts = append(texts, messages...)
-
-	for _, text := range texts {
-		cleaned := pullRequestPattern.ReplaceAllString(text, "")
-		collectIssueNumbers(unique, cleaned, issueKeywordPattern)
-		collectIssueNumbers(unique, cleaned, subPattern)
-		collectIssueNumbers(unique, cleaned, parentPattern)
-		collectIssueNumbers(unique, cleaned, parenPattern)
-	}
-
-	var result []int
-	for num := range unique {
-		result = append(result, num)
-	}
-	sort.Ints(result)
-	return result
-}
-
-func collectIssueNumbers(dst map[int]struct{}, text string, pattern *regexp.Regexp) {
-	matches := pattern.FindAllStringSubmatch(text, -1)
-	for _, groups := range matches {
-		if len(groups) < 2 {
-			continue
-		}
-		num, err := strconv.Atoi(groups[1])
-		if err != nil || num <= 0 {
-			continue
-		}
-		dst[num] = struct{}{}
-	}
+	return state.ParseIssueRefsFromPR(prTitle, prBody, messages)
 }

@@ -142,15 +142,8 @@ def run_step_script(script: str, env: dict[str, str]) -> tuple[subprocess.Comple
 class TestOrchestrateContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        gate_script = extract_step_run_script(REUSABLE_PATH, "Enforce Trigger Gate")
-        cls.reusable_trigger_gate_script = (
-            gate_script.replace("${{ inputs.label_whitelist }}", "${INPUT_LABEL_WHITELIST}")
-            .replace("${{ github.event.label.name }}", "${EVENT_LABEL_NAME}")
-            .replace("${{ inputs.enable_dispatch_wakeup }}", "${INPUT_ENABLE_DISPATCH_WAKEUP}")
-            .replace("${{ github.event.action }}", "${EVENT_ACTION}")
-            .replace("${{ github.event.client_payload.event_source }}", "${EVENT_SOURCE}")
-        )
-        cls.entrypoint_if_expr = extract_job_if_expression(ENTRYPOINT_PATH, "orchestrate")
+        cls.reusable_content = REUSABLE_PATH.read_text(encoding="utf-8")
+        cls.entrypoint_content = ENTRYPOINT_PATH.read_text(encoding="utf-8")
 
     def test_schema_defaults_and_required(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -178,137 +171,23 @@ class TestOrchestrateContract(unittest.TestCase):
         self.assertIn("types: [labeled]", content)
         self.assertIn("types: [niuma.task.completed]", content)
         self.assertIn("uses: ./.github/workflows/niuma-orchestrate-reusable.yml", content)
-        self.assertIn("label_whitelist: \"bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged\"", content)
+        self.assertNotIn("label_whitelist:", content)
         self.assertNotIn("control close-merged", content)
 
-    def test_entrypoint_trigger_matrix_uses_real_if_expression(self) -> None:
-        cases = [
-            {
-                "name": "issues_queued",
-                "event_name": "issues",
-                "label_name": "bot:queued",
-                "expected": True,
-            },
-            {
-                "name": "issues_pr_reviewable",
-                "event_name": "issues",
-                "label_name": "bot:pr-reviewable",
-                "expected": True,
-            },
-            {
-                "name": "issues_premerged",
-                "event_name": "issues",
-                "label_name": "bot:premerged",
-                "expected": True,
-            },
-            {
-                "name": "issues_other",
-                "event_name": "issues",
-                "label_name": "bot:other",
-                "expected": False,
-            },
-            {
-                "name": "dispatch_completed",
-                "event_name": "repository_dispatch",
-                "action": "niuma.task.completed",
-                "event_source": "close-after-integration-merge",
-                "expected": True,
-            },
-            {
-                "name": "dispatch_wrong_source",
-                "event_name": "repository_dispatch",
-                "action": "niuma.task.completed",
-                "event_source": "other-source",
-                "expected": False,
-            },
-        ]
+    def test_entrypoint_is_routed_by_reusable_without_job_if(self) -> None:
+        content = self.entrypoint_content
+        self.assertIn("orchestrate:\n    uses: ./.github/workflows/niuma-orchestrate-reusable.yml", content)
+        self.assertNotIn("orchestrate:\n    if:", content)
 
-        for case in cases:
-            with self.subTest(case=case["name"]):
-                actual = evaluate_entrypoint_if(
-                    self.entrypoint_if_expr,
-                    event_name=case["event_name"],
-                    label_name=case.get("label_name", ""),
-                    action=case.get("action", ""),
-                    event_source=case.get("event_source", ""),
-                )
-                self.assertEqual(actual, case["expected"])
-
-    def test_reusable_trigger_gate_behavior_from_real_script(self) -> None:
-        cases = [
-            {
-                "name": "issues_queued",
-                "env": {
-                    "GITHUB_EVENT_NAME": "issues",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
-                    "EVENT_LABEL_NAME": "bot:queued",
-                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
-                    "EVENT_ACTION": "",
-                    "EVENT_SOURCE": "",
-                },
-                "expected_should_run": "true",
-                "expected_reason": "accepted",
-            },
-            {
-                "name": "issues_not_whitelisted",
-                "env": {
-                    "GITHUB_EVENT_NAME": "issues",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
-                    "EVENT_LABEL_NAME": "bot:blocked",
-                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
-                    "EVENT_ACTION": "",
-                    "EVENT_SOURCE": "",
-                },
-                "expected_should_run": "false",
-                "expected_reason": "label_not_whitelisted",
-            },
-            {
-                "name": "dispatch_accepted",
-                "env": {
-                    "GITHUB_EVENT_NAME": "repository_dispatch",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
-                    "EVENT_LABEL_NAME": "",
-                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
-                    "EVENT_ACTION": "niuma.task.completed",
-                    "EVENT_SOURCE": "close-after-integration-merge",
-                },
-                "expected_should_run": "true",
-                "expected_reason": "accepted",
-            },
-            {
-                "name": "dispatch_disabled",
-                "env": {
-                    "GITHUB_EVENT_NAME": "repository_dispatch",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
-                    "EVENT_LABEL_NAME": "",
-                    "INPUT_ENABLE_DISPATCH_WAKEUP": "false",
-                    "EVENT_ACTION": "niuma.task.completed",
-                    "EVENT_SOURCE": "close-after-integration-merge",
-                },
-                "expected_should_run": "false",
-                "expected_reason": "dispatch_disabled",
-            },
-            {
-                "name": "schedule_accepted",
-                "env": {
-                    "GITHUB_EVENT_NAME": "schedule",
-                    "INPUT_LABEL_WHITELIST": "bot:orchestrate,bot:queued,bot:pr-reviewable,bot:premerged",
-                    "EVENT_LABEL_NAME": "",
-                    "INPUT_ENABLE_DISPATCH_WAKEUP": "true",
-                    "EVENT_ACTION": "",
-                    "EVENT_SOURCE": "",
-                },
-                "expected_should_run": "true",
-                "expected_reason": "accepted",
-            },
-        ]
-
-        for case in cases:
-            with self.subTest(case=case["name"]):
-                completed, outputs = run_step_script(self.reusable_trigger_gate_script, case["env"])
-                self.assertEqual(completed.returncode, 0, msg=completed.stderr + completed.stdout)
-                self.assertEqual(outputs.get("should_run"), case["expected_should_run"])
-                self.assertEqual(outputs.get("reason"), case["expected_reason"])
+    def test_reusable_routes_event_in_control(self) -> None:
+        content = self.reusable_content
+        self.assertIn("- name: Route Event in Control", content)
+        self.assertIn("control route-event", content)
+        self.assertIn("decision=", content)
+        self.assertIn("reason=", content)
+        self.assertIn("action=", content)
+        self.assertIn("steps.route_event.outputs.decision == 'run'", content)
+        self.assertIn("steps.route_event.outputs.action == 'orchestrate'", content)
 
 
 if __name__ == "__main__":
