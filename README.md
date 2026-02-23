@@ -17,24 +17,39 @@
 
 ### `compiler/`
 - [**`bddc/`**](compiler/bddc/README.md)（Elixir escript，已就绪）
-  **BDD 测试运行时**：执行 BCC 生成的 BDD 场景，实现"测试即文档"。
-  与 BCC 配合形成闭环：BCC 生成场景 → BDDC 执行测试 → 报告结果。
+  **BDD 测试运行时**：执行 BCC 产出的行为场景，实现"测试即文档"。
+  与 BCC 配合形成闭环：seed 契约建模 → BCC 校验/导出场景 → BDDC 执行测试 → 报告结果。
 
 - [**`bcc/`**](compiler/bcc/README.md)（Rust + Elixir emit，已就绪）
   **架构编译器**：把架构约束当作语法规则来检查。
   从代码提取结构，构建知识图谱，验证架构合规性，生成治理报告。
   
   核心价值：
+  - **seed 作为架构契约**：围绕 seed 定义模块、关系与治理规则，降低文档/实现漂移
+  - **层级模块与分层校验**：支持子模块嵌套（`parent`）与 `layer/domain_kind` 约束校验（不仅看平铺依赖）
+  - **多视图架构校验**：在依赖关系之外，支持 `flow / boundary / event` 三类视图的结构检查
+  - **行为契约到测试闭环**：从 seed 的 contract/flow/event 行为声明导出 BDD source，串到 `bcc bdd seed -> bddc check`
+  - **seed 统一入口演进**：面向“同一份 seed 驱动文档/校验/测试/代码生成”的方向持续收敛（CRUD/复杂业务分流）
   - **代码知识图谱**：extract → SQLite 持久化 → 图搜索（caller/callee/继承/模块依赖）
   - **架构门禁**：arch validate 检测分层违规（如 api→dao 跳过 service），CI 自动拦截
+  - **架构可视化（辅助）**：arch export-mermaid 导出总览图/详情图，主要用于评审与对账，不是核心门禁
+  - **治理报告**：arch report 聚合 scenario/gate/summary，输出 architecture debt 报告
   - **[代码异味检测](compiler/bcc/README.md#bcc-analyze-smell)**：analyze smell 扫描 6 大类 19 项代码质量问题，支持 Python/Elixir/Rust/TypeScript 四语言。基于 tree-sitter AST 分析，检测复制粘贴式重复函数、空函数体/死分支/不可达代码等噪音、TODO 未清理和冗余防御性代码、吞没异常和过宽捕获、硬编码凭证和注入风险等安全隐患。可搭配 `--smell-gate` 做 CI 门禁。
   - **影响分析**：改动前预知影响范围，降低重构风险
   - **测试生成**：bugfix 历史 → BDD 场景 → BDDC 执行验证
 
+  近期 Issue 驱动进展（重点）：
+  - [#427](https://github.com/biantaishabi2/Cli/issues/427)：层级模块（`parent`）+ 分层校验（`layer`）接入 validate 主流程
+  - [#446](https://github.com/biantaishabi2/Cli/issues/446)：flow / boundary / event 三类架构视图扩展
+  - [#451](https://github.com/biantaishabi2/Cli/issues/451)：行为契约导出 BDD source，接入 BDD 管道
+  - [#453](https://github.com/biantaishabi2/Cli/issues/453)：seed 统一入口（CRUD 自动生成 + 复杂业务 BDD 分流，持续推进）
+
   典型链路：
   - Greenfield：`compile -> arch matrix -> arch validate -> bdd seed`
-  - Brownfield：`extract -> graph-index build -> arch validate -> bugfix`
+  - Brownfield：`extract -> graph-index build -> arch matrix -> arch validate -> arch report -> bugfix -> bddc`
   - 代码质量：`extract -> analyze smell [--smell-gate N]`
+  - 结构+行为：`seed(flow/boundary/event/contracts) -> arch validate --export-bdd-source -> bdd seed -> bddc check`
+  - 可视化治理（辅助）：`extract -> arch matrix/validate -> arch export-mermaid`
   - **案例参考**: [`compiler/bcc/examples/openclaw-arch/`](compiler/bcc/examples/openclaw-arch/)
 
 ### `automation/`
@@ -80,12 +95,41 @@ bcc arch validate \
   --gates seed/v3.gates.yaml \
   --actual artifacts/relation_matrix.actual.json \
   --out-dir versions/v4-draft
+bcc arch report \
+  --scenario-validation versions/v4-draft/scenario-validation.tsv \
+  --gate-evaluation versions/v4-draft/gate-evaluation.tsv \
+  --summary versions/v4-draft/summary.json \
+  --out versions/v4-draft/architecture-debt.md
+bcc arch export-module-map \
+  --module-map artifacts/module_map.json \
+  --module-registry seed/module-registry.v3.yaml \
+  --out artifacts/module_map.bugfix.json
+bcc arch export-mermaid \
+  --module-map artifacts/module_map.bugfix.json \
+  --output docs/architecture.md
+bcc bdd seed \
+  --source docs/backend-trace/bdd-seed-input \
+  --output docs/backend-trace/scenarios/v3-seed \
+  -s check
 
 # bddc（Elixir escript）
 cd compiler/bddc
 mix deps.get
 mix escript.build
 ./bdd_compiler --help
+```
+
+## BCC + BDDC 标准链路（契约到验收）
+
+```bash
+# 1) seed + 实际关系 -> 架构校验（可导出 bdd source）
+bcc arch validate --target ... --transition ... --gates ... --actual ... --out-dir ...
+
+# 2) BDD source -> 场景种子
+bcc bdd seed --source <bdd-source-dir> --output <seed-out> -s organize
+
+# 3) 场景执行
+bddc check --in <seed-out>/features --out test/bdd_generated --instructions <instructions.exs>
 ```
 
 ## Build Release Artifact

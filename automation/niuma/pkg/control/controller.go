@@ -808,6 +808,21 @@ func (c *Controller) Run(ctx context.Context) error {
 		fmt.Printf("[control][dag-sync] event 同步失败（已降级，不阻塞主流程）: %v\n", err)
 	}
 
+	// ⑤.5 prune：裁剪已关闭 issue 对应的 active task，避免旧链路干扰新链路推进。
+	if allIssuesCache == nil {
+		allIssuesCache, err = c.github.ListIssuesByState(ctx, "all")
+		if err != nil {
+			return fmt.Errorf("扫描全量 issues 失败（prune 阶段）: %w", err)
+		}
+	}
+	// 重新读取最新 task 列表（blocked_by 可能已更新）
+	pruneTasks, err := c.taskctl.List("")
+	if err != nil {
+		fmt.Printf("[control][prune] 读取 task 列表失败，跳过裁剪: %v\n", err)
+	} else if pruned := c.pruneClosedIssueTasks(allIssuesCache, pruneTasks); pruned > 0 {
+		fmt.Printf("[control][prune] 本轮共裁剪 %d 个已关闭 issue 的 task\n", pruned)
+	}
+
 	// ⑥ 获取 ready tasks 并推进
 	if !blockedByPersisted {
 		fmt.Println("[control] blocked_by 落盘未完成，跳过本轮 ready 放行，等待下轮重试")
@@ -1737,6 +1752,43 @@ func (c *Controller) logPRReviewableDecision(
 		reviewStatus.normalizedMergeStateStatus(),
 		decision,
 	)
+}
+
+// pruneClosedIssueTasks 裁剪已关闭 issue 对应的 active task，标记为 completed。
+// 返回被裁剪的 task 数量。
+func (c *Controller) pruneClosedIssueTasks(allIssues []IssueInfo, existingTasks []Task) int {
+	// 构建 closed issue 集合
+	closedIssues := make(map[int]bool, len(allIssues))
+	for _, issue := range allIssues {
+		if strings.EqualFold(issue.State, "closed") {
+			closedIssues[issue.Number] = true
+		}
+	}
+	if len(closedIssues) == 0 {
+		return 0
+	}
+
+	pruned := 0
+	for _, task := range existingTasks {
+		issueNum := task.IssueNum()
+		if issueNum == 0 {
+			continue
+		}
+		if !closedIssues[issueNum] {
+			continue
+		}
+		if !isTaskActiveStatus(task.Status) {
+			continue
+		}
+		status := TaskStatusCompleted
+		if err := c.taskctl.Update(task.ID, UpdateOpts{Status: &status}); err != nil {
+			fmt.Printf("[control][prune] 裁剪 task %s (issue #%d) 失败: %v\n", task.ID, issueNum, err)
+			continue
+		}
+		fmt.Printf("[control][prune] 已裁剪 task %s (issue #%d)，issue 已关闭\n", task.ID, issueNum)
+		pruned++
+	}
+	return pruned
 }
 
 // checkParentProgress 检查父 issue 的所有 sub-issues 是否完成

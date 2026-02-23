@@ -1,24 +1,24 @@
 # BDDC — BDD Test Runtime
 
-**BDD 测试运行时**，与 BCC 配合形成"测试即文档"闭环。
+**BDD 测试运行时**，负责把 BCC 产出的行为场景编译成可执行测试并执行。
 
 ## 定位
 
 | 工具 | 职责 | 输出 |
 |------|------|------|
-| **BCC** | 分析代码/历史，生成 BDD 场景 | `docs/bdd/**/*.dsl` |
-| **BDDC** | 执行 BDD 场景，验证行为 | ExUnit 测试报告 |
+| **BCC** | 基于 seed/代码关系生成行为场景（含 contracts/flow/event） | BDD source / DSL 场景 |
+| **BDDC** | 编译并执行场景，验证行为契约是否满足 | ExUnit 测试报告 |
 
 ## 工作流程
 
 ```
-代码变更 / Bugfix 历史
-    ↓ BCC bugfix
-BDD 场景文件 (.dsl)
-    ↓ BDDC 编译
-ExUnit 测试代码
-    ↓ mix test
-测试报告（通过/失败）
+seed 契约 + 实际代码关系
+    ↓ BCC arch validate/export-bdd-source
+BDD source / DSL 场景
+    ↓ BCC bdd seed（可选）
+可执行 BDD DSL
+    ↓ BDDC compile/check
+ExUnit 测试与报告（通过/失败）
 ```
 
 ## 独立使用
@@ -28,26 +28,26 @@ ExUnit 测试代码
 ## 构建
 
 ```bash
-cd tools/bdd_compiler
+cd compiler/bddc
 mix deps.get
 mix escript.build
 ```
 
-产物：`tools/bdd_compiler/bdd_compiler`
+产物：`compiler/bddc/bdd_compiler`
 
 ## 安装（推荐）
 
 安装到 `~/.local/bin`，并创建短别名 `bddc`（软链接到 `bdd_compiler`）：
 
 ```bash
-./tools/bdd_compiler/install.sh --rebuild
+./compiler/bddc/install.sh --rebuild
 bddc --help
 ```
 
 如不想创建别名：
 
 ```bash
-./tools/bdd_compiler/install.sh --rebuild --no-alias
+./compiler/bddc/install.sh --rebuild --no-alias
 ```
 
 ## 指令集输入格式
@@ -77,7 +77,7 @@ bddc --help
 ## 使用
 
 ```bash
-./tools/bdd_compiler/bdd_compiler compile \
+./compiler/bddc/bdd_compiler compile \
   --in docs/bdd \
   --out test/bdd_generated \
   --instructions /tmp/instructions_v1.exs \
@@ -97,20 +97,20 @@ bddc --help
 
 ```bash
 # 默认 project-root 为当前目录
-./tools/bdd_compiler/bdd_compiler annotations.check
-./tools/bdd_compiler/bdd_compiler registry.scaffold --module Shop.Foo --functions bar/1
-./tools/bdd_compiler/bdd_compiler registry.upsert --module Shop.Foo --functions bar/1
-./tools/bdd_compiler/bdd_compiler instructions.docs --version v1 --output docs/bdd/指令集.md
-./tools/bdd_compiler/bdd_compiler factories.scaffold --scope priv/bdd/factories_scope.exs
-./tools/bdd_compiler/bdd_compiler factories.upsert --scope priv/bdd/factories_scope.exs
-./tools/bdd_compiler/bdd_compiler factories.check --paths test/support/bdd/factories_generated
-./tools/bdd_compiler/bdd_compiler contract.check --in docs/bdd/contracts
-./tools/bdd_compiler/bdd_compiler fuzz --seed 42
-./tools/bdd_compiler/bdd_compiler mutation.report --in lib/shop/bdd
-./tools/bdd_compiler/bdd_compiler mutation.run --max-mutants 10
+./compiler/bddc/bdd_compiler annotations.check
+./compiler/bddc/bdd_compiler registry.scaffold --module Shop.Foo --functions bar/1
+./compiler/bddc/bdd_compiler registry.upsert --module Shop.Foo --functions bar/1
+./compiler/bddc/bdd_compiler instructions.docs --version v1 --output docs/bdd/指令集.md
+./compiler/bddc/bdd_compiler factories.scaffold --scope priv/bdd/factories_scope.exs
+./compiler/bddc/bdd_compiler factories.upsert --scope priv/bdd/factories_scope.exs
+./compiler/bddc/bdd_compiler factories.check --paths test/support/bdd/factories_generated
+./compiler/bddc/bdd_compiler contract.check --in docs/bdd/contracts
+./compiler/bddc/bdd_compiler fuzz --seed 42
+./compiler/bddc/bdd_compiler mutation.report --in lib/shop/bdd
+./compiler/bddc/bdd_compiler mutation.run --max-mutants 10
 
 # 一键串联（注解→指令→文档→check）
-./tools/bdd_compiler/bdd_compiler domain.autowire \
+./compiler/bddc/bdd_compiler domain.autowire \
   --project-root /path/to/project \
   --module Shop.Foo.BarService \
   --functions do_x/1,do_y/2 \
@@ -122,7 +122,7 @@ bddc --help
   --fail-on-warn false
 
 # 只预览将执行的步骤（不真正执行）
-./tools/bdd_compiler/bdd_compiler domain.autowire \
+./compiler/bddc/bdd_compiler domain.autowire \
   --project-root /path/to/project \
   --module Shop.Foo.BarService \
   --functions do_x/1,do_y/2 \
@@ -133,18 +133,18 @@ bddc --help
   --dry-run
 
 # 指定项目根目录
-./tools/bdd_compiler/bdd_compiler annotations.check --project-root /path/to/project
+./compiler/bddc/bdd_compiler annotations.check --project-root /path/to/project
 ```
 
 ```bash
-./tools/bdd_compiler/bdd_compiler lint \
+./compiler/bddc/bdd_compiler lint \
   --in docs/bdd \
   --instructions /tmp/instructions_v1.exs \
   --fail-on-warn
 ```
 
 ```bash
-./tools/bdd_compiler/bdd_compiler check \
+./compiler/bddc/bdd_compiler check \
   --in docs/bdd \
   --out test/bdd_generated \
   --instructions /tmp/instructions_v1.exs \
