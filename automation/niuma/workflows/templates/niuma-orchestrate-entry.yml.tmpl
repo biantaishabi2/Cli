@@ -1,0 +1,28 @@
+name: niuma - Orchestrate
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [closed]
+  repository_dispatch:
+    types: [niuma.task.completed]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  orchestrate:
+    uses: ./.github/workflows/niuma-orchestrate-reusable.yml
+    secrets: inherit
+    with:
+      repo: ${{ github.repository }}
+      store_dir: /home/wangbo/.niuma/stores/Cli
+      workflow_source_repo: ${{ github.repository }}
+      workflow_source_ref: ${{ github.event.repository.default_branch }}
+      repo_dir: "."
+      event_id: ${{ github.event.client_payload.event_id || '' }}
+      dedup_window_hours: 24
+      concurrency_key: "niuma-orchestrate-${repo}"
+      enable_local_cleanup: true
