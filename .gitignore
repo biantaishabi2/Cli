@@ -36,3 +36,6 @@ compiler/bcc/scripts/node_modules/
 
 # niuma lock
 .niuma/tasks.json.lock
+
+# niuma local state
+.niuma/
