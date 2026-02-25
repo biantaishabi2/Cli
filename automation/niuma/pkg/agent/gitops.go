@@ -224,10 +224,11 @@ func resolveDefaultBranch(workDir string) defaultBranchResolution {
 
 // resolveDefaultBranchWithExecutor 默认分支解析链路：
 // 1) symbolic-ref refs/remotes/origin/HEAD
-// 2) ls-remote --symref origin HEAD
-// 3) rev-parse --verify refs/remotes/origin/main
-// 4) remote show origin (HEAD branch)
-// 5) fallback master
+// 2) remote set-head origin -a 后重试 symbolic-ref
+// 3) ls-remote --symref origin HEAD
+// 4) rev-parse --verify refs/remotes/origin/main
+// 5) remote show origin (HEAD branch)
+// 6) fallback master
 func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor, logf func(string, ...any)) defaultBranchResolution {
 	result := defaultBranchResolution{}
 
@@ -243,7 +244,23 @@ func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor
 		appendProbeFailure(&result, "symbolic-ref", err, out, logf)
 	}
 
-	// 2) 远端 symref（标准输出）
+	// 2) CI 浅克隆等场景常缺失 origin/HEAD，先尝试同步后再读一次。
+	if out, err := executor.CombinedOutput(workDir, "remote", "set-head", "origin", "-a"); err == nil {
+		if retryOut, retryErr := executor.CombinedOutput(workDir, "symbolic-ref", "refs/remotes/origin/HEAD"); retryErr == nil {
+			if branch, ok := parseBranchFromRef(string(retryOut), "refs/remotes/origin/"); ok {
+				result.Branch = branch
+				result.Source = "symbolic-ref-after-set-head"
+				return result
+			}
+			appendProbeFailure(&result, "symbolic-ref(after set-head)", fmt.Errorf("输出无法解析为 refs/remotes/origin/<branch>"), retryOut, logf)
+		} else {
+			appendProbeFailure(&result, "symbolic-ref(after set-head)", retryErr, retryOut, logf)
+		}
+	} else {
+		appendProbeFailure(&result, "remote set-head origin -a", err, out, logf)
+	}
+
+	// 3) 远端 symref（标准输出）
 	if out, err := executor.CombinedOutput(workDir, "ls-remote", "--symref", "origin", "HEAD"); err == nil {
 		if branch, ok := parseBranchFromLSRemoteSymref(string(out)); ok {
 			result.Branch = branch
@@ -255,7 +272,7 @@ func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor
 		appendProbeFailure(&result, "ls-remote --symref", err, out, logf)
 	}
 
-	// 3) 本地 origin/main 存在性探测
+	// 4) 本地 origin/main 存在性探测
 	if out, err := executor.CombinedOutput(workDir, "rev-parse", "--verify", "refs/remotes/origin/main"); err == nil {
 		result.Branch = "main"
 		result.Source = "local-origin-main"
@@ -264,7 +281,7 @@ func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor
 		appendProbeFailure(&result, "rev-parse origin/main", err, out, logf)
 	}
 
-	// 4) remote show 文本兜底
+	// 5) remote show 文本兜底
 	if out, err := executor.CombinedOutput(workDir, "remote", "show", "origin"); err == nil {
 		if branch, ok := parseBranchFromRemoteShow(string(out)); ok {
 			result.Branch = branch
@@ -276,7 +293,7 @@ func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor
 		appendProbeFailure(&result, "remote show origin", err, out, logf)
 	}
 
-	// 5) 最终兜底 master
+	// 6) 最终兜底 master
 	result.Branch = fallbackDefaultBranch
 	result.Source = "fallback-master"
 	result.UsedFallback = true

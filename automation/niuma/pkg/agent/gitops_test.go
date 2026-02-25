@@ -157,13 +157,19 @@ type mockGitOutputResult struct {
 }
 
 type mockGitOutputExecutor struct {
-	results map[string]mockGitOutputResult
-	calls   []string
+	results   map[string]mockGitOutputResult
+	sequences map[string][]mockGitOutputResult
+	calls     []string
 }
 
 func (m *mockGitOutputExecutor) CombinedOutput(_ string, args ...string) ([]byte, error) {
 	key := strings.Join(args, " ")
 	m.calls = append(m.calls, key)
+	if seq, ok := m.sequences[key]; ok && len(seq) > 0 {
+		result := seq[0]
+		m.sequences[key] = seq[1:]
+		return []byte(result.out), result.err
+	}
 	if result, ok := m.results[key]; ok {
 		return []byte(result.out), result.err
 	}
@@ -174,6 +180,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 	tests := []struct {
 		name           string
 		results        map[string]mockGitOutputResult
+		sequences      map[string][]mockGitOutputResult
 		expectedBranch string
 		expectedSource string
 		expectedCalls  []string
@@ -192,19 +199,41 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			name: "ls-remote symref fallback",
 			results: map[string]mockGitOutputResult{
 				"symbolic-ref refs/remotes/origin/HEAD": {err: fmt.Errorf("missing origin/HEAD")},
+				"remote set-head origin -a":             {err: fmt.Errorf("origin unavailable")},
 				"ls-remote --symref origin HEAD":        {out: "ref: refs/heads/develop\tHEAD\nabc\tHEAD\n"},
 			},
 			expectedBranch: "develop",
 			expectedSource: "ls-remote-symref",
 			expectedCalls: []string{
 				"symbolic-ref refs/remotes/origin/HEAD",
+				"remote set-head origin -a",
 				"ls-remote --symref origin HEAD",
+			},
+		},
+		{
+			name: "set-head sync fallback",
+			results: map[string]mockGitOutputResult{
+				"remote set-head origin -a": {out: "origin/HEAD set to main\n"},
+			},
+			sequences: map[string][]mockGitOutputResult{
+				"symbolic-ref refs/remotes/origin/HEAD": {
+					{err: fmt.Errorf("missing origin/HEAD")},
+					{out: "refs/remotes/origin/main\n"},
+				},
+			},
+			expectedBranch: "main",
+			expectedSource: "symbolic-ref-after-set-head",
+			expectedCalls: []string{
+				"symbolic-ref refs/remotes/origin/HEAD",
+				"remote set-head origin -a",
+				"symbolic-ref refs/remotes/origin/HEAD",
 			},
 		},
 		{
 			name: "local origin/main fallback",
 			results: map[string]mockGitOutputResult{
 				"symbolic-ref refs/remotes/origin/HEAD": {err: fmt.Errorf("missing origin/HEAD")},
+				"remote set-head origin -a":             {err: fmt.Errorf("origin unavailable")},
 				"ls-remote --symref origin HEAD":        {err: fmt.Errorf("origin unavailable")},
 				"rev-parse --verify refs/remotes/origin/main": {
 					out: "0123456789abcdef\n",
@@ -214,6 +243,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			expectedSource: "local-origin-main",
 			expectedCalls: []string{
 				"symbolic-ref refs/remotes/origin/HEAD",
+				"remote set-head origin -a",
 				"ls-remote --symref origin HEAD",
 				"rev-parse --verify refs/remotes/origin/main",
 			},
@@ -222,6 +252,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			name: "remote show fallback",
 			results: map[string]mockGitOutputResult{
 				"symbolic-ref refs/remotes/origin/HEAD":       {err: fmt.Errorf("missing origin/HEAD")},
+				"remote set-head origin -a":                   {err: fmt.Errorf("origin unavailable")},
 				"ls-remote --symref origin HEAD":              {err: fmt.Errorf("origin unavailable")},
 				"rev-parse --verify refs/remotes/origin/main": {err: fmt.Errorf("no origin/main")},
 				"remote show origin":                          {out: "  HEAD branch: release/v2\n"},
@@ -230,6 +261,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			expectedSource: "remote-show",
 			expectedCalls: []string{
 				"symbolic-ref refs/remotes/origin/HEAD",
+				"remote set-head origin -a",
 				"ls-remote --symref origin HEAD",
 				"rev-parse --verify refs/remotes/origin/main",
 				"remote show origin",
@@ -239,6 +271,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			name: "fallback master when all probes fail",
 			results: map[string]mockGitOutputResult{
 				"symbolic-ref refs/remotes/origin/HEAD":       {err: fmt.Errorf("missing origin/HEAD")},
+				"remote set-head origin -a":                   {err: fmt.Errorf("origin unavailable")},
 				"ls-remote --symref origin HEAD":              {err: fmt.Errorf("origin unavailable")},
 				"rev-parse --verify refs/remotes/origin/main": {err: fmt.Errorf("no origin/main")},
 				"remote show origin":                          {err: fmt.Errorf("origin unavailable")},
@@ -248,6 +281,7 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 			usedFallback:   true,
 			expectedCalls: []string{
 				"symbolic-ref refs/remotes/origin/HEAD",
+				"remote set-head origin -a",
 				"ls-remote --symref origin HEAD",
 				"rev-parse --verify refs/remotes/origin/main",
 				"remote show origin",
@@ -257,7 +291,10 @@ func TestResolveDefaultBranchWithExecutor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			executor := &mockGitOutputExecutor{results: tt.results}
+			executor := &mockGitOutputExecutor{
+				results:   tt.results,
+				sequences: tt.sequences,
+			}
 			result := resolveDefaultBranchWithExecutor(t.TempDir(), executor, nil)
 
 			assert.Equal(t, tt.expectedBranch, result.Branch)
@@ -272,6 +309,7 @@ func TestResolveDefaultBranchWithExecutor_StrictParsing(t *testing.T) {
 	executor := &mockGitOutputExecutor{
 		results: map[string]mockGitOutputResult{
 			"symbolic-ref refs/remotes/origin/HEAD":       {out: "origin/main\n"},
+			"remote set-head origin -a":                   {out: "origin/HEAD set to main\n"},
 			"ls-remote --symref origin HEAD":              {out: "ref: refs/heads/feature/x\tHEAD\n"},
 			"rev-parse --verify refs/remotes/origin/main": {err: fmt.Errorf("should not reach")},
 			"remote show origin":                          {err: fmt.Errorf("should not reach")},
@@ -281,5 +319,5 @@ func TestResolveDefaultBranchWithExecutor_StrictParsing(t *testing.T) {
 	result := resolveDefaultBranchWithExecutor(t.TempDir(), executor, nil)
 	assert.Equal(t, "feature/x", result.Branch)
 	assert.Equal(t, "ls-remote-symref", result.Source)
-	assert.Len(t, result.ProbeFailures, 1)
+	assert.Len(t, result.ProbeFailures, 2)
 }
