@@ -3,9 +3,12 @@
 package agent
 
 import (
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsHighRiskChange(t *testing.T) {
@@ -172,8 +175,28 @@ func TestContainsPathTraversal(t *testing.T) {
 }
 
 func TestDefaultBranch_Fallback(t *testing.T) {
-	// 在无 origin/HEAD 的目录中应回退到 master
-	g := NewGitOps(t.TempDir())
+	requireLocalPushSupport(t)
+
+	repoDir := initTestRepo(t)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	// main-only 远端 + 本地无 origin/HEAD，应优先解析到 main。
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "checkout", "-b", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoDir
+	_ = cmd.Run()
+
+	g := NewGitOps(repoDir)
 	branch := g.DefaultBranch()
-	assert.Equal(t, "master", branch)
+	assert.Equal(t, "main", branch)
 }
