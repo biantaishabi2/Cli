@@ -361,8 +361,14 @@ func TestWorkspace_CreateWithOriginMainLocalFallbackWhenRemoteUnavailable(t *tes
 	cmd = exec.Command(git, "push", "-u", "origin", "main")
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "checkout", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "branch", "-D", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
 
-	// 构造：origin/HEAD 缺失 + origin 不可达，但本地 refs/remotes/origin/main 已存在。
+	// 构造：origin/HEAD 缺失 + origin 不可达，且仅保留本地 refs/remotes/origin/main。
 	cmd = exec.Command(git, "update-ref", "-d", "refs/remotes/origin/HEAD")
 	cmd.Dir = repoDir
 	_ = cmd.Run()

@@ -202,6 +202,10 @@ func (w *Workspace) resolveWorktreeBaseRef(base string) (string, error) {
 				return "origin/" + base, nil
 			}
 		}
+		// 远端不可达时，允许复用已存在的本地远端跟踪引用。
+		if w.hasRemoteBranch(base) {
+			return "origin/" + base, nil
+		}
 		if w.branchExists(base) {
 			return base, nil
 		}
