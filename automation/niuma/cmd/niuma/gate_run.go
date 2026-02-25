@@ -34,7 +34,9 @@ func init() {
 	gateRunCmd.Flags().BoolVar(&flagGateSelfCheck, "self-check", false, "self-check 模式：gate 失败时不设标签/不写 issue 评论，仅写 PR review")
 }
 
-// parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2，值 ≤0 clamp 到 1。
+// parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2。
+// 值为 0 表示禁用自动重试（仅执行一次 gate）。
+// 负值会被 clamp 到 0。
 func parseMaxRetries(raw string) int {
 	const defaultVal = 2
 	n, err := strconv.Atoi(raw)
@@ -42,9 +44,9 @@ func parseMaxRetries(raw string) int {
 		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 '%s' 非法，回退为 %d\n", raw, defaultVal)
 		return defaultVal
 	}
-	if n <= 0 {
-		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 %d ≤ 0，clamp 到 1\n", n)
-		return 1
+	if n < 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 %d < 0，clamp 到 0\n", n)
+		return 0
 	}
 	return n
 }

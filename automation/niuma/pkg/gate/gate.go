@@ -142,6 +142,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("写入 gate retry_count 失败: %w", err)
 	}
 
+	addPRReview := func() {
+		if r.opts.AddPRReview != nil {
+			reviewBody := fmt.Sprintf("## ❌ Gate 测试失败详情\n\n```\n%s\n```\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`", gateFailure, retryCount, r.opts.MaxRetries, attemptKey)
+			if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: gate 失败信息写入 PR review 失败: %v\n", err)
+			}
+		}
+	}
+
 	if retryCount <= r.opts.MaxRetries {
 		if !r.opts.SelfCheck {
 			// 正常模式：设标签 + 写 issue 评论
@@ -154,12 +163,13 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			}
 		}
 		// 两种模式都写 PR review（失败详情供 iterate 读取）
-		if r.opts.AddPRReview != nil {
-			reviewBody := fmt.Sprintf("## ❌ Gate 测试失败详情\n\n```\n%s\n```\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`", gateFailure, retryCount, r.opts.MaxRetries, attemptKey)
-			if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: gate 失败信息写入 PR review 失败: %v\n", err)
-			}
-		}
+		addPRReview()
+		return result, fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
+	}
+
+	// self-check 模式下不做 escalate，只写 PR review 由外层流程决定后续动作。
+	if r.opts.SelfCheck {
+		addPRReview()
 		return result, fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
 	}
 

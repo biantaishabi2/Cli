@@ -109,8 +109,10 @@ func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
 
 	assert.Contains(t, content, "\"$NIUMA_BIN\" gate run")
 	assert.Contains(t, content, "MAX_RETRIES=2")
-	assert.Contains(t, content, "--max-retries \"$MAX_RETRIES\"")
+	assert.Contains(t, content, "--max-retries 0")
 	assert.Contains(t, content, "--self-check", "implement workflow 应使用 self-check 模式")
+	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
+	assert.Contains(t, content, "--to bot:pr-needs-fix")
 }
 
 func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {

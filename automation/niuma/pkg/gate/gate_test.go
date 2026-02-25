@@ -471,8 +471,8 @@ func TestRunner_SelfCheck_SkipsMarkNeedsFixAndComment(t *testing.T) {
 	assert.Equal(t, 1, prReviewCalled, "self-check 模式仍应写 PR review")
 }
 
-func TestRunner_SelfCheck_EscalationStillWorks(t *testing.T) {
-	// self-check 模式下超限 escalation 行为不变
+func TestRunner_SelfCheck_OverLimitDoesNotEscalate(t *testing.T) {
+	// self-check 模式下即便超限也不做 issue 升级，交由外层 workflow 决策。
 	labelCalled := 0
 	commentCalled := 0
 
@@ -506,7 +506,7 @@ func TestRunner_SelfCheck_EscalationStillWorks(t *testing.T) {
 	result, err := runner.Run(context.Background())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGateFailed)
-	assert.True(t, result.Escalated, "超限时 escalation 行为不变")
-	assert.Equal(t, 1, labelCalled, "超限时应打标签")
-	assert.Equal(t, 1, commentCalled, "超限时应写评论")
+	assert.False(t, result.Escalated, "self-check 模式超限不应直接 escalate")
+	assert.Equal(t, 0, labelCalled, "self-check 模式不应打标签")
+	assert.Equal(t, 0, commentCalled, "self-check 模式不应写 issue 评论")
 }

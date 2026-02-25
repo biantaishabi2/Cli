@@ -142,7 +142,7 @@ jobs:
             if "$NIUMA_BIN" gate run \
                  --repo "$REPO" --issue "$ISSUE_NUMBER" \
                  --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" \
-                 --max-retries "$MAX_RETRIES" --self-check; then
+                 --max-retries 0 --self-check; then
               echo "Gate passed on attempt $ATTEMPT"
               exit 0
             fi
@@ -157,6 +157,14 @@ jobs:
             fi
 
             echo "Gate failed (attempt $ATTEMPT/$MAX_RETRIES), running iterate..."
+            "$NIUMA_BIN" state-label set \
+              --repo "$REPO" --issue "$ISSUE_NUMBER" \
+              --from bot:pr-created --to bot:pr-needs-fix \
+              || "$NIUMA_BIN" state-label set \
+                --repo "$REPO" --issue "$ISSUE_NUMBER" \
+                --to bot:pr-needs-fix \
+              || true
+
             "$NIUMA_BIN" iterate \
               --repo "$REPO" --issue "$ISSUE_NUMBER" \
               --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" || true

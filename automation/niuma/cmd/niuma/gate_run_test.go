@@ -56,16 +56,15 @@ func TestParseMaxRetries_EmptyInput(t *testing.T) {
 func TestParseMaxRetries_ZeroInput(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		result := parseMaxRetries("0")
-		assert.Equal(t, 1, result, "零值输入应 clamp 到 1")
+		assert.Equal(t, 0, result, "零值输入应保留为 0（禁用自动重试）")
 	})
-	assert.True(t, strings.Contains(stderr, "WARNING"), "零值输入应输出 WARNING")
-	assert.True(t, strings.Contains(stderr, "clamp"), "WARNING 应提示 clamp")
+	assert.Empty(t, stderr, "零值输入不应输出 warning")
 }
 
 func TestParseMaxRetries_NegativeInput(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		result := parseMaxRetries("-1")
-		assert.Equal(t, 1, result, "负数输入应 clamp 到 1")
+		assert.Equal(t, 0, result, "负数输入应 clamp 到 0")
 	})
 	assert.True(t, strings.Contains(stderr, "WARNING"), "负数输入应输出 WARNING")
 	assert.True(t, strings.Contains(stderr, "clamp"), "WARNING 应提示 clamp")
