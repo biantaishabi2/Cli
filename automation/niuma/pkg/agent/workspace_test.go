@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,6 +54,94 @@ func initTestRepo(t *testing.T) string {
 	require.NoError(t, cmd.Run())
 
 	return repoDir
+}
+
+// initBareRemote 创建 bare remote，并关闭 hardlinks 以避免 CI 文件系统跨设备报错。
+func initBareRemote(t *testing.T, remoteDir string) {
+	t.Helper()
+	git := gitBin()
+
+	cmd := exec.Command(git, "init", "--bare", remoteDir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	cmd = exec.Command(git, "--git-dir", remoteDir, "config", "core.hardlinks", "false")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
+
+func asFileRemote(remoteDir string) string {
+	return "file://" + remoteDir
+}
+
+var (
+	localPushCheckOnce sync.Once
+	localPushErr       string
+)
+
+// requireLocalPushSupport 检测当前文件系统是否支持本地 git push。
+func requireLocalPushSupport(t *testing.T) {
+	t.Helper()
+
+	localPushCheckOnce.Do(func() {
+		base := t.TempDir()
+		srcDir := filepath.Join(base, "src")
+		remoteDir := filepath.Join(base, "remote.git")
+		git := gitBin()
+
+		if err := os.MkdirAll(srcDir, 0755); err != nil {
+			localPushErr = err.Error()
+			return
+		}
+
+		cmds := [][]string{
+			{git, "init", "-b", "master"},
+			{git, "config", "user.email", "test@test.com"},
+			{git, "config", "user.name", "Test"},
+		}
+		for _, args := range cmds {
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = srcDir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				localPushErr = string(out)
+				return
+			}
+		}
+
+		if err := os.WriteFile(filepath.Join(srcDir, "README.md"), []byte("probe"), 0644); err != nil {
+			localPushErr = err.Error()
+			return
+		}
+		cmd := exec.Command(git, "add", "README.md")
+		cmd.Dir = srcDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			localPushErr = string(out)
+			return
+		}
+		cmd = exec.Command(git, "commit", "-m", "probe")
+		cmd.Dir = srcDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			localPushErr = string(out)
+			return
+		}
+
+		initBareRemote(t, remoteDir)
+		cmd = exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
+		cmd.Dir = srcDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			localPushErr = string(out)
+			return
+		}
+		cmd = exec.Command(git, "push", "-u", "origin", "master")
+		cmd.Dir = srcDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			localPushErr = string(out)
+		}
+	})
+
+	if localPushErr != "" {
+		t.Skipf("跳过依赖本地 git push 的测试：%s", strings.TrimSpace(localPushErr))
+	}
 }
 
 func TestWorkspace_Path(t *testing.T) {
@@ -131,15 +221,16 @@ func TestWorkspace_CreateWithMissingBase_ReturnsError(t *testing.T) {
 }
 
 func TestWorkspace_CreateWithMissingIntegrationBase_AutoCreatesFromDefaultBranch(t *testing.T) {
+	requireLocalPushSupport(t)
+
 	repoDir := initTestRepo(t)
 	ws := NewWorkspace(repoDir)
 	git := gitBin()
 	remoteDir := filepath.Join(t.TempDir(), "remote.git")
 
 	// 准备远端，仅推送 master，不创建 integration/main。
-	cmd := exec.Command(git, "init", "--bare", remoteDir)
-	require.NoError(t, cmd.Run())
-	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 	cmd = exec.Command(git, "push", "-u", "origin", "master")
@@ -155,6 +246,149 @@ func TestWorkspace_CreateWithMissingIntegrationBase_AutoCreatesFromDefaultBranch
 	cmd = exec.Command(git, "--git-dir", remoteDir, "rev-parse", "--verify", "refs/heads/integration/main")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
+
+	// master-only 仓库下，integration/main 应以 master 为来源保持兼容。
+	cmd = exec.Command(git, "--git-dir", remoteDir, "rev-parse", "--verify", "refs/heads/master")
+	masterOut, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(masterOut))
+	assert.Equal(t, strings.TrimSpace(string(masterOut)), strings.TrimSpace(string(out)))
+}
+
+func TestWorkspace_CreateWithMainOnlyRemote_MissingOriginHead(t *testing.T) {
+	requireLocalPushSupport(t)
+
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	// 准备 main-only 远端。
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.Command(git, "checkout", "-b", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "MAIN_ONLY.txt"), []byte("main branch"), 0644))
+	cmd = exec.Command(git, "add", "MAIN_ONLY.txt")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "commit", "-m", "main only")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 显式删除本地 origin/HEAD，模拟 main-only 且无 origin/HEAD 的仓库。
+	cmd = exec.Command(git, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoDir
+	_ = cmd.Run()
+
+	wtPath, err := ws.Create(10, "main-default", "")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(wtPath, "MAIN_ONLY.txt"))
+}
+
+func TestWorkspace_CreateWithCustomDefaultBranch_Develop(t *testing.T) {
+	requireLocalPushSupport(t)
+
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 推送 master，并创建 develop 专属提交。
+	cmd = exec.Command(git, "push", "-u", "origin", "master")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "checkout", "-b", "develop")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "DEVELOP_ONLY.txt"), []byte("develop default"), 0644))
+	cmd = exec.Command(git, "add", "DEVELOP_ONLY.txt")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "commit", "-m", "develop only")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "develop")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/develop")
+	require.NoError(t, cmd.Run())
+
+	// 删除本地 origin/HEAD，确保使用统一 fallback 链解析到 develop。
+	cmd = exec.Command(git, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoDir
+	_ = cmd.Run()
+
+	wtPath, err := ws.Create(11, "develop-default", "")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(wtPath, "DEVELOP_ONLY.txt"))
+}
+
+func TestWorkspace_CreateWithOriginMainLocalFallbackWhenRemoteUnavailable(t *testing.T) {
+	requireLocalPushSupport(t)
+
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.Command(git, "checkout", "-b", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "MAIN_LOCAL_ONLY.txt"), []byte("local main"), 0644))
+	cmd = exec.Command(git, "add", "MAIN_LOCAL_ONLY.txt")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "commit", "-m", "local main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command(git, "push", "-u", "origin", "main")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// 构造：origin/HEAD 缺失 + origin 不可达，但本地 refs/remotes/origin/main 已存在。
+	cmd = exec.Command(git, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoDir
+	_ = cmd.Run()
+	cmd = exec.Command(git, "remote", "set-url", "origin", asFileRemote(filepath.Join(t.TempDir(), "missing-remote.git")))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	wtPath, err := ws.Create(12, "origin-main-local-fallback", "")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(wtPath, "MAIN_LOCAL_ONLY.txt"))
+}
+
+func TestWorkspace_CreateWithAllDefaultBranchProbesFail_ReturnsDiagnosticError(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ws := NewWorkspace(repoDir)
+	git := gitBin()
+
+	// origin 存在但不可达，且无 origin/main 本地引用。
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(filepath.Join(t.TempDir(), "missing-remote.git")))
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	_, err := ws.Create(13, "all-probes-fail", "integration/main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "自动创建基线分支失败")
+	assert.Contains(t, err.Error(), "默认分支探测已回退")
 }
 
 func TestWorkspace_Checkout(t *testing.T) {

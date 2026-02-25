@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const fallbackDefaultBranch = "master"
+
 // GitOps 封装工作目录中的 git 操作
 type GitOps struct {
 	WorkDir string // 工作目录（通常是 worktree 路径）
@@ -172,19 +174,7 @@ func (g *GitOps) ChangedFiles(base string) ([]string, error) {
 // DefaultBranch 获取远程默认分支名（origin/HEAD 指向）
 // 失败时回退到 "master"
 func (g *GitOps) DefaultBranch() string {
-	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
-	cmd.Dir = g.WorkDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "master"
-	}
-	// 输出格式：refs/remotes/origin/main
-	ref := strings.TrimSpace(string(out))
-	parts := strings.Split(ref, "/")
-	if branch := parts[len(parts)-1]; branch != "" {
-		return branch
-	}
-	return "master"
+	return resolveDefaultBranch(g.WorkDir).Branch
 }
 
 // CurrentBranch 返回当前分支名
@@ -196,4 +186,181 @@ func (g *GitOps) CurrentBranch() (string, error) {
 		return "", fmt.Errorf("获取当前分支失败: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitOutputExecutor 抽象 git 命令执行，便于默认分支解析单测注入 mock。
+type gitOutputExecutor interface {
+	CombinedOutput(workDir string, args ...string) ([]byte, error)
+}
+
+// osGitOutputExecutor 使用系统 git 执行命令。
+type osGitOutputExecutor struct{}
+
+func (osGitOutputExecutor) CombinedOutput(workDir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	return cmd.CombinedOutput()
+}
+
+// defaultBranchResolution 表示默认分支探测结果与诊断信息。
+type defaultBranchResolution struct {
+	Branch        string
+	Source        string
+	ProbeFailures []string
+	UsedFallback  bool
+}
+
+func (r defaultBranchResolution) probeSummary() string {
+	if len(r.ProbeFailures) == 0 {
+		return "无"
+	}
+	return strings.Join(r.ProbeFailures, " | ")
+}
+
+// resolveDefaultBranch 统一默认分支解析入口（供 GitOps / Workspace 复用）。
+func resolveDefaultBranch(workDir string) defaultBranchResolution {
+	return resolveDefaultBranchWithExecutor(workDir, osGitOutputExecutor{}, defaultBranchLogf)
+}
+
+// resolveDefaultBranchWithExecutor 默认分支解析链路：
+// 1) symbolic-ref refs/remotes/origin/HEAD
+// 2) ls-remote --symref origin HEAD
+// 3) rev-parse --verify refs/remotes/origin/main
+// 4) remote show origin (HEAD branch)
+// 5) fallback master
+func resolveDefaultBranchWithExecutor(workDir string, executor gitOutputExecutor, logf func(string, ...any)) defaultBranchResolution {
+	result := defaultBranchResolution{}
+
+	// 1) 本地 origin/HEAD
+	if out, err := executor.CombinedOutput(workDir, "symbolic-ref", "refs/remotes/origin/HEAD"); err == nil {
+		if branch, ok := parseBranchFromRef(string(out), "refs/remotes/origin/"); ok {
+			result.Branch = branch
+			result.Source = "symbolic-ref"
+			return result
+		}
+		appendProbeFailure(&result, "symbolic-ref", fmt.Errorf("输出无法解析为 refs/remotes/origin/<branch>"), out, logf)
+	} else {
+		appendProbeFailure(&result, "symbolic-ref", err, out, logf)
+	}
+
+	// 2) 远端 symref（标准输出）
+	if out, err := executor.CombinedOutput(workDir, "ls-remote", "--symref", "origin", "HEAD"); err == nil {
+		if branch, ok := parseBranchFromLSRemoteSymref(string(out)); ok {
+			result.Branch = branch
+			result.Source = "ls-remote-symref"
+			return result
+		}
+		appendProbeFailure(&result, "ls-remote --symref", fmt.Errorf("输出未包含可解析的 refs/heads/<branch>"), out, logf)
+	} else {
+		appendProbeFailure(&result, "ls-remote --symref", err, out, logf)
+	}
+
+	// 3) 本地 origin/main 存在性探测
+	if out, err := executor.CombinedOutput(workDir, "rev-parse", "--verify", "refs/remotes/origin/main"); err == nil {
+		result.Branch = "main"
+		result.Source = "local-origin-main"
+		return result
+	} else {
+		appendProbeFailure(&result, "rev-parse origin/main", err, out, logf)
+	}
+
+	// 4) remote show 文本兜底
+	if out, err := executor.CombinedOutput(workDir, "remote", "show", "origin"); err == nil {
+		if branch, ok := parseBranchFromRemoteShow(string(out)); ok {
+			result.Branch = branch
+			result.Source = "remote-show"
+			return result
+		}
+		appendProbeFailure(&result, "remote show origin", fmt.Errorf("输出未包含可解析的 HEAD branch"), out, logf)
+	} else {
+		appendProbeFailure(&result, "remote show origin", err, out, logf)
+	}
+
+	// 5) 最终兜底 master
+	result.Branch = fallbackDefaultBranch
+	result.Source = "fallback-master"
+	result.UsedFallback = true
+	if logf != nil {
+		logf("warn: 默认分支探测全部失败，回退到 %q，失败详情: %s", fallbackDefaultBranch, result.probeSummary())
+	}
+	return result
+}
+
+func parseBranchFromLSRemoteSymref(raw string) (string, bool) {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "ref:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "ref:" || fields[2] != "HEAD" {
+			continue
+		}
+		return parseBranchFromRef(fields[1], "refs/heads/")
+	}
+	return "", false
+}
+
+func parseBranchFromRemoteShow(raw string) (string, bool) {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "HEAD branch:") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		return normalizeBranch(parts[1])
+	}
+	return "", false
+}
+
+func parseBranchFromRef(ref, prefix string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, prefix) {
+		return "", false
+	}
+	return normalizeBranch(strings.TrimPrefix(ref, prefix))
+}
+
+func normalizeBranch(raw string) (string, bool) {
+	branch := strings.TrimSpace(raw)
+	if branch == "" || strings.EqualFold(branch, "(unknown)") || strings.EqualFold(branch, "HEAD") {
+		return "", false
+	}
+	if strings.HasPrefix(branch, "refs/heads/") {
+		return parseBranchFromRef(branch, "refs/heads/")
+	}
+	if strings.HasPrefix(branch, "refs/remotes/origin/") {
+		return parseBranchFromRef(branch, "refs/remotes/origin/")
+	}
+	if strings.ContainsAny(branch, " \t\r\n") {
+		return "", false
+	}
+	return branch, true
+}
+
+func appendProbeFailure(result *defaultBranchResolution, step string, err error, output []byte, logf func(string, ...any)) {
+	detail := fmt.Sprintf("%s: %v", step, err)
+	outputText := oneLine(strings.TrimSpace(string(output)))
+	if outputText != "" {
+		detail = detail + " (output=" + outputText + ")"
+	}
+	result.ProbeFailures = append(result.ProbeFailures, detail)
+	if logf != nil {
+		logf("debug: 默认分支探测失败: %s", detail)
+	}
+}
+
+func oneLine(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return strings.ReplaceAll(raw, "\n", " | ")
+}
+
+func defaultBranchLogf(format string, args ...any) {
+	fmt.Printf("[niuma][default-branch] "+format+"\n", args...)
 }
