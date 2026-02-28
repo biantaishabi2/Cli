@@ -800,6 +800,44 @@ func TestBuildPRHistory_ReviewError(t *testing.T) {
 	assert.Contains(t, err.Error(), "获取 PR reviews 失败")
 }
 
+func TestBuildPRHistory_PartialFailure_KeepCommentsWhenReviewsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithReviewErr := &reviewFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithReviewErr, ai.NewMockProvider("unused"), 1)
+
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+	assert.Contains(t, history, "comment history", "reviews 失败时仍应保留 comments 历史")
+	assert.NotContains(t, history, "review history", "reviews 失败时不应注入 reviews 内容")
+}
+
+func TestBuildPRHistory_PartialFailure_KeepReviewsWhenCommentsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithCommentErr := &prCommentFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithCommentErr, ai.NewMockProvider("unused"), 1)
+
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+	assert.Contains(t, history, "review history", "comments 失败时仍应保留 reviews 历史")
+	assert.NotContains(t, history, "comment history", "comments 失败时不应注入 comments 内容")
+}
+
 func TestDoReview_ReadsPRHistory(t *testing.T) {
 	// 验证 DoReview 将 PR 历史传递给 AI
 	mockAI := ai.NewMockProvider(`{"approved": true, "summary": "代码良好", "issues": []}`)

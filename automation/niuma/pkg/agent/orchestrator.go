@@ -1422,8 +1422,12 @@ func buildRoundLimitReasonAndActions(summaryMC *gh.MarkerComment) (string, []str
 // GitHub 中 PR 也是 issue，ListComments(prNumber) 能读到 PR 上的普通评论
 func (o *Orchestrator) buildPRHistory(ctx context.Context, prNumber int) (string, error) {
 	history, err := o.collectPRHistoryContext(ctx, prNumber)
-	if err != nil {
+	if history == nil {
 		return "", err
+	}
+	if err != nil {
+		// 部分拉取失败时保留可用历史，避免“全有或全无”。
+		fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败，已降级保留可用上下文：%v\n", prNumber, err)
 	}
 	return renderPRHistory(history.reviewSections, history.commentSections), nil
 }
