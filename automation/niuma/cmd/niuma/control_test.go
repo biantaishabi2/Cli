@@ -585,14 +585,107 @@ func TestDispatchTaskCompleted_TimestampFallback(t *testing.T) {
 	assert.Equal(t, "timestamp", sender.payload["event_id_source"])
 }
 
+func TestControlMergeBaseBranchFlag_Exists(t *testing.T) {
+	mergeFlag := controlMergeCmd.Flags().Lookup("merge-base-branch")
+	require.NotNil(t, mergeFlag)
+	assert.Equal(t, "", mergeFlag.DefValue)
+
+	closeFlag := controlCloseMergedCmd.Flags().Lookup("merge-base-branch")
+	require.NotNil(t, closeFlag)
+	assert.Equal(t, "", closeFlag.DefValue)
+}
+
+func TestControlMergeBaseBranchFlag_ParseConsistency(t *testing.T) {
+	orig := flagMergeBaseBranch
+	defer func() {
+		flagMergeBaseBranch = orig
+		_ = controlMergeCmd.Flags().Set("merge-base-branch", orig)
+		_ = controlCloseMergedCmd.Flags().Set("merge-base-branch", orig)
+	}()
+
+	require.NoError(t, controlMergeCmd.Flags().Set("merge-base-branch", "release"))
+	assert.Equal(t, "release", flagMergeBaseBranch)
+
+	require.NoError(t, controlCloseMergedCmd.Flags().Set("merge-base-branch", "main"))
+	assert.Equal(t, "main", flagMergeBaseBranch)
+}
+
+func TestResolveControlMergeBaseBranch_Priority(t *testing.T) {
+	orig := flagMergeBaseBranch
+	defer func() { flagMergeBaseBranch = orig }()
+
+	provider := &stubMergeBaseDefaultBranchProvider{branch: "main"}
+	executor := &stubMergeBaseGitExecutor{
+		results: map[string]stubMergeBaseExecResult{
+			"remote show origin":                    {out: "  HEAD branch: develop\n"},
+			"symbolic-ref refs/remotes/origin/HEAD": {out: "refs/remotes/origin/develop\n"},
+		},
+	}
+	resolver := control.NewMergeBaseResolverWithExecutor(t.TempDir(), provider, executor)
+
+	flagMergeBaseBranch = "release"
+	result := resolveControlMergeBaseBranchWithResolver(context.Background(), resolver, "config-branch")
+	assert.Equal(t, "release", result.Branch)
+	assert.Equal(t, "cli-flag", result.Source)
+
+	flagMergeBaseBranch = ""
+	result = resolveControlMergeBaseBranchWithResolver(context.Background(), resolver, "config-branch")
+	assert.Equal(t, "config-branch", result.Branch)
+	assert.Equal(t, "config", result.Source)
+
+	result = resolveControlMergeBaseBranchWithResolver(context.Background(), resolver, "")
+	assert.Equal(t, "main", result.Branch)
+	assert.Equal(t, "github-default-branch", result.Source)
+
+	provider.err = errors.New("github api unavailable")
+	executor.results = map[string]stubMergeBaseExecResult{
+		"remote show origin":                    {err: errors.New("remote show failed")},
+		"symbolic-ref refs/remotes/origin/HEAD": {err: errors.New("origin head missing")},
+	}
+	result = resolveControlMergeBaseBranchWithResolver(context.Background(), resolver, "")
+	assert.Equal(t, "master", result.Branch)
+	assert.Equal(t, "fallback-master", result.Source)
+	assert.Contains(t, result.Warning, "fallback=master")
+}
+
 func TestIsCloseMergedBaseRef(t *testing.T) {
-	assert.True(t, isCloseMergedBaseRef("master"))
-	assert.True(t, isCloseMergedBaseRef("integration/main"))
-	assert.True(t, isCloseMergedBaseRef("integration/feature-x"))
-	assert.True(t, isCloseMergedBaseRef(" integration/main "))
-	assert.False(t, isCloseMergedBaseRef("main"))
-	assert.False(t, isCloseMergedBaseRef("feature/foo"))
-	assert.False(t, isCloseMergedBaseRef(""))
+	assert.True(t, control.IsCloseMergedBaseRef("main", "main"))
+	assert.True(t, control.IsCloseMergedBaseRef("integration/main", "main"))
+	assert.True(t, control.IsCloseMergedBaseRef("integration/feature-x", "main"))
+	assert.True(t, control.IsCloseMergedBaseRef(" integration/main ", "main"))
+	assert.False(t, control.IsCloseMergedBaseRef("master", "main"))
+	assert.False(t, control.IsCloseMergedBaseRef("feature/foo", "main"))
+	assert.False(t, control.IsCloseMergedBaseRef("", "main"))
+}
+
+type stubMergeBaseDefaultBranchProvider struct {
+	branch string
+	err    error
+}
+
+func (s *stubMergeBaseDefaultBranchProvider) GetDefaultBranch(_ context.Context) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.branch, nil
+}
+
+type stubMergeBaseExecResult struct {
+	out string
+	err error
+}
+
+type stubMergeBaseGitExecutor struct {
+	results map[string]stubMergeBaseExecResult
+}
+
+func (s *stubMergeBaseGitExecutor) CombinedOutput(_ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	result, ok := s.results[key]
+	if !ok {
+		return nil, errors.New("unexpected git command: " + key)
+	}
+	return []byte(result.out), result.err
 }
 
 type stubGitHubControlClient struct {

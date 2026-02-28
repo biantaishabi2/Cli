@@ -87,9 +87,13 @@ niuma state-label clear --repo owner/repo --issue 325
 
 ## 新增中间态 `bot:premerged`
 
-- 语义：PR 已合入 `integration/main`，但尚未进入 `master`，不能与 `bot:done` 混淆。
+- 语义：PR 已合入 `integration/main`，但尚未进入主干 base 分支（`resolved_base_branch`），不能与 `bot:done` 混淆。
 - 允许迁移：
   - `bot:pr-reviewable -> bot:premerged`（自动）
   - `bot:premerged -> bot:done`（主干收口）
   - `bot:premerged -> bot:fix|bot:queued`（人工回退）
 - 队列约束：DAG 放行仍只消费 `bot:queued`，`bot:premerged` 不参与待开发放行。
+- 收口前提：
+  - `niuma control close-merged` 解析 `resolved_base_branch`（优先级：CLI > config > GitHub 默认分支 > git probe > fallback `master`）。
+  - 仅当 `base.ref` 属于 `{resolved_base_branch, integration/*}` 时执行收口，防止非目标分支误触发。
+  - 对于默认分支为 `main` 的仓库，满足上述条件后可自动完成 `bot:premerged -> bot:done`。
