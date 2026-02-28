@@ -1043,7 +1043,8 @@ func (o *Orchestrator) buildPhasePromptInput(
 			historyCtx, err = o.collectPRHistoryContext(ctx, resolvedPR)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史失败（phase=%s）：%v\n", resolvedPR, phase, err)
-			} else {
+			}
+			if historyCtx != nil {
 				input.ReviewComment = renderPRHistory(historyCtx.reviewSections, historyCtx.commentSections)
 				input.ReviewSummary = summarizeReviews(historyCtx.reviews)
 				trimmedReasons = append(trimmedReasons, historyCtx.trimmedReasons...)
@@ -1090,14 +1091,17 @@ func (o *Orchestrator) readPRBodyForPrompt(ctx context.Context, prNumber int) (s
 }
 
 func (o *Orchestrator) collectPRHistoryContext(ctx context.Context, prNumber int) (*prHistoryContext, error) {
-	reviews, err := o.github.ListPRReviews(ctx, prNumber)
-	if err != nil {
-		return nil, fmt.Errorf("获取 PR reviews 失败: %w", err)
+	// reviews/comments 独立拉取，任一失败时保留另一侧可用上下文，避免“全有或全无”。
+	reviews, reviewsErr := o.github.ListPRReviews(ctx, prNumber)
+	comments, commentsErr := o.github.ListComments(ctx, prNumber)
+	if reviewsErr != nil && commentsErr != nil {
+		return nil, fmt.Errorf("获取 PR reviews 失败: %v；获取 PR comments 失败: %w", reviewsErr, commentsErr)
 	}
-
-	comments, err := o.github.ListComments(ctx, prNumber)
-	if err != nil {
-		return nil, fmt.Errorf("获取 PR comments 失败: %w", err)
+	if reviews == nil {
+		reviews = []*github.PullRequestReview{}
+	}
+	if comments == nil {
+		comments = []*github.IssueComment{}
 	}
 
 	// 显式按创建时间排序，避免依赖 API 返回顺序。
@@ -1140,7 +1144,18 @@ func (o *Orchestrator) collectPRHistoryContext(ctx context.Context, prNumber int
 		history.commentSections = append(history.commentSections, fmt.Sprintf("[PR Comment]\n%s", body))
 	}
 
-	return history, nil
+	var err error
+	if reviewsErr != nil {
+		err = fmt.Errorf("获取 PR reviews 失败: %w", reviewsErr)
+	}
+	if commentsErr != nil {
+		if err != nil {
+			err = fmt.Errorf("%w；获取 PR comments 失败: %v", err, commentsErr)
+		} else {
+			err = fmt.Errorf("获取 PR comments 失败: %w", commentsErr)
+		}
+	}
+	return history, err
 }
 
 func renderPRHistory(reviewSections, commentSections []string) string {

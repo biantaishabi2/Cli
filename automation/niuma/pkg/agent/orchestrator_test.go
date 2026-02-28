@@ -38,6 +38,30 @@ func (m *diffFailureGitHub) GetPRDiff(_ context.Context, _ int) (string, error) 
 	return "", fmt.Errorf("diff unavailable")
 }
 
+type reviewFailureGitHub struct {
+	*MockGitHub
+	failPR int
+}
+
+func (m *reviewFailureGitHub) ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error) {
+	if number == m.failPR {
+		return nil, fmt.Errorf("reviews unavailable")
+	}
+	return m.MockGitHub.ListPRReviews(ctx, number)
+}
+
+type prCommentFailureGitHub struct {
+	*MockGitHub
+	failPR int
+}
+
+func (m *prCommentFailureGitHub) ListComments(ctx context.Context, issueNumber int) ([]*github.IssueComment, error) {
+	if issueNumber == m.failPR {
+		return nil, fmt.Errorf("comments unavailable")
+	}
+	return m.MockGitHub.ListComments(ctx, issueNumber)
+}
+
 func TestDoPlanDraft_HappyPath(t *testing.T) {
 	mockAI := ai.NewMockProvider(`{"summary": "修复登录", "approach": "编码处理", "affected_files": ["auth.go"]}`)
 	orch, mockGH := setupOrchestrator(mockAI)
@@ -1268,4 +1292,58 @@ func TestDoReview_DiffFailureDegradesButStillBuildsPrompt(t *testing.T) {
 
 	labels := baseGH.Labels[1]
 	assert.Contains(t, labels, string(state.StatePRReviewable))
+}
+
+func TestBuildPhasePromptInput_PRHistoryPartialFailure_KeepCommentsWhenReviewsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 10,
+	}, "PR created")
+	baseGH.PRs = append(baseGH.PRs, &github.PullRequest{
+		Number: github.Ptr(10),
+		Body:   github.Ptr("PR body"),
+	})
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithReviewErr := &reviewFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithReviewErr, ai.NewMockProvider("unused"), 1)
+	input, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, "plan", 10)
+	require.NoError(t, err)
+
+	assert.Contains(t, input.ReviewComment, "comment history", "reviews 失败时仍应保留 comments 历史")
+	assert.NotContains(t, input.ReviewComment, "review history", "reviews 失败时不应伪造 reviews 内容")
+	assert.Contains(t, input.ReviewSummary, "(无 review 意见)")
+}
+
+func TestBuildPhasePromptInput_PRHistoryPartialFailure_KeepReviewsWhenCommentsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 10,
+	}, "PR created")
+	baseGH.PRs = append(baseGH.PRs, &github.PullRequest{
+		Number: github.Ptr(10),
+		Body:   github.Ptr("PR body"),
+	})
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithCommentErr := &prCommentFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithCommentErr, ai.NewMockProvider("unused"), 1)
+	input, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, "plan", 10)
+	require.NoError(t, err)
+
+	assert.Contains(t, input.ReviewComment, "review history", "comments 失败时仍应保留 reviews 历史")
+	assert.NotContains(t, input.ReviewComment, "comment history", "comments 失败时不应注入 comments 内容")
+	assert.Contains(t, input.ReviewSummary, "共 1 条 review")
 }
