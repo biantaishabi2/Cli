@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestParseMaxRetries_NonNumericInput(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		result, err := parseMaxRetries("abc")
 		assert.NoError(t, err)
-		assert.Equal(t, 2, result, "非数字输入应回退默认值 2")
+		assert.Equal(t, defaultGateMaxRetries, result, "非数字输入应回退默认值")
 	})
 	assert.True(t, strings.Contains(stderr, "WARNING"), "非数字输入应输出 WARNING")
 	assert.True(t, strings.Contains(stderr, "abc"), "WARNING 应包含原始输入值")
@@ -51,16 +52,16 @@ func TestParseMaxRetries_EmptyInput(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		result, err := parseMaxRetries("")
 		assert.NoError(t, err)
-		assert.Equal(t, 2, result, "空值输入应回退默认值 2")
+		assert.Equal(t, defaultGateMaxRetries, result, "空值输入应回退默认值")
 	})
 	assert.True(t, strings.Contains(stderr, "WARNING"), "空值输入应输出 WARNING")
 }
 
 func TestParseMaxRetries_DefaultValueUnchanged(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		result, err := parseMaxRetries("2")
+		result, err := parseMaxRetries(strconv.Itoa(defaultGateMaxRetries))
 		assert.NoError(t, err)
-		assert.Equal(t, 2, result, "默认值语义应保持不变")
+		assert.Equal(t, defaultGateMaxRetries, result, "默认值语义应保持不变")
 	})
 	assert.Empty(t, stderr, "默认值输入不应输出 warning")
 }

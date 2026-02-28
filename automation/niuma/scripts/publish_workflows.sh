@@ -57,6 +57,11 @@ if [[ "$MODE" != "entry" && "$MODE" != "full" ]]; then
   exit 1
 fi
 
+if [[ "$REPO" == "$MEN_TARGET_REPO" && "$MODE" != "full" ]]; then
+  echo "men 回归仓库必须使用 --mode full，确保 reusable workflow 修复已同步" >&2
+  exit 1
+fi
+
 ENTRY_FILES=(
   "niuma-plan.yml"
   "niuma-implement.yml"
@@ -141,6 +146,31 @@ verify_remote_file() {
   echo "verified: $REPO/$remote_path"
 }
 
+fetch_remote_text() {
+  local remote_path="$1"
+  gh api "repos/$REPO/contents/$remote_path" --jq '.content' | tr -d '\n' | base64 -d
+}
+
+verify_implement_self_check_contract() {
+  local content=""
+  content="$(fetch_remote_text ".github/workflows/niuma-implement-reusable.yml")"
+
+  if ! grep -Fq 'working-directory: ${{ github.workspace }}/merge-result' <<< "$content"; then
+    echo "verify failed: implement self-check 缺少 merge-result working-directory" >&2
+    return 1
+  fi
+  if ! grep -Fq '--repo-dir "$MERGE_RESULT_DIR"' <<< "$content"; then
+    echo "verify failed: implement self-check 缺少 --repo-dir \"\$MERGE_RESULT_DIR\"" >&2
+    return 1
+  fi
+  if grep -Fq '--repo-dir "$WORKSPACE"' <<< "$content"; then
+    echo "verify failed: implement self-check 不应回落到 workspace 基线" >&2
+    return 1
+  fi
+
+  echo "verified: implement self-check merge-result baseline contract"
+}
+
 confirm_target_repo
 
 for file in "${ENTRY_FILES[@]}"; do
@@ -166,6 +196,9 @@ if [[ "$SKIP_VERIFY" -eq 0 ]]; then
     remote_path="${pair##*::}"
     verify_remote_file "$local_file" "$remote_path"
   done
+  if [[ "$MODE" == "full" ]]; then
+    verify_implement_self_check_contract
+  fi
   echo "post-publish verification passed: ${#PUBLISHED_PAIRS[@]} files"
 fi
 

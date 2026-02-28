@@ -146,8 +146,18 @@ jobs:
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+          WORKSPACE_ROOT: ${{ github.workspace }}
           MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
         run: |
+          if [ ! -d "$MERGE_RESULT_DIR" ]; then
+            echo "::error::merge-result 基线不存在: $MERGE_RESULT_DIR"
+            exit 1
+          fi
+          if [ "$MERGE_RESULT_DIR" = "$WORKSPACE_ROOT" ]; then
+            echo "::error::self-check gate 禁止回落到 workspace 基线: $WORKSPACE_ROOT"
+            exit 1
+          fi
+
           MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then
             MAX_RETRIES="${{ inputs.gate_max_retries }}"

@@ -32,7 +32,7 @@ const defaultGateMaxRetries = 2
 
 func init() {
 	gateCmd.AddCommand(gateRunCmd)
-	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", "2", "gate 自动修复最大重试次数")
+	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", strconv.Itoa(defaultGateMaxRetries), "gate 自动修复最大重试次数")
 	gateRunCmd.Flags().BoolVar(&flagGateSelfCheck, "self-check", false, "self-check 模式：gate 失败时不设标签/不写 issue 评论，仅写 PR review")
 }
 

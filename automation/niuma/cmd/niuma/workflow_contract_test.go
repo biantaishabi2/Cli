@@ -129,6 +129,9 @@ func TestWorkflowContract_ImplementSelfCheckUsesMergeResultBaseline(t *testing.T
 	assert.Contains(t, implementContent, "- name: Self-check gate")
 	assert.Contains(t, implementContent, "working-directory: ${{ github.workspace }}/merge-result")
 	assert.Contains(t, implementContent, "MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result")
+	assert.Contains(t, implementContent, "WORKSPACE_ROOT: ${{ github.workspace }}")
+	assert.Contains(t, implementContent, "merge-result 基线不存在")
+	assert.Contains(t, implementContent, "self-check gate 禁止回落到 workspace 基线")
 	assert.Contains(t, implementContent, "--repo-dir \"$MERGE_RESULT_DIR\"")
 
 	selfCheckStart := strings.Index(implementContent, "- name: Self-check gate")
