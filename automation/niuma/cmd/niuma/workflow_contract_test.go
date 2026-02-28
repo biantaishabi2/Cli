@@ -113,6 +113,10 @@ func TestWorkflowContract_ImplementGateUsesUnifiedCommand(t *testing.T) {
 	assert.Contains(t, content, "--self-check", "implement workflow 应使用 self-check 模式")
 	assert.Equal(t, 1, strings.Count(content, "\"$NIUMA_BIN\" gate run"),
 		"implement self-check 只能执行一次 gate run，禁止 final escalation 二次执行导致 retry_count 增长")
+	assert.NotContains(t, content, "for ATTEMPT in $(seq 1 $((MAX_RETRIES + 1))); do",
+		"implement self-check 禁止外层循环重复执行 gate run")
+	assert.NotContains(t, content, "\"$NIUMA_BIN\" iterate",
+		"implement self-check 禁止在 gate 步骤内回落到 iterate/workspace 路径分支")
 	assert.NotContains(t, content, "--max-retries 0",
 		"final escalation 不应通过额外 gate run 触发，避免重复增长 retry_count")
 }
@@ -122,11 +126,18 @@ func TestWorkflowContract_ImplementSelfCheckUsesMergeResultBaseline(t *testing.T
 	reviewContent := loadWorkflowFile(t, "niuma-review-reusable.yml")
 
 	assert.Contains(t, implementContent, "Prepare merge-result baseline for self-check gate")
+	assert.Contains(t, implementContent, "- name: Self-check gate")
 	assert.Contains(t, implementContent, "working-directory: ${{ github.workspace }}/merge-result")
 	assert.Contains(t, implementContent, "MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result")
 	assert.Contains(t, implementContent, "--repo-dir \"$MERGE_RESULT_DIR\"")
-	assert.NotContains(t, implementContent, "--pr \"$PR_NUMBER\" --repo-dir \"$WORKSPACE\" \\\n                 --max-retries \"$MAX_RETRIES\" --self-check",
+
+	selfCheckStart := strings.Index(implementContent, "- name: Self-check gate")
+	require.NotEqual(t, -1, selfCheckStart, "必须存在 Self-check gate 步骤")
+	selfCheckSection := implementContent[selfCheckStart:]
+	assert.NotContains(t, selfCheckSection, "--repo-dir \"$WORKSPACE\"",
 		"implement self-check gate 禁止回退到 workspace 基线")
+	assert.NotContains(t, selfCheckSection, "WORKSPACE:",
+		"self-check gate 环境变量不应暴露 workspace 基线路径")
 	assert.Contains(t, reviewContent, "./.github/scripts/niuma-test-gate.sh",
 		"review gate 必须继续走统一 gate 脚本基线")
 }

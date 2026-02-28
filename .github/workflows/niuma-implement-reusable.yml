@@ -138,7 +138,7 @@ jobs:
           rm -rf "$MERGE_RESULT_DIR"
           git -C "$SOURCE_REPO_DIR" worktree add --force "$MERGE_RESULT_DIR" HEAD
 
-      - name: Self-check loop (gate + iterate)
+      - name: Self-check gate
         if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
         working-directory: ${{ github.workspace }}/merge-result
         env:
@@ -146,7 +146,6 @@ jobs:
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-          WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
           MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
         run: |
           MAX_RETRIES=2
@@ -156,22 +155,7 @@ jobs:
             echo "::warning::gate_max_retries 非法: '${{ inputs.gate_max_retries }}'，回退为 2"
           fi
 
-          for ATTEMPT in $(seq 1 $((MAX_RETRIES + 1))); do
-            if "$NIUMA_BIN" gate run \
-                 --repo "$REPO" --issue "$ISSUE_NUMBER" \
-                 --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_DIR" \
-                 --max-retries "$MAX_RETRIES" --self-check; then
-              echo "Gate passed on attempt $ATTEMPT"
-              exit 0
-            fi
-
-            if [ "$ATTEMPT" -gt "$MAX_RETRIES" ]; then
-              echo "Gate failed after $MAX_RETRIES retries; final escalation is handled by gate run."
-              exit 1
-            fi
-
-            echo "Gate failed (attempt $ATTEMPT/$MAX_RETRIES), running iterate..."
-            "$NIUMA_BIN" iterate \
-              --repo "$REPO" --issue "$ISSUE_NUMBER" \
-              --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" || true
-          done
+          "$NIUMA_BIN" gate run \
+            --repo "$REPO" --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_DIR" \
+            --max-retries "$MAX_RETRIES" --self-check
