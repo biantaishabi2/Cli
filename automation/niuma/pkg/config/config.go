@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -31,6 +32,7 @@ type LabelGuardConfig struct {
 type ControlConfig struct {
 	TaskCtlBin              string        `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
 	MergeStrategy           string        `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	MergeBaseBranch         string        `yaml:"merge_base_branch"`         // 收口 PR base 分支（可选，默认自动探测）
 	IntegrationBranchPrefix string        `yaml:"integration_branch_prefix"` // 默认 integration/batch-
 	MaxOldBranches          int           `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
 	MinPRsForIntegration    int           `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
@@ -109,12 +111,12 @@ func (c *DagSyncConfig) GetSkippedEdgeThresholdRatio() float64 {
 
 // WorkflowConfig 工作流配置
 type WorkflowConfig struct {
-	RequirePlanApproval   bool     `yaml:"require_plan_approval"`   // 方案定稿后是否需要人工审批
-	MaxIterateRounds      int      `yaml:"max_iterate_rounds"`      // 最大自动迭代轮数（0=默认3）
-	MaxDiscussionRounds   int      `yaml:"max_discussion_rounds"`   // discuss 单次 run 的最大讨论轮数（默认 5）
-	DiscussTimeoutMinutes int      `yaml:"discuss_timeout_minutes"` // discuss 命令超时（分钟，默认 20）
-	VisibleRoundInterval  int      `yaml:"visible_round_interval"`  // 可见评论节流：每 N 轮可见一次（默认 1）
-	VisibleOnlyOnDiff     *bool    `yaml:"visible_only_on_diff"`    // 可见评论节流：仅差异变化时评论（默认 true）
+	RequirePlanApproval    bool     `yaml:"require_plan_approval"`    // 方案定稿后是否需要人工审批
+	MaxIterateRounds       int      `yaml:"max_iterate_rounds"`       // 最大自动迭代轮数（0=默认3）
+	MaxDiscussionRounds    int      `yaml:"max_discussion_rounds"`    // discuss 单次 run 的最大讨论轮数（默认 5）
+	DiscussTimeoutMinutes  int      `yaml:"discuss_timeout_minutes"`  // discuss 命令超时（分钟，默认 20）
+	VisibleRoundInterval   int      `yaml:"visible_round_interval"`   // 可见评论节流：每 N 轮可见一次（默认 1）
+	VisibleOnlyOnDiff      *bool    `yaml:"visible_only_on_diff"`     // 可见评论节流：仅差异变化时评论（默认 true）
 	AllowedPrefixes        []string `yaml:"allowed_prefixes"`         // 允许修改的路径前缀
 	ImplementTriggerLabels []string `yaml:"implement_trigger_labels"` // implement 流程的触发标签（默认 ["bot:plan-final"]）
 }
@@ -394,6 +396,11 @@ func defaultConfig() *Config {
 }
 
 func applyConfigDefaults(cfg *Config) {
+	cfg.Control.MergeBaseBranch = strings.TrimSpace(cfg.Control.MergeBaseBranch)
+	if cfg.Control.MergeBaseBranch != "" && !isValidControlBranchName(cfg.Control.MergeBaseBranch) {
+		cfg.Control.MergeBaseBranch = ""
+	}
+
 	if cfg.Control.DagSync.PollInterval == "" {
 		cfg.Control.DagSync.PollInterval = "5m"
 	}
@@ -478,4 +485,12 @@ func applyEnvOverrides(cfg *Config) {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func isValidControlBranchName(branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false
+	}
+	return !strings.ContainsAny(branch, " \t\r\n")
 }

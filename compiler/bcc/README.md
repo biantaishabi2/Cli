@@ -225,6 +225,8 @@ bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s 
 bcc bdd seed --source docs/backend-trace/bdd-seed-input --output output/seed -s fix
 ```
 
+`--source` 目录只会消费 `*.yaml` / `*.yml` 文件；`*.json`、`*.md` 等非 YAML 文件会被忽略。若目录里没有任何 YAML source，命令会直接报错退出。
+
 `--prompt-template` 当前为 DSL 模板文件（占位符替换），不是模型提示词执行入口。
 `-s check` 会产出 `quality-check.json`，有不合格场景时返回非零；`-s fix` 会尝试修复并产出 `quality-fix.json`。
 

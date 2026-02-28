@@ -2152,8 +2152,8 @@ func (c *Controller) ResolveIntegrationBranchForIssues(issueNums []int) (string,
 	return resolvedBranch, nil
 }
 
-// Merge 将 integration 分支快进合并到主干（默认 master）。
-// 人工批准后执行：integration/{slug} -> master。
+// Merge 将 integration 分支合入目标 base 分支（由构建器 baseBranch 决定）。
+// 人工批准后执行：integration/{slug} -> <base>。
 func (c *Controller) Merge(ctx context.Context, integrationBranch string) error {
 	if c.builder == nil {
 		return fmt.Errorf("IntegrationBuilder 未配置")
@@ -2162,18 +2162,19 @@ func (c *Controller) Merge(ctx context.Context, integrationBranch string) error 
 		return fmt.Errorf("GitHubOps 未配置")
 	}
 
-	integrationBranch = strings.TrimSpace(integrationBranch)
-	if integrationBranch == "" {
+	headRef := strings.TrimSpace(integrationBranch)
+	if headRef == "" {
 		return fmt.Errorf("integration 分支名不能为空")
 	}
-	if !strings.HasPrefix(integrationBranch, "integration/") {
-		return fmt.Errorf("非法 integration 分支 %q（必须以 integration/ 开头）", integrationBranch)
+	if !strings.HasPrefix(headRef, "integration/") {
+		return fmt.Errorf("非法 integration 分支 %q（必须以 integration/ 开头）", headRef)
 	}
 
-	baseBranch := strings.TrimSpace(c.builder.baseBranch)
-	if baseBranch == "" {
-		baseBranch = "master"
+	baseRef := strings.TrimSpace(c.builder.baseBranch)
+	if baseRef == "" {
+		baseRef = fallbackMergeBaseBranch
 	}
+	prRefKey := buildPRRefKey(headRef, baseRef)
 
 	statusOut, err := c.builder.gitOutput("status", "--porcelain")
 	if err != nil {
@@ -2186,39 +2187,43 @@ func (c *Controller) Merge(ctx context.Context, integrationBranch string) error 
 	if err := c.builder.git("fetch", "origin"); err != nil {
 		return fmt.Errorf("拉取远端分支失败: %w", err)
 	}
-	if !c.builder.remoteBranchExists(integrationBranch) {
-		return fmt.Errorf("远端分支不存在: origin/%s", integrationBranch)
+	if !c.builder.remoteBranchExists(headRef) {
+		return fmt.Errorf("远端分支不存在: origin/%s", headRef)
 	}
-	if !c.builder.remoteBranchExists(baseBranch) {
-		return fmt.Errorf("远端分支不存在: origin/%s", baseBranch)
+	if !c.builder.remoteBranchExists(baseRef) {
+		return fmt.Errorf("远端分支不存在: origin/%s", baseRef)
 	}
 
 	// 已包含时直接 no-op，保持幂等。
-	if err := c.builder.git("merge-base", "--is-ancestor", "origin/"+integrationBranch, "origin/"+baseBranch); err == nil {
-		fmt.Printf("[control] origin/%s 已包含 origin/%s，merge no-op\n", baseBranch, integrationBranch)
+	if err := c.builder.git("merge-base", "--is-ancestor", "origin/"+headRef, "origin/"+baseRef); err == nil {
+		fmt.Printf("[control] action=merge pr_ref=%s origin/%s 已包含 origin/%s，merge no-op\n", prRefKey, baseRef, headRef)
 		return nil
 	}
 
-	existing, err := c.github.FindOpenPR(ctx, integrationBranch, baseBranch)
+	existing, err := c.github.FindOpenPR(ctx, headRef, baseRef)
 	if err != nil {
 		return fmt.Errorf("查询已有收口 PR 失败: %w", err)
 	}
 	if existing != nil {
-		fmt.Printf("[control] 复用收口 PR #%d: %s (%s -> %s)\n", existing.Number, existing.URL, integrationBranch, baseBranch)
+		fmt.Printf("[control] action=merge pr_ref=%s 复用收口 PR #%d: %s (%s -> %s)\n", prRefKey, existing.Number, existing.URL, headRef, baseRef)
 		return nil
 	}
 
-	title := buildIntegrationMergePRTitle(integrationBranch, baseBranch)
-	body := buildIntegrationMergePRBody(integrationBranch, baseBranch)
-	created, err := c.github.CreatePR(ctx, title, body, integrationBranch, baseBranch)
+	title := buildIntegrationMergePRTitle(headRef, baseRef)
+	body := buildIntegrationMergePRBody(headRef, baseRef)
+	created, err := c.github.CreatePR(ctx, title, body, headRef, baseRef)
 	if err != nil {
 		return fmt.Errorf("创建收口 PR 失败: %w", err)
 	}
 	if created == nil {
 		return fmt.Errorf("创建收口 PR 失败: 返回结果为空")
 	}
-	fmt.Printf("[control] 已创建收口 PR #%d: %s (%s -> %s)\n", created.Number, created.URL, integrationBranch, baseBranch)
+	fmt.Printf("[control] action=merge pr_ref=%s 已创建收口 PR #%d: %s (%s -> %s)\n", prRefKey, created.Number, created.URL, headRef, baseRef)
 	return nil
+}
+
+func buildPRRefKey(head, base string) string {
+	return strings.TrimSpace(head) + "->" + strings.TrimSpace(base)
 }
 
 func buildIntegrationMergePRTitle(integrationBranch, baseBranch string) string {
@@ -2231,6 +2236,19 @@ func buildIntegrationMergePRBody(integrationBranch, baseBranch string) string {
 		integrationBranch,
 		baseBranch,
 	)
+}
+
+// IsCloseMergedBaseRef 判断 close-merged 是否允许执行收口。
+// 仅允许 resolved base 分支本身，以及 integration/* 分支。
+func IsCloseMergedBaseRef(baseRef, resolvedBaseBranch string) bool {
+	baseRef = strings.TrimSpace(baseRef)
+	if baseRef == "" {
+		return false
+	}
+	if strings.TrimSpace(resolvedBaseBranch) != "" && baseRef == strings.TrimSpace(resolvedBaseBranch) {
+		return true
+	}
+	return strings.HasPrefix(baseRef, "integration/")
 }
 
 // FormatStatus 格式化输出控制状态

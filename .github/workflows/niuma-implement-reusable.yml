@@ -146,20 +146,55 @@ jobs:
             echo "pr_number=" >> $GITHUB_OUTPUT
           fi
 
-      - name: Self-check loop (gate + iterate)
+      - name: Prepare merge-result baseline for self-check gate
+        if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
+        env:
+          SOURCE_REPO_DIR: ${{ steps.resolve_dir.outputs.repo_dir }}
+          MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
+        run: |
+          if [ ! -d "$SOURCE_REPO_DIR" ]; then
+            echo "::error::repo_dir 不存在: $SOURCE_REPO_DIR"
+            exit 1
+          fi
+          if git -C "$SOURCE_REPO_DIR" worktree list --porcelain | awk '/^worktree /{print $2}' | grep -Fxq "$MERGE_RESULT_DIR"; then
+            git -C "$SOURCE_REPO_DIR" worktree remove "$MERGE_RESULT_DIR" --force || true
+          fi
+          rm -rf "$MERGE_RESULT_DIR"
+          git -C "$SOURCE_REPO_DIR" worktree add --force "$MERGE_RESULT_DIR" HEAD
+
+      - name: Self-check gate
         id: self_check_loop
         if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
+        working-directory: ${{ github.workspace }}/merge-result
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
-          WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
           DEFAULT_PR_RUN_MODE: ${{ inputs.default_pr_run_mode }}
           CRITICAL_REGRESSION_REQUIRED: ${{ inputs.critical_regression_required }}
           INFRA_RETRY_MAX: ${{ inputs.infra_retry_max }}
           HIGH_RISK_PATHS: ${{ inputs.high_risk_paths }}
+          WORKSPACE_ROOT: ${{ github.workspace }}
+          MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
         run: |
+          if [ ! -d "$MERGE_RESULT_DIR" ]; then
+            echo "::error::merge-result 基线不存在: $MERGE_RESULT_DIR"
+            exit 1
+          fi
+          MERGE_RESULT_REALPATH="$(cd "$MERGE_RESULT_DIR" && pwd -P)"
+          WORKSPACE_ROOT_REALPATH="$(cd "$WORKSPACE_ROOT" && pwd -P)"
+          CURRENT_DIR_REALPATH="$(pwd -P)"
+
+          if [ "$MERGE_RESULT_REALPATH" = "$WORKSPACE_ROOT_REALPATH" ]; then
+            echo "::error::self-check gate 禁止回落到 workspace 基线: $WORKSPACE_ROOT"
+            exit 1
+          fi
+          if [ "$CURRENT_DIR_REALPATH" != "$MERGE_RESULT_REALPATH" ]; then
+            echo "::error::self-check gate 当前目录必须是 merge-result: current=$CURRENT_DIR_REALPATH expected=$MERGE_RESULT_REALPATH"
+            exit 1
+          fi
+
           MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then
             MAX_RETRIES="${{ inputs.gate_max_retries }}"
@@ -167,26 +202,7 @@ jobs:
             echo "::warning::gate_max_retries 非法: '${{ inputs.gate_max_retries }}'，回退为 2"
           fi
 
-          for ATTEMPT in $(seq 1 $((MAX_RETRIES + 1))); do
-            if "$NIUMA_BIN" gate run \
-                 --repo "$REPO" --issue "$ISSUE_NUMBER" \
-                 --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" \
-                 --max-retries "$MAX_RETRIES" --self-check; then
-              echo "Gate passed on attempt $ATTEMPT"
-              exit 0
-            fi
-
-            if [ "$ATTEMPT" -gt "$MAX_RETRIES" ]; then
-              echo "Gate failed after $MAX_RETRIES retries, running final escalation gate..."
-              "$NIUMA_BIN" gate run \
-                --repo "$REPO" --issue "$ISSUE_NUMBER" \
-                --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" \
-                --max-retries 0
-              exit 1
-            fi
-
-            echo "Gate failed (attempt $ATTEMPT/$MAX_RETRIES), running iterate..."
-            "$NIUMA_BIN" iterate \
-              --repo "$REPO" --issue "$ISSUE_NUMBER" \
-              --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" || true
-          done
+          "$NIUMA_BIN" gate run \
+            --repo "$REPO" --issue "$ISSUE_NUMBER" \
+            --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_REALPATH" \
+            --max-retries "$MAX_RETRIES" --self-check

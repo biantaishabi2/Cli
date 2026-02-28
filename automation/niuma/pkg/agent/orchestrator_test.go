@@ -30,6 +30,38 @@ func setupOrchestrator(mockAI *ai.MockProvider) (*Orchestrator, *MockGitHub) {
 	return orch, mockGH
 }
 
+type diffFailureGitHub struct {
+	*MockGitHub
+}
+
+func (m *diffFailureGitHub) GetPRDiff(_ context.Context, _ int) (string, error) {
+	return "", fmt.Errorf("diff unavailable")
+}
+
+type reviewFailureGitHub struct {
+	*MockGitHub
+	failPR int
+}
+
+func (m *reviewFailureGitHub) ListPRReviews(ctx context.Context, number int) ([]*github.PullRequestReview, error) {
+	if number == m.failPR {
+		return nil, fmt.Errorf("reviews unavailable")
+	}
+	return m.MockGitHub.ListPRReviews(ctx, number)
+}
+
+type prCommentFailureGitHub struct {
+	*MockGitHub
+	failPR int
+}
+
+func (m *prCommentFailureGitHub) ListComments(ctx context.Context, issueNumber int) ([]*github.IssueComment, error) {
+	if issueNumber == m.failPR {
+		return nil, fmt.Errorf("comments unavailable")
+	}
+	return m.MockGitHub.ListComments(ctx, issueNumber)
+}
+
 func TestDoPlanDraft_HappyPath(t *testing.T) {
 	mockAI := ai.NewMockProvider(`{"summary": "修复登录", "approach": "编码处理", "affected_files": ["auth.go"]}`)
 	orch, mockGH := setupOrchestrator(mockAI)
@@ -232,14 +264,15 @@ func (p *writeFileProvider) Execute(_ context.Context, _ string, _ ...ai.Option)
 }
 
 func TestDoImplement_SubIssueCreatePR_BaseIntegrationMain(t *testing.T) {
+	requireLocalPushSupport(t)
+
 	repoDir := initTestRepo(t)
 	git := gitBin()
 	remoteDir := filepath.Join(t.TempDir(), "remote.git")
 
 	// 预置 integration/main 分支，确保 DAG 子 issue 可从该基线创建 worktree。
-	cmd := exec.Command(git, "init", "--bare", remoteDir)
-	require.NoError(t, cmd.Run())
-	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 	cmd = exec.Command(git, "push", "-u", "origin", "master")
@@ -280,14 +313,15 @@ func TestDoImplement_SubIssueCreatePR_BaseIntegrationMain(t *testing.T) {
 }
 
 func TestDoImplement_SubIssueCreatePR_AutoEnsureIntegrationMain(t *testing.T) {
+	requireLocalPushSupport(t)
+
 	repoDir := initTestRepo(t)
 	git := gitBin()
 	remoteDir := filepath.Join(t.TempDir(), "remote.git")
 
 	// 仅准备远端 master，故意不创建 integration/main。
-	cmd := exec.Command(git, "init", "--bare", remoteDir)
-	require.NoError(t, cmd.Run())
-	cmd = exec.Command(git, "remote", "add", "origin", remoteDir)
+	initBareRemote(t, remoteDir)
+	cmd := exec.Command(git, "remote", "add", "origin", asFileRemote(remoteDir))
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 	cmd = exec.Command(git, "push", "-u", "origin", "master")
@@ -766,6 +800,44 @@ func TestBuildPRHistory_ReviewError(t *testing.T) {
 	assert.Contains(t, err.Error(), "获取 PR reviews 失败")
 }
 
+func TestBuildPRHistory_PartialFailure_KeepCommentsWhenReviewsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithReviewErr := &reviewFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithReviewErr, ai.NewMockProvider("unused"), 1)
+
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+	assert.Contains(t, history, "comment history", "reviews 失败时仍应保留 comments 历史")
+	assert.NotContains(t, history, "review history", "reviews 失败时不应注入 reviews 内容")
+}
+
+func TestBuildPRHistory_PartialFailure_KeepReviewsWhenCommentsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithCommentErr := &prCommentFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithCommentErr, ai.NewMockProvider("unused"), 1)
+
+	history, err := orch.buildPRHistory(context.Background(), 10)
+	require.NoError(t, err)
+	assert.Contains(t, history, "review history", "comments 失败时仍应保留 reviews 历史")
+	assert.NotContains(t, history, "comment history", "comments 失败时不应注入 comments 内容")
+}
+
 func TestDoReview_ReadsPRHistory(t *testing.T) {
 	// 验证 DoReview 将 PR 历史传递给 AI
 	mockAI := ai.NewMockProvider(`{"approved": true, "summary": "代码良好", "issues": []}`)
@@ -1104,10 +1176,9 @@ func TestDoDebateABDiscussion_LargeCommentScenario(t *testing.T) {
 	assert.Equal(t, 0, botInPrompt, "普通 BOT 评论应全部被过滤")
 }
 
-// ===== #423 DoImplement PR 历史注入测试 =====
+// ===== Prompt 上下文一致性（Issue/Plan-final/PR body + 阶段增量） =====
 
-func TestDoImplement_InjectsPRHistory(t *testing.T) {
-	// 有已存在 PR 时，DoImplement 应将 PR 历史注入 input.ReviewComment
+func TestDoImplement_InjectsPRBodyFromExistingPR(t *testing.T) {
 	mockAI := ai.NewMockProvider()
 	mockAI.SetExecuteResults("// 实现代码")
 
@@ -1117,31 +1188,23 @@ func TestDoImplement_InjectsPRHistory(t *testing.T) {
 	mockGH.SetMarker(1, &marker.Marker{
 		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
 	}, "最终方案内容")
-	// 预设已有 PR marker（模拟之前 implement 已创建过 PR）
 	mockGH.SetMarker(1, &marker.Marker{
 		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 42,
 	}, "PR created")
-
-	// 设置 PR 42 上的 review 和 comment 历史
-	mockGH.Reviews[42] = []*github.PullRequestReview{
-		{Body: github.Ptr("Gate 测试失败：缺少错误处理"), State: github.Ptr("COMMENT")},
-	}
-	mockGH.Comments[42] = []*github.IssueComment{
-		{Body: github.Ptr("已修复部分问题")},
-	}
+	mockGH.PRs = append(mockGH.PRs, &github.PullRequest{
+		Number: github.Ptr(42),
+		Body:   github.Ptr("Closes #1\n\nImplement PR Body"),
+	})
 
 	orch := NewOrchestrator(mockGH, mockAI, 1)
 	err := orch.DoImplement(context.Background(), "/tmp/work")
 	require.NoError(t, err)
 
-	// 验证 AI Execute 收到的 prompt 包含 PR 历史内容
 	lastPrompt := mockAI.LastPrompt()
-	assert.Contains(t, lastPrompt, "Gate 测试失败", "prompt 应包含 PR review 历史")
-	assert.Contains(t, lastPrompt, "已修复部分问题", "prompt 应包含 PR comment 历史")
+	assert.Contains(t, lastPrompt, "Implement PR Body", "implement prompt 应注入 PR body")
 }
 
-func TestDoImplement_NoPRHistory_WhenNoPRMarker(t *testing.T) {
-	// 无已有 PR marker 时，ReviewComment 应为空
+func TestDoImplement_NoPRMarker_DegradesWithoutPRBody(t *testing.T) {
 	mockAI := ai.NewMockProvider()
 	mockAI.SetExecuteResults("// 实现代码")
 
@@ -1151,13 +1214,174 @@ func TestDoImplement_NoPRHistory_WhenNoPRMarker(t *testing.T) {
 	mockGH.SetMarker(1, &marker.Marker{
 		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
 	}, "最终方案内容")
-	// 不设置 PR marker
 
 	orch := NewOrchestrator(mockGH, mockAI, 1)
 	err := orch.DoImplement(context.Background(), "/tmp/work")
 	require.NoError(t, err)
 
-	// 验证 AI Execute 收到的 prompt 不包含 PR 历史章节的内容区块
 	lastPrompt := mockAI.LastPrompt()
-	assert.NotContains(t, lastPrompt, "编码前必须先逐条阅读，针对其中指出的问题进行修复", "无 PR 时 prompt 不应包含历史 PR 内容区块")
+	assert.Contains(t, lastPrompt, "未读取到 PR Body，已降级继续", "无 PR marker 时应降级继续")
+}
+
+func TestBuildPhasePromptInput_ContextMatrixByPhase(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix prompt", "issue body")
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 20,
+	}, "PR created")
+	mockGH.PRs = append(mockGH.PRs, &github.PullRequest{
+		Number: github.Ptr(20),
+		Body:   github.Ptr("Closes #1\n\nPR body context"),
+	})
+	mockGH.Reviews[20] = []*github.PullRequestReview{
+		{Body: github.Ptr("history review"), State: github.Ptr("COMMENT")},
+	}
+	mockGH.Comments[20] = []*github.IssueComment{
+		{Body: github.Ptr("history comment")},
+	}
+	mockGH.PRDiffs[20] = "diff --git a/a.go b/a.go"
+
+	orch := NewOrchestrator(mockGH, ai.NewMockProvider("unused"), 1)
+	finalPlan := "plan-final content"
+
+	implementInput, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseImplement, finalPlan, 0)
+	require.NoError(t, err)
+	assert.Contains(t, implementInput.PRBody, "PR body context")
+	assert.Empty(t, implementInput.ReviewComment, "implement 阶段不应注入 PR 历史增量")
+	assert.Empty(t, implementInput.PRDiff, "implement 阶段不应注入 PR diff")
+
+	reviewInput, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, finalPlan, 20)
+	require.NoError(t, err)
+	assert.Contains(t, reviewInput.PRBody, "PR body context")
+	assert.Contains(t, reviewInput.ReviewComment, "history review")
+	assert.Contains(t, reviewInput.ReviewComment, "history comment")
+	assert.Contains(t, reviewInput.PRDiff, "diff --git")
+
+	iterateInput, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseIterate, finalPlan, 20)
+	require.NoError(t, err)
+	assert.Contains(t, iterateInput.PRBody, "PR body context")
+	assert.Contains(t, iterateInput.ReviewSummary, "共 1 条 review")
+	assert.Contains(t, iterateInput.ReviewComment, "history comment")
+	assert.Contains(t, iterateInput.PRDiff, "diff --git")
+}
+
+func TestBuildPhasePromptInput_OversizedContextTrimmed(t *testing.T) {
+	mockGH := NewMockGitHub()
+	mockGH.SetIssue(1, "Fix oversized context", "issue body")
+	mockGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 30,
+	}, "PR created")
+	mockGH.PRs = append(mockGH.PRs, &github.PullRequest{
+		Number: github.Ptr(30),
+		Body:   github.Ptr(strings.Repeat("B", 5000)),
+	})
+
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	var comments []*github.IssueComment
+	for i := 0; i < 30; i++ {
+		comments = append(comments, &github.IssueComment{
+			Body:      github.Ptr(fmt.Sprintf("comment-%d-%s", i, strings.Repeat("x", 700))),
+			CreatedAt: &github.Timestamp{Time: base.Add(time.Duration(i) * time.Minute)},
+		})
+	}
+	mockGH.Comments[30] = comments
+	mockGH.PRDiffs[30] = strings.Repeat("D", 76000)
+
+	orch := NewOrchestrator(mockGH, ai.NewMockProvider("unused"), 1)
+	input, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, "plan", 30)
+	require.NoError(t, err)
+
+	assert.True(t, input.ContextTrimmed, "超长上下文应触发裁剪标记")
+	assert.Contains(t, input.TrimmedReason, "PR body 超长已裁剪")
+	assert.Contains(t, input.TrimmedReason, "PR comments 仅保留最近 20 条")
+	assert.Contains(t, input.TrimmedReason, "软上限触发，压缩了")
+	assert.LessOrEqual(t, len([]rune(input.PRBody)), maxPromptPRBodyChars)
+	assert.NotContains(t, input.ReviewComment, "comment-0-", "旧 comment 应优先被压缩")
+}
+
+func TestDoReview_DiffFailureDegradesButStillBuildsPrompt(t *testing.T) {
+	mockAI := ai.NewMockProvider(`{"approved": true, "summary": "ok", "issues": []}`)
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix review context", "Body")
+	baseGH.SetLabel(1, string(state.StatePRCreated))
+	baseGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePlanFinal, Issue: 1, Revision: 1,
+	}, "最终方案内容")
+	baseGH.PRs = append(baseGH.PRs, &github.PullRequest{
+		Number: github.Ptr(10),
+		Body:   github.Ptr("PR body for review"),
+	})
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("pr comment history")},
+	}
+
+	ghWithDiffErr := &diffFailureGitHub{MockGitHub: baseGH}
+	orch := NewOrchestrator(ghWithDiffErr, mockAI, 1)
+	err := orch.DoReview(context.Background(), 10)
+	require.NoError(t, err, "GetPRDiff 失败应降级而非直接失败")
+
+	lastPrompt := mockAI.LastPrompt()
+	assert.Contains(t, lastPrompt, "PR body for review", "应保留 PR body")
+	assert.Contains(t, lastPrompt, "pr comment history", "应保留 PR 历史")
+	assert.Contains(t, lastPrompt, "未读取到 PR Diff，已降级继续", "diff 失败应显示降级提示")
+
+	labels := baseGH.Labels[1]
+	assert.Contains(t, labels, string(state.StatePRReviewable))
+}
+
+func TestBuildPhasePromptInput_PRHistoryPartialFailure_KeepCommentsWhenReviewsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 10,
+	}, "PR created")
+	baseGH.PRs = append(baseGH.PRs, &github.PullRequest{
+		Number: github.Ptr(10),
+		Body:   github.Ptr("PR body"),
+	})
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithReviewErr := &reviewFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithReviewErr, ai.NewMockProvider("unused"), 1)
+	input, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, "plan", 10)
+	require.NoError(t, err)
+
+	assert.Contains(t, input.ReviewComment, "comment history", "reviews 失败时仍应保留 comments 历史")
+	assert.NotContains(t, input.ReviewComment, "review history", "reviews 失败时不应伪造 reviews 内容")
+	assert.Contains(t, input.ReviewSummary, "(无 review 意见)")
+}
+
+func TestBuildPhasePromptInput_PRHistoryPartialFailure_KeepReviewsWhenCommentsFail(t *testing.T) {
+	baseGH := NewMockGitHub()
+	baseGH.SetIssue(1, "Fix partial history", "Body")
+	baseGH.SetMarker(1, &marker.Marker{
+		Type: marker.TypePRCreated, Issue: 1, Revision: 1, PR: 10,
+	}, "PR created")
+	baseGH.PRs = append(baseGH.PRs, &github.PullRequest{
+		Number: github.Ptr(10),
+		Body:   github.Ptr("PR body"),
+	})
+	baseGH.Reviews[10] = []*github.PullRequestReview{
+		{Body: github.Ptr("review history"), State: github.Ptr("COMMENT")},
+	}
+	baseGH.Comments[10] = []*github.IssueComment{
+		{Body: github.Ptr("comment history")},
+	}
+
+	ghWithCommentErr := &prCommentFailureGitHub{MockGitHub: baseGH, failPR: 10}
+	orch := NewOrchestrator(ghWithCommentErr, ai.NewMockProvider("unused"), 1)
+	input, err := orch.buildPhasePromptInput(context.Background(), promptContextPhaseReview, "plan", 10)
+	require.NoError(t, err)
+
+	assert.Contains(t, input.ReviewComment, "review history", "comments 失败时仍应保留 reviews 历史")
+	assert.NotContains(t, input.ReviewComment, "comment history", "comments 失败时不应注入 comments 内容")
+	assert.Contains(t, input.ReviewSummary, "共 1 条 review")
 }

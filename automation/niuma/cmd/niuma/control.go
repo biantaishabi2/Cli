@@ -70,6 +70,7 @@ var controlDagReconcileCmd = &cobra.Command{
 
 var flagDispatchWakeup bool  // --dispatch-wakeup
 var flagControlIssues string // --issues "40,41,42"
+var flagMergeBaseBranch string
 var flagIntegrationGateMaxRetries int
 var flagControlDagDryRun bool
 var flagPRConflictRetryThreshold int
@@ -90,6 +91,7 @@ func init() {
 	controlCmd.AddCommand(controlDagReconcileCmd)
 
 	controlMergeCmd.Flags().StringVar(&flagControlIssues, "issues", "", "要合并的 issue 编号列表（逗号分隔）")
+	controlMergeCmd.Flags().StringVar(&flagMergeBaseBranch, "merge-base-branch", "", "收口 PR base 分支（优先级最高）")
 	controlMergeCmd.MarkFlagRequired("issues")
 	controlRunCmd.Flags().IntVar(&flagIntegrationGateMaxRetries, "integration-gate-max-retries", -1, "integration gate 最大重试次数（flag > env > default=2）")
 	controlDagSyncCmd.Flags().BoolVar(&flagControlDagDryRun, "dry-run", false, "仅计算 diff，不写入 GitHub")
@@ -101,6 +103,7 @@ func init() {
 	controlRunCmd.Flags().StringVar(&flagPRConflictSmokeTestCmd, "pr-conflict-smoke-test-cmd", "", "冲突修复门禁可选 smoke test 命令（默认关闭）")
 	controlRunCmd.Flags().StringVar(&flagPRConflictElixirTestCmd, "pr-conflict-elixir-test-cmd", "mix test", "Elixir 冲突修复门禁测试命令，为空则跳过")
 	controlRunCmd.Flags().StringVar(&flagPRConflictProfile, "profile", "", "冲突修复 profile 路由（auto|<lang,...>|none，默认 auto）（env: NIUMA_PR_CONFLICT_PROFILE）")
+	controlCloseMergedCmd.Flags().StringVar(&flagMergeBaseBranch, "merge-base-branch", "", "收口 base 分支（优先级最高）")
 	controlCloseMergedCmd.Flags().BoolVar(&flagDispatchWakeup, "dispatch-wakeup", false, "close-merged 后发送 niuma.task.completed dispatch 事件")
 	controlCloseMergedCmd.MarkFlagRequired("pr")
 }
@@ -128,6 +131,7 @@ func buildController() (*control.Controller, error) {
 	if err != nil {
 		return nil, err
 	}
+	mergeBase := resolveControlMergeBaseBranch(context.Background(), repoDir, cfg.Control.MergeBaseBranch, ghClient)
 
 	// 创建 taskctl client
 	taskctlBin := ""
@@ -188,7 +192,7 @@ func buildController() (*control.Controller, error) {
 
 	builder := control.NewIntegrationBuilder(
 		repoDir,
-		"master",
+		mergeBase.Branch,
 	)
 
 	ghOps := &gitHubControlOps{client: ghClient}
@@ -263,6 +267,33 @@ func parseBackoffDurations(raw string) ([]time.Duration, error) {
 		return nil, fmt.Errorf("退避列表不能为空")
 	}
 	return backoffs, nil
+}
+
+func resolveControlMergeBaseBranch(
+	ctx context.Context,
+	repoDir string,
+	configMergeBaseBranch string,
+	provider control.MergeBaseDefaultBranchProvider,
+) control.MergeBaseResult {
+	resolver := control.NewMergeBaseResolver(repoDir, provider)
+	return resolveControlMergeBaseBranchWithResolver(ctx, resolver, configMergeBaseBranch)
+}
+
+type mergeBaseResolver interface {
+	Resolve(ctx context.Context, cliBranch, configBranch string) control.MergeBaseResult
+}
+
+func resolveControlMergeBaseBranchWithResolver(
+	ctx context.Context,
+	resolver mergeBaseResolver,
+	configMergeBaseBranch string,
+) control.MergeBaseResult {
+	result := resolver.Resolve(ctx, flagMergeBaseBranch, configMergeBaseBranch)
+	fmt.Printf("[control] resolved_base_branch=%s source=%s\n", result.Branch, result.Source)
+	if strings.TrimSpace(result.Warning) != "" {
+		fmt.Printf("[control] warning=%s\n", result.Warning)
+	}
+	return result
 }
 
 // resolveProfileFlag 按 flag > env > default 分层解析 profile 配置。
@@ -659,7 +690,7 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("解析 integration 分支失败: %w", err)
 	}
 
-	fmt.Printf("开始准备 %s -> master 的收口 PR...\n", integrationBranch)
+	fmt.Printf("开始准备 %s 的收口 PR...\n", integrationBranch)
 	if err := ctrl.Merge(ctx, integrationBranch); err != nil {
 		return fmt.Errorf("准备收口 PR 失败: %w", err)
 	}
@@ -741,10 +772,21 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	repoDir := flagWorkDir
+	if flagRepoDir != "" {
+		repoDir = flagRepoDir
+	}
+	configDir := "."
+	if flagRepoDir != "" {
+		configDir = flagRepoDir
+	}
+	cfg := config.LoadWithDefaults(configDir)
+
 	client, err := gh.NewClientFromEnv(flagRepo)
 	if err != nil {
 		return err
 	}
+	mergeBase := resolveControlMergeBaseBranch(ctx, repoDir, cfg.Control.MergeBaseBranch, client)
 
 	pr, err := client.GetPR(ctx, flagPR)
 	if err != nil {
@@ -755,8 +797,8 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	baseRef := pr.GetBase().GetRef()
-	if !isCloseMergedBaseRef(baseRef) {
-		fmt.Printf("PR #%d base=%s 非 master/integration/*，跳过收口。\n", flagPR, baseRef)
+	if !control.IsCloseMergedBaseRef(baseRef, mergeBase.Branch) {
+		fmt.Printf("PR #%d base=%s 非 %s/integration/*，跳过收口。\n", flagPR, baseRef, mergeBase.Branch)
 		return nil
 	}
 
@@ -786,16 +828,6 @@ func runControlCloseMerged(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// isCloseMergedBaseRef 判断 close-merged 是否应执行收口。
-// 当前允许 master 与 integration/*，覆盖 DAG 子任务先合入 integration 再收口的路径。
-func isCloseMergedBaseRef(baseRef string) bool {
-	baseRef = strings.TrimSpace(baseRef)
-	if baseRef == "master" {
-		return true
-	}
-	return strings.HasPrefix(baseRef, "integration/")
 }
 
 // handleCloseMergedDispatch 处理 close-merged 的 dispatch-wakeup 逻辑。

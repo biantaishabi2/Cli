@@ -156,10 +156,20 @@ niuma control merge --issues 40,41,42  # 人批准后批量合并
 
 - 输入 `--issues` 后，先从 task metadata 解析唯一 integration 分支（`meta_issue_slug -> integration/<slug>`）
 - 若 issue 集合映射到多个 integration 分支，命令直接失败（避免误合并）
-- 收口策略固定为 PR 模式：创建（或复用）`integration/<slug> -> master` 的 open PR
+- 收口策略固定为 PR 模式：创建（或复用）`integration/<slug> -> <resolved-base>` 的 open PR
+- base 分支解析优先级固定为：
+  - `--merge-base-branch`（CLI）
+  - `control.merge_base_branch`（配置）
+  - GitHub API 仓库默认分支（`default_branch`）
+  - `git remote show origin` / `refs/remotes/origin/HEAD`
+  - fallback `master`
+- 关键日志字段：
+  - `resolved_base_branch=<branch>`
+  - `source=<cli-flag|config|github-default-branch|git-remote-show-origin|git-origin-head|fallback-master>`
+- 自动探测失败不会中断流程，会输出 warning 并回退到 `master`
 - 幂等语义：
   - 若已存在同 head/base 的 open PR，返回成功并复用该 PR（不重复创建）
-  - 若 `master` 已包含目标 integration 分支，返回成功并输出 `merge no-op`
+  - 若 `<resolved-base>` 已包含目标 integration 分支，返回成功并输出 `merge no-op`
 - 失败语义：
   - 目标分支不存在 -> 失败
   - 查询/创建 PR 失败（权限、分支策略、API 错误）-> 失败并保留诊断信息
@@ -218,14 +228,15 @@ control:
 | `bot:implementing` | 正在改代码 |
 | `bot:pr-created` | PR 已创建，等待自检 |
 | `bot:pr-reviewable` | 自检通过，可人工审核 |
-| `bot:premerged` | 已合入 `integration/main`，等待进入 `master` 收口 |
+| `bot:premerged` | 已合入 `integration/main`，等待进入主干 base 分支收口 |
 | `bot:pr-needs-fix` | 自检/审核失败，需修复 |
 | `bot:iterating` | 根据 Review 意见迭代 |
 | `bot:done` | 合并/关闭 |
 
 `bot:premerged` 运维约定：
 - 自动迁移：`pull_request.closed && merged=true && base.ref=integration/main` 时，`bot:pr-reviewable -> bot:premerged`
-- 主干收口：变更进入 `master` 后由 `niuma control close-merged` 收口到 `bot:done` 并关闭 issue
+- 主干收口：变更进入 `<resolved-base>` 后由 `niuma control close-merged` 收口到 `bot:done` 并关闭 issue
+  - `close-merged` 仅允许 `base in {resolved_base_branch, integration/*}`，避免误收口
 - 人工回退：`niuma state-label set --repo <owner/repo> --issue <N> --from bot:premerged --to bot:queued --reason premerge_rollback`
 
 ### 状态标签管控（受控单值）
