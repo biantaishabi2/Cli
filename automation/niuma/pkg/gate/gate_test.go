@@ -15,6 +15,9 @@ func TestRunner_PassResetsRetryCount(t *testing.T) {
 	var upsertedCount int
 	var upsertedAttemptKey string
 	upsertCalled := false
+	markCalled := 0
+	labelCalled := 0
+	commentCalled := 0
 
 	runner := newRunnerForTest(t, Options{
 		Repo:       "biantaishabi2/Cli",
@@ -26,9 +29,18 @@ func TestRunner_PassResetsRetryCount(t *testing.T) {
 		RunGate: func(context.Context, string, int) (string, error) {
 			return "ok", nil
 		},
-		MarkNeedsFix: func(context.Context, string, int) error { return nil },
-		AddLabels:    func(context.Context, string, int, []string) error { return nil },
-		AddComment:   func(context.Context, string, int, string) error { return nil },
+		MarkNeedsFix: func(context.Context, string, int) error {
+			markCalled++
+			return nil
+		},
+		AddLabels: func(context.Context, string, int, []string) error {
+			labelCalled++
+			return nil
+		},
+		AddComment: func(context.Context, string, int, string) error {
+			commentCalled++
+			return nil
+		},
 		FindGateRetryState: func(context.Context, int) (int, string, error) {
 			return 2, defaultAttemptKey(358, 9001), nil
 		},
@@ -47,6 +59,9 @@ func TestRunner_PassResetsRetryCount(t *testing.T) {
 	assert.True(t, upsertCalled, "gate 通过后应调用 UpsertGateRetryCount")
 	assert.Equal(t, 0, upsertedCount, "gate 通过后 retry_count 应重置为 0")
 	assert.Equal(t, "", upsertedAttemptKey, "gate 通过后应清空 attempt_key")
+	assert.Equal(t, 0, markCalled, "gate 通过不应回退到 needs-fix")
+	assert.Equal(t, 0, labelCalled, "gate 通过不应打 escalation 标签")
+	assert.Equal(t, 0, commentCalled, "gate 通过不应写 issue 评论")
 }
 
 func TestRunner_FirstFailureMarksNeedsFix(t *testing.T) {

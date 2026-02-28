@@ -123,6 +123,8 @@ const (
 	integrationConflictLabel = "integration-conflict"
 	integrationGateFailLabel = "integration-gate-failed"
 	needsHumanLabel          = "needs-human"
+	securityReviewLabel      = "security-review-required"
+	dependencyWaitingLabel   = "dependency-waiting"
 	botDoneLabel             = "bot:done"
 	botPremergedLabel        = "bot:premerged"
 
@@ -198,12 +200,13 @@ type Controller struct {
 
 // ControlConfig 控制层配置
 type ControlConfig struct {
-	TaskCtlBin                 string `yaml:"taskctl_bin"`
-	MergeStrategy              string `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix    string `yaml:"integration_branch_prefix"` // 默认 integration/
-	MaxOldBranches             int    `yaml:"max_old_branches"`          // 默认 3
-	MinPRsForIntegration       int    `yaml:"min_prs_for_integration"`   // 默认 2
-	IntegrationGateMaxRetries  int    `yaml:"integration_gate_max_retries"`
+	TaskCtlBin                 string   `yaml:"taskctl_bin"`
+	MergeStrategy              string   `yaml:"merge_strategy"`            // merge/squash，默认 merge
+	IntegrationBranchPrefix    string   `yaml:"integration_branch_prefix"` // 默认 integration/
+	MaxOldBranches             int      `yaml:"max_old_branches"`          // 默认 3
+	MinPRsForIntegration       int      `yaml:"min_prs_for_integration"`   // 默认 2
+	IntegrationGateMaxRetries  int      `yaml:"integration_gate_max_retries"`
+	NeedsHumanBlockingLabels   []string `yaml:"needs_human_blocking_labels"`
 	DagSync                    DagSyncConfig
 	PRConflictRetryThreshold   int
 	PRConflictUnknownBackoffs  []time.Duration
@@ -228,6 +231,7 @@ func DefaultControlConfig() *ControlConfig {
 		MaxOldBranches:            3,
 		MinPRsForIntegration:      2,
 		IntegrationGateMaxRetries: integrationGateDefaultMaxRetries,
+		NeedsHumanBlockingLabels:  defaultNeedsHumanBlockingLabels(),
 		DagSync: DagSyncConfig{
 			PollInterval:         5 * time.Minute,
 			MaxRetry:             3,
@@ -247,6 +251,34 @@ func DefaultControlConfig() *ControlConfig {
 		IssueLockHeartbeatInterval: issueLockDefaultHeartbeat,
 		OwnerID:                    defaultIssueLockOwnerID(),
 	}
+}
+
+func defaultNeedsHumanBlockingLabels() []string {
+	return []string{
+		integrationConflictLabel,
+		securityReviewLabel,
+		dependencyWaitingLabel,
+	}
+}
+
+func normalizeLabelList(labels []string) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(labels))
+	seen := make(map[string]struct{}, len(labels))
+	for _, raw := range labels {
+		label := strings.TrimSpace(raw)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		normalized = append(normalized, label)
+	}
+	return normalized
 }
 
 func defaultIssueLockOwnerID() string {
@@ -283,6 +315,10 @@ func NewController(
 	}
 	if cfg.PRConflictAIMaxAttempts <= 0 {
 		cfg.PRConflictAIMaxAttempts = prConflictAIDefaultMaxAttempts
+	}
+	cfg.NeedsHumanBlockingLabels = normalizeLabelList(cfg.NeedsHumanBlockingLabels)
+	if len(cfg.NeedsHumanBlockingLabels) == 0 {
+		cfg.NeedsHumanBlockingLabels = defaultNeedsHumanBlockingLabels()
 	}
 	if cfg.IssueLockTTL <= 0 {
 		cfg.IssueLockTTL = issueLockDefaultTTL
@@ -1011,7 +1047,7 @@ func (c *Controller) Run(ctx context.Context) error {
 			}
 		}
 
-		// ⑦.5 检查 needs-human + integration-conflict 的自动恢复
+		// ⑦.5 检查 needs-human + (integration-conflict/integration-gate-failed) 的自动恢复
 		c.reconcileNeedsHumanRecovery(ctx, allTasks)
 
 		// ⑧ 检查父 issue 进度（Sub-Issue 模式）
@@ -2047,24 +2083,122 @@ func (c *Controller) closeParentIssuesIfReady(ctx context.Context, parentNums ma
 	return firstErr
 }
 
-// normalizeDoneAuxLabels 在 issue 进入 done 收口时清理非终态辅助标签。
-// 这些标签不是 bot:*，不会被 state transition 自动清理，需要显式归一。
-func (c *Controller) normalizeDoneAuxLabels(ctx context.Context, issueNum int) error {
-	auxLabels := []string{
-		integrationConflictLabel,
-		integrationGateFailLabel,
-		needsHumanLabel,
-	}
+type escalationAuxLabelContext struct {
+	TargetLabel string
+	Review      *PRReviewStatus
+	GatePassed  bool
+}
 
-	var firstErr error
-	for _, oldLabel := range auxLabels {
-		if _, err := c.github.ReplaceLabelIfPresent(ctx, issueNum, oldLabel, botDoneLabel); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+type escalationAuxNormalizationResult struct {
+	RemovedLabels  []string
+	BlockingLabels []string
+	Changed        bool
+}
+
+func (c *Controller) needsHumanBlockingLabels() []string {
+	if c == nil || c.cfg == nil {
+		return defaultNeedsHumanBlockingLabels()
+	}
+	return append([]string(nil), c.cfg.NeedsHumanBlockingLabels...)
+}
+
+func collectBlockingLabels(labels []string, blockingWhitelist []string) []string {
+	if len(labels) == 0 || len(blockingWhitelist) == 0 {
+		return nil
+	}
+	blocking := make([]string, 0, len(blockingWhitelist))
+	for _, candidate := range blockingWhitelist {
+		if hasLabel(labels, candidate) {
+			blocking = append(blocking, candidate)
 		}
 	}
-	return firstErr
+	return blocking
+}
+
+func filterLabelsForEscalationNormalization(labels []string, removeSet map[string]struct{}) ([]string, []string) {
+	if len(labels) == 0 || len(removeSet) == 0 {
+		return append([]string(nil), labels...), nil
+	}
+	filtered := make([]string, 0, len(labels))
+	removed := make([]string, 0, len(removeSet))
+	seenRemoved := make(map[string]struct{}, len(removeSet))
+	for _, label := range labels {
+		if _, shouldRemove := removeSet[label]; shouldRemove {
+			if _, seen := seenRemoved[label]; !seen {
+				seenRemoved[label] = struct{}{}
+				removed = append(removed, label)
+			}
+			continue
+		}
+		filtered = append(filtered, label)
+	}
+	return filtered, removed
+}
+
+// normalizeEscalationAuxLabels 统一处理 needs-human / integration-conflict / integration-gate-failed。
+// 仅在满足目标状态语义时清理，失败时保守保持现状。
+func (c *Controller) normalizeEscalationAuxLabels(ctx context.Context, issue IssueInfo, normalizeCtx escalationAuxLabelContext) (escalationAuxNormalizationResult, error) {
+	result := escalationAuxNormalizationResult{}
+	if issue.Number <= 0 {
+		return result, fmt.Errorf("issue 编号无效: %d", issue.Number)
+	}
+
+	labels, err := c.github.ListLabels(ctx, issue.Number)
+	if err != nil {
+		return result, err
+	}
+
+	removeSet := make(map[string]struct{})
+	switch strings.TrimSpace(normalizeCtx.TargetLabel) {
+	case botDoneLabel:
+		removeSet[needsHumanLabel] = struct{}{}
+		removeSet[integrationConflictLabel] = struct{}{}
+		removeSet[integrationGateFailLabel] = struct{}{}
+	case "bot:pr-reviewable":
+		if normalizeCtx.Review == nil || !normalizeCtx.Review.IsMergeable() {
+			return result, nil
+		}
+
+		if hasLabel(labels, integrationConflictLabel) {
+			removeSet[integrationConflictLabel] = struct{}{}
+		}
+
+		hasGateFailed := hasLabel(labels, integrationGateFailLabel)
+		if hasGateFailed {
+			if !normalizeCtx.GatePassed {
+				return result, nil
+			}
+			removeSet[integrationGateFailLabel] = struct{}{}
+		}
+
+		if hasLabel(labels, needsHumanLabel) {
+			labelsAfterPrimary, _ := filterLabelsForEscalationNormalization(labels, removeSet)
+			result.BlockingLabels = collectBlockingLabels(labelsAfterPrimary, c.needsHumanBlockingLabels())
+			if len(result.BlockingLabels) == 0 {
+				removeSet[needsHumanLabel] = struct{}{}
+			}
+		}
+	default:
+		return result, nil
+	}
+
+	filtered, removed := filterLabelsForEscalationNormalization(labels, removeSet)
+	result.RemovedLabels = removed
+	if len(removed) == 0 {
+		return result, nil
+	}
+
+	if err := c.github.ReplaceLabels(ctx, issue.Number, filtered); err != nil {
+		return result, err
+	}
+	result.Changed = true
+	return result, nil
+}
+
+// normalizeDoneAuxLabels 在 issue 进入 done 收口时清理非终态辅助标签。
+func (c *Controller) normalizeDoneAuxLabels(ctx context.Context, issueNum int) error {
+	_, err := c.normalizeEscalationAuxLabels(ctx, IssueInfo{Number: issueNum}, escalationAuxLabelContext{TargetLabel: botDoneLabel})
+	return err
 }
 
 // Status 返回全局控制状态
@@ -3129,8 +3263,8 @@ func (c *Controller) persistIntegrationConflictRetryCount(ctx context.Context, i
 	return c.github.UpdateIssueBody(ctx, issue.Number, updatedBody)
 }
 
-// reconcileNeedsHumanRecovery 检查带 needs-human + integration-conflict 标签的 issue，
-// 如果关联 PR 恢复 MERGEABLE，则自动恢复到 bot:pr-reviewable。
+// reconcileNeedsHumanRecovery 检查带 needs-human 的升级 issue，
+// 当 PR/gate 已恢复时自动迁移到 bot:pr-reviewable，并归一化辅助标签。
 func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Task) {
 	for _, task := range tasks {
 		issueNum := task.IssueNum()
@@ -3151,12 +3285,15 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			}
 		}
 
-		// 确认 issue 确实带 needs-human + integration-conflict
+		// 确认 issue 带 needs-human，且存在可恢复的辅助阻塞标签。
 		labels, err := c.github.ListLabels(ctx, issueNum)
 		if err != nil {
 			continue
 		}
-		if !hasLabel(labels, needsHumanLabel) || !hasLabel(labels, integrationConflictLabel) {
+		hasNeedsHuman := hasLabel(labels, needsHumanLabel)
+		hasConflict := hasLabel(labels, integrationConflictLabel)
+		hasGateFailed := hasLabel(labels, integrationGateFailLabel)
+		if !hasNeedsHuman || (!hasConflict && !hasGateFailed) {
 			continue
 		}
 
@@ -3169,6 +3306,14 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			continue
 		}
 
+		gatePassed := true
+		if hasGateFailed {
+			gatePassed = valueOrEmpty(task.Metadata, metaKeyIntegrationGateStatus) == integrationGateStatusPassed
+			if !gatePassed {
+				continue
+			}
+		}
+
 		// PR 恢复 MERGEABLE，清除标签恢复流转
 		fmt.Printf("[control] issue #%d PR 已恢复 MERGEABLE，自动恢复到 bot:pr-reviewable\n", issueNum)
 
@@ -3178,55 +3323,65 @@ func (c *Controller) reconcileNeedsHumanRecovery(ctx context.Context, tasks []Ta
 			continue
 		}
 
-		// 清除 integration-conflict 和 needs-human 标签（syncIssueStateLabel 已处理 bot:* 标签切换，
-		// 但 integration-conflict 和 needs-human 不是 bot:* 前缀，需要通过 ReplaceLabels 处理）
-		labelsCleaned := false
-		currentLabels, err := c.github.ListLabels(ctx, issueNum)
-		if err == nil {
-			filtered := make([]string, 0, len(currentLabels))
-			for _, l := range currentLabels {
-				if l != integrationConflictLabel && l != needsHumanLabel {
-					filtered = append(filtered, l)
-				}
+		normalizeResult, err := c.normalizeEscalationAuxLabels(ctx, IssueInfo{Number: issueNum}, escalationAuxLabelContext{
+			TargetLabel: "bot:pr-reviewable",
+			Review:      &reviewStatus,
+			GatePassed:  gatePassed,
+		})
+		if err != nil {
+			fmt.Printf("[control] issue #%d 恢复后归一化辅助标签失败: %v\n", issueNum, err)
+			marker := fmt.Sprintf("<!-- BOT:NEEDS_HUMAN_RECOVERY_NORMALIZE_FAILED issue=%d -->", issueNum)
+			body := fmt.Sprintf("%s\n\n自动恢复后标签归一化失败，已保守保留当前标签，等待下轮重试。\n\n- error: `%s`", marker, trimIntegrationGateError(err))
+			if commentErr := c.ensureIssueCommentWithMarker(ctx, issueNum, marker, body); commentErr != nil {
+				fmt.Printf("[control] issue #%d 写恢复失败评论失败: %v\n", issueNum, commentErr)
 			}
-			if len(filtered) != len(currentLabels) {
-				if err := c.github.ReplaceLabels(ctx, issueNum, filtered); err != nil {
-					fmt.Printf("[control] issue #%d 清除冲突标签失败: %v\n", issueNum, err)
-				} else {
-					labelsCleaned = true
-				}
-			} else {
-				labelsCleaned = true
-			}
+			continue
 		}
 
-		// 只有标签清理成功才清除 metadata 和写恢复 comment，否则保留以便下次 reconcile 重试
-		if labelsCleaned {
+		// 只有辅助标签真正清理成功，才同步 metadata 与恢复 comment。
+		if normalizeResult.Changed {
+			clearMeta := make(map[string]string)
+
 			// 恢复流转后重置 integration conflict retry 计数，
 			// 避免下一轮因历史超限计数再次立即升级到 needs-human。
-			if issue, err := c.github.GetIssue(ctx, issueNum); err == nil {
-				if parseIntegrationConflictRetryCount(issue.Body) > 0 {
-					if err := c.persistIntegrationConflictRetryCount(ctx, issue, 0); err != nil {
-						fmt.Printf("[control] issue #%d 重置 integration retry marker 失败: %v\n", issueNum, err)
+			if hasLabel(normalizeResult.RemovedLabels, integrationConflictLabel) {
+				if issue, getErr := c.github.GetIssue(ctx, issueNum); getErr == nil {
+					if parseIntegrationConflictRetryCount(issue.Body) > 0 {
+						if err := c.persistIntegrationConflictRetryCount(ctx, issue, 0); err != nil {
+							fmt.Printf("[control] issue #%d 重置 integration retry marker 失败: %v\n", issueNum, err)
+						}
 					}
+				} else {
+					fmt.Printf("[control] issue #%d 读取 body 失败，跳过 retry marker 重置: %v\n", issueNum, getErr)
 				}
-			} else {
-				fmt.Printf("[control] issue #%d 读取 body 失败，跳过 retry marker 重置: %v\n", issueNum, err)
+
+				clearMeta[metaKeyIntegrationConflictLabelSynced] = ""
 			}
 
-			clearMeta := map[string]string{
-				metaKeyIntegrationConflictLabelSynced: "",
-				metaKeyEscalatedAt:                    "",
-			}
-			if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
-				fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
+			if hasLabel(normalizeResult.RemovedLabels, integrationGateFailLabel) {
+				clearMeta[metaKeyIntegrationGateEscalationLabelSynced] = ""
 			}
 
+			if hasLabel(normalizeResult.RemovedLabels, needsHumanLabel) {
+				clearMeta[metaKeyEscalatedAt] = ""
+			}
+
+			if len(clearMeta) > 0 {
+				if err := c.taskctl.Update(task.ID, UpdateOpts{Metadata: &clearMeta}); err != nil {
+					fmt.Printf("[control] 清除 task %s 的 escalation metadata 失败: %v\n", task.ID, err)
+				}
+			}
+
+			sort.Strings(normalizeResult.RemovedLabels)
 			recoveryComment := fmt.Sprintf(
 				"<!-- BOT:NEEDS_HUMAN_RECOVERY -->\n\n"+
-					"**自动恢复**: issue #%d PR 已恢复 MERGEABLE 状态，从 `needs-human` + `integration-conflict` 恢复到 `bot:pr-reviewable`。",
-				issueNum,
+					"**自动恢复**: issue #%d 已恢复到 `bot:pr-reviewable`。\n\n"+
+					"- 清理辅助标签: `%s`",
+				issueNum, strings.Join(normalizeResult.RemovedLabels, "`, `"),
 			)
+			if len(normalizeResult.BlockingLabels) > 0 {
+				recoveryComment += fmt.Sprintf("\n- 保留 `needs-human`：仍存在阻塞标签 `%s`", strings.Join(normalizeResult.BlockingLabels, "`, `"))
+			}
 			if err := c.github.AddIssueComment(ctx, issueNum, recoveryComment); err != nil {
 				fmt.Printf("[control] issue #%d 写恢复 comment 失败: %v\n", issueNum, err)
 			}
