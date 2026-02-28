@@ -294,6 +294,28 @@ func TestMergeBaseResolver_AutoDetectFromGitRemoteShow(t *testing.T) {
 	assert.Equal(t, "remote show origin", executor.calls[0])
 }
 
+func TestMergeBaseResolver_RemoteShowUnknownContinuesToOriginHead(t *testing.T) {
+	executor := &stubMergeBaseGitExecutor{
+		results: map[string]stubMergeBaseGitResult{
+			"remote show origin":                    {out: "  HEAD branch: (unknown)\n"},
+			"symbolic-ref refs/remotes/origin/HEAD": {out: "refs/remotes/origin/main\n"},
+		},
+	}
+	resolver := NewMergeBaseResolverWithExecutor(
+		t.TempDir(),
+		&stubMergeBaseDefaultBranchProvider{err: fmt.Errorf("github unavailable")},
+		executor,
+	)
+
+	result := resolver.Resolve(context.Background(), "", "")
+	assert.Equal(t, "main", result.Branch)
+	assert.Equal(t, "git-origin-head", result.Source)
+	assert.Equal(t, []string{
+		"remote show origin",
+		"symbolic-ref refs/remotes/origin/HEAD",
+	}, executor.calls)
+}
+
 func TestMergeBaseResolver_FallbackWarning(t *testing.T) {
 	executor := &stubMergeBaseGitExecutor{
 		results: map[string]stubMergeBaseGitResult{
@@ -314,6 +336,25 @@ func TestMergeBaseResolver_FallbackWarning(t *testing.T) {
 	assert.Contains(t, result.Warning, "github-default-branch")
 	assert.Contains(t, result.Warning, "git-remote-show-origin")
 	assert.Contains(t, result.Warning, "git-origin-head")
+}
+
+func TestMergeBaseResolver_OriginHeadPlaceholderFallsBack(t *testing.T) {
+	executor := &stubMergeBaseGitExecutor{
+		results: map[string]stubMergeBaseGitResult{
+			"remote show origin":                    {out: "  HEAD branch: (unknown)\n"},
+			"symbolic-ref refs/remotes/origin/HEAD": {out: "refs/remotes/origin/HEAD\n"},
+		},
+	}
+	resolver := NewMergeBaseResolverWithExecutor(
+		t.TempDir(),
+		&stubMergeBaseDefaultBranchProvider{err: fmt.Errorf("github unavailable")},
+		executor,
+	)
+
+	result := resolver.Resolve(context.Background(), "", "")
+	assert.Equal(t, "master", result.Branch)
+	assert.Equal(t, "fallback-master", result.Source)
+	assert.Contains(t, result.Warning, "fallback=master")
 }
 
 func captureStdout(t *testing.T, fn func()) string {

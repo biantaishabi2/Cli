@@ -159,6 +159,11 @@ func normalizeMergeBaseBranch(raw string) (string, bool) {
 	if strings.ContainsAny(branch, " \t\r\n") {
 		return "", false
 	}
+	lowered := strings.ToLower(branch)
+	switch lowered {
+	case "(unknown)", "unknown", "head":
+		return "", false
+	}
 	return branch, true
 }
 
