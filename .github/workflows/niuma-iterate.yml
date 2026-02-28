@@ -24,6 +24,10 @@ jobs:
       issue_number: ${{ format('{0}', github.event.issue.number) }}
       trigger_source: review
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
     secrets: inherit
 
   # 人工 PR review changes_requested -> 直接透传上下文给 Go 处理
@@ -37,5 +41,9 @@ jobs:
       pr_number: ${{ format('{0}', github.event.pull_request.number) }}
       trigger_source: human
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
       initial_pr_state: ${{ github.event.pull_request.state }}
     secrets: inherit

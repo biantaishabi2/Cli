@@ -60,6 +60,10 @@ render_entry_workflow \
 
 implement_with_extra="$(cat <<'EOT'
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
       trigger_label: ${{ github.event.label.name }}
 EOT
 )"
@@ -75,6 +79,14 @@ render_entry_workflow \
   $'  issues: write\n  pull-requests: write\n  contents: write' \
   "$implement_with_extra"
 
+review_with_extra="$(cat <<'EOT'
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
+EOT
+)"
+
 render_entry_workflow \
   "$ROOT_DIR/.github/workflows/niuma-review.yml" \
   "review" \
@@ -83,7 +95,8 @@ render_entry_workflow \
   "review" \
   "niuma-review-reusable.yml" \
   "review" \
-  $'  issues: write\n  pull-requests: write'
+  $'  issues: write\n  pull-requests: write' \
+  "$review_with_extra"
 
 cp "$TEMPLATE_ORCHESTRATE" "$ROOT_DIR/.github/workflows/niuma-orchestrate.yml"
 cp "$TEMPLATE_ITERATE" "$ROOT_DIR/.github/workflows/niuma-iterate.yml"

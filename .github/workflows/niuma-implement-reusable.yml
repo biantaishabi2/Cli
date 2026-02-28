@@ -31,6 +31,26 @@ on:
         required: false
         default: "2"
         type: string
+      default_pr_run_mode:
+        description: "PR 默认测试模式（smoke/critical/full）"
+        required: false
+        default: "full"
+        type: string
+      critical_regression_required:
+        description: "是否强制关键回归（true/false）"
+        required: false
+        default: "true"
+        type: string
+      infra_retry_max:
+        description: "基础设施超时自动重试次数"
+        required: false
+        default: "2"
+        type: string
+      high_risk_paths:
+        description: "高风险路径模式（逗号分隔）"
+        required: false
+        default: ""
+        type: string
       trigger_label:
         description: "触发本次实现的标签名（用于 gate label 校验）"
         required: false
@@ -45,6 +65,10 @@ permissions:
 jobs:
   implement:
     runs-on: self-hosted
+    outputs:
+      run_mode: ${{ steps.self_check_loop.outputs.run_mode }}
+      risk_level: ${{ steps.self_check_loop.outputs.risk_level }}
+      required_jobs: ${{ steps.self_check_loop.outputs.required_jobs }}
     concurrency:
       group: niuma-impl-${{ inputs.issue_number }}
       cancel-in-progress: false
@@ -123,6 +147,7 @@ jobs:
           fi
 
       - name: Self-check loop (gate + iterate)
+        id: self_check_loop
         if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -130,6 +155,10 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
+          DEFAULT_PR_RUN_MODE: ${{ inputs.default_pr_run_mode }}
+          CRITICAL_REGRESSION_REQUIRED: ${{ inputs.critical_regression_required }}
+          INFRA_RETRY_MAX: ${{ inputs.infra_retry_max }}
+          HIGH_RISK_PATHS: ${{ inputs.high_risk_paths }}
         run: |
           MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then

@@ -54,5 +54,9 @@ jobs:
       repo: ${{ github.repository }}
       issue_number: ${{ format('{0}', github.event.issue.number) }}
       gate_max_retries: ${{ vars.NIUMA_INTEGRATION_GATE_MAX_RETRIES || '2' }}
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
       trigger_label: ${{ github.event.label.name }}
     secrets: inherit

@@ -51,6 +51,24 @@ case "$*" in
   *"--json files"*)
     printf '%b' "${MOCK_FILES:-README.md\n}"
     ;;
+  *"pr checks "*)
+    if [[ -n "${MOCK_CHECKS_SEQ:-}" ]]; then
+      counter_file="${MOCK_CHECK_COUNTER_FILE:-/tmp/niuma_gate_mock_counter}"
+      idx=1
+      if [[ -f "$counter_file" ]]; then
+        idx=$(cat "$counter_file")
+        idx=$((idx + 1))
+      fi
+      echo "$idx" > "$counter_file"
+      awk -v idx="$idx" '
+        BEGIN {part=1}
+        /^__NEXT__$/ {part++; next}
+        part==idx {print}
+      ' <<< "${MOCK_CHECKS_SEQ}"
+      exit 0
+    fi
+    printf '%b' "${MOCK_CHECKS:-smoke\tSUCCESS\n}"
+    ;;
   *)
     echo "unexpected gh args: $*" >&2
     exit 1
@@ -58,38 +76,19 @@ case "$*" in
 esac
 SH
 
-  cat > "$bin_dir/go" <<'SH'
+  cat > "$bin_dir/sleep" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-
-status="${MOCK_GO_EXIT:-0}"
-if [[ "$status" -ne 0 ]]; then
-  echo "${MOCK_GO_MESSAGE:-go test failed}" >&2
-  exit "$status"
-fi
 exit 0
 SH
 
-  cat > "$bin_dir/cargo" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-status="${MOCK_CARGO_EXIT:-0}"
-if [[ "$status" -ne 0 ]]; then
-  echo "${MOCK_CARGO_MESSAGE:-cargo test failed}" >&2
-  exit "$status"
-fi
-exit 0
-SH
-
-  chmod +x "$bin_dir/gh" "$bin_dir/go" "$bin_dir/cargo"
+  chmod +x "$bin_dir/gh" "$bin_dir/sleep"
 }
 
 init_repo() {
   local sandbox="$1"
   local pr_number="$2"
   local with_merge_ref="$3"
-  local conflict_mode="$4"
 
   local origin="$sandbox/origin"
   local work="$sandbox/work"
@@ -99,44 +98,17 @@ init_repo() {
   git config user.name "test"
   git config user.email "test@example.com"
 
-  mkdir -p automation/niuma
-  echo "placeholder" > automation/niuma/.keep
-
-  if [[ "$conflict_mode" == "yes" ]]; then
-    echo "line=base" > conflict.txt
-    git add automation/niuma/.keep conflict.txt
-    git commit -m "base" >/dev/null
-
-    git checkout -b feature >/dev/null
-    echo "line=feature" > conflict.txt
-    git add conflict.txt
-    git commit -m "feature-conflict" >/dev/null
-    local head_sha
-    head_sha=$(git rev-parse HEAD)
-
-    git checkout master >/dev/null
-    echo "line=master" > conflict.txt
-    git add conflict.txt
-    git commit -m "master-conflict" >/dev/null
-    local base_sha
-    base_sha=$(git rev-parse HEAD)
-
-    popd >/dev/null
-
-    git clone "$origin" "$work" >/dev/null
-    printf '%s|%s|%s|%s\n' "$base_sha" "$head_sha" "" "$work"
-    return 0
-  fi
-
-  echo "base" > docs.txt
-  git add automation/niuma/.keep docs.txt
+  mkdir -p automation/niuma docs
+  echo "base" > automation/niuma/base.txt
+  echo "doc" > docs/readme.md
+  git add automation/niuma/base.txt docs/readme.md
   git commit -m "base" >/dev/null
   local base_sha
   base_sha=$(git rev-parse HEAD)
 
   git checkout -b feature >/dev/null
-  echo "feature" >> docs.txt
-  git add docs.txt
+  echo "feature" >> automation/niuma/base.txt
+  git add automation/niuma/base.txt
   git commit -m "feature" >/dev/null
   local head_sha
   head_sha=$(git rev-parse HEAD)
@@ -153,111 +125,175 @@ init_repo() {
   fi
 
   popd >/dev/null
-
   git clone "$origin" "$work" >/dev/null
   printf '%s|%s|%s|%s\n' "$base_sha" "$head_sha" "$merge_sha" "$work"
 }
 
-scenario_merge_result_fail() {
+write_critical_config() {
+  local work_dir="$1"
+  mkdir -p "$work_dir/.github/niuma"
+  cat > "$work_dir/.github/niuma/critical-regressions.yml" <<'EOF'
+schema_version: 1
+critical_jobs:
+  - critical-agent-loop
+  - critical-dispatch
+EOF
+}
+
+run_gate_case() {
+  local sandbox="$1"
+  local pr_number="$2"
+  local stdout_file="$3"
+  local stderr_file="$4"
+  shift 4
+  (
+    cd "$sandbox/work"
+    env \
+      PATH="$sandbox/bin:$PATH" \
+      GITHUB_TOKEN=token \
+      MOCK_BASE_REF=master \
+      MOCK_HEAD_REF=feature \
+      MOCK_BASE_SHA="$BASE_SHA" \
+      MOCK_HEAD_SHA="$HEAD_SHA" \
+      "$@" \
+      "$SCRIPT_UNDER_TEST" "$pr_number"
+  ) >"$stdout_file" 2>"$stderr_file"
+}
+
+scenario_high_risk_missing_critical() {
   local sandbox
   sandbox=$(mktemp -d)
   mkdir -p "$sandbox/bin"
   make_mock_bin "$sandbox/bin"
-
   local repo_info
-  repo_info=$(init_repo "$sandbox" 301 yes no)
-  IFS='|' read -r base_sha head_sha _ work_dir <<< "$repo_info"
+  repo_info=$(init_repo "$sandbox" 301 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  write_critical_config "$sandbox/work"
 
   set +e
-  (
-    cd "$work_dir"
-    PATH="$sandbox/bin:$PATH" \
-    GITHUB_TOKEN=token \
-    MOCK_BASE_REF=master \
-    MOCK_HEAD_REF=feature \
-    MOCK_BASE_SHA="$base_sha" \
-    MOCK_HEAD_SHA="$head_sha" \
-    MOCK_FILES=$'automation/niuma/main.go\n' \
-    MOCK_GO_EXIT=1 \
-    "$SCRIPT_UNDER_TEST" 301
-  ) >"$sandbox/stdout" 2>"$sandbox/stderr"
+  run_gate_case "$sandbox" 301 "$sandbox/stdout" "$sandbox/stderr" \
+    MOCK_FILES=$'automation/niuma/pkg/agent/loop_core.go\n' \
+    MOCK_CHECKS=$'smoke\tSUCCESS\n'
   local status=$?
   set -e
 
-  if [[ "$status" -eq 0 ]]; then
-    fail "场景1应失败：merge-result 下测试失败必须返回非 0"
-    return 1
-  fi
-  assert_contains "$sandbox/stdout" "baseline=merge-result" "场景1应输出 merge-result 口径" || return 1
+  [[ "$status" -ne 0 ]] || { fail "场景1应失败：关键回归未运行必须阻塞"; return 1; }
+  assert_contains "$sandbox/stdout" "reason_code=CRITICAL_REGRESSION_MISSING" "场景1应输出关键回归缺失原因码" || return 1
+  assert_contains "$sandbox/stdout" "missing_jobs=critical-agent-loop,critical-dispatch" "场景1应输出 missing_jobs" || return 1
   return 0
 }
 
-scenario_merge_result_pass() {
+scenario_low_risk_docs_smoke_only() {
   local sandbox
   sandbox=$(mktemp -d)
   mkdir -p "$sandbox/bin"
   make_mock_bin "$sandbox/bin"
-
   local repo_info
-  repo_info=$(init_repo "$sandbox" 302 yes no)
-  IFS='|' read -r base_sha head_sha _ work_dir <<< "$repo_info"
+  repo_info=$(init_repo "$sandbox" 302 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  write_critical_config "$sandbox/work"
 
   set +e
-  (
-    cd "$work_dir"
-    PATH="$sandbox/bin:$PATH" \
-    GITHUB_TOKEN=token \
-    MOCK_BASE_REF=master \
-    MOCK_HEAD_REF=feature \
-    MOCK_BASE_SHA="$base_sha" \
-    MOCK_HEAD_SHA="$head_sha" \
-    MOCK_FILES=$'automation/niuma/main.go\n' \
-    MOCK_GO_EXIT=0 \
-    "$SCRIPT_UNDER_TEST" 302
-  ) >"$sandbox/stdout" 2>"$sandbox/stderr"
+  run_gate_case "$sandbox" 302 "$sandbox/stdout" "$sandbox/stderr" \
+    MOCK_FILES=$'docs/readme.md\n' \
+    MOCK_CHECKS=$'smoke\tSUCCESS\nfull\tSKIPPED\n'
   local status=$?
   set -e
 
-  if [[ "$status" -ne 0 ]]; then
-    fail "场景2应成功：merge-result 下测试通过必须返回 0"
-    return 1
-  fi
-  assert_contains "$sandbox/stdout" "base_sha=$base_sha" "场景2应输出 base_sha" || return 1
-  assert_contains "$sandbox/stdout" "head_sha=$head_sha" "场景2应输出 head_sha" || return 1
+  [[ "$status" -eq 0 ]] || { fail "场景2应成功：低风险文档应允许 smoke"; return 1; }
+  assert_contains "$sandbox/stdout" "run_mode=smoke" "场景2应为 smoke 模式" || return 1
   return 0
 }
 
-scenario_merge_conflict_fail() {
+scenario_smoke_pass_but_critical_skipped() {
   local sandbox
   sandbox=$(mktemp -d)
   mkdir -p "$sandbox/bin"
   make_mock_bin "$sandbox/bin"
-
   local repo_info
-  repo_info=$(init_repo "$sandbox" 303 no yes)
-  IFS='|' read -r base_sha head_sha _ work_dir <<< "$repo_info"
+  repo_info=$(init_repo "$sandbox" 303 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  write_critical_config "$sandbox/work"
 
   set +e
-  (
-    cd "$work_dir"
-    PATH="$sandbox/bin:$PATH" \
-    GITHUB_TOKEN=token \
-    MOCK_BASE_REF=master \
-    MOCK_HEAD_REF=feature \
-    MOCK_BASE_SHA="$base_sha" \
-    MOCK_HEAD_SHA="$head_sha" \
-    MOCK_FILES=$'README.md\n' \
-    "$SCRIPT_UNDER_TEST" 303
-  ) >"$sandbox/stdout" 2>"$sandbox/stderr"
+  run_gate_case "$sandbox" 303 "$sandbox/stdout" "$sandbox/stderr" \
+    MOCK_FILES=$'automation/niuma/pkg/control/controller.go\n' \
+    MOCK_CHECKS=$'smoke\tSUCCESS\ncritical-agent-loop\tSKIPPED\ncritical-dispatch\tSKIPPED\n'
   local status=$?
   set -e
 
-  if [[ "$status" -eq 0 ]]; then
-    fail "场景3应失败：merge 冲突必须直接失败"
-    return 1
-  fi
-  assert_contains "$sandbox/stderr" "CONFLICT:" "场景3需输出 CONFLICT 前缀" || return 1
-  assert_contains "$sandbox/stderr" "conflict.txt" "场景3需输出冲突文件清单" || return 1
+  [[ "$status" -ne 0 ]] || { fail "场景3应失败：高风险 smoke 通过但 critical skipped 不能放行"; return 1; }
+  assert_contains "$sandbox/stdout" "reason_code=INSUFFICIENT_COVERAGE_FOR_HIGH_RISK" "场景3应输出覆盖不足原因码" || return 1
+  return 0
+}
+
+scenario_critical_green_pass() {
+  local sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/bin"
+  make_mock_bin "$sandbox/bin"
+  local repo_info
+  repo_info=$(init_repo "$sandbox" 304 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  write_critical_config "$sandbox/work"
+
+  set +e
+  run_gate_case "$sandbox" 304 "$sandbox/stdout" "$sandbox/stderr" \
+    MOCK_FILES=$'automation/niuma/pkg/agent/loop_core.go\n' \
+    MOCK_CHECKS=$'critical-agent-loop\tSUCCESS\ncritical-dispatch\tSUCCESS\n'
+  local status=$?
+  set -e
+
+  [[ "$status" -eq 0 ]] || { fail "场景4应成功：关键回归全绿应放行"; return 1; }
+  assert_contains "$sandbox/stdout" "reason_code=PASS" "场景4应输出 PASS" || return 1
+  return 0
+}
+
+scenario_timeout_retry_blocked() {
+  local sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/bin"
+  make_mock_bin "$sandbox/bin"
+  local repo_info
+  repo_info=$(init_repo "$sandbox" 305 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  write_critical_config "$sandbox/work"
+
+  set +e
+  run_gate_case "$sandbox" 305 "$sandbox/stdout" "$sandbox/stderr" \
+    INFRA_RETRY_MAX=2 \
+    MOCK_CHECK_COUNTER_FILE="$sandbox/check_counter" \
+    MOCK_FILES=$'automation/niuma/pkg/control/controller.go\n' \
+    MOCK_CHECKS_SEQ=$'critical-agent-loop\tTIMED_OUT\ncritical-dispatch\tSUCCESS\n__NEXT__\ncritical-agent-loop\tTIMED_OUT\ncritical-dispatch\tSUCCESS\n__NEXT__\ncritical-agent-loop\tTIMED_OUT\ncritical-dispatch\tSUCCESS\n'
+  local status=$?
+  set -e
+
+  [[ "$status" -ne 0 ]] || { fail "场景5应失败：timeout 重试后仍失败必须阻塞"; return 1; }
+  assert_contains "$sandbox/stdout" "reason_code=TIMEOUT_BLOCKED" "场景5应输出 TIMEOUT_BLOCKED" || return 1
+  assert_contains "$sandbox/stdout" "retry_count=2" "场景5应输出重试次数" || return 1
+  return 0
+}
+
+scenario_missing_critical_config_fallback_full() {
+  local sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/bin"
+  make_mock_bin "$sandbox/bin"
+  local repo_info
+  repo_info=$(init_repo "$sandbox" 306 yes)
+  IFS='|' read -r BASE_SHA HEAD_SHA _ _ <<< "$repo_info"
+  # 故意不写 critical 配置，验证 full 安全回退
+
+  set +e
+  run_gate_case "$sandbox" 306 "$sandbox/stdout" "$sandbox/stderr" \
+    MOCK_FILES=$'automation/niuma/pkg/agent/loop_core.go\n' \
+    MOCK_CHECKS=$'full\tSUCCESS\n'
+  local status=$?
+  set -e
+
+  [[ "$status" -eq 0 ]] || { fail "场景6应成功：缺失 critical 配置时 full 成功应放行"; return 1; }
+  assert_contains "$sandbox/stdout" "run_mode=full" "场景6应回退 full" || return 1
+  assert_contains "$sandbox/stderr" "critical 清单" "场景6应输出回退告警" || return 1
   return 0
 }
 
@@ -271,9 +307,12 @@ run_case() {
   fi
 }
 
-run_case "Given merge-result 失败 Then gate 失败" scenario_merge_result_fail
-run_case "Given merge-result 通过 Then gate 通过" scenario_merge_result_pass
-run_case "Given merge 冲突 Then gate 冲突失败" scenario_merge_conflict_fail
+run_case "场景1 高风险关键回归缺失阻塞" scenario_high_risk_missing_critical
+run_case "场景2 低风险文档 smoke 放行" scenario_low_risk_docs_smoke_only
+run_case "场景3 smoke 绿但 critical skipped 阻塞" scenario_smoke_pass_but_critical_skipped
+run_case "场景4 critical 全绿通过" scenario_critical_green_pass
+run_case "场景5 timeout 重试后阻塞" scenario_timeout_retry_blocked
+run_case "场景6 缺失 critical 清单回退 full" scenario_missing_critical_config_fallback_full
 
 echo "[bdd] pass=$PASS_COUNT fail=$FAIL_COUNT"
 if [[ "$FAIL_COUNT" -ne 0 ]]; then

@@ -26,6 +26,26 @@ on:
         required: false
         default: "."
         type: string
+      default_pr_run_mode:
+        description: "PR 默认测试模式（smoke/critical/full）"
+        required: false
+        default: "full"
+        type: string
+      critical_regression_required:
+        description: "是否强制关键回归（true/false）"
+        required: false
+        default: "true"
+        type: string
+      infra_retry_max:
+        description: "基础设施超时自动重试次数"
+        required: false
+        default: "2"
+        type: string
+      high_risk_paths:
+        description: "高风险路径模式（逗号分隔）"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   issues: write
@@ -34,6 +54,10 @@ permissions:
 jobs:
   review:
     runs-on: self-hosted
+    outputs:
+      run_mode: ${{ steps.pr_gate.outputs.run_mode }}
+      risk_level: ${{ steps.pr_gate.outputs.risk_level }}
+      required_jobs: ${{ steps.pr_gate.outputs.required_jobs }}
     concurrency:
       group: niuma-review-${{ inputs.issue_number }}
       cancel-in-progress: false
@@ -76,6 +100,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
+          DEFAULT_PR_RUN_MODE: ${{ inputs.default_pr_run_mode }}
+          CRITICAL_REGRESSION_REQUIRED: ${{ inputs.critical_regression_required }}
+          INFRA_RETRY_MAX: ${{ inputs.infra_retry_max }}
+          HIGH_RISK_PATHS: ${{ inputs.high_risk_paths }}
         run: |
           if [ -x "./.github/scripts/niuma-test-gate.sh" ]; then
             echo "检测到自定义门禁脚本，执行..."
@@ -100,6 +128,13 @@ jobs:
             fi
             echo "所有 PR checks 通过"
           fi
+
+      - name: Log Gate Decision Outputs
+        if: steps.find_pr.outputs.pr_number != ''
+        run: |
+          echo "run_mode=${{ steps.pr_gate.outputs.run_mode }}"
+          echo "risk_level=${{ steps.pr_gate.outputs.risk_level }}"
+          echo "required_jobs=${{ steps.pr_gate.outputs.required_jobs }}"
 
       - name: Restore Workspace After Gate
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'

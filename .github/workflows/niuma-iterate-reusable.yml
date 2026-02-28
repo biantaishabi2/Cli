@@ -41,6 +41,26 @@ on:
         required: false
         default: "2"
         type: string
+      default_pr_run_mode:
+        description: "PR 默认测试模式（smoke/critical/full）"
+        required: false
+        default: "full"
+        type: string
+      critical_regression_required:
+        description: "是否强制关键回归（true/false）"
+        required: false
+        default: "true"
+        type: string
+      infra_retry_max:
+        description: "基础设施超时自动重试次数"
+        required: false
+        default: "2"
+        type: string
+      high_risk_paths:
+        description: "高风险路径模式（逗号分隔）"
+        required: false
+        default: ""
+        type: string
       initial_pr_state:
         description: "caller 透传的 PR 初始状态"
         required: false
@@ -55,6 +75,10 @@ permissions:
 jobs:
   iterate:
     runs-on: self-hosted
+    outputs:
+      run_mode: ${{ steps.gate_review.outputs.run_mode || steps.gate_human.outputs.run_mode }}
+      risk_level: ${{ steps.gate_review.outputs.risk_level || steps.gate_human.outputs.risk_level }}
+      required_jobs: ${{ steps.gate_review.outputs.required_jobs || steps.gate_human.outputs.required_jobs }}
     concurrency:
       group: niuma-iterate-${{ inputs.issue_number || inputs.pr_number }}
       cancel-in-progress: false
@@ -141,6 +165,7 @@ jobs:
           echo "issue_number=$issue" >> "$GITHUB_OUTPUT"
 
       - name: Run PR Gate (from bot review)
+        id: gate_review
         if: steps.iterate_review.outputs.decision == 'run' && steps.find_pr.outputs.pr_number != '' && steps.iterate_review.outputs.issue_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -148,6 +173,10 @@ jobs:
           ISSUE_NUMBER: ${{ steps.iterate_review.outputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
+          DEFAULT_PR_RUN_MODE: ${{ inputs.default_pr_run_mode }}
+          CRITICAL_REGRESSION_REQUIRED: ${{ inputs.critical_regression_required }}
+          INFRA_RETRY_MAX: ${{ inputs.infra_retry_max }}
+          HIGH_RISK_PATHS: ${{ inputs.high_risk_paths }}
         run: |
           GATE_MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then
@@ -192,6 +221,7 @@ jobs:
           echo "issue_number=$issue" >> "$GITHUB_OUTPUT"
 
       - name: Run PR Gate (from human)
+        id: gate_human
         if: steps.iterate_human.outputs.decision == 'run' && inputs.pr_number != '' && steps.iterate_human.outputs.issue_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
@@ -199,6 +229,10 @@ jobs:
           ISSUE_NUMBER: ${{ steps.iterate_human.outputs.issue_number }}
           PR_NUMBER: ${{ inputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
+          DEFAULT_PR_RUN_MODE: ${{ inputs.default_pr_run_mode }}
+          CRITICAL_REGRESSION_REQUIRED: ${{ inputs.critical_regression_required }}
+          INFRA_RETRY_MAX: ${{ inputs.infra_retry_max }}
+          HIGH_RISK_PATHS: ${{ inputs.high_risk_paths }}
         run: |
           GATE_MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then
