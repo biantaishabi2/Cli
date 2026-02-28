@@ -39,3 +39,6 @@ compiler/bcc/scripts/node_modules/
 
 # niuma local state
 .niuma/
+
+# local session artifacts
+.gong/
