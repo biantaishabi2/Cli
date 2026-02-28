@@ -4623,3 +4623,59 @@ func TestPruneClosedIssueTasks_no_closed(t *testing.T) {
 	assert.Equal(t, TaskStatusPending, ctrl.mockTaskCtl.tasks[0].Status)
 	assert.Equal(t, TaskStatusInProgress, ctrl.mockTaskCtl.tasks[1].Status)
 }
+
+func TestPruneClosedIssueTasks_NormalizeClosedIssueLabelsWithoutTask(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 502,
+			Title:  "closed issue",
+			State:  "closed",
+			Labels: []string{"bot:pr-needs-fix", needsHumanLabel, integrationGateFailLabel},
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	allIssues, err := mockGH.ListIssuesByState(context.Background(), "all")
+	require.NoError(t, err)
+
+	pruned := ctrl.pruneClosedIssueTasks(context.Background(), allIssues, nil)
+	assert.Equal(t, 0, pruned, "无 active task 时不应统计裁剪数量")
+
+	labels, err := mockGH.ListLabels(context.Background(), 502)
+	require.NoError(t, err)
+	assert.Contains(t, labels, botDoneLabel)
+	assert.NotContains(t, labels, "bot:pr-needs-fix")
+	assert.NotContains(t, labels, needsHumanLabel)
+	assert.NotContains(t, labels, integrationGateFailLabel)
+}
+
+func TestPruneClosedIssueTasks_NormalizeClosedIssueLabelsIdempotent(t *testing.T) {
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 503,
+			Title:  "closed issue",
+			State:  "closed",
+			Labels: []string{"bot:pr-needs-fix", needsHumanLabel, integrationConflictLabel, integrationGateFailLabel},
+		},
+	)
+	ctrl := &Controller{github: mockGH}
+
+	allIssues, err := mockGH.ListIssuesByState(context.Background(), "all")
+	require.NoError(t, err)
+
+	ctrl.pruneClosedIssueTasks(context.Background(), allIssues, nil)
+	firstLabels, err := mockGH.ListLabels(context.Background(), 503)
+	require.NoError(t, err)
+
+	allIssues, err = mockGH.ListIssuesByState(context.Background(), "all")
+	require.NoError(t, err)
+	ctrl.pruneClosedIssueTasks(context.Background(), allIssues, nil)
+	secondLabels, err := mockGH.ListLabels(context.Background(), 503)
+	require.NoError(t, err)
+
+	assert.Equal(t, firstLabels, secondLabels, "重复执行应保持标签集合稳定")
+	assert.Equal(t, 1, countLabel(secondLabels, botDoneLabel), "bot:done 不应重复")
+	assert.NotContains(t, secondLabels, needsHumanLabel)
+	assert.NotContains(t, secondLabels, integrationConflictLabel)
+	assert.NotContains(t, secondLabels, integrationGateFailLabel)
+}

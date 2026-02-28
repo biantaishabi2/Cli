@@ -866,7 +866,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	pruneTasks, err := c.taskctl.List("")
 	if err != nil {
 		fmt.Printf("[control][prune] 读取 task 列表失败，跳过裁剪: %v\n", err)
-	} else if pruned := c.pruneClosedIssueTasks(allIssuesCache, pruneTasks); pruned > 0 {
+	} else if pruned := c.pruneClosedIssueTasks(ctx, allIssuesCache, pruneTasks); pruned > 0 {
 		fmt.Printf("[control][prune] 本轮共裁剪 %d 个已关闭 issue 的 task\n", pruned)
 	}
 
@@ -1801,18 +1801,52 @@ func (c *Controller) logPRReviewableDecision(
 	)
 }
 
-// pruneClosedIssueTasks 裁剪已关闭 issue 对应的 active task，标记为 completed。
+// pruneClosedIssueTasks 处理已关闭 issue 的收口：
+// 1) 将关闭但仍处于非 done 的 bot 状态收敛到 bot:done；
+// 2) 清理 needs-human / integration-* 辅助标签；
+// 3) 裁剪已关闭 issue 对应的 active task，标记为 completed。
 // 返回被裁剪的 task 数量。
-func (c *Controller) pruneClosedIssueTasks(allIssues []IssueInfo, existingTasks []Task) int {
+func (c *Controller) pruneClosedIssueTasks(ctx context.Context, allIssues []IssueInfo, existingTasks []Task) int {
 	// 构建 closed issue 集合
-	closedIssues := make(map[int]bool, len(allIssues))
+	closedIssues := make(map[int]IssueInfo, len(allIssues))
 	for _, issue := range allIssues {
 		if strings.EqualFold(issue.State, "closed") {
-			closedIssues[issue.Number] = true
+			closedIssues[issue.Number] = issue
 		}
 	}
 	if len(closedIssues) == 0 {
 		return 0
+	}
+
+	// closed issue 标签收口：与 task 活跃状态无关，避免“已关闭但仍 needs-human”残留。
+	for issueNum, issue := range closedIssues {
+		labels := issue.Labels
+		hasAux := hasLabel(labels, needsHumanLabel) ||
+			hasLabel(labels, integrationConflictLabel) ||
+			hasLabel(labels, integrationGateFailLabel)
+
+		// 仅当存在非 done bot 状态时迁移，避免给无状态 issue 额外打 bot:done。
+		needsDone := false
+		if botStates, invalid := state.CollectBotStatesWithInvalid(labels); len(invalid) > 0 {
+			fmt.Printf("[control][prune] issue #%d 存在非法 bot 标签，跳过 done 收口: %v\n", issueNum, invalid)
+		} else if len(botStates) > 0 {
+			if len(botStates) > 1 || botStates[0] != state.StateDone {
+				needsDone = true
+			}
+		}
+
+		if !needsDone && !hasAux {
+			continue
+		}
+
+		if needsDone {
+			if err := c.syncIssueStateLabel(ctx, issueNum, botDoneLabel); err != nil {
+				fmt.Printf("[control][prune] issue #%d 收敛到 %s 失败: %v\n", issueNum, botDoneLabel, err)
+			}
+		}
+		if err := c.normalizeDoneAuxLabels(ctx, issueNum); err != nil {
+			fmt.Printf("[control][prune] issue #%d 清理关闭态辅助标签失败: %v\n", issueNum, err)
+		}
 	}
 
 	pruned := 0
@@ -1821,7 +1855,7 @@ func (c *Controller) pruneClosedIssueTasks(allIssues []IssueInfo, existingTasks 
 		if issueNum == 0 {
 			continue
 		}
-		if !closedIssues[issueNum] {
+		if _, ok := closedIssues[issueNum]; !ok {
 			continue
 		}
 		if !isTaskActiveStatus(task.Status) {
