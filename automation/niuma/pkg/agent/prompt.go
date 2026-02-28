@@ -23,8 +23,12 @@ type PromptInput struct {
 	DiscussionRole string   // 当前发言角色（A/B）
 	Counterpart    string   // 对方角色（A/B）
 	FinalPlan      string   // 最终方案文本（用于实现/迭代）
-	ReviewComment  string   // PR review 意见（用于迭代）
-	PRDiff         string   // PR diff 内容（用于迭代）
+	PRBody         string   // PR Body（实现/审查/迭代统一核心上下文）
+	ReviewSummary  string   // Review 汇总（用于 iterate，且不替代完整历史）
+	ReviewComment  string   // PR 历史（reviews + PR comments）
+	PRDiff         string   // PR diff 内容（用于 review/iterate）
+	ContextTrimmed bool     // 是否发生上下文裁剪
+	TrimmedReason  string   // 裁剪原因说明（用于提示“已裁剪”）
 }
 
 // BuildDraftPrompt 生成方案草案的 prompt
@@ -274,11 +278,30 @@ const finalPlanTmpl = `你是一个高级软件架构师。请根据以下讨论
 
 const implementTmpl = `你是一个高级软件工程师。请根据以下方案实现代码。
 
-## Issue: {{.IssueTitle}}
+## 核心上下文（统一）
 
-## 最终方案
+### Issue
+
+{{.IssueTitle}}
+
+{{.IssueBody}}
+
+### Plan-final（marker）
 
 {{.FinalPlan}}
+
+### PR Body
+
+{{- if .PRBody}}
+{{.PRBody}}
+{{- else}}
+(未读取到 PR Body，已降级继续)
+{{- end}}
+
+{{- if .ContextTrimmed}}
+
+> 注意：输入上下文存在“已裁剪”：{{.TrimmedReason}}
+{{- end}}
 {{- if .ReviewComment}}
 
 ## 历史 PR Review 与 CI/Gate 反馈
@@ -318,21 +341,48 @@ const implementTmpl = `你是一个高级软件工程师。请根据以下方案
 
 const reviewTmpl = `你是一个务实的代码审查员。请审查以下 PR 的代码变更。
 
-## Issue: {{.IssueTitle}}
+## 核心上下文（统一）
 
-## 最终方案
+### Issue
+
+{{.IssueTitle}}
+
+{{.IssueBody}}
+
+### Plan-final（marker）
 
 {{.FinalPlan}}
 
-## PR Diff
+### PR Body
 
-{{.PRDiff}}
+{{- if .PRBody}}
+{{.PRBody}}
+{{- else}}
+(未读取到 PR Body，已降级继续)
+{{- end}}
+
+{{- if .ContextTrimmed}}
+
+> 注意：输入上下文存在“已裁剪”：{{.TrimmedReason}}
+{{- end}}
+
+## 阶段增量上下文（Review）
+
+### PR 历史（reviews + PR comments）
 
 {{- if .ReviewComment}}
 
-## 之前的 Review 讨论
-
 {{.ReviewComment}}
+{{- else}}
+(无可用 PR 历史)
+{{- end}}
+
+### PR Diff
+
+{{- if .PRDiff}}
+{{.PRDiff}}
+{{- else}}
+(未读取到 PR Diff，已降级继续)
 {{- end}}
 
 ## 审查要求
@@ -414,21 +464,55 @@ PR 历史中包含之前的 review 和回复。你必须：
 
 const iterateTmpl = `你是一个高级软件工程师。请根据 review 意见修改代码。
 
-## Issue: {{.IssueTitle}}
+## 核心上下文（统一）
 
-## 最终方案
+### Issue
+
+{{.IssueTitle}}
+
+{{.IssueBody}}
+
+### Plan-final（marker）
 
 {{.FinalPlan}}
 
-## Review 意见
+### PR Body
 
+{{- if .PRBody}}
+{{.PRBody}}
+{{- else}}
+(未读取到 PR Body，已降级继续)
+{{- end}}
+
+{{- if .ContextTrimmed}}
+
+> 注意：输入上下文存在“已裁剪”：{{.TrimmedReason}}
+{{- end}}
+
+## 阶段增量上下文（Iterate）
+
+### Review Summary
+
+{{- if .ReviewSummary}}
+{{.ReviewSummary}}
+{{- else}}
+(无 review 汇总)
+{{- end}}
+
+### 完整 PR 历史（reviews + PR comments）
+
+{{- if .ReviewComment}}
 {{.ReviewComment}}
+{{- else}}
+(无可用 PR 历史)
+{{- end}}
+
+### 当前 PR Diff
 
 {{- if .PRDiff}}
-
-## 当前 PR Diff
-
 {{.PRDiff}}
+{{- else}}
+(未读取到 PR Diff，已降级继续)
 {{- end}}
 
 ## 要求
