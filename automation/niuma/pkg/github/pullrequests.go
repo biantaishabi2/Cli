@@ -5,6 +5,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-github/v68/github"
 )
@@ -45,6 +46,65 @@ func (c *Client) CreatePR(ctx context.Context, title, body, head, base string) (
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 PR 失败: %w", err)
+	}
+	return pr, nil
+}
+
+// FindOpenPR 根据 head/base 查找已存在的 open PR（不存在返回 nil）。
+func (c *Client) FindOpenPR(ctx context.Context, head, base string) (*github.PullRequest, error) {
+	head = strings.TrimSpace(head)
+	base = strings.TrimSpace(base)
+	if head == "" || base == "" {
+		return nil, nil
+	}
+
+	find := func(headFilter string) (*github.PullRequest, error) {
+		opts := &github.PullRequestListOptions{
+			State: "open",
+			Head:  headFilter,
+			Base:  base,
+			ListOptions: github.ListOptions{
+				PerPage: 100,
+			},
+		}
+		for {
+			prs, resp, err := c.gh.PullRequests.List(ctx, c.owner, c.repo, opts)
+			if err != nil {
+				return nil, err
+			}
+			for _, pr := range prs {
+				if pr == nil {
+					continue
+				}
+				if strings.TrimSpace(pr.GetState()) != "open" {
+					continue
+				}
+				if strings.TrimSpace(pr.GetHead().GetRef()) == head && strings.TrimSpace(pr.GetBase().GetRef()) == base {
+					return pr, nil
+				}
+			}
+			if resp.NextPage == 0 {
+				break
+			}
+			opts.Page = resp.NextPage
+		}
+		return nil, nil
+	}
+
+	// GitHub List PR 的 head 过滤通常要求 owner:branch。
+	withOwner := fmt.Sprintf("%s:%s", c.owner, head)
+	pr, err := find(withOwner)
+	if err != nil {
+		return nil, fmt.Errorf("查找 open PR 失败: %w", err)
+	}
+	if pr != nil {
+		return pr, nil
+	}
+
+	// 兼容部分环境的 head 过滤行为差异。
+	pr, err = find(head)
+	if err != nil {
+		return nil, fmt.Errorf("查找 open PR 失败: %w", err)
 	}
 	return pr, nil
 }

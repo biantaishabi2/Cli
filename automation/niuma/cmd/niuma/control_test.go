@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -599,6 +600,8 @@ type stubGitHubControlClient struct {
 	findMarkerErr  error
 	prs            map[int]*ghapi.PullRequest
 	prErr          map[int]error
+	openPRByRef    map[string]*ghapi.PullRequest
+	nextPRNumber   int
 }
 
 func (s *stubGitHubControlClient) ListIssuesWithLabel(_ context.Context, _ string) ([]*ghapi.Issue, error) {
@@ -680,4 +683,39 @@ func (s *stubGitHubControlClient) GetPR(_ context.Context, number int) (*ghapi.P
 		return pr, nil
 	}
 	return nil, errors.New("pr not found")
+}
+
+func (s *stubGitHubControlClient) FindOpenPR(_ context.Context, head, base string) (*ghapi.PullRequest, error) {
+	key := head + "->" + base
+	if s.openPRByRef == nil {
+		return nil, nil
+	}
+	return s.openPRByRef[key], nil
+}
+
+func (s *stubGitHubControlClient) CreatePR(_ context.Context, title, body, head, base string) (*ghapi.PullRequest, error) {
+	if s.nextPRNumber <= 0 {
+		s.nextPRNumber = 1000
+	}
+	number := s.nextPRNumber
+	s.nextPRNumber++
+	url := "https://example.invalid/pr/" + strconv.Itoa(number)
+	pr := &ghapi.PullRequest{
+		Number:  ghapi.Int(number),
+		State:   ghapi.String("open"),
+		HTMLURL: ghapi.String(url),
+		Title:   ghapi.String(title),
+		Body:    ghapi.String(body),
+		Head: &ghapi.PullRequestBranch{
+			Ref: ghapi.String(head),
+		},
+		Base: &ghapi.PullRequestBranch{
+			Ref: ghapi.String(base),
+		},
+	}
+	if s.openPRByRef == nil {
+		s.openPRByRef = make(map[string]*ghapi.PullRequest)
+	}
+	s.openPRByRef[head+"->"+base] = pr
+	return pr, nil
 }

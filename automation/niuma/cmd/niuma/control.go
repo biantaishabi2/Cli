@@ -306,6 +306,8 @@ type githubControlClient interface {
 	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	FindMarker(ctx context.Context, issueNumber int, t marker.Type) (*gh.MarkerComment, error)
 	GetPR(ctx context.Context, number int) (*ghapi.PullRequest, error)
+	FindOpenPR(ctx context.Context, head, base string) (*ghapi.PullRequest, error)
+	CreatePR(ctx context.Context, title, body, head, base string) (*ghapi.PullRequest, error)
 }
 
 func (g *gitHubControlOps) ListIssuesWithLabel(ctx context.Context, label string) ([]control.IssueInfo, error) {
@@ -479,6 +481,35 @@ func (g *gitHubControlOps) ResolvePRReviewStatus(ctx context.Context, issueNumbe
 	}, nil
 }
 
+func (g *gitHubControlOps) FindOpenPR(ctx context.Context, head, base string) (*control.PullRequestInfo, error) {
+	pr, err := g.client.FindOpenPR(ctx, head, base)
+	if err != nil {
+		return nil, err
+	}
+	return toControlPullRequestInfo(pr), nil
+}
+
+func (g *gitHubControlOps) CreatePR(ctx context.Context, title, body, head, base string) (*control.PullRequestInfo, error) {
+	pr, err := g.client.CreatePR(ctx, title, body, head, base)
+	if err != nil {
+		return nil, err
+	}
+	return toControlPullRequestInfo(pr), nil
+}
+
+func toControlPullRequestInfo(pr *ghapi.PullRequest) *control.PullRequestInfo {
+	if pr == nil {
+		return nil
+	}
+	return &control.PullRequestInfo{
+		Number: pr.GetNumber(),
+		URL:    pr.GetHTMLURL(),
+		State:  pr.GetState(),
+		Head:   strings.TrimSpace(pr.GetHead().GetRef()),
+		Base:   strings.TrimSpace(pr.GetBase().GetRef()),
+	}
+}
+
 func (g *gitHubControlOps) resolveOpenPR(ctx context.Context, issueNumber int) (int, *ghapi.PullRequest, error) {
 	found, err := g.client.FindMarker(ctx, issueNumber, marker.TypePRCreated)
 	if err != nil {
@@ -628,12 +659,12 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("解析 integration 分支失败: %w", err)
 	}
 
-	fmt.Printf("开始合并 %s 到 master...\n", integrationBranch)
+	fmt.Printf("开始准备 %s -> master 的收口 PR...\n", integrationBranch)
 	if err := ctrl.Merge(ctx, integrationBranch); err != nil {
-		return fmt.Errorf("合并失败: %w", err)
+		return fmt.Errorf("准备收口 PR 失败: %w", err)
 	}
 
-	fmt.Println("合并完成。")
+	fmt.Println("收口 PR 准备完成。")
 	return nil
 }
 

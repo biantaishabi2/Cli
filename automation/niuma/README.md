@@ -156,12 +156,13 @@ niuma control merge --issues 40,41,42  # 人批准后批量合并
 
 - 输入 `--issues` 后，先从 task metadata 解析唯一 integration 分支（`meta_issue_slug -> integration/<slug>`）
 - 若 issue 集合映射到多个 integration 分支，命令直接失败（避免误合并）
-- 合并策略固定为 `fast-forward only`，不在主干制造额外 merge commit
-- 幂等语义：若 `master` 已包含目标 integration 分支，返回成功并输出 `merge no-op`
+- 收口策略固定为 PR 模式：创建（或复用）`integration/<slug> -> master` 的 open PR
+- 幂等语义：
+  - 若已存在同 head/base 的 open PR，返回成功并复用该 PR（不重复创建）
+  - 若 `master` 已包含目标 integration 分支，返回成功并输出 `merge no-op`
 - 失败语义：
   - 目标分支不存在 -> 失败
-  - 主干与 integration 已分叉（不可 ff）-> 失败并提示人工处理
-  - push 被策略拒绝（保护分支/权限）-> 失败并保留诊断信息
+  - 查询/创建 PR 失败（权限、分支策略、API 错误）-> 失败并保留诊断信息
 
 `control.dag_sync` 默认配置：
 
