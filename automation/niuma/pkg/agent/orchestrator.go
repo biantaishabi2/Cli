@@ -1001,6 +1001,7 @@ type prHistoryContext struct {
 	reviewSections  []string
 	commentSections []string
 	trimmedReasons  []string
+	warnings        []string
 }
 
 // buildPhasePromptInput 按“核心上下文 + 阶段增量”统一装配 prompt 输入。
@@ -1045,6 +1046,9 @@ func (o *Orchestrator) buildPhasePromptInput(
 				fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史失败（phase=%s）：%v\n", resolvedPR, phase, err)
 			}
 			if historyCtx != nil {
+				if len(historyCtx.warnings) > 0 {
+					fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败（phase=%s）：%s\n", resolvedPR, phase, strings.Join(historyCtx.warnings, "；"))
+				}
 				input.ReviewComment = renderPRHistory(historyCtx.reviewSections, historyCtx.commentSections)
 				input.ReviewSummary = summarizeReviews(historyCtx.reviews)
 				trimmedReasons = append(trimmedReasons, historyCtx.trimmedReasons...)
@@ -1114,6 +1118,13 @@ func (o *Orchestrator) collectPRHistoryContext(ctx context.Context, prNumber int
 		reviewSections:  make([]string, 0, len(reviews)),
 		commentSections: make([]string, 0, len(comments)),
 		trimmedReasons:  make([]string, 0, 2),
+		warnings:        make([]string, 0, 2),
+	}
+	if reviewsErr != nil {
+		history.warnings = append(history.warnings, fmt.Sprintf("获取 PR reviews 失败: %v", reviewsErr))
+	}
+	if commentsErr != nil {
+		history.warnings = append(history.warnings, fmt.Sprintf("获取 PR comments 失败: %v", commentsErr))
 	}
 
 	for _, r := range reviews {
@@ -1144,18 +1155,7 @@ func (o *Orchestrator) collectPRHistoryContext(ctx context.Context, prNumber int
 		history.commentSections = append(history.commentSections, fmt.Sprintf("[PR Comment]\n%s", body))
 	}
 
-	var err error
-	if reviewsErr != nil {
-		err = fmt.Errorf("获取 PR reviews 失败: %w", reviewsErr)
-	}
-	if commentsErr != nil {
-		if err != nil {
-			err = fmt.Errorf("%w；获取 PR comments 失败: %v", err, commentsErr)
-		} else {
-			err = fmt.Errorf("获取 PR comments 失败: %w", commentsErr)
-		}
-	}
-	return history, err
+	return history, nil
 }
 
 func renderPRHistory(reviewSections, commentSections []string) string {
@@ -1425,9 +1425,9 @@ func (o *Orchestrator) buildPRHistory(ctx context.Context, prNumber int) (string
 	if history == nil {
 		return "", err
 	}
-	if err != nil {
+	if len(history.warnings) > 0 {
 		// 部分拉取失败时保留可用历史，避免“全有或全无”。
-		fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败，已降级保留可用上下文：%v\n", prNumber, err)
+		fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败，已降级保留可用上下文：%s\n", prNumber, strings.Join(history.warnings, "；"))
 	}
 	return renderPRHistory(history.reviewSections, history.commentSections), nil
 }
