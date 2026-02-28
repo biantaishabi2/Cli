@@ -29,12 +29,13 @@ type LabelGuardConfig struct {
 
 // ControlConfig 多 Issue 协调配置
 type ControlConfig struct {
-	TaskCtlBin              string        `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
-	MergeStrategy           string        `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix string        `yaml:"integration_branch_prefix"` // 默认 integration/batch-
-	MaxOldBranches          int           `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
-	MinPRsForIntegration    int           `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
-	DagSync                 DagSyncConfig `yaml:"dag_sync"`                  // DAG -> GitHub 展示层单向同步
+	TaskCtlBin               string        `yaml:"taskctl_bin"`                 // taskctl 二进制路径（可选，自动查找）
+	MergeStrategy            string        `yaml:"merge_strategy"`              // merge/squash，默认 merge
+	IntegrationBranchPrefix  string        `yaml:"integration_branch_prefix"`   // 默认 integration/batch-
+	MaxOldBranches           int           `yaml:"max_old_branches"`            // 保留旧 integration 分支数，默认 3
+	MinPRsForIntegration     int           `yaml:"min_prs_for_integration"`     // 触发 integration 构建的最少 PR 数，默认 2
+	NeedsHumanBlockingLabels []string      `yaml:"needs_human_blocking_labels"` // needs-human 保留判定的阻塞标签白名单
+	DagSync                  DagSyncConfig `yaml:"dag_sync"`                    // DAG -> GitHub 展示层单向同步
 }
 
 // DagSyncConfig DAG 展示层同步配置

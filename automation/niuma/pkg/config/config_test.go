@@ -259,6 +259,29 @@ control:
 	assert.Equal(t, 0.35, cfg.Control.DagSync.GetSkippedEdgeThresholdRatio())
 }
 
+func TestLoad_ControlNeedsHumanBlockingLabels(t *testing.T) {
+	dir := t.TempDir()
+	content := `ai:
+  default: codex
+  providers: {}
+control:
+  needs_human_blocking_labels:
+    - integration-conflict
+    - security-review-required
+    - dependency-waiting
+`
+	err := os.WriteFile(filepath.Join(dir, ".niuma.yml"), []byte(content), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"integration-conflict",
+		"security-review-required",
+		"dependency-waiting",
+	}, cfg.Control.NeedsHumanBlockingLabels)
+}
+
 func TestLoadWithDefaults_MissingLabelGuardSection_AppliesDefaults(t *testing.T) {
 	// 配置文件存在但缺少 label_guard 段时，应回退到默认值
 	dir := t.TempDir()
