@@ -153,8 +153,16 @@ jobs:
             echo "::error::merge-result 基线不存在: $MERGE_RESULT_DIR"
             exit 1
           fi
-          if [ "$MERGE_RESULT_DIR" = "$WORKSPACE_ROOT" ]; then
+          MERGE_RESULT_REALPATH="$(cd "$MERGE_RESULT_DIR" && pwd -P)"
+          WORKSPACE_ROOT_REALPATH="$(cd "$WORKSPACE_ROOT" && pwd -P)"
+          CURRENT_DIR_REALPATH="$(pwd -P)"
+
+          if [ "$MERGE_RESULT_REALPATH" = "$WORKSPACE_ROOT_REALPATH" ]; then
             echo "::error::self-check gate 禁止回落到 workspace 基线: $WORKSPACE_ROOT"
+            exit 1
+          fi
+          if [ "$CURRENT_DIR_REALPATH" != "$MERGE_RESULT_REALPATH" ]; then
+            echo "::error::self-check gate 当前目录必须是 merge-result: current=$CURRENT_DIR_REALPATH expected=$MERGE_RESULT_REALPATH"
             exit 1
           fi
 
@@ -167,5 +175,5 @@ jobs:
 
           "$NIUMA_BIN" gate run \
             --repo "$REPO" --issue "$ISSUE_NUMBER" \
-            --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_DIR" \
+            --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_REALPATH" \
             --max-retries "$MAX_RETRIES" --self-check

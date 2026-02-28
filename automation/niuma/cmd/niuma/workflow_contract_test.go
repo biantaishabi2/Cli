@@ -132,7 +132,9 @@ func TestWorkflowContract_ImplementSelfCheckUsesMergeResultBaseline(t *testing.T
 	assert.Contains(t, implementContent, "WORKSPACE_ROOT: ${{ github.workspace }}")
 	assert.Contains(t, implementContent, "merge-result 基线不存在")
 	assert.Contains(t, implementContent, "self-check gate 禁止回落到 workspace 基线")
-	assert.Contains(t, implementContent, "--repo-dir \"$MERGE_RESULT_DIR\"")
+	assert.Contains(t, implementContent, "CURRENT_DIR_REALPATH")
+	assert.Contains(t, implementContent, "self-check gate 当前目录必须是 merge-result")
+	assert.Contains(t, implementContent, "--repo-dir \"$MERGE_RESULT_REALPATH\"")
 
 	selfCheckStart := strings.Index(implementContent, "- name: Self-check gate")
 	require.NotEqual(t, -1, selfCheckStart, "必须存在 Self-check gate 步骤")

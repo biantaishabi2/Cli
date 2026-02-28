@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/gate"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
@@ -41,6 +42,7 @@ func init() {
 // - 0: 仅首轮执行，不做自动重试
 // - <0: 视为非法参数
 func parseMaxRetries(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
 	n, err := strconv.Atoi(raw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 '%s' 非法，回退为 %d\n", raw, defaultGateMaxRetries)

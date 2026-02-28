@@ -75,6 +75,15 @@ func TestParseMaxRetries_ZeroInput(t *testing.T) {
 	assert.Empty(t, stderr, "max-retries=0 不应输出 warning")
 }
 
+func TestParseMaxRetries_WhitespaceInput(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		result, err := parseMaxRetries(" 0 ")
+		assert.NoError(t, err)
+		assert.Equal(t, 0, result, "max-retries 应允许前后空白并保持语义")
+	})
+	assert.Empty(t, stderr, "合法输入带空白不应输出 warning")
+}
+
 func TestParseMaxRetries_NegativeInput(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		result, err := parseMaxRetries("-1")
@@ -94,4 +103,11 @@ func TestRetryCountMapping_OnlyCountsAutoRetries(t *testing.T) {
 	assert.Equal(t, 1, retryCountFromStorage(0, attemptKey), "读取 marker 时应恢复到内部失败计数")
 	assert.Equal(t, 2, retryCountFromStorage(1, attemptKey), "读取 marker 时应恢复到内部失败计数")
 	assert.Equal(t, 0, retryCountForDisplay(1, attemptKey), "输出给用户的 retry_count 应保持自动重试语义")
+}
+
+func TestRetryCountMapping_EscalationKeepsAutoRetrySemantics(t *testing.T) {
+	attemptKey := "issue-488-pr-100-run-1-attempt-1"
+
+	assert.Equal(t, 2, retryCountForStorage(3, attemptKey), "超限 escalation 场景下，外部 retry_count 仍只统计自动重试次数")
+	assert.Equal(t, 2, retryCountForDisplay(3, attemptKey), "输出给用户的 retry_count 在 escalation 场景下不应额外增长")
 }

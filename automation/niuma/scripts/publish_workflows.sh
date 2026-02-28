@@ -159,8 +159,12 @@ verify_implement_self_check_contract() {
     echo "verify failed: implement self-check 缺少 merge-result working-directory" >&2
     return 1
   fi
-  if ! grep -Fq '--repo-dir "$MERGE_RESULT_DIR"' <<< "$content"; then
-    echo "verify failed: implement self-check 缺少 --repo-dir \"\$MERGE_RESULT_DIR\"" >&2
+  if ! grep -Fq '--repo-dir "$MERGE_RESULT_REALPATH"' <<< "$content"; then
+    echo "verify failed: implement self-check 缺少 --repo-dir \"\$MERGE_RESULT_REALPATH\"" >&2
+    return 1
+  fi
+  if ! grep -Fq 'self-check gate 当前目录必须是 merge-result' <<< "$content"; then
+    echo "verify failed: implement self-check 缺少当前目录/merge-result 一致性校验" >&2
     return 1
   fi
   if grep -Fq '--repo-dir "$WORKSPACE"' <<< "$content"; then
