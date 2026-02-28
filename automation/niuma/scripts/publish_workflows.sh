@@ -5,6 +5,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SOURCE_DIR="$ROOT_DIR/.github/workflows"
 GITHUB_SCRIPTS_DIR="$ROOT_DIR/.github/scripts"
+NIUMA_CONFIG_DIR="$ROOT_DIR/.github/niuma"
+
+DEFAULT_PR_RUN_MODE_VALUE="${DEFAULT_PR_RUN_MODE:-full}"
+CRITICAL_REGRESSION_REQUIRED_VALUE="${CRITICAL_REGRESSION_REQUIRED:-true}"
+INFRA_RETRY_MAX_VALUE="${INFRA_RETRY_MAX:-2}"
+HIGH_RISK_PATHS_VALUE="${HIGH_RISK_PATHS:-automation/niuma/**,.github/workflows/**,.github/scripts/**,compiler/bcc/**,orchestration/**}"
+FORCE_POLICY_VARS_VALUE="${FORCE_POLICY_VARS:-false}"
+CRITICAL_CONFIG_FILE="$NIUMA_CONFIG_DIR/critical-regressions.yml"
 
 REPO=""
 BRANCH=""
@@ -81,6 +89,127 @@ REUSABLE_FILES=(
   "niuma-discuss-reusable.yml"
 )
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+to_lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+is_bool() {
+  case "$(to_lower "$(trim "$1")")" in
+    true|false|1|0|yes|no|on|off) return 0 ;;
+  esac
+  return 1
+}
+
+validate_policy_values() {
+  local mode
+  mode="$(to_lower "$(trim "$DEFAULT_PR_RUN_MODE_VALUE")")"
+  if [[ "$mode" != "smoke" && "$mode" != "critical" && "$mode" != "full" ]]; then
+    echo "invalid DEFAULT_PR_RUN_MODE: $DEFAULT_PR_RUN_MODE_VALUE (expected smoke|critical|full)" >&2
+    exit 1
+  fi
+  DEFAULT_PR_RUN_MODE_VALUE="$mode"
+
+  if ! is_bool "$CRITICAL_REGRESSION_REQUIRED_VALUE"; then
+    echo "invalid CRITICAL_REGRESSION_REQUIRED: $CRITICAL_REGRESSION_REQUIRED_VALUE (expected true|false)" >&2
+    exit 1
+  fi
+  CRITICAL_REGRESSION_REQUIRED_VALUE="$(to_lower "$(trim "$CRITICAL_REGRESSION_REQUIRED_VALUE")")"
+  if [[ "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "1" || "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "yes" || "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "on" ]]; then
+    CRITICAL_REGRESSION_REQUIRED_VALUE="true"
+  fi
+  if [[ "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "0" || "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "no" || "$CRITICAL_REGRESSION_REQUIRED_VALUE" == "off" ]]; then
+    CRITICAL_REGRESSION_REQUIRED_VALUE="false"
+  fi
+
+  if [[ ! "$INFRA_RETRY_MAX_VALUE" =~ ^[0-9]+$ ]]; then
+    echo "invalid INFRA_RETRY_MAX: $INFRA_RETRY_MAX_VALUE (expected non-negative integer)" >&2
+    exit 1
+  fi
+
+  HIGH_RISK_PATHS_VALUE="$(trim "$HIGH_RISK_PATHS_VALUE")"
+  if [[ -z "$HIGH_RISK_PATHS_VALUE" ]]; then
+    echo "invalid HIGH_RISK_PATHS: empty value is not allowed" >&2
+    exit 1
+  fi
+
+  if ! is_bool "$FORCE_POLICY_VARS_VALUE"; then
+    echo "invalid FORCE_POLICY_VARS: $FORCE_POLICY_VARS_VALUE (expected true|false)" >&2
+    exit 1
+  fi
+  FORCE_POLICY_VARS_VALUE="$(to_lower "$(trim "$FORCE_POLICY_VARS_VALUE")")"
+  if [[ "$FORCE_POLICY_VARS_VALUE" == "1" || "$FORCE_POLICY_VARS_VALUE" == "yes" || "$FORCE_POLICY_VARS_VALUE" == "on" ]]; then
+    FORCE_POLICY_VARS_VALUE="true"
+  fi
+  if [[ "$FORCE_POLICY_VARS_VALUE" == "0" || "$FORCE_POLICY_VARS_VALUE" == "no" || "$FORCE_POLICY_VARS_VALUE" == "off" ]]; then
+    FORCE_POLICY_VARS_VALUE="false"
+  fi
+}
+
+validate_critical_config() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    echo "missing critical regression config: $file" >&2
+    exit 1
+  fi
+
+  local schema_version
+  schema_version="$(awk '
+    /^[[:space:]]*#/ {next}
+    {
+      line=$0
+      sub(/[[:space:]]*#.*$/, "", line)
+      if (line ~ /^[[:space:]]*schema_version:[[:space:]]*/) {
+        sub(/^[[:space:]]*schema_version:[[:space:]]*/, "", line)
+        gsub(/[[:space:]]+/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$file")"
+
+  if [[ "$schema_version" != "1" ]]; then
+    echo "invalid $file: schema_version must be 1" >&2
+    exit 1
+  fi
+
+  local jobs
+  jobs="$(awk '
+    BEGIN {in_jobs=0}
+    /^[[:space:]]*#/ {next}
+    {
+      line=$0
+      sub(/[[:space:]]*#.*$/, "", line)
+    }
+    line ~ /^[[:space:]]*critical_jobs:[[:space:]]*$/ {in_jobs=1; next}
+    in_jobs && line ~ /^[[:space:]]*-[[:space:]]*/ {
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (length(line) > 0) print line
+      next
+    }
+    in_jobs && line ~ /^[[:space:]]*[A-Za-z0-9_]+:[[:space:]]*/ {in_jobs=0}
+  ' "$file")"
+
+  if [[ -z "$jobs" ]]; then
+    echo "invalid $file: critical_jobs must not be empty" >&2
+    exit 1
+  fi
+
+  local dup
+  dup="$(printf '%s\n' "$jobs" | sort | uniq -d || true)"
+  if [[ -n "$dup" ]]; then
+    echo "invalid $file: duplicated critical_jobs entries detected: $dup" >&2
+    exit 1
+  fi
+}
+
 confirm_target_repo() {
   if ! gh repo view "$REPO" >/dev/null 2>&1; then
     echo "target repo not accessible: $REPO" >&2
@@ -130,6 +259,24 @@ put_file() {
   PUBLISHED_PAIRS+=("$local_file::$remote_path")
 }
 
+has_repo_variable() {
+  local var_name="$1"
+  gh variable list --repo "$REPO" --json name --jq ".[] | select(.name == \"$var_name\") | .name" | grep -q .
+}
+
+ensure_repo_variable() {
+  local var_name="$1"
+  local var_value="$2"
+
+  if [[ "$FORCE_POLICY_VARS_VALUE" == "false" ]] && has_repo_variable "$var_name"; then
+    echo "keep repo variable: $REPO/$var_name (already exists)"
+    return 0
+  fi
+
+  gh variable set "$var_name" --repo "$REPO" --body "$var_value"
+  echo "published repo variable: $REPO/$var_name=$var_value"
+}
+
 verify_remote_file() {
   local local_file="$1"
   local remote_path="$2"
@@ -175,16 +322,25 @@ verify_implement_self_check_contract() {
   echo "verified: implement self-check merge-result baseline contract"
 }
 
+validate_policy_values
+validate_critical_config "$CRITICAL_CONFIG_FILE"
 confirm_target_repo
 
 for file in "${ENTRY_FILES[@]}"; do
   put_file "$SOURCE_DIR/$file" ".github/workflows/$file"
 done
 
+ensure_repo_variable "DEFAULT_PR_RUN_MODE" "$DEFAULT_PR_RUN_MODE_VALUE"
+ensure_repo_variable "CRITICAL_REGRESSION_REQUIRED" "$CRITICAL_REGRESSION_REQUIRED_VALUE"
+ensure_repo_variable "INFRA_RETRY_MAX" "$INFRA_RETRY_MAX_VALUE"
+ensure_repo_variable "HIGH_RISK_PATHS" "$HIGH_RISK_PATHS_VALUE"
+
 if [[ "$MODE" == "full" ]]; then
   for file in "${REUSABLE_FILES[@]}"; do
     put_file "$SOURCE_DIR/$file" ".github/workflows/$file"
   done
+
+  put_file "$CRITICAL_CONFIG_FILE" ".github/niuma/critical-regressions.yml"
 
   if [[ -f "$GITHUB_SCRIPTS_DIR/niuma-test-gate.sh" ]]; then
     put_file "$GITHUB_SCRIPTS_DIR/niuma-test-gate.sh" ".github/scripts/niuma-test-gate.sh"

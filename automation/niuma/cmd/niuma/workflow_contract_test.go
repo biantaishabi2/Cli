@@ -170,6 +170,79 @@ func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
 	assert.NotContains(t, content, "skip_test_gate")
 }
 
+func TestWorkflowContract_GateScriptRiskDecisionContract(t *testing.T) {
+	content := loadRepoFile(t, filepath.Join(".github", "scripts", "niuma-test-gate.sh"))
+
+	assert.Contains(t, content, "HIGH_RISK_PATHS")
+	assert.Contains(t, content, "RISK_LEVEL")
+	assert.Contains(t, content, "RUN_MODE")
+	assert.Contains(t, content, "REQUIRED_JOBS")
+	assert.Contains(t, content, "CRITICAL_REGRESSION_REQUIRED")
+	assert.Contains(t, content, "CRITICAL_REGRESSION_CONFIG")
+}
+
+func TestWorkflowContract_GateScriptFallbackAndBlockContract(t *testing.T) {
+	content := loadRepoFile(t, filepath.Join(".github", "scripts", "niuma-test-gate.sh"))
+
+	assert.Contains(t, content, "critical_fallback_full")
+	assert.Contains(t, content, "CRITICAL_REGRESSION_MISSING")
+	assert.Contains(t, content, "INSUFFICIENT_COVERAGE_FOR_HIGH_RISK")
+	assert.Contains(t, content, "REQUIRED_JOBS_NOT_EXECUTED")
+	assert.Contains(t, content, "REQUIRED_JOBS_TIMEOUT")
+}
+
+func TestWorkflowContract_GateScriptTimeoutRetryAndStructuredLogContract(t *testing.T) {
+	content := loadRepoFile(t, filepath.Join(".github", "scripts", "niuma-test-gate.sh"))
+
+	assert.Contains(t, content, "INFRA_RETRY_MAX")
+	assert.Contains(t, content, "TIMEOUT_RETRYING")
+	assert.Contains(t, content, "TIMEOUT_BLOCKED")
+	assert.Contains(t, content, "run_mode=")
+	assert.Contains(t, content, "risk_level=")
+	assert.Contains(t, content, "required_jobs=")
+	assert.Contains(t, content, "actual_jobs=")
+	assert.Contains(t, content, "missing_jobs=")
+	assert.Contains(t, content, "reason_code=")
+	assert.Contains(t, content, "retry_count=")
+}
+
+func TestWorkflowContract_EntryWorkflowsPropagateGatePolicyVars(t *testing.T) {
+	files := []string{
+		"niuma-implement.yml",
+		"niuma-review.yml",
+		"niuma-iterate.yml",
+	}
+	for _, file := range files {
+		content := loadWorkflowFile(t, file)
+		assert.Contains(t, content, "default_pr_run_mode")
+		assert.Contains(t, content, "critical_regression_required")
+		assert.Contains(t, content, "infra_retry_max")
+		assert.Contains(t, content, "high_risk_paths")
+	}
+}
+
+func TestWorkflowContract_ReusableWorkflowsAcceptGatePolicyInputs(t *testing.T) {
+	files := []string{
+		"niuma-implement-reusable.yml",
+		"niuma-review-reusable.yml",
+		"niuma-iterate-reusable.yml",
+	}
+	for _, file := range files {
+		content := loadWorkflowFile(t, file)
+		assert.Contains(t, content, "default_pr_run_mode:")
+		assert.Contains(t, content, "critical_regression_required:")
+		assert.Contains(t, content, "infra_retry_max:")
+		assert.Contains(t, content, "high_risk_paths:")
+	}
+}
+
+func TestWorkflowContract_CriticalRegressionConfigSchema(t *testing.T) {
+	content := loadRepoFile(t, filepath.Join(".github", "niuma", "critical-regressions.yml"))
+	assert.Contains(t, content, "schema_version: 1")
+	assert.Contains(t, content, "critical_jobs:")
+	assert.Contains(t, content, "- ")
+}
+
 // ─── YAML 结构体定义 ───
 
 type workflowFile struct {

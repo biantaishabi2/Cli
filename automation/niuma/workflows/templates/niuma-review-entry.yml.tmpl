@@ -15,4 +15,8 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ format('{0}', github.event.issue.number) }}
+      default_pr_run_mode: ${{ vars.DEFAULT_PR_RUN_MODE || 'full' }}
+      critical_regression_required: ${{ vars.CRITICAL_REGRESSION_REQUIRED || 'true' }}
+      infra_retry_max: ${{ vars.INFRA_RETRY_MAX || '2' }}
+      high_risk_paths: ${{ vars.HIGH_RISK_PATHS || '' }}
     secrets: inherit

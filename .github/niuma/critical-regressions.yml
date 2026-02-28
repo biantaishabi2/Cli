@@ -1,0 +1,5 @@
+schema_version: 1
+critical_jobs:
+  - bot label guard + niuma gate tests (ubuntu)
+  - taskctl test (ubuntu)
+  - bcc test (ubuntu)
