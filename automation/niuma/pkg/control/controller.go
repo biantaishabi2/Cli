@@ -2075,21 +2075,145 @@ func (c *Controller) Status(ctx context.Context) (*ControlStatus, error) {
 	}, nil
 }
 
-// Merge 将 integration 分支合并到 master
-// 人工批准后执行：integration/{slug} → master
+// ResolveIntegrationBranchForIssues 根据 issue 集合解析唯一 integration 分支。
+// 约束：所有 issue 必须映射到同一个 integration/* 分支，否则返回错误。
+func (c *Controller) ResolveIntegrationBranchForIssues(issueNums []int) (string, error) {
+	if c.taskctl == nil {
+		return "", fmt.Errorf("taskctl 未配置，无法解析 integration 分支")
+	}
+	targets := uniquePositiveIssueNumbers(issueNums)
+	if len(targets) == 0 {
+		return "", fmt.Errorf("issue 列表为空，无法解析 integration 分支")
+	}
+
+	tasks, err := c.taskctl.List("")
+	if err != nil {
+		return "", fmt.Errorf("读取任务失败: %w", err)
+	}
+
+	tasksByIssue := make(map[int][]Task)
+	for _, task := range tasks {
+		issueNum := task.IssueNum()
+		if issueNum <= 0 {
+			continue
+		}
+		tasksByIssue[issueNum] = append(tasksByIssue[issueNum], task)
+	}
+
+	var (
+		resolvedBranch string
+		missingIssues  []int
+		branchMismatch []string
+	)
+
+	for _, issueNum := range targets {
+		candidates := tasksByIssue[issueNum]
+		if len(candidates) == 0 {
+			missingIssues = append(missingIssues, issueNum)
+			continue
+		}
+
+		// 优先取 active task，避免历史已完成 task 的旧 metadata 干扰分支解析。
+		selected := candidates[len(candidates)-1]
+		for i := range candidates {
+			if isTaskActiveStatus(candidates[i].Status) {
+				selected = candidates[i]
+				break
+			}
+		}
+
+		branch := c.getIntegrationBranchName(&selected)
+		if resolvedBranch == "" {
+			resolvedBranch = branch
+			continue
+		}
+		if branch != resolvedBranch {
+			branchMismatch = append(branchMismatch, fmt.Sprintf("#%d->%s", issueNum, branch))
+		}
+	}
+
+	if len(missingIssues) > 0 {
+		return "", fmt.Errorf("issue 未找到任务映射: %v", missingIssues)
+	}
+	if len(branchMismatch) > 0 {
+		return "", fmt.Errorf("issue 集合映射到多个 integration 分支: expected=%s mismatched=%s", resolvedBranch, strings.Join(branchMismatch, ","))
+	}
+	return resolvedBranch, nil
+}
+
+// Merge 将 integration 分支快进合并到主干（默认 master）。
+// 人工批准后执行：integration/{slug} -> master。
 func (c *Controller) Merge(ctx context.Context, integrationBranch string) error {
+	_ = ctx
 	if c.builder == nil {
 		return fmt.Errorf("IntegrationBuilder 未配置")
 	}
 
-	// 使用 GitHub API 创建 PR 或直接 merge
-	// 这里简化处理：直接 fast-forward merge
-	fmt.Printf("[control] 合并 %s 到 master...\n", integrationBranch)
+	integrationBranch = strings.TrimSpace(integrationBranch)
+	if integrationBranch == "" {
+		return fmt.Errorf("integration 分支名不能为空")
+	}
+	if !strings.HasPrefix(integrationBranch, "integration/") {
+		return fmt.Errorf("非法 integration 分支 %q（必须以 integration/ 开头）", integrationBranch)
+	}
 
-	// 实际实现需要调用 GitHub API 或 git 命令
-	// 这里只是一个占位，具体实现取决于 GitHubOps 接口的扩展
+	baseBranch := strings.TrimSpace(c.builder.baseBranch)
+	if baseBranch == "" {
+		baseBranch = "master"
+	}
 
-	return fmt.Errorf("Merge 实现待完成：需要扩展 GitHubOps 接口支持分支合并")
+	statusOut, err := c.builder.gitOutput("status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("检查工作区状态失败: %w", err)
+	}
+	if strings.TrimSpace(statusOut) != "" {
+		return fmt.Errorf("工作区不干净，拒绝执行合并；请先清理本地变更")
+	}
+
+	if err := c.builder.git("fetch", "origin"); err != nil {
+		return fmt.Errorf("拉取远端分支失败: %w", err)
+	}
+	if !c.builder.remoteBranchExists(integrationBranch) {
+		return fmt.Errorf("远端分支不存在: origin/%s", integrationBranch)
+	}
+	if !c.builder.remoteBranchExists(baseBranch) {
+		return fmt.Errorf("远端分支不存在: origin/%s", baseBranch)
+	}
+
+	if err := c.builder.git("checkout", baseBranch); err != nil {
+		if errReset := c.builder.git("checkout", "-B", baseBranch, "origin/"+baseBranch); errReset != nil {
+			return fmt.Errorf("切换主干分支失败: %w", err)
+		}
+	}
+	// 使用 ff-only 与远端主干对齐，避免破坏式 reset。
+	if err := c.builder.git("merge", "--ff-only", "origin/"+baseBranch); err != nil {
+		return fmt.Errorf("同步本地主干分支失败（非 fast-forward）: %w", err)
+	}
+
+	// 已包含时直接 no-op，保持幂等。
+	if err := c.builder.git("merge-base", "--is-ancestor", "origin/"+integrationBranch, "HEAD"); err == nil {
+		fmt.Printf("[control] %s 已包含 origin/%s，merge no-op\n", baseBranch, integrationBranch)
+		return nil
+	}
+
+	// 只允许 fast-forward，避免在主干制造额外 merge commit。
+	if err := c.builder.git("merge-base", "--is-ancestor", "HEAD", "origin/"+integrationBranch); err != nil {
+		return fmt.Errorf("无法快进合并 origin/%s 到 %s：分支已分叉", integrationBranch, baseBranch)
+	}
+
+	if err := c.builder.git("merge", "--ff-only", "origin/"+integrationBranch); err != nil {
+		return fmt.Errorf("执行快进合并失败: %w", err)
+	}
+	if err := c.builder.git("push", "origin", baseBranch); err != nil {
+		return fmt.Errorf("推送主干分支失败: %w", err)
+	}
+
+	head, err := c.builder.gitOutput("rev-parse", "HEAD")
+	if err != nil {
+		head = "unknown"
+	}
+	fmt.Printf("[control] 合并成功: origin/%s -> %s (head=%s)\n", integrationBranch, baseBranch, strings.TrimSpace(head))
+	return nil
 }
 
 // FormatStatus 格式化输出控制状态

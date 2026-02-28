@@ -614,30 +614,19 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 解析 issue 编号
-	parts := strings.Split(flagControlIssues, ",")
-	var issueNums []int
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return fmt.Errorf("无效的 issue 编号: %s", p)
-		}
-		issueNums = append(issueNums, n)
+	issueNums, err := parseIssueNumberList(flagControlIssues)
+	if err != nil {
+		return err
 	}
-
 	if len(issueNums) == 0 {
 		return fmt.Errorf("请指定至少一个 issue 编号")
 	}
 
 	ctx := context.Background()
-
-	// 简化处理：固定使用 integration/main
-	// TODO: 根据 issueNums 确定对应的 integration 分支
-	integrationBranch := "integration/main"
+	integrationBranch, err := ctrl.ResolveIntegrationBranchForIssues(issueNums)
+	if err != nil {
+		return fmt.Errorf("解析 integration 分支失败: %w", err)
+	}
 
 	fmt.Printf("开始合并 %s 到 master...\n", integrationBranch)
 	if err := ctrl.Merge(ctx, integrationBranch); err != nil {
@@ -646,6 +635,28 @@ func runControlMerge(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("合并完成。")
 	return nil
+}
+
+func parseIssueNumberList(raw string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	seen := make(map[int]struct{}, len(parts))
+	result := make([]int, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("无效的 issue 编号: %s", p)
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		result = append(result, n)
+	}
+	return result, nil
 }
 
 func runControlCheck(cmd *cobra.Command, args []string) error {

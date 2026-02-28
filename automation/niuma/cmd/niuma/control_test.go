@@ -298,6 +298,22 @@ func TestResolveIntegrationGateMaxRetries_InvalidEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "NIUMA_INTEGRATION_GATE_MAX_RETRIES")
 }
 
+func TestParseIssueNumberList(t *testing.T) {
+	issues, err := parseIssueNumberList("40, 41,40, 42")
+	require.NoError(t, err)
+	assert.Equal(t, []int{40, 41, 42}, issues)
+}
+
+func TestParseIssueNumberList_Invalid(t *testing.T) {
+	_, err := parseIssueNumberList("40,foo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "无效的 issue 编号")
+
+	_, err = parseIssueNumberList("0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "无效的 issue 编号")
+}
+
 func TestResolvePRConflictRetryThreshold(t *testing.T) {
 	value, err := resolvePRConflictRetryThreshold(-1, "")
 	require.NoError(t, err)
