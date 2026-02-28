@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/gate"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
@@ -28,25 +29,49 @@ var gateRunCmd = &cobra.Command{
 var flagGateMaxRetries string
 var flagGateSelfCheck bool
 
+const defaultGateMaxRetries = 2
+
 func init() {
 	gateCmd.AddCommand(gateRunCmd)
-	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", "2", "gate 自动修复最大重试次数")
+	gateRunCmd.Flags().StringVar(&flagGateMaxRetries, "max-retries", strconv.Itoa(defaultGateMaxRetries), "gate 自动修复最大重试次数")
 	gateRunCmd.Flags().BoolVar(&flagGateSelfCheck, "self-check", false, "self-check 模式：gate 失败时不设标签/不写 issue 评论，仅写 PR review")
 }
 
-// parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2，值 ≤0 clamp 到 1。
-func parseMaxRetries(raw string) int {
-	const defaultVal = 2
+// parseMaxRetries 将 string 解析为 int，解析失败回退默认值 2。
+// 语义约束：
+// - 0: 仅首轮执行，不做自动重试
+// - <0: 视为非法参数
+func parseMaxRetries(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 '%s' 非法，回退为 %d\n", raw, defaultVal)
-		return defaultVal
+		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 '%s' 非法，回退为 %d\n", raw, defaultGateMaxRetries)
+		return defaultGateMaxRetries, nil
 	}
-	if n <= 0 {
-		fmt.Fprintf(os.Stderr, "WARNING: --max-retries 值 %d ≤ 0，clamp 到 1\n", n)
-		return 1
+	if n < 0 {
+		return 0, fmt.Errorf("参数 --max-retries 非法: %d（必须 >= 0）", n)
 	}
-	return n
+	return n, nil
+}
+
+// retry_count 契约语义：仅统计自动重试次数，不包含首轮失败。
+// gate.Runner 内部计数是失败次数（首轮=1），这里做边界映射以保持外部语义稳定。
+func retryCountForStorage(internalCount int, attemptKey string) int {
+	if attemptKey == "" || internalCount <= 0 {
+		return internalCount
+	}
+	return internalCount - 1
+}
+
+func retryCountFromStorage(storedCount int, attemptKey string) int {
+	if attemptKey == "" || storedCount < 0 {
+		return storedCount
+	}
+	return storedCount + 1
+}
+
+func retryCountForDisplay(internalCount int, attemptKey string) int {
+	return retryCountForStorage(internalCount, attemptKey)
 }
 
 func runGateRun(cmd *cobra.Command, args []string) error {
@@ -54,7 +79,10 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("必须指定 --repo、--issue 和 --pr")
 	}
 
-	maxRetries := parseMaxRetries(flagGateMaxRetries)
+	maxRetries, err := parseMaxRetries(flagGateMaxRetries)
+	if err != nil {
+		return err
+	}
 
 	repoDir := "."
 	if flagRepoDir != "" {
@@ -99,16 +127,17 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 			if mc == nil {
 				return 0, "", nil
 			}
-			return mc.Marker.Revision, mc.Marker.AttemptKey, nil
+			return retryCountFromStorage(mc.Marker.Revision, mc.Marker.AttemptKey), mc.Marker.AttemptKey, nil
 		},
 		UpsertGateRetryCount: func(ctx context.Context, issue int, count int, attemptKey string) error {
+			storedCount := retryCountForStorage(count, attemptKey)
 			m := &marker.Marker{
 				Type:       marker.TypeGateRetry,
 				Issue:      issue,
-				Revision:   count,
+				Revision:   storedCount,
 				AttemptKey: attemptKey,
 			}
-			body := fmt.Sprintf("gate retry_count=%d", count)
+			body := fmt.Sprintf("gate retry_count=%d", storedCount)
 			return client.CreateOrUpdateMarker(ctx, issue, m, body)
 		},
 		HasLabel: func(ctx context.Context, issue int, label string) (bool, error) {
@@ -139,11 +168,12 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if errors.Is(err, gate.ErrGateFailed) {
+		displayRetryCount := retryCountForDisplay(result.RetryCount, result.AttemptKey)
 		fmt.Printf(
 			"gate 未通过: issue=%d pr=%d retry_count=%d max_retries=%d attempt_key=%s escalated=%t dedup=%t\n",
 			flagIssue,
 			flagPR,
-			result.RetryCount,
+			displayRetryCount,
 			result.MaxRetries,
 			result.AttemptKey,
 			result.Escalated,
