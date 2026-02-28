@@ -26,7 +26,7 @@ func NewWorkspace(repoDir string) *Workspace {
 }
 
 // Create 创建 worktree 并切出新分支
-// base 为空时默认使用 master，返回 worktree 的绝对路径
+// base 为空时默认使用远端默认分支（无 origin 时回退 master），返回 worktree 的绝对路径
 func (w *Workspace) Create(issueNum int, slug, base string) (string, error) {
 	wtPath := w.Path(issueNum)
 	branch := w.branchName(issueNum, slug)
@@ -179,11 +179,16 @@ func (w *Workspace) branchName(issueNum int, slug string) string {
 // 有 origin 时优先 fetch 并使用 origin/<base>，否则回退到本地分支。
 func (w *Workspace) resolveWorktreeBaseRef(base string) (string, error) {
 	base = strings.TrimSpace(base)
+	hasOrigin := w.hasOrigin()
 	if base == "" {
-		base = "master"
+		if hasOrigin {
+			base = w.remoteDefaultBranch()
+		} else {
+			base = fallbackDefaultBranch
+		}
 	}
 
-	if w.hasOrigin() {
+	if hasOrigin {
 		if err := w.fetchRef(base); err == nil {
 			return "origin/" + base, nil
 		}
@@ -196,6 +201,10 @@ func (w *Workspace) resolveWorktreeBaseRef(base string) (string, error) {
 			if err := w.fetchRef(base); err == nil {
 				return "origin/" + base, nil
 			}
+		}
+		// 远端不可达时，允许复用已存在的本地远端跟踪引用。
+		if w.hasRemoteBranch(base) {
+			return "origin/" + base, nil
 		}
 		if w.branchExists(base) {
 			return base, nil
@@ -243,8 +252,13 @@ func (w *Workspace) ensureRemoteBaselineBranch(base string) error {
 		return nil
 	}
 
-	defaultBranch := w.remoteDefaultBranch()
+	resolution := resolveDefaultBranch(w.RepoDir)
+	defaultBranch := resolution.Branch
 	if err := w.fetchRef(defaultBranch); err != nil && !w.branchExists(defaultBranch) {
+		if resolution.UsedFallback {
+			return fmt.Errorf("无法获取默认分支 %s 用于创建 %s（默认分支探测已回退，详情: %s）: %w",
+				defaultBranch, base, resolution.probeSummary(), err)
+		}
 		return fmt.Errorf("无法获取默认分支 %s 用于创建 %s: %w", defaultBranch, base, err)
 	}
 
@@ -257,6 +271,10 @@ func (w *Workspace) ensureRemoteBaselineBranch(base string) error {
 	cmd.Dir = w.RepoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if resolution.UsedFallback {
+			return fmt.Errorf("自动创建基线分支失败（默认分支探测已回退，详情: %s）: %w\n%s",
+				resolution.probeSummary(), err, string(out))
+		}
 		return fmt.Errorf("自动创建基线分支失败: %w\n%s", err, string(out))
 	}
 	return nil
@@ -264,19 +282,7 @@ func (w *Workspace) ensureRemoteBaselineBranch(base string) error {
 
 // remoteDefaultBranch 返回远端默认分支名，失败时回退 master。
 func (w *Workspace) remoteDefaultBranch() string {
-	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
-	cmd.Dir = w.RepoDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "master"
-	}
-	ref := strings.TrimSpace(string(out))
-	parts := strings.Split(ref, "/")
-	branch := strings.TrimSpace(parts[len(parts)-1])
-	if branch == "" {
-		return "master"
-	}
-	return branch
+	return resolveDefaultBranch(w.RepoDir).Branch
 }
 
 // hasRemoteBranch 检查远端分支 refs/remotes/origin/<branch> 是否存在。
