@@ -10,6 +10,9 @@ REPO=""
 BRANCH=""
 MODE="entry"
 MESSAGE="chore: sync niuma workflows from Cli"
+SKIP_VERIFY=0
+MEN_TARGET_REPO="biantaishabi2/men"
+PUBLISHED_PAIRS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,6 +36,10 @@ while [[ $# -gt 0 ]]; do
       SOURCE_DIR="${2:-}"
       shift 2
       ;;
+    --skip-verify)
+      SKIP_VERIFY=1
+      shift
+      ;;
     *)
       echo "unknown arg: $1" >&2
       exit 1
@@ -41,7 +48,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPO" ]]; then
-  echo "usage: $0 --repo <owner/repo> [--mode entry|full] [--branch <name>] [--message <msg>] [--source-dir <dir>]" >&2
+  echo "usage: $0 --repo <owner/repo> [--mode entry|full] [--branch <name>] [--message <msg>] [--source-dir <dir>] [--skip-verify]" >&2
   exit 1
 fi
 
@@ -68,6 +75,18 @@ REUSABLE_FILES=(
   "niuma-iterate-reusable.yml"
   "niuma-discuss-reusable.yml"
 )
+
+confirm_target_repo() {
+  if ! gh repo view "$REPO" >/dev/null 2>&1; then
+    echo "target repo not accessible: $REPO" >&2
+    return 1
+  fi
+  if [[ "$REPO" == "$MEN_TARGET_REPO" ]]; then
+    echo "target repo confirmed: $REPO (men 回归目标 #69/#78)"
+  else
+    echo "warning: 当前目标仓库不是 $MEN_TARGET_REPO，发布完成后请至少同步一次到 $MEN_TARGET_REPO 并回归 #69/#78" >&2
+  fi
+}
 
 put_file() {
   local local_file="$1"
@@ -103,7 +122,26 @@ put_file() {
 
   gh api "${args[@]}" >/dev/null
   echo "published: $REPO/$remote_path"
+  PUBLISHED_PAIRS+=("$local_file::$remote_path")
 }
+
+verify_remote_file() {
+  local local_file="$1"
+  local remote_path="$2"
+  local local_content=""
+  local remote_content=""
+
+  local_content="$(base64 -w 0 < "$local_file")"
+  remote_content="$(gh api "repos/$REPO/contents/$remote_path" --jq '.content' | tr -d '\n')"
+
+  if [[ "$local_content" != "$remote_content" ]]; then
+    echo "verify failed: $REPO/$remote_path content mismatch" >&2
+    return 1
+  fi
+  echo "verified: $REPO/$remote_path"
+}
+
+confirm_target_repo
 
 for file in "${ENTRY_FILES[@]}"; do
   put_file "$SOURCE_DIR/$file" ".github/workflows/$file"
@@ -119,4 +157,20 @@ if [[ "$MODE" == "full" ]]; then
   else
     echo "warning: skip .github/scripts/niuma-test-gate.sh (not found in source repo)" >&2
   fi
+fi
+
+if [[ "$SKIP_VERIFY" -eq 0 ]]; then
+  echo "running post-publish verification..."
+  for pair in "${PUBLISHED_PAIRS[@]}"; do
+    local_file="${pair%%::*}"
+    remote_path="${pair##*::}"
+    verify_remote_file "$local_file" "$remote_path"
+  done
+  echo "post-publish verification passed: ${#PUBLISHED_PAIRS[@]} files"
+fi
+
+if [[ "$REPO" == "$MEN_TARGET_REPO" ]]; then
+  echo "regression hint: 请在 men 仓库回归 issue #69 和 #78 场景。"
+else
+  echo "regression hint: 发布到 $MEN_TARGET_REPO 后回归 issue #69 和 #78 场景。"
 fi

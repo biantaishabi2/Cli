@@ -122,14 +122,32 @@ jobs:
             echo "pr_number=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Prepare merge-result baseline for self-check gate
+        if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
+        env:
+          SOURCE_REPO_DIR: ${{ steps.resolve_dir.outputs.repo_dir }}
+          MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
+        run: |
+          if [ ! -d "$SOURCE_REPO_DIR" ]; then
+            echo "::error::repo_dir 不存在: $SOURCE_REPO_DIR"
+            exit 1
+          fi
+          if git -C "$SOURCE_REPO_DIR" worktree list --porcelain | awk '/^worktree /{print $2}' | grep -Fxq "$MERGE_RESULT_DIR"; then
+            git -C "$SOURCE_REPO_DIR" worktree remove "$MERGE_RESULT_DIR" --force || true
+          fi
+          rm -rf "$MERGE_RESULT_DIR"
+          git -C "$SOURCE_REPO_DIR" worktree add --force "$MERGE_RESULT_DIR" HEAD
+
       - name: Self-check loop (gate + iterate)
         if: steps.gate_label.outcome == 'success' && steps.find_pr.outputs.pr_number != ''
+        working-directory: ${{ github.workspace }}/merge-result
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           PR_NUMBER: ${{ steps.find_pr.outputs.pr_number }}
           WORKSPACE: ${{ steps.resolve_dir.outputs.repo_dir }}
+          MERGE_RESULT_DIR: ${{ github.workspace }}/merge-result
         run: |
           MAX_RETRIES=2
           if [[ "${{ inputs.gate_max_retries }}" =~ ^[0-9]+$ ]]; then
@@ -141,18 +159,14 @@ jobs:
           for ATTEMPT in $(seq 1 $((MAX_RETRIES + 1))); do
             if "$NIUMA_BIN" gate run \
                  --repo "$REPO" --issue "$ISSUE_NUMBER" \
-                 --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" \
+                 --pr "$PR_NUMBER" --repo-dir "$MERGE_RESULT_DIR" \
                  --max-retries "$MAX_RETRIES" --self-check; then
               echo "Gate passed on attempt $ATTEMPT"
               exit 0
             fi
 
             if [ "$ATTEMPT" -gt "$MAX_RETRIES" ]; then
-              echo "Gate failed after $MAX_RETRIES retries, running final escalation gate..."
-              "$NIUMA_BIN" gate run \
-                --repo "$REPO" --issue "$ISSUE_NUMBER" \
-                --pr "$PR_NUMBER" --repo-dir "$WORKSPACE" \
-                --max-retries 0
+              echo "Gate failed after $MAX_RETRIES retries; final escalation is handled by gate run."
               exit 1
             fi
 
