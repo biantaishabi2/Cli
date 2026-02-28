@@ -291,6 +291,33 @@ test_timeout_retry_then_block() {
   return 0
 }
 
+test_pending_wait_then_pass() {
+  local sandbox
+  sandbox=$(new_sandbox)
+  write_critical_config "$sandbox" "  - critical-agent-loop"
+
+  local counter_file="$sandbox/check_counter"
+  set +e
+  (
+    cd "$sandbox/work"
+    PATH="$sandbox/bin:$PATH" \
+    GITHUB_TOKEN=token \
+    PENDING_RETRY_MAX=3 \
+    PENDING_RETRY_INTERVAL=1 \
+    MOCK_CHECK_COUNTER_FILE="$counter_file" \
+    MOCK_FILES=$'automation/niuma/pkg/agent/loop_core.go\n' \
+    MOCK_CHECKS_SEQ=$'critical-agent-loop\tIN_PROGRESS\n__NEXT__\ncritical-agent-loop\tSUCCESS\n' \
+    "$SCRIPT_UNDER_TEST" 105
+  ) >"$sandbox/stdout" 2>"$sandbox/stderr"
+  local status=$?
+  set -e
+
+  assert_eq "0" "$status" "required jobs pending 收敛后应通过" || return 1
+  assert_contains "$sandbox/stdout" "reason_code=PENDING_RETRYING" "等待期间应输出 pending 重试日志" || return 1
+  assert_contains "$sandbox/stdout" "reason_code=PASS" "最终应输出 PASS" || return 1
+  return 0
+}
+
 run_case() {
   local name="$1"
   local fn="$2"
@@ -306,6 +333,7 @@ run_case "merge ref 优先路径" test_merge_ref_preferred
 run_case "高风险关键回归缺失阻塞" test_high_risk_missing_critical_blocks
 run_case "低风险文档 smoke 通过" test_low_risk_docs_smoke_pass
 run_case "timeout 重试后阻塞" test_timeout_retry_then_block
+run_case "pending 收敛后通过" test_pending_wait_then_pass
 
 echo "[unit] pass=$PASS_COUNT fail=$FAIL_COUNT"
 if [[ "$FAIL_COUNT" -ne 0 ]]; then

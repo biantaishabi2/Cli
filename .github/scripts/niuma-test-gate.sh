@@ -378,6 +378,22 @@ else
   INFRA_RETRY_MAX="2"
 fi
 
+PENDING_RETRY_MAX_RAW="${PENDING_RETRY_MAX:-30}"
+if [[ "$PENDING_RETRY_MAX_RAW" =~ ^[0-9]+$ ]]; then
+  PENDING_RETRY_MAX="$PENDING_RETRY_MAX_RAW"
+else
+  warn "PENDING_RETRY_MAX 非法: '$PENDING_RETRY_MAX_RAW'，回退为 30"
+  PENDING_RETRY_MAX="30"
+fi
+
+PENDING_RETRY_INTERVAL_RAW="${PENDING_RETRY_INTERVAL:-10}"
+if [[ "$PENDING_RETRY_INTERVAL_RAW" =~ ^[0-9]+$ ]]; then
+  PENDING_RETRY_INTERVAL="$PENDING_RETRY_INTERVAL_RAW"
+else
+  warn "PENDING_RETRY_INTERVAL 非法: '$PENDING_RETRY_INTERVAL_RAW'，回退为 10"
+  PENDING_RETRY_INTERVAL="10"
+fi
+
 HIGH_RISK_PATHS_DEFAULT="automation/niuma/**,.github/workflows/**,.github/scripts/**,compiler/bcc/**,orchestration/**"
 HIGH_RISK_PATHS_RAW="${HIGH_RISK_PATHS:-$HIGH_RISK_PATHS_DEFAULT}"
 CRITICAL_CONFIG_FILE="${CRITICAL_REGRESSION_CONFIG:-.github/niuma/critical-regressions.yml}"
@@ -540,6 +556,7 @@ fi
 
 REASON_CODE="INIT"
 RETRY_COUNT=0
+PENDING_RETRY_COUNT=0
 ACTUAL_JOBS=()
 MISSING_JOBS=()
 CHECK_NAMES=()
@@ -570,8 +587,20 @@ while true; do
     continue
   fi
 
+  if [[ "$REASON_CODE" == "REQUIRED_JOBS_PENDING" && "$PENDING_RETRY_COUNT" -lt "$PENDING_RETRY_MAX" ]]; then
+    PENDING_RETRY_COUNT=$((PENDING_RETRY_COUNT + 1))
+    REASON_CODE="PENDING_RETRYING"
+    emit_gate_outputs
+    emit_decision_log
+    sleep "$PENDING_RETRY_INTERVAL"
+    continue
+  fi
+
   if [[ "$REASON_CODE" == "REQUIRED_JOBS_TIMEOUT" ]]; then
     REASON_CODE="TIMEOUT_BLOCKED"
+  fi
+  if [[ "$REASON_CODE" == "REQUIRED_JOBS_PENDING" ]]; then
+    REASON_CODE="PENDING_BLOCKED"
   fi
   emit_gate_outputs
   emit_decision_log
