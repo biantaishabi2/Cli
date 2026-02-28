@@ -48,6 +48,9 @@ func (c *Client) Owner() string { return c.owner }
 // Repo 返回仓库名
 func (c *Client) Repo() string { return c.repo }
 
+// RepoFullName 返回 owner/repo。
+func (c *Client) RepoFullName() string { return c.owner + "/" + c.repo }
+
 // GitHub 返回底层 go-github 客户端（用于高级操作）
 func (c *Client) GitHub() *github.Client { return c.gh }
 
