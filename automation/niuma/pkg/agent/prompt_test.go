@@ -98,6 +98,8 @@ func TestBuildIteratePrompt(t *testing.T) {
 	input := &PromptInput{
 		IssueTitle:    "Add user API",
 		FinalPlan:     "## 方案\n创建端点",
+		PRBody:        "Closes #1\n\nPR body text",
+		ReviewSummary: "共 1 条 review:\n\n- [COMMENT] 请添加输入验证",
 		ReviewComment: "请添加输入验证",
 		PRDiff:        "+func CreateUser() {}",
 	}
@@ -107,6 +109,7 @@ func TestBuildIteratePrompt(t *testing.T) {
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "请添加输入验证")
 	assert.Contains(t, result, "CreateUser")
+	assert.Contains(t, result, "PR body text")
 }
 
 func TestBuildReviewPrompt_CrossFunctionAndPlanChecks(t *testing.T) {
@@ -137,6 +140,63 @@ func TestBuildPrompt_EmptyInput(t *testing.T) {
 	result, err := BuildDraftPrompt(input)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result) // 模板本身有固定文本
+}
+
+func TestBuildPrompts_AllPhasesIncludePRBody(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle:    "Fix prompt context",
+		IssueBody:     "Need consistent prompt context",
+		FinalPlan:     "统一上下文来源",
+		PRBody:        "Closes #487\n\nThis PR adds unified context assembly.",
+		ReviewSummary: "共 1 条 review:\n\n- [COMMENT] add tests",
+		ReviewComment: "[Review - COMMENT]\nadd tests\n\n---\n\n[PR Comment]\nplease keep comments",
+		PRDiff:        "diff --git a/a.go b/a.go",
+	}
+
+	implementPrompt, err := BuildImplementPrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, implementPrompt, "This PR adds unified context assembly.")
+
+	reviewPrompt, err := BuildReviewPrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, reviewPrompt, "This PR adds unified context assembly.")
+
+	iteratePrompt, err := BuildIteratePrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, iteratePrompt, "This PR adds unified context assembly.")
+}
+
+func TestBuildIteratePrompt_ContainsPRCommentsHistory(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle:    "Fix iterate context",
+		FinalPlan:     "保持 review summary 与完整历史并存",
+		PRBody:        "PR body",
+		ReviewSummary: "共 1 条 review",
+		ReviewComment: "[Review - COMMENT]\nreview text\n\n---\n\n[PR Comment]\nconversation comment",
+		PRDiff:        "diff content",
+	}
+
+	result, err := BuildIteratePrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, result, "Review Summary")
+	assert.Contains(t, result, "conversation comment")
+}
+
+func TestBuildPrompt_ShowsTrimmedMarker(t *testing.T) {
+	input := &PromptInput{
+		IssueTitle:     "Fix oversized context",
+		FinalPlan:      "裁剪策略",
+		PRBody:         "body",
+		ReviewComment:  "history",
+		PRDiff:         "diff",
+		ContextTrimmed: true,
+		TrimmedReason:  "PR body 超长已裁剪；PR comments 仅保留最近 20 条",
+	}
+
+	result, err := BuildReviewPrompt(input)
+	require.NoError(t, err)
+	assert.Contains(t, result, "已裁剪")
+	assert.Contains(t, result, "PR comments 仅保留最近 20 条")
 }
 
 // ===== FilterCommentsForPrompt 单元测试 =====

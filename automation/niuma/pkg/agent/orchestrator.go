@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 	gh "github.com/biantaishabi2/Cli/automation/niuma/pkg/github"
@@ -95,6 +97,19 @@ type Orchestrator struct {
 	plan        *PlanEngine
 	config      *OrchestratorConfig
 }
+
+type promptContextPhase string
+
+const (
+	promptContextPhaseImplement promptContextPhase = "implement"
+	promptContextPhaseReview    promptContextPhase = "review"
+	promptContextPhaseIterate   promptContextPhase = "iterate"
+
+	maxPromptPRBodyChars      = 4000
+	maxPromptPRCommentCount   = 20
+	maxPromptPRCommentChars   = 500
+	maxPromptContextSoftChars = 80000
+)
 
 // NewOrchestrator 创建编排器（兼容旧接口：单 provider）
 func NewOrchestrator(ghOps GitHubOps, provider ai.Provider, issueNumber int) *Orchestrator {
@@ -450,24 +465,10 @@ func (o *Orchestrator) DoImplement(ctx context.Context, workDir string) error {
 		return fmt.Errorf("未找到最终方案")
 	}
 
-	input, err := o.buildPromptInput(ctx)
+	finalPlan := marker.StripMarkerLines(finalMC.Comment.GetBody())
+	input, err := o.buildPhasePromptInput(ctx, promptContextPhaseImplement, finalPlan, 0)
 	if err != nil {
 		return err
-	}
-	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
-
-	// 读取已有 PR 历史，让 AI 编码前看到之前的 review/gate 意见
-	if existingPR, _ := o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated); existingPR != nil {
-		prNum := existingPR.Marker.PR
-		if prNum > 0 {
-			prHistory, err := o.buildPRHistory(ctx, prNum)
-			if err != nil {
-				prHistory = fmt.Sprintf("(读取 PR #%d 历史失败: %v)", prNum, err)
-			}
-			if prHistory != "" {
-				input.ReviewComment = prHistory
-			}
-		}
 	}
 
 	// 记录进入前的状态，用于失败回滚
@@ -644,15 +645,8 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 		return nil
 	}
 
-	// 读取 PR review 意见
+	// 读取 PR review/comment 历史意见
 	o.upsertProgressMarker(ctx, marker.TypeIterateProgress, "diagnosis", "开始迭代修复，读取 review/gate 历史意见。")
-	reviews, err := o.github.ListPRReviews(ctx, prNumber)
-	if err != nil {
-		return fmt.Errorf("获取 PR reviews 失败: %w", err)
-	}
-
-	// 汇总 review 意见
-	reviewText := summarizeReviews(reviews)
 
 	// 读取最终方案
 	finalMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePlanFinal)
@@ -663,12 +657,11 @@ func (o *Orchestrator) DoIterate(ctx context.Context, prNumber int, workDir stri
 		return fmt.Errorf("未找到最终方案")
 	}
 
-	input, err := o.buildPromptInput(ctx)
+	finalPlan := marker.StripMarkerLines(finalMC.Comment.GetBody())
+	input, err := o.buildPhasePromptInput(ctx, promptContextPhaseIterate, finalPlan, prNumber)
 	if err != nil {
 		return err
 	}
-	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
-	input.ReviewComment = reviewText
 
 	// 转状态到 iterating
 	prevState := currentState
@@ -798,12 +791,6 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return fmt.Errorf("当前状态 %s 不允许审查（需要 %s）", currentState, state.StatePRCreated)
 	}
 
-	// 读取 PR diff
-	diff, err := o.github.GetPRDiff(ctx, prNumber)
-	if err != nil {
-		return fmt.Errorf("获取 PR diff 失败: %w", err)
-	}
-
 	// 读取最终方案
 	finalMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePlanFinal)
 	if err != nil {
@@ -813,21 +800,10 @@ func (o *Orchestrator) DoReview(ctx context.Context, prNumber int) error {
 		return fmt.Errorf("未找到最终方案")
 	}
 
-	input, err := o.buildPromptInput(ctx)
+	finalPlan := marker.StripMarkerLines(finalMC.Comment.GetBody())
+	input, err := o.buildPhasePromptInput(ctx, promptContextPhaseReview, finalPlan, prNumber)
 	if err != nil {
 		return err
-	}
-	input.FinalPlan = marker.StripMarkerLines(finalMC.Comment.GetBody())
-	input.PRDiff = diff
-
-	// 读取 PR 完整历史（reviews + comments），让 reviewer 看到之前的讨论
-	prHistory, err := o.buildPRHistory(ctx, prNumber)
-	if err != nil {
-		// 非致命，记录但继续
-		prHistory = fmt.Sprintf("(读取 PR 历史失败: %v)", err)
-	}
-	if prHistory != "" {
-		input.ReviewComment = prHistory
 	}
 
 	// 构建 review prompt
@@ -1020,6 +996,268 @@ func (o *Orchestrator) buildPromptInputWithFilter(ctx context.Context, maxHuman 
 	}, nil
 }
 
+type prHistoryContext struct {
+	reviews         []*github.PullRequestReview
+	reviewSections  []string
+	commentSections []string
+	trimmedReasons  []string
+	warnings        []string
+}
+
+// buildPhasePromptInput 按“核心上下文 + 阶段增量”统一装配 prompt 输入。
+// 规则：
+// 1) implement/review/iterate 都包含 Issue + plan-final + PR body；
+// 2) review/iterate 额外包含 PR 历史（reviews + PR comments）与 PR diff；
+// 3) iterate 保留 review summary，同时不丢失完整 PR 历史。
+func (o *Orchestrator) buildPhasePromptInput(
+	ctx context.Context,
+	phase promptContextPhase,
+	finalPlan string,
+	prNumber int,
+) (*PromptInput, error) {
+	input, err := o.buildPromptInput(ctx)
+	if err != nil {
+		return nil, err
+	}
+	input.FinalPlan = finalPlan
+
+	trimmedReasons := make([]string, 0, 4)
+
+	resolvedPR := prNumber
+	if resolvedPR <= 0 {
+		resolvedPR = o.resolvePromptPRNumber(ctx, phase)
+	}
+
+	var historyCtx *prHistoryContext
+	if resolvedPR > 0 {
+		prBody, bodyTrimmed, err := o.readPRBodyForPrompt(ctx, resolvedPR)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d body 失败（phase=%s）：%v\n", resolvedPR, phase, err)
+		} else {
+			input.PRBody = prBody
+			if bodyTrimmed {
+				trimmedReasons = append(trimmedReasons, "PR body 超长已裁剪")
+			}
+		}
+
+		if phase == promptContextPhaseReview || phase == promptContextPhaseIterate {
+			historyCtx, err = o.collectPRHistoryContext(ctx, resolvedPR)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史失败（phase=%s）：%v\n", resolvedPR, phase, err)
+			}
+			if historyCtx != nil {
+				if len(historyCtx.warnings) > 0 {
+					fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败（phase=%s）：%s\n", resolvedPR, phase, strings.Join(historyCtx.warnings, "；"))
+				}
+				input.ReviewComment = renderPRHistory(historyCtx.reviewSections, historyCtx.commentSections)
+				input.ReviewSummary = summarizeReviews(historyCtx.reviews)
+				trimmedReasons = append(trimmedReasons, historyCtx.trimmedReasons...)
+			}
+
+			diff, err := o.github.GetPRDiff(ctx, resolvedPR)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d diff 失败（phase=%s）：%v\n", resolvedPR, phase, err)
+			} else {
+				input.PRDiff = diff
+			}
+		}
+	}
+
+	trimmedReasons = o.applyPromptContextBudget(input, historyCtx, trimmedReasons)
+	if len(trimmedReasons) > 0 {
+		input.ContextTrimmed = true
+		input.TrimmedReason = strings.Join(uniqueNonEmpty(trimmedReasons), "；")
+	}
+	return input, nil
+}
+
+func (o *Orchestrator) resolvePromptPRNumber(ctx context.Context, phase promptContextPhase) int {
+	prMC, err := o.github.FindMarker(ctx, o.issueNumber, marker.TypePRCreated)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] 查找 PR marker 失败（phase=%s）：%v\n", phase, err)
+		return 0
+	}
+	if prMC == nil || prMC.Marker == nil || prMC.Marker.PR <= 0 {
+		fmt.Fprintf(os.Stderr, "[WARN] 未找到可用 PR marker（phase=%s），跳过 PR 上下文注入\n", phase)
+		return 0
+	}
+	return prMC.Marker.PR
+}
+
+func (o *Orchestrator) readPRBodyForPrompt(ctx context.Context, prNumber int) (string, bool, error) {
+	pr, err := o.github.GetPR(ctx, prNumber)
+	if err != nil {
+		return "", false, fmt.Errorf("获取 PR 失败: %w", err)
+	}
+	body := strings.TrimSpace(pr.GetBody())
+	trimmedBody, trimmed := trimToMaxChars(body, maxPromptPRBodyChars)
+	return trimmedBody, trimmed, nil
+}
+
+func (o *Orchestrator) collectPRHistoryContext(ctx context.Context, prNumber int) (*prHistoryContext, error) {
+	// reviews/comments 独立拉取，任一失败时保留另一侧可用上下文，避免“全有或全无”。
+	reviews, reviewsErr := o.github.ListPRReviews(ctx, prNumber)
+	comments, commentsErr := o.github.ListComments(ctx, prNumber)
+	if reviewsErr != nil && commentsErr != nil {
+		return nil, fmt.Errorf("获取 PR reviews 失败: %v；获取 PR comments 失败: %w", reviewsErr, commentsErr)
+	}
+	if reviews == nil {
+		reviews = []*github.PullRequestReview{}
+	}
+	if comments == nil {
+		comments = []*github.IssueComment{}
+	}
+
+	// 显式按创建时间排序，避免依赖 API 返回顺序。
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].GetCreatedAt().Before(comments[j].GetCreatedAt().Time)
+	})
+
+	history := &prHistoryContext{
+		reviews:         reviews,
+		reviewSections:  make([]string, 0, len(reviews)),
+		commentSections: make([]string, 0, len(comments)),
+		trimmedReasons:  make([]string, 0, 2),
+		warnings:        make([]string, 0, 2),
+	}
+	if reviewsErr != nil {
+		history.warnings = append(history.warnings, fmt.Sprintf("获取 PR reviews 失败: %v", reviewsErr))
+	}
+	if commentsErr != nil {
+		history.warnings = append(history.warnings, fmt.Sprintf("获取 PR comments 失败: %v", commentsErr))
+	}
+
+	for _, r := range reviews {
+		body := strings.TrimSpace(r.GetBody())
+		if body == "" {
+			continue
+		}
+		history.reviewSections = append(history.reviewSections, fmt.Sprintf("[Review - %s]\n%s", r.GetState(), body))
+	}
+
+	commentBodies := make([]string, 0, len(comments))
+	for _, c := range comments {
+		body := strings.TrimSpace(c.GetBody())
+		if body == "" {
+			continue
+		}
+		trimmedBody, trimmed := trimToMaxChars(body, maxPromptPRCommentChars)
+		if trimmed {
+			history.trimmedReasons = append(history.trimmedReasons, "PR comment 超长已裁剪")
+		}
+		commentBodies = append(commentBodies, trimmedBody)
+	}
+	if len(commentBodies) > maxPromptPRCommentCount {
+		commentBodies = commentBodies[len(commentBodies)-maxPromptPRCommentCount:]
+		history.trimmedReasons = append(history.trimmedReasons, "PR comments 仅保留最近 20 条")
+	}
+	for _, body := range commentBodies {
+		history.commentSections = append(history.commentSections, fmt.Sprintf("[PR Comment]\n%s", body))
+	}
+
+	return history, nil
+}
+
+func renderPRHistory(reviewSections, commentSections []string) string {
+	parts := make([]string, 0, len(reviewSections)+len(commentSections))
+	parts = append(parts, reviewSections...)
+	parts = append(parts, commentSections...)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func (o *Orchestrator) applyPromptContextBudget(
+	input *PromptInput,
+	history *prHistoryContext,
+	trimmedReasons []string,
+) []string {
+	if promptContextChars(input) <= maxPromptContextSoftChars {
+		return uniqueNonEmpty(trimmedReasons)
+	}
+
+	// 超限优先压缩旧 comments（从最早的开始丢弃）。
+	if history != nil && len(history.commentSections) > 0 {
+		removed := 0
+		for promptContextChars(input) > maxPromptContextSoftChars && len(history.commentSections) > 0 {
+			history.commentSections = history.commentSections[1:]
+			input.ReviewComment = renderPRHistory(history.reviewSections, history.commentSections)
+			removed++
+		}
+		if removed > 0 {
+			trimmedReasons = append(trimmedReasons, fmt.Sprintf("软上限触发，压缩了 %d 条旧 PR comments", removed))
+		}
+	}
+
+	// 兜底：如果仍超限，按增量字段优先继续裁剪，避免核心上下文装配失败。
+	input.PRDiff, trimmedReasons = trimFieldToBudget(input, input.PRDiff, "PR diff 软上限裁剪", trimmedReasons)
+	input.ReviewComment, trimmedReasons = trimFieldToBudget(input, input.ReviewComment, "PR 历史软上限裁剪", trimmedReasons)
+	input.PRBody, trimmedReasons = trimFieldToBudget(input, input.PRBody, "PR body 软上限裁剪", trimmedReasons)
+	input.FinalPlan, trimmedReasons = trimFieldToBudget(input, input.FinalPlan, "Plan-final 软上限裁剪", trimmedReasons)
+	input.IssueBody, trimmedReasons = trimFieldToBudget(input, input.IssueBody, "Issue body 软上限裁剪", trimmedReasons)
+
+	return uniqueNonEmpty(trimmedReasons)
+}
+
+func trimFieldToBudget(input *PromptInput, fieldValue string, reason string, trimmedReasons []string) (string, []string) {
+	if fieldValue == "" {
+		return fieldValue, trimmedReasons
+	}
+	overflow := promptContextChars(input) - maxPromptContextSoftChars
+	if overflow <= 0 {
+		return fieldValue, trimmedReasons
+	}
+	nextLen := utf8.RuneCountInString(fieldValue) - overflow
+	nextValue, trimmed := trimToMaxChars(fieldValue, nextLen)
+	if trimmed {
+		trimmedReasons = append(trimmedReasons, reason)
+	}
+	return nextValue, trimmedReasons
+}
+
+func promptContextChars(input *PromptInput) int {
+	return utf8.RuneCountInString(input.IssueTitle) +
+		utf8.RuneCountInString(input.IssueBody) +
+		utf8.RuneCountInString(input.FinalPlan) +
+		utf8.RuneCountInString(input.PRBody) +
+		utf8.RuneCountInString(input.ReviewSummary) +
+		utf8.RuneCountInString(input.ReviewComment) +
+		utf8.RuneCountInString(input.PRDiff)
+}
+
+func trimToMaxChars(s string, maxChars int) (string, bool) {
+	if maxChars <= 0 {
+		return "", strings.TrimSpace(s) != ""
+	}
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s, false
+	}
+	return string(runes[:maxChars]), true
+}
+
+func uniqueNonEmpty(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
 // doDebateABDiscussion 执行 AB 轮流评论模式。
 // 使用 WithRecovery 统一 3 级降级：格式修复重试 → fallback provider → 中止上报。
 func (o *Orchestrator) doDebateABDiscussion(ctx context.Context, round, maxRounds int) (*DiscussionSummary, error) {
@@ -1183,34 +1421,15 @@ func buildRoundLimitReasonAndActions(summaryMC *gh.MarkerComment) (string, []str
 // buildPRHistory 读取 PR 上的全部 reviews 和 comments，构建完整历史上下文
 // GitHub 中 PR 也是 issue，ListComments(prNumber) 能读到 PR 上的普通评论
 func (o *Orchestrator) buildPRHistory(ctx context.Context, prNumber int) (string, error) {
-	reviews, err := o.github.ListPRReviews(ctx, prNumber)
-	if err != nil {
-		return "", fmt.Errorf("获取 PR reviews 失败: %w", err)
+	history, err := o.collectPRHistoryContext(ctx, prNumber)
+	if history == nil {
+		return "", err
 	}
-
-	comments, err := o.github.ListComments(ctx, prNumber)
-	if err != nil {
-		return "", fmt.Errorf("获取 PR comments 失败: %w", err)
+	if len(history.warnings) > 0 {
+		// 部分拉取失败时保留可用历史，避免“全有或全无”。
+		fmt.Fprintf(os.Stderr, "[WARN] 读取 PR #%d 历史部分失败，已降级保留可用上下文：%s\n", prNumber, strings.Join(history.warnings, "；"))
 	}
-
-	var parts []string
-	for _, r := range reviews {
-		body := r.GetBody()
-		if body != "" {
-			parts = append(parts, fmt.Sprintf("[Review - %s]\n%s", r.GetState(), body))
-		}
-	}
-	for _, c := range comments {
-		body := c.GetBody()
-		if body != "" {
-			parts = append(parts, fmt.Sprintf("[PR Comment]\n%s", body))
-		}
-	}
-
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return strings.Join(parts, "\n\n---\n\n"), nil
+	return renderPRHistory(history.reviewSections, history.commentSections), nil
 }
 
 // getImplementProvider 获取实现用的 provider
