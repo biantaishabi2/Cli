@@ -228,6 +228,16 @@ control:
 - 主干收口：变更进入 `master` 后由 `niuma control close-merged` 收口到 `bot:done` 并关闭 issue
 - 人工回退：`niuma state-label set --repo <owner/repo> --issue <N> --from bot:premerged --to bot:queued --reason premerge_rollback`
 
+### 辅助标签生命周期（needs-human / integration-conflict / integration-gate-failed）
+
+- `needs-human`、`integration-conflict`、`integration-gate-failed` 仅表达“当前阻塞”，不承载历史语义。
+- `bot:pr-reviewable` 恢复归一化规则：
+  - `PR` 恢复 `MERGEABLE/CLEAN` 时清理 `integration-conflict`。
+  - `gate=passed` 且 `PR` 可合并时清理 `integration-gate-failed`。
+  - `needs-human` 仅在无其他阻塞标签时清理；默认阻塞白名单：`integration-conflict`、`security-review-required`、`dependency-waiting`。
+- issue 进入 `bot:done` 收口时，会无条件清理上述三类辅助标签。
+- 历史失败信息通过 issue metadata/comment 追溯，不通过残留辅助标签表达。
+
 ### 状态标签管控（受控单值）
 
 - `bot:*` 必须通过受控入口迁移，禁止在脚本中散落 `gh issue edit --add-label/--remove-label bot:*`。

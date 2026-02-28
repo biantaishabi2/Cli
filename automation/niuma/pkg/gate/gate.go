@@ -15,7 +15,7 @@ import (
 const (
 	maxGateErrorMessageLen          = 800
 	needsHumanLabel                 = "needs-human"
-	integrationGateFailedLabel      = "integration-gate-failed"
+	integrationGateFailedLabel      = "integration-gate-failed" // 瞬时失败辅助标签：仅表达“当前 gate 阻塞”，恢复后由 control 归一化清理
 	defaultGateScriptRelativePath   = ".github/scripts/niuma-test-gate.sh"
 	defaultNeedsFixCommentTemplate  = "## ❌ Gate 未通过\n\n自动测试门禁失败，已回退为 `bot:pr-needs-fix`，请继续迭代修复。\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`"
 	defaultEscalatedCommentTemplate = "## 🚨 Gate 已超限，升级人工处理\n\nintegration gate 失败次数已超过上限，本轮不再触发自动修复。\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`"
@@ -178,6 +178,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("%w: %s", ErrGateFailed, gateFailure)
 	}
 
+	// gate 超限时只负责升级标记；恢复后的标签归一化由 control 层统一处理。
 	if err := r.opts.AddLabels(ctx, r.opts.Repo, r.opts.Issue, []string{needsHumanLabel, integrationGateFailedLabel}); err != nil {
 		return result, fmt.Errorf("%w: gate 超限后打标失败: %v", ErrGateFailed, err)
 	}

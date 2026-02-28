@@ -29,12 +29,13 @@ type LabelGuardConfig struct {
 
 // ControlConfig 多 Issue 协调配置
 type ControlConfig struct {
-	TaskCtlBin              string        `yaml:"taskctl_bin"`               // taskctl 二进制路径（可选，自动查找）
-	MergeStrategy           string        `yaml:"merge_strategy"`            // merge/squash，默认 merge
-	IntegrationBranchPrefix string        `yaml:"integration_branch_prefix"` // 默认 integration/batch-
-	MaxOldBranches          int           `yaml:"max_old_branches"`          // 保留旧 integration 分支数，默认 3
-	MinPRsForIntegration    int           `yaml:"min_prs_for_integration"`   // 触发 integration 构建的最少 PR 数，默认 2
-	DagSync                 DagSyncConfig `yaml:"dag_sync"`                  // DAG -> GitHub 展示层单向同步
+	TaskCtlBin               string        `yaml:"taskctl_bin"`                 // taskctl 二进制路径（可选，自动查找）
+	MergeStrategy            string        `yaml:"merge_strategy"`              // merge/squash，默认 merge
+	IntegrationBranchPrefix  string        `yaml:"integration_branch_prefix"`   // 默认 integration/batch-
+	MaxOldBranches           int           `yaml:"max_old_branches"`            // 保留旧 integration 分支数，默认 3
+	MinPRsForIntegration     int           `yaml:"min_prs_for_integration"`     // 触发 integration 构建的最少 PR 数，默认 2
+	NeedsHumanBlockingLabels []string      `yaml:"needs_human_blocking_labels"` // needs-human 保留条件标签白名单
+	DagSync                  DagSyncConfig `yaml:"dag_sync"`                    // DAG -> GitHub 展示层单向同步
 }
 
 // DagSyncConfig DAG 展示层同步配置
@@ -109,12 +110,12 @@ func (c *DagSyncConfig) GetSkippedEdgeThresholdRatio() float64 {
 
 // WorkflowConfig 工作流配置
 type WorkflowConfig struct {
-	RequirePlanApproval   bool     `yaml:"require_plan_approval"`   // 方案定稿后是否需要人工审批
-	MaxIterateRounds      int      `yaml:"max_iterate_rounds"`      // 最大自动迭代轮数（0=默认3）
-	MaxDiscussionRounds   int      `yaml:"max_discussion_rounds"`   // discuss 单次 run 的最大讨论轮数（默认 5）
-	DiscussTimeoutMinutes int      `yaml:"discuss_timeout_minutes"` // discuss 命令超时（分钟，默认 20）
-	VisibleRoundInterval  int      `yaml:"visible_round_interval"`  // 可见评论节流：每 N 轮可见一次（默认 1）
-	VisibleOnlyOnDiff     *bool    `yaml:"visible_only_on_diff"`    // 可见评论节流：仅差异变化时评论（默认 true）
+	RequirePlanApproval    bool     `yaml:"require_plan_approval"`    // 方案定稿后是否需要人工审批
+	MaxIterateRounds       int      `yaml:"max_iterate_rounds"`       // 最大自动迭代轮数（0=默认3）
+	MaxDiscussionRounds    int      `yaml:"max_discussion_rounds"`    // discuss 单次 run 的最大讨论轮数（默认 5）
+	DiscussTimeoutMinutes  int      `yaml:"discuss_timeout_minutes"`  // discuss 命令超时（分钟，默认 20）
+	VisibleRoundInterval   int      `yaml:"visible_round_interval"`   // 可见评论节流：每 N 轮可见一次（默认 1）
+	VisibleOnlyOnDiff      *bool    `yaml:"visible_only_on_diff"`     // 可见评论节流：仅差异变化时评论（默认 true）
 	AllowedPrefixes        []string `yaml:"allowed_prefixes"`         // 允许修改的路径前缀
 	ImplementTriggerLabels []string `yaml:"implement_trigger_labels"` // implement 流程的触发标签（默认 ["bot:plan-final"]）
 }

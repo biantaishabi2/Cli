@@ -3215,13 +3215,15 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 			Title:  "sub-214",
 			Body:   "parent: #210",
 			State:  "closed",
-			Labels: []string{"bot:iterating", "needs-human", "integration-gate-failed"},
+			Labels: []string{"bot:iterating", "needs-human", "integration-conflict", "integration-gate-failed"},
 		},
 		IssueInfo{Number: 215, Title: "sub-215", Body: "parent: #210", State: "open"},
 	)
 
 	ctrl := &Controller{github: mockGH}
 	err := ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
+	require.NoError(t, err)
+	err = ctrl.FinalizeIntegratedIssues(context.Background(), []int{214})
 	require.NoError(t, err)
 
 	assert.NotContains(t, mockGH.closeIssueCalls, 214)
@@ -3231,6 +3233,7 @@ func TestFinalizeIntegratedIssues_ClosedIssueIsIdempotent(t *testing.T) {
 	assert.Contains(t, labels214, botDoneLabel)
 	assert.NotContains(t, labels214, "bot:iterating")
 	assert.NotContains(t, labels214, "needs-human")
+	assert.NotContains(t, labels214, "integration-conflict")
 	assert.NotContains(t, labels214, "integration-gate-failed")
 }
 
@@ -4066,6 +4069,148 @@ func TestReconcileNeedsHumanRecovery_CooldownWithNowFn(t *testing.T) {
 	assert.Contains(t, mockGH.addIssueCommentCalls[len(mockGH.addIssueCommentCalls)-1].body, "自动恢复")
 }
 
+func TestReconcileNeedsHumanRecovery_GateRecovered(t *testing.T) {
+	escalatedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 54,
+			Labels: []string{"bot:pr-needs-fix", needsHumanLabel, integrationGateFailLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[54] = PRReviewStatus{
+		PRNum:            204,
+		HeadSHA:          "gate-ok-54",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-54",
+			Metadata: map[string]string{
+				"issue_num":                                 "54",
+				metaKeyIntegrationGateStatus:                integrationGateStatusPassed,
+				metaKeyIntegrationGateEscalationLabelSynced: "true",
+				metaKeyEscalatedAt:                          escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+	labels, err := mockGH.ListLabels(context.Background(), 54)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-reviewable")
+	assert.NotContains(t, labels, needsHumanLabel)
+	assert.NotContains(t, labels, integrationGateFailLabel)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "integration-gate-failed")
+
+	// 幂等：再次执行不应重复清理或重复评论
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+	labels, err = mockGH.ListLabels(context.Background(), 54)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-reviewable")
+	assert.NotContains(t, labels, needsHumanLabel)
+	assert.NotContains(t, labels, integrationGateFailLabel)
+	assert.Len(t, mockGH.addIssueCommentCalls, 1)
+}
+
+func TestReconcileNeedsHumanRecovery_GateNotPassed(t *testing.T) {
+	escalatedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 55,
+			Labels: []string{"bot:pr-needs-fix", needsHumanLabel, integrationGateFailLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[55] = PRReviewStatus{
+		PRNum:            205,
+		HeadSHA:          "gate-not-pass-55",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		cfg:    DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-55",
+			Metadata: map[string]string{
+				"issue_num":                  "55",
+				metaKeyIntegrationGateStatus: integrationGateStatusRetrying,
+				metaKeyEscalatedAt:           escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+	labels, err := mockGH.ListLabels(context.Background(), 55)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-needs-fix")
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.Contains(t, labels, integrationGateFailLabel)
+	assert.Empty(t, mockGH.addIssueCommentCalls)
+}
+
+func TestReconcileNeedsHumanRecovery_GateRecoveredButBlockedKeepsNeedsHuman(t *testing.T) {
+	escalatedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	mockGH := newMockGitHubOps(
+		IssueInfo{
+			Number: 56,
+			Labels: []string{"bot:pr-needs-fix", needsHumanLabel, integrationGateFailLabel, securityReviewLabel},
+		},
+	)
+	mockGH.resolvePRReviewStatus[56] = PRReviewStatus{
+		PRNum:            206,
+		HeadSHA:          "gate-blocked-56",
+		Mergeable:        PRMergeableMergeable,
+		MergeStateStatus: "CLEAN",
+	}
+
+	ctrl := &Controller{
+		github: mockGH,
+		taskctl: &TaskCtlClient{
+			BinPath:   "/bin/true",
+			StorePath: t.TempDir() + "/tasks.json",
+		},
+		cfg: DefaultControlConfig(),
+	}
+
+	tasks := []Task{
+		{
+			ID: "task-56",
+			Metadata: map[string]string{
+				"issue_num":                                 "56",
+				metaKeyIntegrationGateStatus:                integrationGateStatusPassed,
+				metaKeyIntegrationGateEscalationLabelSynced: "true",
+				metaKeyEscalatedAt:                          escalatedAt,
+			},
+		},
+	}
+
+	ctrl.reconcileNeedsHumanRecovery(context.Background(), tasks)
+	labels, err := mockGH.ListLabels(context.Background(), 56)
+	require.NoError(t, err)
+	assert.Contains(t, labels, "bot:pr-reviewable")
+	assert.Contains(t, labels, needsHumanLabel)
+	assert.NotContains(t, labels, integrationGateFailLabel)
+	assert.Contains(t, labels, securityReviewLabel)
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "保留 `needs-human`")
+}
+
 // setupIntegrationConflictRepo 创建一个有冲突的 integration 场景：
 // integration/main 和 feat/test-source 分支在 Go test 文件上冲突。
 // 返回 repoDir、conflictFile 路径（相对于 repoDir）。
@@ -4293,8 +4438,10 @@ func TestReconcileNeedsHumanRecovery_LabelCleanupFailRetainsMetadata(t *testing.
 			"标签清理失败时不应清除 escalation metadata")
 	}
 
-	// 标签清理失败时，不应写恢复 comment（避免评论与真实标签状态不一致）
-	assert.Empty(t, mockGH.addIssueCommentCalls, "标签清理失败时不应写恢复 comment")
+	// 标签清理失败时，不应写成功恢复 comment；应写失败审计 comment。
+	require.Len(t, mockGH.addIssueCommentCalls, 1)
+	assert.Contains(t, mockGH.addIssueCommentCalls[0].body, "BOT:NEEDS_HUMAN_RECOVERY_NORMALIZE_FAILED")
+	assert.NotContains(t, mockGH.addIssueCommentCalls[0].body, "已恢复到 `bot:pr-reviewable`")
 }
 
 func TestHandleIntegrationConflictRetry_FirstRetry(t *testing.T) {
