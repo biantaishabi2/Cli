@@ -27,8 +27,15 @@ fn sanitize_id(s: &str) -> String {
         .to_string()
 }
 
-fn read_source_entries(source: &Path) -> Result<Vec<PathBuf>, String> {
+#[derive(Debug, Default)]
+struct SourceScanResult {
+    entries: Vec<PathBuf>,
+    skipped_non_yaml: usize,
+}
+
+fn read_source_entries(source: &Path) -> Result<SourceScanResult, String> {
     let mut out = Vec::new();
+    let mut skipped_non_yaml = 0usize;
     let mut stack = vec![source.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let rd =
@@ -41,29 +48,24 @@ fn read_source_entries(source: &Path) -> Result<Vec<PathBuf>, String> {
                 continue;
             }
             let Some(ext) = p.extension().and_then(|x| x.to_str()) else {
+                skipped_non_yaml += 1;
                 continue;
             };
-            if ["yaml", "yml", "json"].contains(&ext) {
+            if ["yaml", "yml"].contains(&ext) {
                 out.push(p);
+            } else {
+                skipped_non_yaml += 1;
             }
         }
     }
     out.sort();
-    Ok(out)
+    Ok(SourceScanResult {
+        entries: out,
+        skipped_non_yaml,
+    })
 }
 
 fn extract_module_from_source(path: &Path, content: &str) -> String {
-    if path.extension().and_then(|x| x.to_str()) == Some("json") {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
-            if let Some(m) = v.get("module").and_then(|x| x.as_str()) {
-                return m.to_string();
-            }
-            if let Some(m) = v.get("module_id").and_then(|x| x.as_str()) {
-                return m.to_string();
-            }
-        }
-    }
-
     if let Ok(v) = serde_yaml::from_str::<serde_yaml::Value>(content) {
         if let Some(m) = v.get("module").and_then(|x| x.as_str()) {
             return m.to_string();
@@ -154,7 +156,22 @@ fn run_context(
     });
 
     let mut contexts = Vec::new();
-    let mut files = read_source_entries(source_path)?;
+    let scan = read_source_entries(source_path)?;
+    if scan.entries.is_empty() {
+        return Err(format!(
+            "no YAML source files found under: {}",
+            source_path.display()
+        ));
+    }
+    // 显式提示被忽略的非 YAML 文件数量，便于排查输入目录污染。
+    if scan.skipped_non_yaml > 0 {
+        eprintln!(
+            "[bdd seed] skipped_non_yaml_count={} (source={})",
+            scan.skipped_non_yaml,
+            source_path.display()
+        );
+    }
+    let mut files = scan.entries;
     if let Some(max) = limit {
         files.truncate(max);
     }
@@ -532,8 +549,10 @@ contract: create account
 "#,
         );
         write(
-            &source.join("billing.json"),
-            r#"{"module_id":"BILLING","contract":"issue invoice"}"#,
+            &source.join("billing.yml"),
+            r#"module: BILLING
+contract: issue invoice
+"#,
         );
         write(
             &template,
@@ -554,6 +573,7 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         )
         .expect("context");
         assert_eq!(contexts.len(), 2);
+        assert!(contexts.iter().any(|c| c.module == "BILLING"));
 
         run_generate(
             &output.to_string_lossy(),
@@ -669,6 +689,71 @@ contract: create account
         let good = run_check(&output.to_string_lossy()).expect("check after fix");
         assert_eq!(good.invalid_files, 0);
         assert!(output.join("quality-fix.json").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_context_ignores_non_yaml_files() {
+        let root = temp_dir("bcc_bdd_ignore_non_yaml");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("account.yaml"),
+            r#"module: ACCOUNT
+contract: account contract
+"#,
+        );
+        write(
+            &source.join("summary.json"),
+            r#"{"module":"SOURCE","contract":"should be ignored"}"#,
+        );
+        write(&source.join("README.md"), "# ignored");
+
+        let contexts = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "all",
+            None,
+            true,
+        )
+        .expect("context");
+
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].module, "ACCOUNT");
+        assert!(output.join("contexts/account_account.json").exists());
+        assert!(!output.join("contexts/source_summary.json").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_context_errors_when_no_yaml_sources() {
+        let root = temp_dir("bcc_bdd_no_yaml");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("summary.json"),
+            r#"{"module":"SOURCE","contract":"not yaml"}"#,
+        );
+        write(&source.join("notes.md"), "not yaml");
+
+        let err = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "all",
+            None,
+            true,
+        )
+        .expect_err("should fail without yaml");
+
+        assert!(err.contains("no YAML source files found"));
 
         let _ = fs::remove_dir_all(&root);
     }
