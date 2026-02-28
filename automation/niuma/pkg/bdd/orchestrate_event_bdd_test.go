@@ -119,6 +119,14 @@ func (m *bddEventGitHubMock) MergePR(_ context.Context, _ int, _ string) error {
 	return nil
 }
 
+func (m *bddEventGitHubMock) FindOpenPR(_ context.Context, _, _ string) (*control.PullRequestInfo, error) {
+	return nil, nil
+}
+
+func (m *bddEventGitHubMock) CreatePR(_ context.Context, _, _, _, _ string) (*control.PullRequestInfo, error) {
+	return nil, fmt.Errorf("unexpected CreatePR call")
+}
+
 func (m *bddEventGitHubMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

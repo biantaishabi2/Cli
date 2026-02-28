@@ -61,24 +61,35 @@ func TestControllerMerge_FastForwardAndIdempotent(t *testing.T) {
 	runGit(t, repoDir, "commit", "-m", "feat: integration change")
 	runGit(t, repoDir, "push", "-u", "origin", "integration/main")
 	runGit(t, repoDir, "checkout", "master")
+	masterBefore := runGitOutput(t, "", "--git-dir", remoteDir, "rev-parse", "refs/heads/master")
 
+	mockGH := newMockGitHubOps()
 	ctrl := &Controller{
 		builder: NewIntegrationBuilder(repoDir, "master"),
+		github:  mockGH,
 	}
 
 	require.NoError(t, ctrl.Merge(context.Background(), "integration/main"))
+	require.Len(t, mockGH.createPRCalls, 1)
+	require.Equal(t, "integration/main", mockGH.createPRCalls[0].head)
+	require.Equal(t, "master", mockGH.createPRCalls[0].base)
+
 	// 幂等要求：重复执行应 no-op 成功。
 	require.NoError(t, ctrl.Merge(context.Background(), "integration/main"))
+	require.Len(t, mockGH.createPRCalls, 1)
+	require.Len(t, mockGH.findOpenPRCalls, 2)
 
-	integrationSHA := runGitOutput(t, "", "--git-dir", remoteDir, "rev-parse", "refs/heads/integration/main")
-	masterSHA := runGitOutput(t, "", "--git-dir", remoteDir, "rev-parse", "refs/heads/master")
-	assert.Equal(t, integrationSHA, masterSHA)
+	// PR 模式不应直接 push master。
+	masterAfter := runGitOutput(t, "", "--git-dir", remoteDir, "rev-parse", "refs/heads/master")
+	assert.Equal(t, masterBefore, masterAfter)
 }
 
 func TestControllerMerge_BranchNotFound(t *testing.T) {
 	repoDir, _ := setupGitRepoWithBareRemote(t)
+	mockGH := newMockGitHubOps()
 	ctrl := &Controller{
 		builder: NewIntegrationBuilder(repoDir, "master"),
+		github:  mockGH,
 	}
 
 	err := ctrl.Merge(context.Background(), "integration/not-exists")
@@ -86,27 +97,48 @@ func TestControllerMerge_BranchNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "远端分支不存在")
 }
 
-func TestControllerMerge_DivergedBranchRejected(t *testing.T) {
+func TestControllerMerge_AlreadyMerged_NoOp(t *testing.T) {
 	repoDir, _ := setupGitRepoWithBareRemote(t)
 
-	// integration/main 增加独立提交并推送。
+	// integration/main 与 master 指向同一提交。
+	runGit(t, repoDir, "checkout", "-b", "integration/main")
+	runGit(t, repoDir, "push", "-u", "origin", "integration/main")
+	runGit(t, repoDir, "checkout", "master")
+
+	mockGH := newMockGitHubOps()
+	ctrl := &Controller{
+		builder: NewIntegrationBuilder(repoDir, "master"),
+		github:  mockGH,
+	}
+	require.NoError(t, ctrl.Merge(context.Background(), "integration/main"))
+	assert.Empty(t, mockGH.createPRCalls)
+}
+
+func TestControllerMerge_ClosedPRNotReused(t *testing.T) {
+	repoDir, _ := setupGitRepoWithBareRemote(t)
+
 	runGit(t, repoDir, "checkout", "-b", "integration/main")
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "integration.txt"), []byte("integration\n"), 0o644))
 	runGit(t, repoDir, "add", "integration.txt")
 	runGit(t, repoDir, "commit", "-m", "feat: integration")
 	runGit(t, repoDir, "push", "-u", "origin", "integration/main")
-
-	// master 再增加一条不同提交并推送，形成分叉，无法 ff-only。
 	runGit(t, repoDir, "checkout", "master")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "master.txt"), []byte("master\n"), 0o644))
-	runGit(t, repoDir, "add", "master.txt")
-	runGit(t, repoDir, "commit", "-m", "feat: master diverged")
-	runGit(t, repoDir, "push", "origin", "master")
+
+	mockGH := newMockGitHubOps()
+	mockGH.findOpenPR[prRefKey("integration/main", "master")] = &PullRequestInfo{
+		Number: 88,
+		URL:    "https://example.invalid/pr/88",
+		State:  "closed",
+		Head:   "integration/main",
+		Base:   "master",
+	}
 
 	ctrl := &Controller{
 		builder: NewIntegrationBuilder(repoDir, "master"),
+		github:  mockGH,
 	}
-	err := ctrl.Merge(context.Background(), "integration/main")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "分支已分叉")
+
+	require.NoError(t, ctrl.Merge(context.Background(), "integration/main"))
+	require.Len(t, mockGH.createPRCalls, 1)
+	assert.NotEqual(t, 88, mockGH.findOpenPR[prRefKey("integration/main", "master")].Number)
 }

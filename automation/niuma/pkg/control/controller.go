@@ -42,12 +42,23 @@ type GitHubOps interface {
 	RemoveIssueBlockedBy(ctx context.Context, issueNumber int, blockedByIssueNumber int) error
 	ResolvePRMetadata(ctx context.Context, issueNumber int) (PRMetadata, error)
 	ResolvePRReviewStatus(ctx context.Context, issueNumber int) (PRReviewStatus, error)
+	FindOpenPR(ctx context.Context, head, base string) (*PullRequestInfo, error)
+	CreatePR(ctx context.Context, title, body, head, base string) (*PullRequestInfo, error)
 }
 
 // PRMetadata 表示用于 integration 候选筛选的最小 PR 元数据。
 type PRMetadata struct {
 	PRNum  int
 	Branch string
+}
+
+// PullRequestInfo 表示控制层关心的最小 PR 信息。
+type PullRequestInfo struct {
+	Number int
+	URL    string
+	State  string
+	Head   string
+	Base   string
 }
 
 // PRMergeable 表示 PR mergeable 字段的归一化结果。
@@ -2144,9 +2155,11 @@ func (c *Controller) ResolveIntegrationBranchForIssues(issueNums []int) (string,
 // Merge 将 integration 分支快进合并到主干（默认 master）。
 // 人工批准后执行：integration/{slug} -> master。
 func (c *Controller) Merge(ctx context.Context, integrationBranch string) error {
-	_ = ctx
 	if c.builder == nil {
 		return fmt.Errorf("IntegrationBuilder 未配置")
+	}
+	if c.github == nil {
+		return fmt.Errorf("GitHubOps 未配置")
 	}
 
 	integrationBranch = strings.TrimSpace(integrationBranch)
@@ -2180,40 +2193,44 @@ func (c *Controller) Merge(ctx context.Context, integrationBranch string) error 
 		return fmt.Errorf("远端分支不存在: origin/%s", baseBranch)
 	}
 
-	if err := c.builder.git("checkout", baseBranch); err != nil {
-		if errReset := c.builder.git("checkout", "-B", baseBranch, "origin/"+baseBranch); errReset != nil {
-			return fmt.Errorf("切换主干分支失败: %w", err)
-		}
-	}
-	// 使用 ff-only 与远端主干对齐，避免破坏式 reset。
-	if err := c.builder.git("merge", "--ff-only", "origin/"+baseBranch); err != nil {
-		return fmt.Errorf("同步本地主干分支失败（非 fast-forward）: %w", err)
-	}
-
 	// 已包含时直接 no-op，保持幂等。
-	if err := c.builder.git("merge-base", "--is-ancestor", "origin/"+integrationBranch, "HEAD"); err == nil {
-		fmt.Printf("[control] %s 已包含 origin/%s，merge no-op\n", baseBranch, integrationBranch)
+	if err := c.builder.git("merge-base", "--is-ancestor", "origin/"+integrationBranch, "origin/"+baseBranch); err == nil {
+		fmt.Printf("[control] origin/%s 已包含 origin/%s，merge no-op\n", baseBranch, integrationBranch)
 		return nil
 	}
 
-	// 只允许 fast-forward，避免在主干制造额外 merge commit。
-	if err := c.builder.git("merge-base", "--is-ancestor", "HEAD", "origin/"+integrationBranch); err != nil {
-		return fmt.Errorf("无法快进合并 origin/%s 到 %s：分支已分叉", integrationBranch, baseBranch)
-	}
-
-	if err := c.builder.git("merge", "--ff-only", "origin/"+integrationBranch); err != nil {
-		return fmt.Errorf("执行快进合并失败: %w", err)
-	}
-	if err := c.builder.git("push", "origin", baseBranch); err != nil {
-		return fmt.Errorf("推送主干分支失败: %w", err)
-	}
-
-	head, err := c.builder.gitOutput("rev-parse", "HEAD")
+	existing, err := c.github.FindOpenPR(ctx, integrationBranch, baseBranch)
 	if err != nil {
-		head = "unknown"
+		return fmt.Errorf("查询已有收口 PR 失败: %w", err)
 	}
-	fmt.Printf("[control] 合并成功: origin/%s -> %s (head=%s)\n", integrationBranch, baseBranch, strings.TrimSpace(head))
+	if existing != nil {
+		fmt.Printf("[control] 复用收口 PR #%d: %s (%s -> %s)\n", existing.Number, existing.URL, integrationBranch, baseBranch)
+		return nil
+	}
+
+	title := buildIntegrationMergePRTitle(integrationBranch, baseBranch)
+	body := buildIntegrationMergePRBody(integrationBranch, baseBranch)
+	created, err := c.github.CreatePR(ctx, title, body, integrationBranch, baseBranch)
+	if err != nil {
+		return fmt.Errorf("创建收口 PR 失败: %w", err)
+	}
+	if created == nil {
+		return fmt.Errorf("创建收口 PR 失败: 返回结果为空")
+	}
+	fmt.Printf("[control] 已创建收口 PR #%d: %s (%s -> %s)\n", created.Number, created.URL, integrationBranch, baseBranch)
 	return nil
+}
+
+func buildIntegrationMergePRTitle(integrationBranch, baseBranch string) string {
+	return fmt.Sprintf("chore(control): merge %s into %s", integrationBranch, baseBranch)
+}
+
+func buildIntegrationMergePRBody(integrationBranch, baseBranch string) string {
+	return fmt.Sprintf(
+		"## Control Merge\n\n由 niuma control merge 自动创建的收口 PR。\n\n- head: `%s`\n- base: `%s`\n\n> 该 PR 走标准 review/merge 流程，用于触发 close-merged 收口链路。",
+		integrationBranch,
+		baseBranch,
+	)
 }
 
 // FormatStatus 格式化输出控制状态

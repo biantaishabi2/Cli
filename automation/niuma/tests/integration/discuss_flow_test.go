@@ -255,14 +255,14 @@ func newControlFlowGitHubMock(issueNumber int) *controlFlowGitHubMock {
 				State:  "open",
 			},
 		},
-			labels: map[int][]string{
-				issueNumber: {"bot:queued"},
-			},
-			blockedBy:         map[int]map[int]struct{}{},
-			commentBodies:     map[int][]string{},
-			stateTransitions:  map[int]int{},
-			replaceLabelCalls: map[int]int{},
-		}
+		labels: map[int][]string{
+			issueNumber: {"bot:queued"},
+		},
+		blockedBy:         map[int]map[int]struct{}{},
+		commentBodies:     map[int][]string{},
+		stateTransitions:  map[int]int{},
+		replaceLabelCalls: map[int]int{},
+	}
 }
 
 func (m *controlFlowGitHubMock) ListIssuesWithLabel(_ context.Context, label string) ([]control.IssueInfo, error) {
@@ -359,6 +359,14 @@ func (m *controlFlowGitHubMock) CloseIssue(_ context.Context, issueNumber int) e
 
 func (m *controlFlowGitHubMock) MergePR(_ context.Context, _ int, _ string) error {
 	return nil
+}
+
+func (m *controlFlowGitHubMock) FindOpenPR(_ context.Context, _, _ string) (*control.PullRequestInfo, error) {
+	return nil, nil
+}
+
+func (m *controlFlowGitHubMock) CreatePR(_ context.Context, _, _, _, _ string) (*control.PullRequestInfo, error) {
+	return nil, errMockMethodNotImplemented
 }
 
 func (m *controlFlowGitHubMock) ListLabels(_ context.Context, issueNumber int) ([]string, error) {

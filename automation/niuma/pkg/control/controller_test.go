@@ -36,6 +36,12 @@ type mockGitHubOps struct {
 	resolvePRReviewStatusIdx  map[int]int
 	resolvePRReviewStatusErr  map[int]error
 	resolvePRReviewStatusCall []int
+	findOpenPR                map[string]*PullRequestInfo
+	findOpenPRErr             map[string]error
+	findOpenPRCalls           []string
+	createPRErr               map[string]error
+	createPRCalls             []createPRCall
+	nextPRNumber              int
 	replaceLabelCalls         []replaceLabelCall
 	replaceLabelError         map[string]error
 	replaceLabelPairError     map[string]error
@@ -74,6 +80,13 @@ type addIssueCommentCall struct {
 	body        string
 }
 
+type createPRCall struct {
+	title string
+	body  string
+	head  string
+	base  string
+}
+
 type blockedByCall struct {
 	issueNumber          int
 	blockedByIssueNumber int
@@ -97,6 +110,10 @@ func newMockGitHubOps(issues ...IssueInfo) *mockGitHubOps {
 		resolvePRReviewStatusSeq: make(map[int][]PRReviewStatus),
 		resolvePRReviewStatusIdx: make(map[int]int),
 		resolvePRReviewStatusErr: make(map[int]error),
+		findOpenPR:               make(map[string]*PullRequestInfo),
+		findOpenPRErr:            make(map[string]error),
+		createPRErr:              make(map[string]error),
+		nextPRNumber:             100,
 		replaceLabelError:        make(map[string]error),
 		replaceLabelPairError:    make(map[string]error),
 		replaceLabelFails:        make(map[string]int),
@@ -230,6 +247,55 @@ func (m *mockGitHubOps) ResolvePRReviewStatus(_ context.Context, issueNumber int
 		return status, nil
 	}
 	return PRReviewStatus{}, ErrPRMarkerNotFound
+}
+
+func prRefKey(head, base string) string {
+	return strings.TrimSpace(head) + "->" + strings.TrimSpace(base)
+}
+
+func (m *mockGitHubOps) FindOpenPR(_ context.Context, head, base string) (*PullRequestInfo, error) {
+	key := prRefKey(head, base)
+	m.findOpenPRCalls = append(m.findOpenPRCalls, key)
+	if err, ok := m.findOpenPRErr[key]; ok {
+		return nil, err
+	}
+	pr, ok := m.findOpenPR[key]
+	if !ok || pr == nil {
+		return nil, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(pr.State), "open") {
+		return nil, nil
+	}
+	copied := *pr
+	return &copied, nil
+}
+
+func (m *mockGitHubOps) CreatePR(_ context.Context, title, body, head, base string) (*PullRequestInfo, error) {
+	key := prRefKey(head, base)
+	m.createPRCalls = append(m.createPRCalls, createPRCall{
+		title: title,
+		body:  body,
+		head:  strings.TrimSpace(head),
+		base:  strings.TrimSpace(base),
+	})
+	if err, ok := m.createPRErr[key]; ok {
+		return nil, err
+	}
+	number := m.nextPRNumber
+	if number <= 0 {
+		number = 100
+	}
+	m.nextPRNumber = number + 1
+	created := &PullRequestInfo{
+		Number: number,
+		URL:    fmt.Sprintf("https://example.invalid/pr/%d", number),
+		State:  "open",
+		Head:   strings.TrimSpace(head),
+		Base:   strings.TrimSpace(base),
+	}
+	m.findOpenPR[key] = created
+	copied := *created
+	return &copied, nil
 }
 
 func (m *mockGitHubOps) ListLabels(_ context.Context, issueNumber int) ([]string, error) {
