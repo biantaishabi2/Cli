@@ -168,7 +168,6 @@ func buildController() (*control.Controller, error) {
 		MaxOldBranches:            cfg.Control.MaxOldBranches,
 		MinPRsForIntegration:      cfg.Control.MinPRsForIntegration,
 		IntegrationGateMaxRetries: integrationGateMaxRetries,
-		NeedsHumanBlockingLabels:  append([]string(nil), cfg.Control.NeedsHumanBlockingLabels...),
 		DagSync: control.DagSyncConfig{
 			PollInterval:         cfg.Control.DagSync.GetPollInterval(),
 			MaxRetry:             cfg.Control.DagSync.GetMaxRetry(),
