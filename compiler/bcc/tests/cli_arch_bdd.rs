@@ -1,4 +1,5 @@
 use bcc::extract::testing as extract_testing;
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,6 +167,70 @@ profiles:
         .expect("run relaxed validate");
     assert_eq!(relaxed.code(), Some(0));
     assert!(relaxed_out.join("summary.json").exists());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn given_seed_with_contracts_when_emit_api_contract_then_only_contract_file_is_emitted() {
+    let root = temp_dir("bcc_bdd_arch_generate_api_contract");
+    let seed = root.join("seed.yaml");
+    let output = root.join("out");
+    write(
+        &seed,
+        r#"version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: create_invoice
+        kind: command
+        input:
+          order_id: uuid
+        output:
+          invoice_id: uuid
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "generate",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--emit",
+            "api-contract",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run arch generate api-contract");
+    assert!(status.success());
+
+    let contract_path = output.join("api-contract.json");
+    assert!(contract_path.exists(), "api-contract.json should exist");
+
+    let payload: Value = serde_json::from_str(
+        &fs::read_to_string(&contract_path).expect("read generated api-contract"),
+    )
+    .expect("parse generated api-contract json");
+    assert!(payload.get("contracts").and_then(Value::as_array).is_some());
+
+    let mut files: Vec<String> = fs::read_dir(&output)
+        .expect("read output dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec!["api-contract.json".to_string()]);
+    assert!(!files.iter().any(|name| {
+        name.contains("runtime") || name.contains("controller") || name.contains("resolver")
+    }));
 
     let _ = fs::remove_dir_all(&root);
 }
