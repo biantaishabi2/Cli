@@ -1,80 +1,80 @@
-# 决策：Issue #453 BCC 对接 UniBO GraphQL 复用边界（双轨生成策略）
+# 决策文档：Issue #453 双轨生成策略（UniBO + Seed 渐进）
 
 ## 背景
 
-Issue #453 已确认 UniBO 侧 GraphQL 解耦层（manifest + runtime）已可用。  
-BCC 不应再次实现同构 GraphQL runtime/controller/resolver 能力。
+Issue #453 原始讨论聚焦 `seed -> 代码生成`，并提出 CRUD 与复杂业务分流。后续讨论明确了一个关键缺口：如果仅依赖 `phx.gen` 的默认 Web 入口，系统边界会和 Context 形态耦合，导致后续从 CRUD 演进到 DDD 时外部接口震荡。
 
-本决策用于固化 BCC 与 UniBO 的职责边界、可复用产物与输入输出契约。
+同时，UniBO 在 PoC 中已经验证了“声明式模型 + GraphQL 契约层”的解耦路径，可作为已建模业务的主路径。
 
-## 职责边界（MUST / MUST NOT）
+## 决策结论
 
-### BCC（MUST）
+1. 采用双轨路线，而不是单一路线。
+2. 路线选择依据是“建模成熟度”，不是业务行业标签。
+3. 对外稳定边界统一为 GraphQL 契约层（manifest/schema/resolver）。
+4. `phx.gen` 仅作为内部脚手架，不作为系统边界生成器。
 
-- MUST 从 seed 中提取接口契约，输出 UniBO 可消费的 API Contract 文件（`api-contract.json`）。
-- MUST 保持既有 `bcc arch generate --emit code` 行为兼容。
-- MUST 在 `--emit api-contract` 时执行最小契约校验（必须存在 `boundaries[].contracts`）。
+## 双轨定义
 
-### UniBO（MUST）
+1. UniBO 轨道（model-first）
+- 适用：实体关系、行为、流程可清晰建模的业务。
+- 产物：模型、代码、GraphQL 契约、BDD source 联动生成。
 
-- MUST 负责 GraphQL manifest 解析与装配。
-- MUST 负责 runtime/controller/resolver/schema 的生成与执行。
-- MUST 在同 major 版本下向后兼容地消费 BCC 契约，并忽略未知字段。
+2. 453 修正版轨道（seed 渐进）
+- 适用：业务仍在探索、模型暂不稳定的场景。
+- 要求：先保证 GraphQL 契约层稳定，再逐步升级内部实现。
 
-### 禁止重复实现（MUST NOT）
+## 路线选择标准（立项检查）
 
-- BCC MUST NOT 新增或生成 GraphQL runtime 模板。
-- BCC MUST NOT 新增或生成 controller/resolver 模板。
-- BCC MUST NOT 在 BCC 内复制 UniBO 的 manifest/runtime 解释执行逻辑。
+满足以下 4 条，优先使用 UniBO：
 
-## 复用产物边界
+1. 可稳定定义实体关系和关键约束（主键、引用、状态边界）。
+2. 可将核心行为抽象为 `action/validation/workflow/event`。
+3. 需要长期稳定的对外 API 契约。
+4. 团队接受 model-first 迭代方式（先改模型，再生成代码/测试）。
 
-- 可复用：UniBO 既有 `manifest + runtime`。
-- BCC 新增输出：`--emit api-contract` 仅生成 `api-contract.json`。
-- 不允许输出：任何 GraphQL 运行时代码或控制器模板。
+若不满足，先走 453 修正版，待模型稳定后再迁移到 UniBO。
 
-## CLI 语义冻结
+## 453 修正版的生成边界
 
-- `--emit code`：保留原有代码生成路径（`generate-commands.sh` + `*.ex`）。
-- `--emit api-contract`：仅输出对接契约文件。
-- `--emit all`：当前版本冻结为与 `--emit code` 等价，保证历史脚本兼容。
+1. 允许：`phx.gen.context` / `phx.gen.schema`（内部脚手架）。
+2. 不建议作为边界：`phx.gen.json` / `phx.gen.html` / `phx.gen.live`。
+3. 默认产物应包含或对接 GraphQL 契约层，避免 Controller 与 Context 强耦合。
 
-## BCC -> UniBO 契约格式（v1）
+## CRUD -> DDD 渐进分级（L0-L3）
 
-输出 JSON 根字段：
+1. L0（CRUD 启动）
+- 产物：schema/migration/repo CRUD/context adapter/GraphQL 契约。
+- 约束：Context 保持薄封装。
 
-- `contract_schema_version`（示例：`1.0.0`）
-- `producer`（`name` + `version`）
-- `seed_version`
-- `generated_at`（RFC3339）
-- `contracts[]`
+2. L1（规则外提）
+- 触发：出现显式业务约束（errors/validations）。
+- 产物：policy/rules 模块。
 
-`contracts[]` 最小必填字段：
+3. L2（用例分层）
+- 触发：command/query 分化、跨实体事务增多。
+- 产物：application use_case（commands/queries）。
 
-- `module_id`
-- `name`
-- `kind`
-- `input`
-- `output`
+4. L3（DDD 聚合）
+- 触发：flow/event/workflow 复杂度持续上升。
+- 产物：aggregate/domain service/event handler。
 
-可选字段：
+## 门禁与验收
 
-- `errors`
-- `fields`
-- `metadata`
+1. GraphQL 契约门禁：manifest/schema 变更需可审计。
+2. 行为门禁：关键 query/mutation 契约测试通过。
+3. 架构门禁：限制业务逻辑回流到 Context。
+4. 流程门禁：L2/L3 场景纳入 BDD 回归。
 
-## 版本演进规则
+## 执行拆分（Sub-Issues）
 
-- major：不兼容变更（字段删除/重命名、语义破坏）。
-- minor：向后兼容扩展（仅新增可选字段）。
-- patch：非语义修订（文档、描述、格式性修复）。
+parent: #453
 
-UniBO 消费策略：
+1. #506 定义 GraphQL 契约层产物与 CLI 开关
+2. #507 实现 seed -> GraphQL 契约产物生成（depends-on: #506）
+3. #508 增加契约门禁与 L0-L3 回归测试（depends-on: #507）
 
-- 同 major 版本可消费。
-- 对未知字段执行忽略策略，避免因扩展字段导致失败。
+## 非目标
 
-## 错误与回滚策略
-
-- `--emit api-contract` 若 seed 缺少 contracts，返回可读错误并非 0 退出。
-- 回滚策略：保持 `--emit code` / `--emit all` 不变，并继续禁止在 BCC 生成 runtime/controller。
+1. 不在本轮直接替换所有历史项目到 UniBO。
+2. 不在本轮一次性完成全量 DDD 自动生成。
+3. 不把“改 YAML”误解为零成本演进。
