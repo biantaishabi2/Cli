@@ -1,5 +1,5 @@
-use serde::Serialize;
 use crate::spec::ModuleSpec;
+use serde::Serialize;
 
 /// 映射 Elixir quoted AST 的三元组结构
 #[derive(Debug, Clone, Serialize)]
@@ -12,7 +12,9 @@ pub enum QuotedAST {
         args: Vec<QuotedAST>,
     },
     /// {:__aliases__, meta, segments} — 模块名
-    Aliases { segments: Vec<String> },
+    Aliases {
+        segments: Vec<String>,
+    },
     Atom(String),
     String(String),
     // TODO: 在 Elixir AST 解析中支持整数字面量
@@ -41,17 +43,23 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
         let kind = port.kind.as_deref().unwrap_or("command");
 
         // 收集输入参数名
-        let param_names: Vec<String> = port.input.as_ref()
+        let param_names: Vec<String> = port
+            .input
+            .as_ref()
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
 
         // @spec 注解
-        let spec_params: Vec<String> = port.input.as_ref()
+        let spec_params: Vec<String> = port
+            .input
+            .as_ref()
             .map(|m| m.values().map(|t| yaml_type_to_elixir(t)).collect())
             .unwrap_or_default();
         let spec_return = match kind {
             "query" => {
-                let out_types: Vec<String> = port.output.as_ref()
+                let out_types: Vec<String> = port
+                    .output
+                    .as_ref()
                     .map(|m| m.values().map(|t| yaml_type_to_elixir(t)).collect())
                     .unwrap_or_else(|| vec!["any()".into()]);
                 format!("{{:ok, {}}}", out_types.join(", "))
@@ -71,7 +79,8 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
         });
 
         // def 函数体
-        let params: Vec<QuotedAST> = param_names.iter()
+        let params: Vec<QuotedAST> = param_names
+            .iter()
             .map(|n| QuotedAST::Call {
                 name: n.clone(),
                 meta: vec![],
@@ -100,12 +109,10 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
                     meta: vec![],
                     args: params,
                 },
-                QuotedAST::List(vec![
-                    QuotedAST::Tuple(vec![
-                        QuotedAST::Atom("do".into()),
-                        return_val,
-                    ]),
-                ]),
+                QuotedAST::List(vec![QuotedAST::Tuple(vec![
+                    QuotedAST::Atom("do".into()),
+                    return_val,
+                ])]),
             ],
         });
     }
@@ -115,13 +122,13 @@ pub fn build_skeleton(spec: &ModuleSpec) -> Vec<QuotedAST> {
         name: "defmodule".into(),
         meta: vec![],
         args: vec![
-            QuotedAST::Aliases { segments: vec![spec.module.name.clone()] },
-            QuotedAST::List(vec![
-                QuotedAST::Tuple(vec![
-                    QuotedAST::Atom("do".into()),
-                    QuotedAST::Block(body),
-                ]),
-            ]),
+            QuotedAST::Aliases {
+                segments: vec![spec.module.name.clone()],
+            },
+            QuotedAST::List(vec![QuotedAST::Tuple(vec![
+                QuotedAST::Atom("do".into()),
+                QuotedAST::Block(body),
+            ])]),
         ],
     }]
 }

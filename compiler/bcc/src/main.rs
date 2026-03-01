@@ -365,9 +365,15 @@ enum ArchAction {
     Generate {
         #[arg(long)]
         seed_file: String,
-        /// 输出模式：code | all
+        /// 输出模式：code | api-contract | all
         #[arg(long, default_value = "code")]
         emit: String,
+        /// 是否输出 UniBO runtime 桥接配置文件
+        #[arg(long, default_value_t = false, action = ArgAction::Set)]
+        emit_runtime_bridge: bool,
+        /// contract key 冲突策略：error-on-conflict | dedupe
+        #[arg(long, default_value = "error-on-conflict")]
+        conflict_strategy: String,
         /// 输出目录（不指定则输出到 stdout）
         #[arg(long, short)]
         output: Option<String>,
@@ -417,112 +423,112 @@ enum GraphAction {
         /// 仓库ID (如 github.com/HKUDS/nanobot)
         #[arg(short, long)]
         repo: String,
-        
+
         /// 仓库名称
         #[arg(short, long)]
         name: String,
-        
+
         /// 仓库根路径
         #[arg(short, long)]
         path: String,
-        
+
         /// extract 输出的 JSON 文件路径
         #[arg(short, long)]
         input: String,
-        
+
         /// commit hash
         #[arg(short, long)]
         commit: String,
     },
-    
+
     /// 查询函数信息
     Query {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
-        
+
         /// 查询目标ID
         #[arg(short, long)]
         id: String,
-        
+
         /// 查询类型
         #[arg(short, long, default_value = "id")]
         by: String,
-        
+
         /// 查询深度（用于 callers/callees）
         #[arg(short, long, default_value = "3")]
         depth: usize,
     },
-    
+
     /// 分析影响面
     Analyze {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
-        
+
         /// 函数ID
         #[arg(short, long)]
         id: String,
     },
-    
+
     /// 列出所有索引的仓库
     List,
-    
+
     /// 删除仓库索引
     Delete {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
     },
-    
+
     /// 图搜索（多关系融合查询）
     Search {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
-        
+
         /// 函数ID
         #[arg(short, long)]
         id: String,
-        
+
         /// 搜索深度
         #[arg(short, long, default_value = "2")]
         depth: usize,
-        
+
         /// 包含的关系类型（逗号分隔: callers,callees,siblings,same-file,same-module）
         #[arg(short, long, default_value = "callers,callees")]
         include: String,
     },
-    
+
     /// 架构验证
     ValidateArch {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
-        
+
         /// 目标架构 YAML 文件路径
         #[arg(short, long)]
         target: String,
-        
+
         /// 输出 JSON 文件路径
         #[arg(short, long)]
         output: Option<String>,
     },
-    
+
     /// 模块依赖查询
     Module {
         /// 仓库ID
         #[arg(short, long)]
         repo: String,
-        
+
         /// 模块ID（文件路径）
         #[arg(short, long)]
         id: String,
-        
+
         /// 查询类型
         #[arg(short, long, default_value = "id")]
         by: String,
-        
+
         /// 查询深度
         #[arg(short, long, default_value = "3")]
         depth: usize,
@@ -736,11 +742,33 @@ fn main() {
                     &format,
                 );
             }
-            ArchAction::ExportMermaid { seed_file, ast_file, output, export_bdd_source } => {
-                arch::export_mermaid(&seed_file, ast_file.as_deref(), output.as_deref(), export_bdd_source.as_deref());
+            ArchAction::ExportMermaid {
+                seed_file,
+                ast_file,
+                output,
+                export_bdd_source,
+            } => {
+                arch::export_mermaid(
+                    &seed_file,
+                    ast_file.as_deref(),
+                    output.as_deref(),
+                    export_bdd_source.as_deref(),
+                );
             }
-            ArchAction::Generate { seed_file, emit, output } => {
-                arch::generate(&seed_file, &emit, output.as_deref());
+            ArchAction::Generate {
+                seed_file,
+                emit,
+                emit_runtime_bridge,
+                conflict_strategy,
+                output,
+            } => {
+                arch::generate(
+                    &seed_file,
+                    &emit,
+                    output.as_deref(),
+                    emit_runtime_bridge,
+                    &conflict_strategy,
+                );
             }
             ArchAction::Score { action } => {
                 action.execute();
@@ -782,13 +810,24 @@ fn main() {
             }
         },
         Some(Commands::Graph { action }) => match action {
-            GraphAction::Build { repo, name, path, input, commit } => {
+            GraphAction::Build {
+                repo,
+                name,
+                path,
+                input,
+                commit,
+            } => {
                 if let Err(e) = graph::cli::build_index(&repo, &name, &path, &input, &commit) {
                     eprintln!("[graph-index] Error: {}", e);
                     std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::Query { repo, id, by, depth } => {
+            GraphAction::Query {
+                repo,
+                id,
+                by,
+                depth,
+            } => {
                 let query_type = match by.as_str() {
                     "id" => graph::cli::QueryType::ById,
                     "name" => graph::cli::QueryType::ByName,
@@ -824,19 +863,33 @@ fn main() {
                     std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::Search { repo, id, depth, include } => {
+            GraphAction::Search {
+                repo,
+                id,
+                depth,
+                include,
+            } => {
                 if let Err(e) = graph::cli::search_graph(&repo, &id, depth, &include) {
                     eprintln!("[graph-index] Error: {}", e);
                     std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::ValidateArch { repo, target, output } => {
+            GraphAction::ValidateArch {
+                repo,
+                target,
+                output,
+            } => {
                 if let Err(e) = graph::cli::validate_arch(&repo, &target, output.as_deref()) {
                     eprintln!("[graph-index] Error: {}", e);
                     std::process::exit(e.exit_code());
                 }
             }
-            GraphAction::Module { repo, id, by, depth } => {
+            GraphAction::Module {
+                repo,
+                id,
+                by,
+                depth,
+            } => {
                 let query_type = match by.as_str() {
                     "id" => graph::cli::ModuleQueryType::ById,
                     "deps" => graph::cli::ModuleQueryType::Deps { depth },

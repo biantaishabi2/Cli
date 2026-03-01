@@ -1,11 +1,17 @@
 //! 架构矩阵与门禁工具
 
+use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::arch_bridge_schema::{
+    ContractSourceConfig, RuntimeBindingConfig, UniboActionContract, UniboApiContractDocument,
+    UniboBoundaryContract, UniboContractProducer, UniboRuntimeBridgeConfig,
+};
 
 pub mod injection;
 use injection::{
@@ -110,7 +116,7 @@ struct SeedFlowStep {
 struct FlowValidationResult {
     flow_name: String,
     missing_steps: Vec<(String, String, Option<String>)>, // (from, to, action)
-    shortcuts: Vec<(String, String, String)>,              // (from, to, bypassed_module)
+    shortcuts: Vec<(String, String, String)>,             // (from, to, bypassed_module)
 }
 
 /// 接口边界定义：声明模块的公共 API 文件路径
@@ -148,6 +154,64 @@ fn default_contract_kind() -> String {
     "command".to_string()
 }
 
+const UNIBO_BRIDGE_VERSION: &str = "1.0.0";
+const UNIBO_TARGET_RUNTIME_VERSION: &str = "1.x";
+const UNIBO_COMPAT_VERSION: &str = "1";
+const UNIBO_API_CONTRACT_FILE: &str = "unibo-api-contract.json";
+const UNIBO_RUNTIME_BRIDGE_FILE: &str = "unibo-runtime-bridge.yaml";
+const LEGACY_API_CONTRACT_SCHEMA_VERSION: &str = "1.0.0";
+const LEGACY_API_CONTRACT_FILE: &str = "api-contract.json";
+const GENERATE_EXIT_INVALID_ARGUMENT: i32 = 10;
+const GENERATE_EXIT_CONTRACT_CONFLICT: i32 = 12;
+const GENERATE_EXIT_OUTPUT_FAILED: i32 = 13;
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractProducer {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractItem {
+    module_id: String,
+    name: String,
+    kind: String,
+    input: BTreeMap<String, String>,
+    output: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractDocument {
+    contract_schema_version: String,
+    producer: LegacyApiContractProducer,
+    seed_version: String,
+    generated_at: String,
+    contracts: Vec<LegacyApiContractItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConflictStrategy {
+    ErrorOnConflict,
+    Dedupe,
+}
+
+impl ConflictStrategy {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "error-on-conflict" => Ok(Self::ErrorOnConflict),
+            "dedupe" => Ok(Self::Dedupe),
+            _ => Err(format!(
+                "unknown conflict strategy: {} (expected error-on-conflict|dedupe)",
+                raw
+            )),
+        }
+    }
+}
+
 /// 契约复杂度分类
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContractComplexity {
@@ -180,8 +244,7 @@ fn classify_contract(
             .any(|s| s.from == module_id || s.to == module_id)
     });
     let in_event = seed.events.iter().any(|e| {
-        e.producers.iter().any(|p| p == module_id)
-            || e.consumers.iter().any(|c| c == module_id)
+        e.producers.iter().any(|p| p == module_id) || e.consumers.iter().any(|c| c == module_id)
     });
     let out_edges = seed
         .relations_expected
@@ -1772,7 +1835,10 @@ fn validate_impl(
                     .then_with(|| a.line.cmp(&b.line))
             });
 
-            eprintln!("\n=== Smell Gate Report ({} issue(s)) ===\n", all_smells.len());
+            eprintln!(
+                "\n=== Smell Gate Report ({} issue(s)) ===\n",
+                all_smells.len()
+            );
             for smell in &all_smells {
                 eprintln!(
                     "[{}] {}:{} - {} ({})",
@@ -1796,8 +1862,14 @@ fn validate_impl(
             }
 
             // 统计
-            let critical = all_smells.iter().filter(|s| s.severity == "critical").count();
-            let warning = all_smells.iter().filter(|s| s.severity == "warning").count();
+            let critical = all_smells
+                .iter()
+                .filter(|s| s.severity == "critical")
+                .count();
+            let warning = all_smells
+                .iter()
+                .filter(|s| s.severity == "warning")
+                .count();
             let info = all_smells.iter().filter(|s| s.severity == "info").count();
             eprintln!(
                 "\nTotal: {} (critical={}, warning={}, info={})",
@@ -1844,11 +1916,7 @@ fn validate_flows(
         // 检查每个 step 是否在 actual edges 中存在
         for step in &flow.steps {
             if !actual_edges.contains(&(step.from.clone(), step.to.clone())) {
-                missing_steps.push((
-                    step.from.clone(),
-                    step.to.clone(),
-                    step.action.clone(),
-                ));
+                missing_steps.push((step.from.clone(), step.to.clone(), step.action.clone()));
             }
         }
 
@@ -1921,10 +1989,7 @@ fn render_mermaid_flows(flows: &[SeedFlow], module_map: &HashMap<&str, &SeedModu
         // 输出步骤
         for step in &flow.steps {
             let action = step.action.as_deref().unwrap_or(" ");
-            out.push_str(&format!(
-                "    {}->>{}:{}\n",
-                step.from, step.to, action
-            ));
+            out.push_str(&format!("    {}->>{}:{}\n", step.from, step.to, action));
         }
     }
     out
@@ -2032,20 +2097,11 @@ fn render_mermaid_boundaries(
             .unwrap_or(&boundary.module_id);
 
         let sg_id = format!("bd_{}", boundary.module_id);
-        out.push_str(&format!(
-            "  subgraph {}[\"{}\"]\n",
-            sg_id, display
-        ));
+        out.push_str(&format!("  subgraph {}[\"{}\"]\n", sg_id, display));
         let pub_id = format!("bd_{}_pub", boundary.module_id);
         let int_id = format!("bd_{}_int", boundary.module_id);
-        out.push_str(&format!(
-            "    {}[\"📤 公共 API\"]\n",
-            pub_id
-        ));
-        out.push_str(&format!(
-            "    {}[\"🔒 内部实现\"]\n",
-            int_id
-        ));
+        out.push_str(&format!("    {}[\"📤 公共 API\"]\n", pub_id));
+        out.push_str(&format!("    {}[\"🔒 内部实现\"]\n", int_id));
         out.push_str("  end\n");
 
         // 如果有校验结果，渲染泄漏边
@@ -2064,20 +2120,14 @@ fn render_mermaid_boundaries(
                     .unwrap_or(src_mod);
                 let src_node = format!("leak_src_{}", src_mod);
                 out.push_str(&format!("  {}[\"{}\"]\n", src_node, src_display));
-                out.push_str(&format!(
-                    "  {} -..->|\"⚠️ 泄漏\"| {}\n",
-                    src_node, int_id
-                ));
+                out.push_str(&format!("  {} -..->|\"⚠️ 泄漏\"| {}\n", src_node, int_id));
             }
 
             // 合规引用（如果有外部引用且不全是泄漏）
             if result.total_external_refs > result.leaked_refs.len() {
                 let ok_node = format!("bd_{}_ok", boundary.module_id);
                 out.push_str(&format!("  {}[\"合规调用方\"]\n", ok_node));
-                out.push_str(&format!(
-                    "  {} -->|\"✅ 合规\"| {}\n",
-                    ok_node, pub_id
-                ));
+                out.push_str(&format!("  {} -->|\"✅ 合规\"| {}\n", ok_node, pub_id));
             }
         }
     }
@@ -2132,19 +2182,19 @@ fn validate_events(
 }
 
 /// 渲染事件流 Mermaid 图
-fn render_mermaid_events(
-    events: &[SeedEvent],
-    module_map: &HashMap<&str, &SeedModule>,
-) -> String {
+fn render_mermaid_events(events: &[SeedEvent], module_map: &HashMap<&str, &SeedModule>) -> String {
     let mut out = String::from("graph LR\n");
 
     for event in events {
         // 事件节点用菱形样式
-        let evt_id = format!("evt_{}", event.name.replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', ""));
-        out.push_str(&format!(
-            "  {}{{\"{}\"}}\n",
-            evt_id, event.name
-        ));
+        let evt_id = format!(
+            "evt_{}",
+            event
+                .name
+                .replace(' ', "_")
+                .replace(|c: char| !c.is_alphanumeric() && c != '_', "")
+        );
+        out.push_str(&format!("  {}{{\"{}\"}}\n", evt_id, event.name));
 
         // 生产者 → 事件
         for producer in &event.producers {
@@ -2213,10 +2263,7 @@ fn validate_flow_data_continuity(flows: &[SeedFlow]) -> Vec<FlowDataIssue> {
 
 /// 格式化 HashMap<String, String> 为 "field1:type1, field2:type2" 形式
 fn format_fields(fields: &HashMap<String, String>) -> String {
-    let mut pairs: Vec<String> = fields
-        .iter()
-        .map(|(k, v)| format!("{}:{}", k, v))
-        .collect();
+    let mut pairs: Vec<String> = fields.iter().map(|(k, v)| format!("{}:{}", k, v)).collect();
     pairs.sort();
     pairs.join(", ")
 }
@@ -2266,15 +2313,16 @@ fn to_pascal_case(s: &str) -> String {
 }
 
 /// 从 CRUD contract 生成 mix phx.gen.context 命令
-fn generate_crud_mix_command(
-    module_id: &str,
-    contract: &BoundaryContract,
-) -> String {
+fn generate_crud_mix_command(module_id: &str, contract: &BoundaryContract) -> String {
     let (context, schema, table) = derive_phoenix_names(module_id, &contract.name);
 
     // 优先用 fields，没有则从 input+output 合并
     let fields: BTreeMap<String, String> = if !contract.fields.is_empty() {
-        contract.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        contract
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     } else {
         let mut merged = BTreeMap::new();
         for (k, v) in &contract.input {
@@ -2419,19 +2467,405 @@ fn generate_from_seed(seed: &SeedSpec) -> Vec<(String, String, ContractComplexit
     for (module_id, (complexity, contracts)) in sorted_modules {
         let skeleton = generate_elixir_skeleton(&module_id, &contracts, &complexity);
         let names: Vec<&str> = contracts.iter().map(|c| c.name.as_str()).collect();
-        results.push((
-            module_id,
-            names.join("+"),
-            complexity,
-            skeleton,
-        ));
+        results.push((module_id, names.join("+"), complexity, skeleton));
     }
 
     results
 }
 
+fn normalize_key(raw: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_is_sep = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_is_sep = false;
+        } else if !last_is_sep {
+            normalized.push('_');
+            last_is_sep = true;
+        }
+    }
+    let trimmed = normalized.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn normalize_contract_kind(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        default_contract_kind()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
+}
+
+fn to_sorted_map(raw: &HashMap<String, String>) -> BTreeMap<String, String> {
+    raw.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+fn resolve_contract_fields(contract: &BoundaryContract) -> BTreeMap<String, String> {
+    if !contract.fields.is_empty() {
+        return to_sorted_map(&contract.fields);
+    }
+    let mut merged = BTreeMap::new();
+    for (k, v) in &contract.input {
+        merged.insert(k.clone(), v.clone());
+    }
+    for (k, v) in &contract.output {
+        merged.insert(k.clone(), v.clone());
+    }
+    merged
+}
+
+fn build_action(
+    action: &str,
+    graphql_kind: &str,
+    input: BTreeMap<String, String>,
+    output: BTreeMap<String, String>,
+    errors: &[String],
+) -> UniboActionContract {
+    UniboActionContract {
+        action_key: normalize_key(action),
+        action: action.to_string(),
+        graphql_kind: graphql_kind.to_string(),
+        input,
+        output,
+        errors: errors.to_vec(),
+    }
+}
+
+fn build_unibo_contract_item(
+    module_id: &str,
+    contract: &BoundaryContract,
+) -> Result<UniboBoundaryContract, String> {
+    let source_kind = normalize_contract_kind(&contract.kind);
+    let fields = resolve_contract_fields(contract);
+    let contract_key = format!(
+        "{}.{}",
+        normalize_key(module_id),
+        normalize_key(&contract.name)
+    );
+    let mut actions = match source_kind.as_str() {
+        "query" => vec![build_action(
+            &contract.name,
+            "query",
+            to_sorted_map(&contract.input),
+            to_sorted_map(&contract.output),
+            &contract.errors,
+        )],
+        "command" => vec![build_action(
+            &contract.name,
+            "mutation",
+            to_sorted_map(&contract.input),
+            to_sorted_map(&contract.output),
+            &contract.errors,
+        )],
+        "crud" => {
+            let mut read_delete_input = BTreeMap::new();
+            read_delete_input.insert("id".to_string(), "uuid".to_string());
+
+            let mut update_input = fields.clone();
+            update_input.insert("id".to_string(), "uuid".to_string());
+
+            let mut delete_output = BTreeMap::new();
+            delete_output.insert("deleted".to_string(), "boolean".to_string());
+
+            let mut list_output = BTreeMap::new();
+            list_output.insert("items".to_string(), "array".to_string());
+
+            vec![
+                build_action(
+                    "create",
+                    "mutation",
+                    fields.clone(),
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "read",
+                    "query",
+                    read_delete_input.clone(),
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "update",
+                    "mutation",
+                    update_input,
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "delete",
+                    "mutation",
+                    read_delete_input,
+                    delete_output,
+                    &contract.errors,
+                ),
+                build_action(
+                    "list",
+                    "query",
+                    BTreeMap::new(),
+                    list_output,
+                    &contract.errors,
+                ),
+            ]
+        }
+        other => {
+            return Err(format!(
+                "unsupported contract kind `{}` for {}.{} (expected query|command|crud)",
+                other, module_id, contract.name
+            ));
+        }
+    };
+    actions.sort_by(|a, b| a.action_key.cmp(&b.action_key));
+
+    Ok(UniboBoundaryContract {
+        contract_key,
+        module_id: module_id.to_string(),
+        name: contract.name.clone(),
+        source_kind: source_kind.clone(),
+        graphql_kind: match source_kind.as_str() {
+            "query" => "query".to_string(),
+            "command" => "mutation".to_string(),
+            _ => "mixed".to_string(),
+        },
+        fields,
+        actions,
+    })
+}
+
+#[derive(Debug)]
+enum UniboContractBuildError {
+    Conflict(String),
+    Other(String),
+}
+
+fn build_unibo_api_contract_document(
+    seed: &SeedSpec,
+    strategy: ConflictStrategy,
+) -> Result<UniboApiContractDocument, UniboContractBuildError> {
+    let mut contracts_by_key: BTreeMap<String, UniboBoundaryContract> = BTreeMap::new();
+    let mut conflicts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            let item = build_unibo_contract_item(&boundary.module_id, contract)
+                .map_err(UniboContractBuildError::Other)?;
+            let source = format!("{}.{}", boundary.module_id, contract.name);
+            if let Some(prev) = contracts_by_key.get(&item.contract_key) {
+                match strategy {
+                    ConflictStrategy::ErrorOnConflict => {
+                        let entry = conflicts.entry(item.contract_key.clone()).or_default();
+                        if entry.is_empty() {
+                            entry.push(format!("{}.{}", prev.module_id, prev.name));
+                        }
+                        entry.push(source);
+                    }
+                    ConflictStrategy::Dedupe => {
+                        eprintln!(
+                            "[generate] warning: contract key conflict `{}`，保留后者 {}（覆盖 {}.{}）",
+                            item.contract_key, source, prev.module_id, prev.name
+                        );
+                        contracts_by_key.insert(item.contract_key.clone(), item);
+                    }
+                }
+            } else {
+                contracts_by_key.insert(item.contract_key.clone(), item);
+            }
+        }
+    }
+
+    if !conflicts.is_empty() {
+        let mut detail = Vec::new();
+        for (key, mut sources) in conflicts {
+            sources.sort();
+            sources.dedup();
+            detail.push(format!("{} => {}", key, sources.join(" | ")));
+        }
+        return Err(UniboContractBuildError::Conflict(format!(
+            "contract key conflicts detected: {}",
+            detail.join("; ")
+        )));
+    }
+
+    if contracts_by_key.is_empty() {
+        return Err(UniboContractBuildError::Other(
+            "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
+        ));
+    }
+
+    Ok(UniboApiContractDocument {
+        bridge_version: UNIBO_BRIDGE_VERSION.to_string(),
+        target_runtime_version: UNIBO_TARGET_RUNTIME_VERSION.to_string(),
+        compat_version: UNIBO_COMPAT_VERSION.to_string(),
+        producer: UniboContractProducer {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        seed_version: seed
+            .version
+            .clone()
+            .unwrap_or_else(|| "unspecified".to_string()),
+        generated_at: Utc::now().to_rfc3339(),
+        contracts: contracts_by_key.into_values().collect(),
+    })
+}
+
+fn build_legacy_api_contract_document(
+    seed: &SeedSpec,
+) -> Result<LegacyApiContractDocument, String> {
+    let mut contracts = Vec::new();
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            contracts.push(LegacyApiContractItem {
+                module_id: boundary.module_id.clone(),
+                name: contract.name.clone(),
+                kind: normalize_contract_kind(&contract.kind),
+                input: to_sorted_map(&contract.input),
+                output: to_sorted_map(&contract.output),
+                errors: contract.errors.clone(),
+                fields: to_sorted_map(&contract.fields),
+            });
+        }
+    }
+
+    if contracts.is_empty() {
+        return Err(
+            "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
+        );
+    }
+
+    contracts.sort_by(|a, b| {
+        a.module_id
+            .cmp(&b.module_id)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(LegacyApiContractDocument {
+        contract_schema_version: LEGACY_API_CONTRACT_SCHEMA_VERSION.to_string(),
+        producer: LegacyApiContractProducer {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        seed_version: seed
+            .version
+            .clone()
+            .unwrap_or_else(|| "unspecified".to_string()),
+        generated_at: Utc::now().to_rfc3339(),
+        contracts,
+    })
+}
+
+fn build_unibo_runtime_bridge_config() -> UniboRuntimeBridgeConfig {
+    UniboRuntimeBridgeConfig {
+        bridge_version: UNIBO_BRIDGE_VERSION.to_string(),
+        target_runtime_version: UNIBO_TARGET_RUNTIME_VERSION.to_string(),
+        compat_version: UNIBO_COMPAT_VERSION.to_string(),
+        runtime: RuntimeBindingConfig {
+            package: "unibo_graphql_runtime".to_string(),
+            mode: "reuse".to_string(),
+        },
+        contract_source: ContractSourceConfig {
+            path: format!("./{}", UNIBO_API_CONTRACT_FILE),
+            format: "json".to_string(),
+        },
+    }
+}
+
+fn write_unibo_api_contract_document(
+    document: &UniboApiContractDocument,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(document)
+        .map_err(|e| format!("serialize api-contract failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(UNIBO_API_CONTRACT_FILE);
+            fs::write(&file_path, format!("{}\n", payload))
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出 UniBO API Contract 到 {}（contracts: {}）",
+                file_path.display(),
+                document.contracts.len()
+            );
+        }
+        None => {
+            eprintln!("[generate] 未指定 --output，UniBO 契约输出到 stdout（机读）");
+            println!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
+fn write_legacy_api_contract_document(
+    document: &LegacyApiContractDocument,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(document)
+        .map_err(|e| format!("serialize legacy api-contract failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(LEGACY_API_CONTRACT_FILE);
+            fs::write(&file_path, format!("{}\n", payload))
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出兼容层 API Contract 到 {}（contracts: {}）",
+                file_path.display(),
+                document.contracts.len()
+            );
+        }
+        None => {
+            eprintln!("[generate] 未指定 --output，兼容层 JSON 输出到 stderr 供人工检查");
+            eprintln!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
+fn write_unibo_runtime_bridge_config(
+    config: &UniboRuntimeBridgeConfig,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_yaml::to_string(config)
+        .map_err(|e| format!("serialize runtime-bridge failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(UNIBO_RUNTIME_BRIDGE_FILE);
+            fs::write(&file_path, payload)
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出 UniBO runtime bridge 配置到 {}",
+                file_path.display()
+            );
+        }
+        None => {
+            eprintln!(
+                "[generate] 未指定 --output，runtime bridge 改为输出到 stderr 以保持 stdout JSON 可机读"
+            );
+            eprintln!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
 /// 公共入口：从 seed 生成代码
-pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
+pub fn generate(
+    seed_file: &str,
+    emit: &str,
+    output_dir: Option<&str>,
+    emit_runtime_bridge: bool,
+    conflict_strategy: &str,
+) {
     let seed_raw = match fs::read_to_string(seed_file) {
         Ok(s) => s,
         Err(e) => {
@@ -2447,17 +2881,21 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
         }
     };
 
-    let results = generate_from_seed(&seed);
-
-    if results.is_empty() {
-        eprintln!("[generate] seed 中没有 boundary contracts，无产出");
-        return;
-    }
-
     // 按 emit 模式输出
     match emit {
         "code" | "all" => {
-            let crud_count = results.iter().filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud)).count();
+            if emit == "all" {
+                eprintln!("[generate] emit=all 当前与 emit=code 等价（兼容保留）");
+            }
+            let results = generate_from_seed(&seed);
+            if results.is_empty() {
+                eprintln!("[generate] seed 中没有 boundary contracts，无产出");
+                return;
+            }
+            let crud_count = results
+                .iter()
+                .filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud))
+                .count();
             let other_count = results.len() - crud_count;
 
             if let Some(dir) = output_dir {
@@ -2513,15 +2951,57 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
                     }
                     println!("{}\n", output);
                 }
-                eprintln!(
-                    "[generate] CRUD: {}, 骨架: {}",
-                    crud_count, other_count
-                );
+                eprintln!("[generate] CRUD: {}, 骨架: {}", crud_count, other_count);
+            }
+        }
+        "api-contract" => {
+            let strategy = match ConflictStrategy::parse(conflict_strategy) {
+                Ok(strategy) => strategy,
+                Err(e) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
+                }
+            };
+            let document = match build_unibo_api_contract_document(&seed, strategy) {
+                Ok(doc) => doc,
+                Err(UniboContractBuildError::Conflict(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_CONTRACT_CONFLICT);
+                }
+                Err(UniboContractBuildError::Other(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let legacy_document = match build_legacy_api_contract_document(&seed) {
+                Ok(doc) => doc,
+                Err(e) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = write_unibo_api_contract_document(&document, output_dir) {
+                eprintln!("[generate] {}", e);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+            }
+            if let Err(e) = write_legacy_api_contract_document(&legacy_document, output_dir) {
+                eprintln!("[generate] {}", e);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+            }
+            if emit_runtime_bridge {
+                let runtime_bridge = build_unibo_runtime_bridge_config();
+                if let Err(e) = write_unibo_runtime_bridge_config(&runtime_bridge, output_dir) {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+                }
+            } else {
+                eprintln!("[generate] emit-runtime-bridge=false，仅输出契约桥接产物");
             }
         }
         other => {
             eprintln!("[generate] 未知 emit 模式: {}", other);
-            std::process::exit(1);
+            eprintln!("[generate] 可选值: code | api-contract | all");
+            std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
         }
     }
 }
@@ -2621,7 +3101,12 @@ fn export_bdd_sources_from_contracts(
     Ok((flow_count, boundary_count, event_count))
 }
 
-pub fn export_mermaid(seed_file: &str, ast_file: Option<&str>, output: Option<&str>, export_bdd_source: Option<&str>) {
+pub fn export_mermaid(
+    seed_file: &str,
+    ast_file: Option<&str>,
+    output: Option<&str>,
+    export_bdd_source: Option<&str>,
+) {
     let seed_raw = match fs::read_to_string(seed_file) {
         Ok(s) => s,
         Err(e) => {
@@ -2707,10 +3192,7 @@ pub fn export_mermaid(seed_file: &str, ast_file: Option<&str>, output: Option<&s
                     eprintln!("  缺失步骤: {} → {} {}", from, to, act);
                 }
                 for (from, to, bypassed) in &result.shortcuts {
-                    eprintln!(
-                        "  捷径: {} → {} 跳过 {}",
-                        from, to, bypassed
-                    );
+                    eprintln!("  捷径: {} → {} 跳过 {}", from, to, bypassed);
                 }
             } else {
                 eprintln!("[flow] 流程「{}」校验通过", result.flow_name);
@@ -2772,13 +3254,14 @@ pub fn export_mermaid(seed_file: &str, ast_file: Option<&str>, output: Option<&s
             } else {
                 eprintln!(
                     "[boundary] 模块「{}」: {} 个外部引用，{} 个泄漏:",
-                    result.module_id, result.total_external_refs, result.leaked_refs.len()
+                    result.module_id,
+                    result.total_external_refs,
+                    result.leaked_refs.len()
                 );
                 for leak in &result.leaked_refs {
                     eprintln!(
                         "  {} ({}) → {} ({})",
-                        leak.source_file, leak.source_module,
-                        leak.target_file, leak.target_module
+                        leak.source_file, leak.source_module, leak.target_file, leak.target_module
                     );
                 }
             }
@@ -2811,10 +3294,7 @@ pub fn export_mermaid(seed_file: &str, ast_file: Option<&str>, output: Option<&s
                 issues.push("孤儿事件(无消费者)".to_string());
             }
             if !result.ghost_consumers.is_empty() {
-                issues.push(format!(
-                    "幽灵消费者: {}",
-                    result.ghost_consumers.join(", ")
-                ));
+                issues.push(format!("幽灵消费者: {}", result.ghost_consumers.join(", ")));
             }
             if !result.missing_edges.is_empty() {
                 let edges: Vec<String> = result
@@ -2918,26 +3398,17 @@ pub fn export_mermaid(seed_file: &str, ast_file: Option<&str>, output: Option<&s
 
             // 时序流程图（在总览图之前）
             if let Some(ref fm) = flows_mermaid {
-                main_parts.push(format!(
-                    "## 时序流程图\n\n```mermaid\n{}\n```",
-                    fm.trim()
-                ));
+                main_parts.push(format!("## 时序流程图\n\n```mermaid\n{}\n```", fm.trim()));
             }
 
             // 接口边界图
             if let Some(ref bm) = boundaries_mermaid {
-                main_parts.push(format!(
-                    "## 接口边界图\n\n```mermaid\n{}\n```",
-                    bm.trim()
-                ));
+                main_parts.push(format!("## 接口边界图\n\n```mermaid\n{}\n```", bm.trim()));
             }
 
             // 事件流图
             if let Some(ref em) = events_mermaid {
-                main_parts.push(format!(
-                    "## 事件流图\n\n```mermaid\n{}\n```",
-                    em.trim()
-                ));
+                main_parts.push(format!("## 事件流图\n\n```mermaid\n{}\n```", em.trim()));
             }
 
             // 总览图
@@ -3104,7 +3575,10 @@ fn render_mermaid_overview(
             allow_indices.push(edge_idx);
         } else {
             if let Some(ref r) = rel.rationale {
-                out.push_str(&format!("  {} -.->|\"⛔ {}\"| {}\n", rel.caller, r, rel.callee));
+                out.push_str(&format!(
+                    "  {} -.->|\"⛔ {}\"| {}\n",
+                    rel.caller, r, rel.callee
+                ));
             } else {
                 out.push_str(&format!("  {} -.-x {}\n", rel.caller, rel.callee));
             }
@@ -3115,11 +3589,17 @@ fn render_mermaid_overview(
 
     if !allow_indices.is_empty() {
         let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
-        out.push_str(&format!("  linkStyle {} stroke:#2196F3,stroke-width:2px\n", indices.join(",")));
+        out.push_str(&format!(
+            "  linkStyle {} stroke:#2196F3,stroke-width:2px\n",
+            indices.join(",")
+        ));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
-        out.push_str(&format!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n", indices.join(",")));
+        out.push_str(&format!(
+            "  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n",
+            indices.join(",")
+        ));
     }
 
     out
@@ -3139,10 +3619,7 @@ fn render_mermaid_detail(
         Some(m) => m,
         None => return (String::new(), 0),
     };
-    let _parent_label = parent_mod
-        .display_name
-        .as_deref()
-        .unwrap_or(parent_id);
+    let _parent_label = parent_mod.display_name.as_deref().unwrap_or(parent_id);
 
     let mut out = String::new();
     out.push_str("graph LR\n");
@@ -3184,7 +3661,7 @@ fn render_mermaid_detail(
     // 第一遍：收集子模块级别边，记录已覆盖的 (方向, 外部模块) 对
     // 用于后续去除冗余的父级边
     let mut kid_out_covered: HashSet<String> = HashSet::new(); // 子模块→外部 已有边
-    let mut kid_in_covered: HashSet<String> = HashSet::new();  // 外部→子模块 已有边
+    let mut kid_in_covered: HashSet<String> = HashSet::new(); // 外部→子模块 已有边
 
     for rel in &seed.relations_expected {
         let caller_is_kid = kid_set.contains(rel.caller.as_str());
@@ -3211,14 +3688,12 @@ fn render_mermaid_detail(
 
         let caller_collapsed = collapse_external(&rel.caller);
         let callee_collapsed = collapse_external(&rel.callee);
-        let caller_collapsed_mine = caller_collapsed == parent_id
-            || kid_set.contains(caller_collapsed.as_str());
-        let callee_collapsed_mine = callee_collapsed == parent_id
-            || kid_set.contains(callee_collapsed.as_str());
+        let caller_collapsed_mine =
+            caller_collapsed == parent_id || kid_set.contains(caller_collapsed.as_str());
+        let callee_collapsed_mine =
+            callee_collapsed == parent_id || kid_set.contains(callee_collapsed.as_str());
 
-        if !caller_is_mine && !callee_is_mine
-            && !caller_collapsed_mine && !callee_collapsed_mine
-        {
+        if !caller_is_mine && !callee_is_mine && !caller_collapsed_mine && !callee_collapsed_mine {
             continue;
         }
 
@@ -3303,7 +3778,10 @@ fn render_mermaid_detail(
     }
 
     // 输出子模块节点（subgraph 包裹）
-    out.push_str(&format!("  subgraph {}[\"{}\"]\n", parent_id, _parent_label));
+    out.push_str(&format!(
+        "  subgraph {}[\"{}\"]\n",
+        parent_id, _parent_label
+    ));
     for kid_id in kids {
         if let Some(kid) = module_map.get(kid_id.as_str()) {
             let kid_label = kid.display_name.as_deref().unwrap_or(&kid.module_id);
@@ -3356,7 +3834,10 @@ fn render_mermaid_detail(
             allow_indices.push(edge_idx);
         } else {
             if !e.rationale.is_empty() {
-                out.push_str(&format!("  {} -.->|\"⛔ {}\"| {}\n", e.from, e.rationale, e.to));
+                out.push_str(&format!(
+                    "  {} -.->|\"⛔ {}\"| {}\n",
+                    e.from, e.rationale, e.to
+                ));
             } else {
                 out.push_str(&format!("  {} -.-x {}\n", e.from, e.to));
             }
@@ -3367,11 +3848,17 @@ fn render_mermaid_detail(
 
     if !allow_indices.is_empty() {
         let indices: Vec<String> = allow_indices.iter().map(|i| i.to_string()).collect();
-        out.push_str(&format!("  linkStyle {} stroke:#2196F3,stroke-width:2px\n", indices.join(",")));
+        out.push_str(&format!(
+            "  linkStyle {} stroke:#2196F3,stroke-width:2px\n",
+            indices.join(",")
+        ));
     }
     if !forbid_indices.is_empty() {
         let indices: Vec<String> = forbid_indices.iter().map(|i| i.to_string()).collect();
-        out.push_str(&format!("  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n", indices.join(",")));
+        out.push_str(&format!(
+            "  linkStyle {} stroke:#F44336,stroke-width:2px,stroke-dasharray:5\n",
+            indices.join(",")
+        ));
     }
 
     (out, edge_count)
@@ -3659,7 +4146,11 @@ pub(crate) fn validate_parent_hierarchy(seed: &SeedSpec) -> Result<(), String> {
     let parent_map: HashMap<&str, &str> = seed
         .modules
         .iter()
-        .filter_map(|m| m.parent.as_ref().map(|p| (m.module_id.as_str(), p.as_str())))
+        .filter_map(|m| {
+            m.parent
+                .as_ref()
+                .map(|p| (m.module_id.as_str(), p.as_str()))
+        })
         .collect();
 
     for m in &seed.modules {
@@ -3751,15 +4242,9 @@ fn expand_edges_to_children(
                     continue; // 已有显式定义，不覆盖
                 }
                 let inherit_note = if is_forbid {
-                    format!(
-                        "inherited forbid from {}→{}",
-                        edge.caller, edge.callee
-                    )
+                    format!("inherited forbid from {}→{}", edge.caller, edge.callee)
                 } else {
-                    format!(
-                        "inherited from {}→{}",
-                        edge.caller, edge.callee
-                    )
+                    format!("inherited from {}→{}", edge.caller, edge.callee)
                 };
                 expanded.push(Edge {
                     caller: c.clone(),
@@ -4258,14 +4743,8 @@ profiles:
 
         let pm = build_parent_map(&seed);
         assert_eq!(pm.get("AGENT"), Some(&None));
-        assert_eq!(
-            pm.get("AGENT_HISTORY"),
-            Some(&Some("AGENT".to_string()))
-        );
-        assert_eq!(
-            pm.get("AGENT_LOOP"),
-            Some(&Some("AGENT".to_string()))
-        );
+        assert_eq!(pm.get("AGENT_HISTORY"), Some(&Some("AGENT".to_string())));
+        assert_eq!(pm.get("AGENT_LOOP"), Some(&Some("AGENT".to_string())));
 
         let ancestors = get_ancestors("AGENT_HISTORY", &pm);
         assert_eq!(ancestors, vec!["AGENT"]);
@@ -4435,7 +4914,11 @@ profiles:
                 display_name: None,
                 layer: None,
                 domain_kind: None,
-                parent: if i == 0 { None } else { Some(format!("L{}", i - 1)) },
+                parent: if i == 0 {
+                    None
+                } else {
+                    Some(format!("L{}", i - 1))
+                },
                 precedence: None,
                 path_rules: None,
             })
@@ -4524,23 +5007,34 @@ profiles:
         };
 
         let children_map = build_children_map(&seed);
-        assert_eq!(children_map.get("AGENT").unwrap(), &vec!["AGENT_HISTORY".to_string()]);
+        assert_eq!(
+            children_map.get("AGENT").unwrap(),
+            &vec!["AGENT_HISTORY".to_string()]
+        );
 
         let allow_edges = vec![Edge {
             caller: "AGENT".to_string(),
             callee: "SESSION".to_string(),
             rationale: "from relations_expected".to_string(),
         }];
-        let existing: HashSet<String> = allow_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
-        let expanded =
-            expand_edges_to_children(&allow_edges, &children_map, &existing, false);
+        let existing: HashSet<String> = allow_edges
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
+        let expanded = expand_edges_to_children(&allow_edges, &children_map, &existing, false);
 
         // AGENT_HISTORY→SESSION 应被展开
-        let keys: HashSet<String> = expanded.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let keys: HashSet<String> = expanded
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
         assert!(keys.contains(&edge_key("AGENT_HISTORY", "SESSION")));
 
         // rationale 标注继承来源
-        let ah_edge = expanded.iter().find(|e| e.caller == "AGENT_HISTORY" && e.callee == "SESSION").unwrap();
+        let ah_edge = expanded
+            .iter()
+            .find(|e| e.caller == "AGENT_HISTORY" && e.callee == "SESSION")
+            .unwrap();
         assert!(ah_edge.rationale.contains("inherited from AGENT→SESSION"));
     }
 
@@ -4569,7 +5063,8 @@ profiles:
             .chain(forbid_edges.iter())
             .map(|e| edge_key(&e.caller, &e.callee))
             .collect();
-        let expanded_forbid = expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
+        let expanded_forbid =
+            expand_edges_to_children(&forbid_edges, &children_map, &explicit_keys, true);
 
         // 更新 key 集合
         let mut all_keys = explicit_keys;
@@ -4578,8 +5073,12 @@ profiles:
         }
 
         // 展开 allow —— AGENT_HISTORY→SESSION 已被显式 forbid，不应出现在 allow 展开中
-        let expanded_allow = expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
-        let allow_keys: HashSet<String> = expanded_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let expanded_allow =
+            expand_edges_to_children(&allow_edges, &children_map, &all_keys, false);
+        let allow_keys: HashSet<String> = expanded_allow
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
         assert!(!allow_keys.contains(&edge_key("AGENT_HISTORY", "SESSION")));
     }
 
@@ -4596,12 +5095,18 @@ profiles:
         let existing = HashSet::new();
         let sibling_edges = sibling_default_allow_edges(&children_map, &existing);
 
-        let keys: HashSet<String> = sibling_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let keys: HashSet<String> = sibling_edges
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
         assert!(keys.contains(&edge_key("AGENT_HISTORY", "AGENT_LOOP")));
         assert!(keys.contains(&edge_key("AGENT_LOOP", "AGENT_HISTORY")));
 
         // rationale 标注
-        let e = sibling_edges.iter().find(|e| e.caller == "AGENT_HISTORY").unwrap();
+        let e = sibling_edges
+            .iter()
+            .find(|e| e.caller == "AGENT_HISTORY")
+            .unwrap();
         assert!(e.rationale.contains("sibling modules under AGENT"));
     }
 
@@ -4657,7 +5162,10 @@ profiles:
             callee: "X".to_string(),
             rationale: "from relations_expected".to_string(),
         }];
-        let existing: HashSet<String> = allow_edges.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let existing: HashSet<String> = allow_edges
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
 
         // 第一轮展开：A→X → B→X
         let expanded1 = expand_edges_to_children(&allow_edges, &children_map, &existing, false);
@@ -4665,11 +5173,17 @@ profiles:
         all_allow.extend(expanded1);
 
         // 第二轮展开（B→X → C→X）
-        let keys2: HashSet<String> = all_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let keys2: HashSet<String> = all_allow
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
         let expanded2 = expand_edges_to_children(&all_allow, &children_map, &keys2, false);
         all_allow.extend(expanded2);
 
-        let final_keys: HashSet<String> = all_allow.iter().map(|e| edge_key(&e.caller, &e.callee)).collect();
+        let final_keys: HashSet<String> = all_allow
+            .iter()
+            .map(|e| edge_key(&e.caller, &e.callee))
+            .collect();
         assert!(final_keys.contains(&edge_key("A", "X")));
         assert!(final_keys.contains(&edge_key("B", "X")));
         assert!(final_keys.contains(&edge_key("C", "X")));
@@ -4778,9 +5292,10 @@ layer_rules:
             fs::read_to_string(matrix_out.join("v3.target-matrix.yaml")).expect("read target");
         let target: TargetContract =
             serde_yaml::from_str(&target_raw).expect("parse target contract");
-        let has_gc_child_edge = target.allow_edges.iter().any(|e| {
-            e.caller == "GRANDCHILD" && e.callee == "CHILD"
-        });
+        let has_gc_child_edge = target
+            .allow_edges
+            .iter()
+            .any(|e| e.caller == "GRANDCHILD" && e.callee == "CHILD");
         assert!(
             has_gc_child_edge,
             "target contract should contain allow edge GRANDCHILD→CHILD"
@@ -4914,8 +5429,7 @@ relations_expected: []
         // Step 4: 验证 summary.json 中 layer_violation_count > 0
         let summary_raw =
             fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
-        let summary: serde_json::Value =
-            serde_json::from_str(&summary_raw).expect("parse summary");
+        let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
         let lvc = summary["layer_violation_count"].as_i64().unwrap_or(0);
         assert!(
             lvc > 0,
@@ -5005,9 +5519,7 @@ layer_rules:
             &inherit_matrix_out
                 .join("v3.transition-matrix.yaml")
                 .to_string_lossy(),
-            &inherit_matrix_out
-                .join("v3.gates.yaml")
-                .to_string_lossy(),
+            &inherit_matrix_out.join("v3.gates.yaml").to_string_lossy(),
             &inherit_actual_path.to_string_lossy(),
             &inherit_validate_out.to_string_lossy(),
             "both",
@@ -5026,10 +5538,9 @@ layer_rules:
             "exit code should be 2: INHERITOR inherits infrastructure layer from parent INFRA_BASE, \
              calling APP_MOD (application) violates forbidden_transitions"
         );
-        let inherit_report = fs::read_to_string(
-            inherit_validate_out.join("v3-validation-report.md"),
-        )
-        .expect("read inherit report");
+        let inherit_report =
+            fs::read_to_string(inherit_validate_out.join("v3-validation-report.md"))
+                .expect("read inherit report");
         assert!(
             inherit_report.contains("INHERITOR"),
             "report should mention INHERITOR in layer violation (inherited layer from parent)"
@@ -5039,7 +5550,10 @@ layer_rules:
         let inherit_summary: serde_json::Value =
             serde_json::from_str(&inherit_summary_raw).expect("parse summary");
         assert!(
-            inherit_summary["layer_violation_count"].as_i64().unwrap_or(0) > 0,
+            inherit_summary["layer_violation_count"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0,
             "layer_violation_count should be > 0 for inherited layer violation"
         );
 
@@ -5051,13 +5565,15 @@ layer_rules:
     fn test_gong_seed_v3_structure() {
         let seed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("examples/cross-project-arch-comparison/projects/gong/seed-v3.yaml");
-        let content = fs::read_to_string(&seed_path)
-            .expect("should read gong seed-v3.yaml");
+        let content = fs::read_to_string(&seed_path).expect("should read gong seed-v3.yaml");
         let seed: SeedSpec = serde_yaml::from_str(&content)
             .expect("gong seed-v3.yaml should parse as valid SeedSpec");
 
         // 验证 AGENT_CORE.parent = AGENT
-        let agent_core = seed.modules.iter().find(|m| m.module_id == "AGENT_CORE")
+        let agent_core = seed
+            .modules
+            .iter()
+            .find(|m| m.module_id == "AGENT_CORE")
             .expect("AGENT_CORE module should exist");
         assert_eq!(
             agent_core.parent.as_deref(),
@@ -5066,7 +5582,10 @@ layer_rules:
         );
 
         // 验证 AGENT_LOOP.parent = AGENT
-        let agent_loop = seed.modules.iter().find(|m| m.module_id == "AGENT_LOOP")
+        let agent_loop = seed
+            .modules
+            .iter()
+            .find(|m| m.module_id == "AGENT_LOOP")
             .expect("AGENT_LOOP module should exist");
         assert_eq!(
             agent_loop.parent.as_deref(),
@@ -5075,7 +5594,9 @@ layer_rules:
         );
 
         // 验证 layer_rules 存在且格式正确
-        let layer_rules = seed.layer_rules.as_ref()
+        let layer_rules = seed
+            .layer_rules
+            .as_ref()
             .expect("layer_rules should be present");
         assert!(
             !layer_rules.layers.is_empty(),
@@ -5149,8 +5670,20 @@ relations_expected: []
         let flows = vec![SeedFlow {
             name: "f1".into(),
             steps: vec![
-                SeedFlowStep { from: "A".into(), to: "B".into(), action: Some("act1".into()), input: HashMap::new(), output: HashMap::new() },
-                SeedFlowStep { from: "B".into(), to: "C".into(), action: None, input: HashMap::new(), output: HashMap::new() },
+                SeedFlowStep {
+                    from: "A".into(),
+                    to: "B".into(),
+                    action: Some("act1".into()),
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
+                SeedFlowStep {
+                    from: "B".into(),
+                    to: "C".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
             ],
         }];
         // actual 只有 A→B，缺少 B→C
@@ -5169,8 +5702,20 @@ relations_expected: []
         let flows = vec![SeedFlow {
             name: "f1".into(),
             steps: vec![
-                SeedFlowStep { from: "A".into(), to: "B".into(), action: None, input: HashMap::new(), output: HashMap::new() },
-                SeedFlowStep { from: "B".into(), to: "C".into(), action: None, input: HashMap::new(), output: HashMap::new() },
+                SeedFlowStep {
+                    from: "A".into(),
+                    to: "B".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
+                SeedFlowStep {
+                    from: "B".into(),
+                    to: "C".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
             ],
         }];
         // actual 有 A→B, B→C, 还有跳跃边 A→C
@@ -5193,8 +5738,20 @@ relations_expected: []
         let flows = vec![SeedFlow {
             name: "happy".into(),
             steps: vec![
-                SeedFlowStep { from: "A".into(), to: "B".into(), action: None, input: HashMap::new(), output: HashMap::new() },
-                SeedFlowStep { from: "B".into(), to: "C".into(), action: None, input: HashMap::new(), output: HashMap::new() },
+                SeedFlowStep {
+                    from: "A".into(),
+                    to: "B".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
+                SeedFlowStep {
+                    from: "B".into(),
+                    to: "C".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
             ],
         }];
         let mut actual = HashSet::new();
@@ -5211,31 +5768,52 @@ relations_expected: []
         let flows = vec![SeedFlow {
             name: "测试流程".into(),
             steps: vec![
-                SeedFlowStep { from: "A".into(), to: "B".into(), action: Some("请求".into()), input: HashMap::new(), output: HashMap::new() },
-                SeedFlowStep { from: "B".into(), to: "C".into(), action: None, input: HashMap::new(), output: HashMap::new() },
+                SeedFlowStep {
+                    from: "A".into(),
+                    to: "B".into(),
+                    action: Some("请求".into()),
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
+                SeedFlowStep {
+                    from: "B".into(),
+                    to: "C".into(),
+                    action: None,
+                    input: HashMap::new(),
+                    output: HashMap::new(),
+                },
             ],
         }];
         let mod_a = SeedModule {
             module_id: "A".into(),
             display_name: Some("模块A".into()),
-            layer: None, domain_kind: None, parent: None,
-            precedence: None, path_rules: None,
+            layer: None,
+            domain_kind: None,
+            parent: None,
+            precedence: None,
+            path_rules: None,
         };
         let mod_b = SeedModule {
             module_id: "B".into(),
             display_name: Some("模块B".into()),
-            layer: None, domain_kind: None, parent: None,
-            precedence: None, path_rules: None,
+            layer: None,
+            domain_kind: None,
+            parent: None,
+            precedence: None,
+            path_rules: None,
         };
         let mod_c = SeedModule {
             module_id: "C".into(),
             display_name: None,
-            layer: None, domain_kind: None, parent: None,
-            precedence: None, path_rules: None,
+            layer: None,
+            domain_kind: None,
+            parent: None,
+            precedence: None,
+            path_rules: None,
         };
-        let module_map: HashMap<&str, &SeedModule> = [
-            ("A", &mod_a), ("B", &mod_b), ("C", &mod_c),
-        ].into_iter().collect();
+        let module_map: HashMap<&str, &SeedModule> = [("A", &mod_a), ("B", &mod_b), ("C", &mod_c)]
+            .into_iter()
+            .collect();
 
         let result = render_mermaid_flows(&flows, &module_map);
         assert!(result.contains("sequenceDiagram"));
@@ -5293,7 +5871,7 @@ relations_expected: []
             records: vec![AstRecord {
                 sourcePath: "src/mod_b/handler.ts".into(),
                 localDependencies: vec![
-                    "src/mod_a/api/index.ts".into(),      // 合规
+                    "src/mod_a/api/index.ts".into(),       // 合规
                     "src/mod_a/internal/helper.ts".into(), // 泄漏
                 ],
                 localCallTargets: vec![],
@@ -5305,12 +5883,8 @@ relations_expected: []
         file_to_module.insert("src/mod_a/api/index.ts".into(), "mod_a".into());
         file_to_module.insert("src/mod_a/internal/helper.ts".into(), "mod_a".into());
 
-        let results = validate_boundaries(
-            &boundaries,
-            &module_ids,
-            Some(&file_to_module),
-            Some(&ast),
-        );
+        let results =
+            validate_boundaries(&boundaries, &module_ids, Some(&file_to_module), Some(&ast));
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].total_external_refs, 2);
@@ -5459,10 +6033,9 @@ relations_expected: []
             precedence: None,
             path_rules: None,
         };
-        let module_map: HashMap<&str, &SeedModule> =
-            [("A", &mod_a), ("B", &mod_b), ("C", &mod_c)]
-                .into_iter()
-                .collect();
+        let module_map: HashMap<&str, &SeedModule> = [("A", &mod_a), ("B", &mod_b), ("C", &mod_c)]
+            .into_iter()
+            .collect();
 
         let result = render_mermaid_events(&events, &module_map);
         assert!(result.contains("graph LR"));
@@ -6222,16 +6795,21 @@ boundaries:
         let c1 = BoundaryContract {
             name: "process_message".to_string(),
             kind: "command".to_string(),
-            input: [("user_id".to_string(), "uuid".to_string()), ("content".to_string(), "string".to_string())].into(),
+            input: [
+                ("user_id".to_string(), "uuid".to_string()),
+                ("content".to_string(), "string".to_string()),
+            ]
+            .into(),
             output: [("message_id".to_string(), "uuid".to_string())].into(),
             errors: vec!["invalid_content".to_string()],
             fields: HashMap::new(),
         };
-        let skeleton = generate_elixir_skeleton("agent_runtime", &[&c1], &ContractComplexity::SimpleCommand);
+        let skeleton =
+            generate_elixir_skeleton("agent_runtime", &[&c1], &ContractComplexity::SimpleCommand);
         assert!(skeleton.contains("defmodule MyApp.AgentRuntime do"));
         assert!(skeleton.contains("@moduledoc"));
         assert!(skeleton.contains("@spec process_message("));
-        assert!(skeleton.contains("String.t()"));  // uuid → String.t()
+        assert!(skeleton.contains("String.t()")); // uuid → String.t()
         assert!(skeleton.contains("def process_message(content, user_id)"));
         assert!(skeleton.contains("{:ok, nil}"));
         assert!(skeleton.contains("end\n"));
@@ -6255,7 +6833,11 @@ boundaries:
             errors: vec![],
             fields: HashMap::new(),
         };
-        let skeleton = generate_elixir_skeleton("channel_ingress", &[&c1, &c2], &ContractComplexity::ComplexOrchestration);
+        let skeleton = generate_elixir_skeleton(
+            "channel_ingress",
+            &[&c1, &c2],
+            &ContractComplexity::ComplexOrchestration,
+        );
         // 两个 def 都在
         assert!(skeleton.contains("def send(msg)"));
         assert!(skeleton.contains("def query_status(id)"));
@@ -6275,7 +6857,8 @@ boundaries:
             errors: vec![],
             fields: HashMap::new(),
         };
-        let skeleton = generate_elixir_skeleton("gateway", &[&c], &ContractComplexity::SimpleCommand);
+        let skeleton =
+            generate_elixir_skeleton("gateway", &[&c], &ContractComplexity::SimpleCommand);
         assert!(skeleton.contains("def health_check()"));
         assert!(skeleton.contains("@spec health_check()"));
     }

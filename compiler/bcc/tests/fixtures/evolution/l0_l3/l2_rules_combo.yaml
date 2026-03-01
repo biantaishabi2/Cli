@@ -1,0 +1,13 @@
+scenario: l2_rules_combo
+level: L2
+rules: 14
+max_depth: 3
+branches: 5
+description: 规则组合与分支扩张
+seed_file: seeds/l2_rules_combo.seed.yaml
+query_action: risk.validate_invoice:validate_invoice
+query_input:
+  invoice_id: "11111111-1111-1111-1111-111111111111"
+mutation_action: billing.approve_invoice:approve_invoice
+mutation_input:
+  invoice_id: "11111111-1111-1111-1111-111111111111"

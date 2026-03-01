@@ -192,6 +192,37 @@ bcc arch report \
   --gate-evaluation docs/backend-trace/artifacts/trace2contract/versions/v3-draft/gate-evaluation.tsv \
   --summary docs/backend-trace/artifacts/trace2contract/versions/v3-draft/summary.json \
   --out docs/backend-trace/artifacts/trace2contract/versions/v3-draft/architecture-debt.md
+
+# 5) 从 seed 生成对接产物
+# 兼容模式：沿用原有代码生成（generate-commands.sh + *.ex）
+bcc arch generate \
+  --seed-file docs/backend-trace/module-registry.seed.yaml \
+  --emit code \
+  --output docs/backend-trace/artifacts/arch-generate
+
+# 对接 UniBO：只输出 API Contract，不生成 runtime/controller/resolver
+bcc arch generate \
+  --seed-file docs/backend-trace/module-registry.seed.yaml \
+  --emit api-contract \
+  --output docs/backend-trace/artifacts/arch-generate
+# 输出文件:
+# - docs/backend-trace/artifacts/arch-generate/unibo-api-contract.json
+# - docs/backend-trace/artifacts/arch-generate/api-contract.json
+
+# 对接 UniBO runtime bridge（复用 runtime，不生成自研 controller/resolver）
+bcc arch generate \
+  --seed-file docs/backend-trace/module-registry.seed.yaml \
+  --emit api-contract \
+  --emit-runtime-bridge true \
+  --output docs/backend-trace/artifacts/arch-generate
+# 追加输出:
+# - docs/backend-trace/artifacts/arch-generate/unibo-runtime-bridge.yaml
+
+# 兼容说明：当前版本 emit=all 与 emit=code 等价（冻结语义）
+bcc arch generate \
+  --seed-file docs/backend-trace/module-registry.seed.yaml \
+  --emit all \
+  --output docs/backend-trace/artifacts/arch-generate
 ```
 
 `--detect-injection` 开启后会额外输出 `<version>.relation-classification.json`，每条边包含：
@@ -205,6 +236,42 @@ bcc arch report \
 兼容性说明：
 - 默认不开启 `--detect-injection`，输出与既有 `target/transition/gates` 一致。
 - `--injection-patterns` 参数已预留，MVP 阶段仅占位，不参与规则匹配。
+- `bcc arch generate --emit api-contract` 缺少 `boundaries[].contracts` 时会报错并非 0 退出。
+
+### BCC + UniBO 门禁回归（#508）
+
+本仓库新增了 BCC + UniBO 联合门禁测试，覆盖：
+- GraphQL manifest drift 契约门禁
+- BCC bridge + UniBO runtime smoke 集成回归
+- L0-L3 演进复杂度最小链路回归
+
+本地执行：
+
+```bash
+# 默认 warn（只告警不拦截）
+cargo test -p bcc --test contract_manifest_drift --test integration_bcc_unibo_runtime --test regression_l0_l3_evolution
+
+# strict（发现未豁免 BREAKING/过期豁免时失败）
+GATE_MODE=strict cargo test -p bcc --test contract_manifest_drift --test integration_bcc_unibo_runtime --test regression_l0_l3_evolution
+
+# strict + dangerous 一并拦截
+GATE_MODE=strict GATE_FAIL_ON_DANGEROUS=true cargo test -p bcc --test contract_manifest_drift --test integration_bcc_unibo_runtime --test regression_l0_l3_evolution
+```
+
+门禁报告输出到 `target/gate-reports/*.json`，可在 CI 归档审计。
+
+manifest 基线与白名单：
+- 基线文件：`compiler/bcc/tests/fixtures/contracts/baseline_manifest.json`
+- 白名单文件：`compiler/bcc/tests/fixtures/contracts/whitelist.toml`
+- 白名单格式：
+  - `[[entry]] id/reason/approved_by/expires_at`
+  - `expires_at` 必须为 RFC3339 时间（如 `2026-12-31T00:00:00Z`）
+
+更新流程（建议）：
+1. 先在 `GATE_MODE=strict` 下确认 drift 分类是否符合预期。
+2. 若确属可接受变更，同步更新 baseline 并在 PR 说明原因。
+3. 必要时新增 whitelist 临时豁免，并设置明确过期时间。
+4. 过期豁免必须清偿；strict 模式会对过期条目直接失败。
 
 ### bcc bdd seed
 

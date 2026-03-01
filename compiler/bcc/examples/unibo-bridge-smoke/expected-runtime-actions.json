@@ -1,0 +1,13 @@
+{
+  "queries": [
+    "account.list_users:list_users",
+    "billing.invoice:list",
+    "billing.invoice:read"
+  ],
+  "mutations": [
+    "billing.create_invoice:create_invoice",
+    "billing.invoice:create",
+    "billing.invoice:delete",
+    "billing.invoice:update"
+  ]
+}

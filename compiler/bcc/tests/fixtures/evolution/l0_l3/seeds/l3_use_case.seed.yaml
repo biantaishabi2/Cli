@@ -1,0 +1,52 @@
+version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+  - module_id: risk
+    precedence: 2
+    path_rules:
+      include: ["src/risk/**"]
+  - module_id: workflow
+    precedence: 3
+    path_rules:
+      include: ["src/workflow/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: invoice
+        kind: crud
+        fields:
+          amount: decimal
+          buyer_id: uuid
+      - name: approve_invoice
+        kind: command
+        input:
+          invoice_id: uuid
+        output:
+          approved: boolean
+  - module_id: risk
+    contracts:
+      - name: validate_invoice
+        kind: query
+        input:
+          invoice_id: uuid
+        output:
+          valid: boolean
+  - module_id: workflow
+    contracts:
+      - name: invoice_journey
+        kind: query
+        input:
+          invoice_id: uuid
+        output:
+          steps: array
+      - name: settle_invoice
+        kind: command
+        input:
+          invoice_id: uuid
+          approver_id: uuid
+        output:
+          status: string

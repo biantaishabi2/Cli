@@ -1,4 +1,5 @@
 use bcc::extract::testing as extract_testing;
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,6 +167,90 @@ profiles:
         .expect("run relaxed validate");
     assert_eq!(relaxed.code(), Some(0));
     assert!(relaxed_out.join("summary.json").exists());
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn given_seed_with_contracts_when_emit_api_contract_then_only_contract_file_is_emitted() {
+    let root = temp_dir("bcc_bdd_arch_generate_api_contract");
+    let seed = root.join("seed.yaml");
+    let output = root.join("out");
+    write(
+        &seed,
+        r#"version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: create_invoice
+        kind: command
+        input:
+          order_id: uuid
+        output:
+          invoice_id: uuid
+"#,
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "generate",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--emit",
+            "api-contract",
+            "--emit-runtime-bridge",
+            "false",
+            "--output",
+            &output.to_string_lossy(),
+        ])
+        .status()
+        .expect("run arch generate api-contract");
+    assert!(status.success());
+
+    let contract_path = output.join("unibo-api-contract.json");
+    let legacy_contract_path = output.join("api-contract.json");
+    assert!(
+        contract_path.exists(),
+        "unibo-api-contract.json should exist"
+    );
+    assert!(
+        legacy_contract_path.exists(),
+        "api-contract.json compatibility file should exist"
+    );
+
+    let payload: Value = serde_json::from_str(
+        &fs::read_to_string(&contract_path).expect("read generated api-contract"),
+    )
+    .expect("parse generated api-contract json");
+    assert!(payload.get("contracts").and_then(Value::as_array).is_some());
+    assert_eq!(
+        payload.get("bridgeVersion"),
+        Some(&Value::String("1.0.0".to_string()))
+    );
+
+    let mut files: Vec<String> = fs::read_dir(&output)
+        .expect("read output dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        vec![
+            "api-contract.json".to_string(),
+            "unibo-api-contract.json".to_string()
+        ]
+    );
+    assert!(!files.iter().any(|name| {
+        name.contains("runtime") || name.contains("controller") || name.contains("resolver")
+    }));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1124,14 +1209,26 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     assert!(ts_calls.contains("foo"), "ts calls should contain foo");
     assert!(ts_calls.contains("bar"), "ts calls should contain bar");
     assert!(ts_calls.contains("baz"), "ts calls should contain baz");
-    assert!(ts_calls.contains("level1"), "ts calls should contain level1");
-    assert!(ts_calls.contains("level2"), "ts calls should contain level2");
-    assert!(ts_calls.contains("level3"), "ts calls should contain level3");
+    assert!(
+        ts_calls.contains("level1"),
+        "ts calls should contain level1"
+    );
+    assert!(
+        ts_calls.contains("level2"),
+        "ts calls should contain level2"
+    );
+    assert!(
+        ts_calls.contains("level3"),
+        "ts calls should contain level3"
+    );
 
     // 2) PHP AST：namespace use/use as 不漏提，同时 extends/trait/new 不回归
     let php_ast = run_extract_ast_json(&php_file, &work.join("php.ast.json"));
     let php_imports = extract_testing::normalized_import_set_from_json(&php_ast);
-    assert!(php_imports.contains("use:A\\B"), "php imports should contain use:A\\B");
+    assert!(
+        php_imports.contains("use:A\\B"),
+        "php imports should contain use:A\\B"
+    );
     assert!(
         php_imports.contains("use:C\\D as E"),
         "php imports should contain use:C\\D as E"
@@ -1162,7 +1259,10 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     let ts_records = ts_batch["records"].as_array().expect("ts records array");
     assert_eq!(ts_records.len(), 1);
     let ts_batch_record = &ts_records[0];
-    assert_eq!(ts_batch_record["sourcePath"].as_str(), Some("export_calls.ts"));
+    assert_eq!(
+        ts_batch_record["sourcePath"].as_str(),
+        Some("export_calls.ts")
+    );
     assert_eq!(
         ts_batch_record["imports_count"].as_u64(),
         Some(ts_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
@@ -1182,7 +1282,10 @@ fn extract_accuracy_gate_ts_export_calls_and_php_namespace_use() {
     let php_records = php_batch["records"].as_array().expect("php records array");
     assert_eq!(php_records.len(), 1);
     let php_batch_record = &php_records[0];
-    assert_eq!(php_batch_record["sourcePath"].as_str(), Some("namespace_use.php"));
+    assert_eq!(
+        php_batch_record["sourcePath"].as_str(),
+        Some("namespace_use.php")
+    );
     assert_eq!(
         php_batch_record["imports_count"].as_u64(),
         Some(php_ast["imports"].as_array().map(|v| v.len()).unwrap_or(0) as u64)
@@ -2482,15 +2585,24 @@ fn smell_gate_with_smells_exits_nonzero() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--smell-gate", &smells_file.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--smell-gate",
+            &smells_file.to_string_lossy(),
         ])
         .output()
         .expect("run validate with smell-gate");
@@ -2498,12 +2610,21 @@ fn smell_gate_with_smells_exits_nonzero() {
     assert_eq!(output.status.code(), Some(1), "should exit 1 with smells");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Smell Gate Report"), "should contain report header");
+    assert!(
+        stderr.contains("Smell Gate Report"),
+        "should contain report header"
+    );
     assert!(stderr.contains("CRITICAL"), "should show CRITICAL severity");
-    assert!(stderr.contains("hardcoded secret found"), "should show smell message");
+    assert!(
+        stderr.contains("hardcoded secret found"),
+        "should show smell message"
+    );
     assert!(stderr.contains("fix:"), "should show fix_hint");
     assert!(stderr.contains("offending:"), "should show offending_code");
-    assert!(stderr.contains("smell_gate=FAIL"), "should contain FAIL marker");
+    assert!(
+        stderr.contains("smell_gate=FAIL"),
+        "should contain FAIL marker"
+    );
     assert!(stderr.contains("Total: 3"), "should show total count");
 
     let _ = fs::remove_dir_all(&root);
@@ -2520,15 +2641,24 @@ fn smell_gate_empty_smells_passes() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--smell-gate", &smells_file.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--smell-gate",
+            &smells_file.to_string_lossy(),
         ])
         .status()
         .expect("run validate with empty smell-gate");
@@ -2555,15 +2685,24 @@ fn smell_gate_old_severity_alias_maps_correctly() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--smell-gate", &smells_file.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--smell-gate",
+            &smells_file.to_string_lossy(),
         ])
         .output()
         .expect("run validate with old severity");
@@ -2590,14 +2729,22 @@ fn validate_without_smell_gate_backward_compatible() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
         ])
         .status()
         .expect("run validate without smell-gate");
@@ -2621,15 +2768,21 @@ fn linter_timeout_kills_slow_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "analyze",
-            "--ast-file", &ast.to_string_lossy(),
-            "-o", &out.to_string_lossy(),
-            "--linter", "slow:sleep 60",
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "-o",
+            &out.to_string_lossy(),
+            "--linter",
+            "slow:sleep 60",
         ])
         .env("BCC_LINTER_TIMEOUT", "1")
         .output()
         .expect("run analyze with slow linter");
 
-    assert!(output.status.success(), "should still succeed despite linter timeout");
+    assert!(
+        output.status.success(),
+        "should still succeed despite linter timeout"
+    );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -2684,10 +2837,15 @@ fn critical_smell_triggers_blocking_fail_in_score() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "score", "score",
-            "--input", &input.to_string_lossy(),
-            "--smell-report", &smells_file.to_string_lossy(),
-            "--mode", "strict",
+            "arch",
+            "score",
+            "score",
+            "--input",
+            &input.to_string_lossy(),
+            "--smell-report",
+            &smells_file.to_string_lossy(),
+            "--mode",
+            "strict",
         ])
         .output()
         .expect("run arch score with critical smells");
@@ -2732,10 +2890,15 @@ fn score_with_nonexistent_smell_report_fails() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "score", "score",
-            "--input", &input.to_string_lossy(),
-            "--smell-report", "/nonexistent/smell_report.json",
-            "--mode", "strict",
+            "arch",
+            "score",
+            "score",
+            "--input",
+            &input.to_string_lossy(),
+            "--smell-report",
+            "/nonexistent/smell_report.json",
+            "--mode",
+            "strict",
         ])
         .output()
         .expect("run arch score with nonexistent smell-report");
@@ -2784,10 +2947,15 @@ fn score_with_invalid_json_smell_report_fails() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "score", "score",
-            "--input", &input.to_string_lossy(),
-            "--smell-report", &smells_file.to_string_lossy(),
-            "--mode", "strict",
+            "arch",
+            "score",
+            "score",
+            "--input",
+            &input.to_string_lossy(),
+            "--smell-report",
+            &smells_file.to_string_lossy(),
+            "--mode",
+            "strict",
         ])
         .output()
         .expect("run arch score with invalid json smell-report");
@@ -2874,15 +3042,24 @@ fn smell_gate_preserves_higher_failure_code() {
     // smell-gate 有 smell 时应 code=max(2,1)=2
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "true",
-            "--fail-on-forbidden", "true",
-            "--smell-gate", &smells_file.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "true",
+            "--fail-on-forbidden",
+            "true",
+            "--smell-gate",
+            &smells_file.to_string_lossy(),
         ])
         .output()
         .expect("run validate with gate fail + smell-gate");
@@ -2916,10 +3093,14 @@ fn multi_linter_one_fails_one_succeeds() {
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "analyze",
-            "--ast-file", &ast.to_string_lossy(),
-            "-o", &out.to_string_lossy(),
-            "--linter", "bad:false",
-            "--linter", "good:echo '[]'",
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "-o",
+            &out.to_string_lossy(),
+            "--linter",
+            "bad:false",
+            "--linter",
+            "good:echo '[]'",
         ])
         .env("BCC_LINTER_TIMEOUT", "5")
         .output()
@@ -2964,10 +3145,14 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "analyze",
-            "--ast-file", &ast.to_string_lossy(),
-            "-o", &out.to_string_lossy(),
-            "--linter", "slow:sleep 60",
-            "--linter", &format!("good:{}", good_cmd),
+            "--ast-file",
+            &ast.to_string_lossy(),
+            "-o",
+            &out.to_string_lossy(),
+            "--linter",
+            "slow:sleep 60",
+            "--linter",
+            &format!("good:{}", good_cmd),
         ])
         .env("BCC_LINTER_TIMEOUT", "1")
         .output()
@@ -2998,20 +3183,30 @@ fn multi_linter_one_timeout_one_succeeds_with_results() {
     // 输出文件应存在且可解析
     assert!(out.exists(), "output file should exist");
     let raw = fs::read_to_string(&out).expect("read output");
-    let reports: serde_json::Value = serde_json::from_str(&raw).expect("output should be valid JSON");
+    let reports: serde_json::Value =
+        serde_json::from_str(&raw).expect("output should be valid JSON");
 
     // analyze 输出是 Vec<SmellReport> 数组，遍历所有 report 的 smells
     let reports_arr = reports.as_array().expect(&format!(
-        "output should be a JSON array (Vec<SmellReport>), raw: {}", raw
+        "output should be a JSON array (Vec<SmellReport>), raw: {}",
+        raw
     ));
-    let good_smells: Vec<_> = reports_arr.iter()
-        .flat_map(|r| r.get("smells").and_then(|v| v.as_array()).into_iter().flatten())
+    let good_smells: Vec<_> = reports_arr
+        .iter()
+        .flat_map(|r| {
+            r.get("smells")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+        })
         .filter(|s| s.get("source").and_then(|v| v.as_str()) == Some("good"))
         .collect();
     assert_eq!(
-        good_smells.len(), 2,
+        good_smells.len(),
+        2,
         "should have 2 smells from 'good' linter, got {}: {:?}",
-        good_smells.len(), good_smells
+        good_smells.len(),
+        good_smells
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -3117,22 +3312,34 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
     assert_eq!(status.code(), Some(0)); // 不开 --fail-on-layer-violation
 
     let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
-    assert!(report.contains("## Layer Violations"), "report should have Layer Violations section");
+    assert!(
+        report.contains("## Layer Violations"),
+        "report should have Layer Violations section"
+    );
     assert!(
         report.contains("MOD_A (infrastructure)"),
         "report should mention MOD_A infrastructure: {}",
@@ -3193,15 +3400,24 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
@@ -3248,15 +3464,24 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
@@ -3307,15 +3532,24 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
@@ -3359,15 +3593,24 @@ modules:
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .output()
         .expect("run validate");
@@ -3425,20 +3668,34 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
-            "--fail-on-layer-violation", "true",
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--fail-on-layer-violation",
+            "true",
         ])
         .status()
         .expect("run validate");
-    assert_eq!(status.code(), Some(2), "should exit 2 when --fail-on-layer-violation and violations exist");
+    assert_eq!(
+        status.code(),
+        Some(2),
+        "should exit 2 when --fail-on-layer-violation and violations exist"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -3458,14 +3715,22 @@ fn layer_violation_backward_compatible_no_seed_file() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
         ])
         .status()
         .expect("run validate");
@@ -3503,19 +3768,32 @@ fn layer_violation_seed_file_not_found_exits_1() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &nonexistent_seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &nonexistent_seed.to_string_lossy(),
         ])
         .output()
         .expect("run validate");
-    assert_eq!(output.status.code(), Some(1), "should exit 1 when seed file not found");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "should exit 1 when seed file not found"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("read seed_file failed"),
@@ -3544,19 +3822,32 @@ fn layer_violation_seed_file_invalid_yaml_exits_1() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .output()
         .expect("run validate");
-    assert_eq!(output.status.code(), Some(1), "should exit 1 when seed yaml is invalid");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "should exit 1 when seed yaml is invalid"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("parse seed yaml failed"),
@@ -3607,19 +3898,32 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
-    assert_eq!(status.code(), Some(0), "unknown layers should not cause violation");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "unknown layers should not cause violation"
+    );
 
     let report = fs::read_to_string(out.join("v3-validation-report.md")).expect("read report");
     assert!(
@@ -3670,15 +3974,24 @@ layer_rules:
 
     let status = Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
-            "arch", "validate",
-            "--target", &target.to_string_lossy(),
-            "--transition", &transition.to_string_lossy(),
-            "--gates", &gates.to_string_lossy(),
-            "--actual", &actual.to_string_lossy(),
-            "--out-dir", &out.to_string_lossy(),
-            "--fail-on-gate", "false",
-            "--fail-on-forbidden", "false",
-            "--seed-file", &seed.to_string_lossy(),
+            "arch",
+            "validate",
+            "--target",
+            &target.to_string_lossy(),
+            "--transition",
+            &transition.to_string_lossy(),
+            "--gates",
+            &gates.to_string_lossy(),
+            "--actual",
+            &actual.to_string_lossy(),
+            "--out-dir",
+            &out.to_string_lossy(),
+            "--fail-on-gate",
+            "false",
+            "--fail-on-forbidden",
+            "false",
+            "--seed-file",
+            &seed.to_string_lossy(),
         ])
         .status()
         .expect("run validate");
@@ -3850,8 +4163,7 @@ layer_rules:
     );
 
     // 验证 summary.json 中 layer_violation_count > 0
-    let summary_raw =
-        fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
+    let summary_raw = fs::read_to_string(validate_out.join("summary.json")).expect("read summary");
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).expect("parse summary");
     let lvc = summary["layer_violation_count"].as_i64().unwrap_or(0);
     assert!(

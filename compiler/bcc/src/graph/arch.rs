@@ -15,10 +15,9 @@ impl ArchValidator {
     /// 从 YAML 文件加载目标架构
     pub fn from_yaml<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let target_matrix: TargetMatrix = serde_yaml::from_str(&content)
-            .map_err(|e| crate::graph::error::GraphError::InvalidArgs(
-                format!("YAML parse error: {}", e)
-            ))?;
+        let target_matrix: TargetMatrix = serde_yaml::from_str(&content).map_err(|e| {
+            crate::graph::error::GraphError::InvalidArgs(format!("YAML parse error: {}", e))
+        })?;
         Ok(Self { target_matrix })
     }
 
@@ -48,19 +47,16 @@ impl ArchValidator {
             let callees = store.find_callees(&func.id, 1)?;
             for callee in callees {
                 checked_deps += 1;
-                
+
                 let target_layer = match func_layers.get(&callee.id) {
                     Some(layer) if !layer.is_empty() => layer.clone(),
                     _ => continue,
                 };
 
                 // 检查是否违反架构规则
-                if let Some(violation) = self.check_violation(
-                    &func,
-                    &callee,
-                    &source_layer,
-                    &target_layer,
-                ) {
+                if let Some(violation) =
+                    self.check_violation(&func, &callee, &source_layer, &target_layer)
+                {
                     violations.push(violation);
                 }
             }
@@ -95,7 +91,10 @@ impl ArchValidator {
             "api".to_string()
         } else if lower_path.contains("service") || lower_path.contains("biz") {
             "service".to_string()
-        } else if lower_path.contains("dao") || lower_path.contains("repository") || lower_path.contains("model") {
+        } else if lower_path.contains("dao")
+            || lower_path.contains("repository")
+            || lower_path.contains("model")
+        {
             "dao".to_string()
         } else if lower_path.contains("util") || lower_path.contains("helper") {
             "util".to_string()
@@ -108,7 +107,8 @@ impl ArchValidator {
     fn matches_pattern(&self, file_path: &str, pattern: &str) -> bool {
         // 简单的通配符匹配
         let pattern = pattern.replace("*", ".*");
-        let regex = regex::Regex::new(&pattern).unwrap_or_else(|_| regex::Regex::new(".*").unwrap());
+        let regex =
+            regex::Regex::new(&pattern).unwrap_or_else(|_| regex::Regex::new(".*").unwrap());
         regex.is_match(file_path)
     }
 
@@ -126,9 +126,11 @@ impl ArchValidator {
         }
 
         // 检查是否有明确的允许规则
-        let is_allowed = self.target_matrix.allowed_deps.iter().any(|rule| {
-            rule.from == source_layer && rule.to == target_layer
-        });
+        let is_allowed = self
+            .target_matrix
+            .allowed_deps
+            .iter()
+            .any(|rule| rule.from == source_layer && rule.to == target_layer);
 
         if is_allowed {
             return None;
@@ -170,10 +172,10 @@ impl ArchValidator {
     /// 检查是否是反向依赖
     fn is_reverse_dep(&self, source: &str, target: &str) -> bool {
         let layer_order = ["api", "service", "dao", "util"];
-        
+
         let source_idx = layer_order.iter().position(|&l| l == source);
         let target_idx = layer_order.iter().position(|&l| l == target);
-        
+
         match (source_idx, target_idx) {
             (Some(s), Some(t)) => s > t && target != "util",
             _ => false,
@@ -192,7 +194,7 @@ impl ArchValidator {
         function_id: &str,
     ) -> Result<ArchValidationResult> {
         let mut violations = Vec::new();
-        
+
         let source_func = match store.get_function(function_id) {
             Some(f) => f,
             None => {
@@ -228,19 +230,16 @@ impl ArchValidator {
         for target_func in callees {
             checked_deps += 1;
             let target_layer = self.determine_layer(&target_func.file_path);
-            
-            if let Some(violation) = self.check_violation(
-                &source_func,
-                &target_func,
-                &source_layer,
-                &target_layer,
-            ) {
+
+            if let Some(violation) =
+                self.check_violation(&source_func, &target_func, &source_layer, &target_layer)
+            {
                 violations.push(violation);
             }
         }
 
         let violation_count = violations.len();
-        
+
         Ok(ArchValidationResult {
             passed: violations.is_empty(),
             violations,
@@ -275,16 +274,33 @@ mod tests {
                 },
             ],
             allowed_deps: vec![
-                DepRule { from: "api".to_string(), to: "service".to_string() },
-                DepRule { from: "service".to_string(), to: "dao".to_string() },
-                DepRule { from: "api".to_string(), to: "dao".to_string() }, // 允许直接访问（某些框架）
+                DepRule {
+                    from: "api".to_string(),
+                    to: "service".to_string(),
+                },
+                DepRule {
+                    from: "service".to_string(),
+                    to: "dao".to_string(),
+                },
+                DepRule {
+                    from: "api".to_string(),
+                    to: "dao".to_string(),
+                }, // 允许直接访问（某些框架）
             ],
         };
 
-        let validator = ArchValidator { target_matrix: matrix };
+        let validator = ArchValidator {
+            target_matrix: matrix,
+        };
 
-        assert_eq!(validator.determine_layer("app/Controllers/UserController.php"), "api");
-        assert_eq!(validator.determine_layer("app/Services/UserService.php"), "service");
+        assert_eq!(
+            validator.determine_layer("app/Controllers/UserController.php"),
+            "api"
+        );
+        assert_eq!(
+            validator.determine_layer("app/Services/UserService.php"),
+            "service"
+        );
         assert_eq!(validator.determine_layer("app/Models/User.php"), "dao");
     }
 }

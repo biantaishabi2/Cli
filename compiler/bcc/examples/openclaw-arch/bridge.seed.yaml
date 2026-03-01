@@ -1,0 +1,33 @@
+version: v3
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+  - module_id: account
+    precedence: 2
+    path_rules:
+      include: ["src/account/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: invoice
+        kind: crud
+        fields:
+          amount: decimal
+          buyer_id: uuid
+      - name: create_invoice
+        kind: command
+        input:
+          order_id: uuid
+        output:
+          invoice_id: uuid
+  - module_id: account
+    contracts:
+      - name: list_users
+        kind: query
+        input:
+          page: integer
+        output:
+          users: array

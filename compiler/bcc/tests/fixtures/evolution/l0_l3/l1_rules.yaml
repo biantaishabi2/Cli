@@ -1,0 +1,14 @@
+scenario: l1_rules
+level: L1
+rules: 8
+max_depth: 2
+branches: 2
+description: 引入单规则校验
+seed_file: seeds/l1_rules.seed.yaml
+query_action: risk.validate_invoice:validate_invoice
+query_input:
+  invoice_id: "11111111-1111-1111-1111-111111111111"
+mutation_action: billing.invoice:create
+mutation_input:
+  amount: 12.5
+  buyer_id: "11111111-1111-1111-1111-111111111111"

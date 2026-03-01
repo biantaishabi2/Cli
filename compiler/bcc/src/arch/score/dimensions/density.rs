@@ -78,34 +78,34 @@ impl DensityDimension {
 
         if density > self.config.max_acceptable {
             suggestions.push(
-                "Consider refactoring high-coupling modules into smaller, more focused units".to_string(),
+                "Consider refactoring high-coupling modules into smaller, more focused units"
+                    .to_string(),
             );
             suggestions.push(
-                "Introduce abstraction layers (interfaces/traits) to reduce direct dependencies".to_string(),
+                "Introduce abstraction layers (interfaces/traits) to reduce direct dependencies"
+                    .to_string(),
             );
             suggestions.push(
-                "Review module boundaries and consider splitting overly connected modules".to_string(),
+                "Review module boundaries and consider splitting overly connected modules"
+                    .to_string(),
             );
         } else if density > self.config.ideal_max {
-            suggestions.push(
-                "Monitor dependency growth and establish dependency budgets".to_string(),
-            );
-            suggestions.push(
-                "Consider applying the Dependency Inversion Principle".to_string(),
-            );
+            suggestions
+                .push("Monitor dependency growth and establish dependency budgets".to_string());
+            suggestions.push("Consider applying the Dependency Inversion Principle".to_string());
         }
 
         if density < self.config.ideal_min && ctx.structure.modules_count > 5 {
-            suggestions.push(
-                "Very low dependency density may indicate over-modularization".to_string(),
-            );
+            suggestions
+                .push("Very low dependency density may indicate over-modularization".to_string());
             suggestions.push(
                 "Consider consolidating related modules to reduce maintenance overhead".to_string(),
             );
         }
 
         if suggestions.is_empty() {
-            suggestions.push("Dependency density is within ideal range. Good architecture!".to_string());
+            suggestions
+                .push("Dependency density is within ideal range. Good architecture!".to_string());
         }
 
         suggestions
@@ -217,11 +217,7 @@ mod tests {
     #[test]
     fn test_ideal_density() {
         let ctx = create_context(25.0, 10);
-        let dim = DensityDimension::new(
-            0.25,
-            true,
-            DensityDimensionConfig::default(),
-        );
+        let dim = DensityDimension::new(0.25, true, DensityDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert_eq!(result.score, 100.0);
@@ -231,11 +227,7 @@ mod tests {
     #[test]
     fn test_high_density() {
         let ctx = create_context(80.0, 10);
-        let dim = DensityDimension::new(
-            0.25,
-            true,
-            DensityDimensionConfig::default(),
-        );
+        let dim = DensityDimension::new(0.25, true, DensityDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert_eq!(result.score, 0.0);
@@ -245,11 +237,7 @@ mod tests {
     #[test]
     fn test_low_density() {
         let ctx = create_context(5.0, 10);
-        let dim = DensityDimension::new(
-            0.25,
-            true,
-            DensityDimensionConfig::default(),
-        );
+        let dim = DensityDimension::new(0.25, true, DensityDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert!(result.score < 100.0);
