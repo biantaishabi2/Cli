@@ -15,7 +15,7 @@ pub struct SqliteGraphStore {
 }
 
 /// 存储管理器 - 管理多个仓库的 SQLite 文件
-/// 
+///
 /// 注意：由于 SQLite Connection 不是 Send，每个线程应该有自己的 GraphStoreManager 实例
 pub struct GraphStoreManager {
     base_dir: PathBuf,
@@ -31,9 +31,7 @@ impl GraphStoreManager {
     pub fn new(base_dir: impl AsRef<Path>) -> Result<Self> {
         let base_dir = base_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&base_dir)?;
-        Ok(Self {
-            base_dir,
-        })
+        Ok(Self { base_dir })
     }
 
     /// 获取默认存储管理器 (~/.bcc/index)
@@ -45,7 +43,7 @@ impl GraphStoreManager {
     }
 
     /// 获取或创建仓库的存储实例
-    /// 
+    ///
     /// 注意：每次调用都会创建新的连接，适合短生命周期操作
     pub fn get_store(&self, repo_id: &str) -> Result<SqliteGraphStore> {
         let db_path = self.get_db_path(repo_id);
@@ -135,7 +133,10 @@ impl SqliteGraphStore {
             end_line: row.get::<_, i64>(6)? as usize,
             signature: row.get(7)?,
             content_hash: row.get(8)?,
-            indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+            indexed_at: row
+                .get::<_, String>(9)?
+                .parse()
+                .unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -245,9 +246,10 @@ impl CodeGraphStore for SqliteGraphStore {
     }
 
     fn find_by_module(&self, module: &str) -> Vec<FunctionRecord> {
-        let mut stmt = match self.conn.prepare(
-            "SELECT * FROM functions WHERE module = ?1 ORDER BY file_path, start_line"
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT * FROM functions WHERE module = ?1 ORDER BY file_path, start_line")
+        {
             Ok(s) => s,
             Err(_) => return vec![],
         };
@@ -261,9 +263,10 @@ impl CodeGraphStore for SqliteGraphStore {
     }
 
     fn find_by_file(&self, file_path: &str) -> Vec<FunctionRecord> {
-        let mut stmt = match self.conn.prepare(
-            "SELECT * FROM functions WHERE file_path = ?1 ORDER BY start_line"
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT * FROM functions WHERE file_path = ?1 ORDER BY start_line")
+        {
             Ok(s) => s,
             Err(_) => return vec![],
         };
@@ -277,9 +280,10 @@ impl CodeGraphStore for SqliteGraphStore {
     }
 
     fn find_by_name(&self, name: &str) -> Vec<FunctionRecord> {
-        let mut stmt = match self.conn.prepare(
-            "SELECT * FROM functions WHERE name = ?1 ORDER BY file_path, start_line"
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT * FROM functions WHERE name = ?1 ORDER BY file_path, start_line")
+        {
             Ok(s) => s,
             Err(_) => return vec![],
         };
@@ -293,9 +297,10 @@ impl CodeGraphStore for SqliteGraphStore {
     }
 
     fn list_functions(&self) -> Vec<FunctionRecord> {
-        let mut stmt = match self.conn.prepare(
-            "SELECT * FROM functions ORDER BY file_path, start_line"
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT * FROM functions ORDER BY file_path, start_line")
+        {
             Ok(s) => s,
             Err(_) => return vec![],
         };
@@ -310,7 +315,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_callers(&self, function_id: &str, depth: usize) -> Result<Vec<FunctionRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -343,7 +348,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_callees(&self, function_id: &str, depth: usize) -> Result<Vec<FunctionRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -382,7 +387,7 @@ impl CodeGraphStore for SqliteGraphStore {
             JOIN functions f ON cf.function_id = f.id
             WHERE cf.commit_hash = ?1
             ORDER BY f.file_path, f.start_line
-            "#
+            "#,
         ) {
             Ok(s) => s,
             Err(_) => return vec![],
@@ -400,7 +405,10 @@ impl CodeGraphStore for SqliteGraphStore {
                 },
                 before_hash: row.get(3)?,
                 after_hash: row.get(4)?,
-                indexed_at: row.get::<_, String>(5)?.parse().unwrap_or_else(|_| Utc::now()),
+                indexed_at: row
+                    .get::<_, String>(5)?
+                    .parse()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         });
 
@@ -499,7 +507,10 @@ impl CodeGraphStore for SqliteGraphStore {
                 interface_ids,
                 start_line: row.get::<_, i64>(7)? as usize,
                 end_line: row.get::<_, i64>(8)? as usize,
-                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+                indexed_at: row
+                    .get::<_, String>(9)?
+                    .parse()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         });
 
@@ -511,7 +522,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_parents(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -551,7 +562,10 @@ impl CodeGraphStore for SqliteGraphStore {
                 interface_ids,
                 start_line: row.get::<_, i64>(7)? as usize,
                 end_line: row.get::<_, i64>(8)? as usize,
-                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+                indexed_at: row
+                    .get::<_, String>(9)?
+                    .parse()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
 
@@ -560,7 +574,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_children(&self, class_id: &str, depth: usize) -> Result<Vec<ClassRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -600,7 +614,10 @@ impl CodeGraphStore for SqliteGraphStore {
                 interface_ids,
                 start_line: row.get::<_, i64>(7)? as usize,
                 end_line: row.get::<_, i64>(8)? as usize,
-                indexed_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+                indexed_at: row
+                    .get::<_, String>(9)?
+                    .parse()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
 
@@ -626,13 +643,19 @@ impl CodeGraphStore for SqliteGraphStore {
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;
-        let result: Option<String> = stmt.query_row(params![class_id], |row| row.get(0)).optional()?;
-        
+        let result: Option<String> = stmt
+            .query_row(params![class_id], |row| row.get(0))
+            .optional()?;
+
         if let Some(path_str) = result {
-            let path: Vec<String> = path_str.trim_end_matches(',').split(',').map(|s| s.to_string()).collect();
+            let path: Vec<String> = path_str
+                .trim_end_matches(',')
+                .split(',')
+                .map(|s| s.to_string())
+                .collect();
             return Ok(Some(path));
         }
-        
+
         Ok(None)
     }
 
@@ -645,17 +668,18 @@ impl CodeGraphStore for SqliteGraphStore {
         include: &[SearchInclude],
     ) -> Result<SearchResult> {
         self.check_depth(depth)?;
-        
+
         let mut functions = Vec::new();
         let classes = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
-        
+
         // 获取查询函数的基本信息
         let query_func = self.get_function(function_id);
-        let (file_path, module, _class_id) = query_func.as_ref()
+        let (file_path, module, _class_id) = query_func
+            .as_ref()
             .map(|f| (f.file_path.clone(), f.module.clone(), None::<String>))
             .unwrap_or_default();
-        
+
         for include_type in include {
             match include_type {
                 SearchInclude::Callers => {
@@ -709,9 +733,9 @@ impl CodeGraphStore for SqliteGraphStore {
                 }
             }
         }
-        
+
         let include_types = include.iter().map(|i| i.to_string()).collect();
-        
+
         Ok(SearchResult {
             functions,
             classes,
@@ -751,7 +775,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_module_deps(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -795,7 +819,7 @@ impl CodeGraphStore for SqliteGraphStore {
 
     fn find_module_dependents(&self, module_id: &str, depth: usize) -> Result<Vec<ModuleRecord>> {
         self.check_depth(depth)?;
-        
+
         if depth == 0 {
             return Ok(vec![]);
         }
@@ -855,13 +879,19 @@ impl CodeGraphStore for SqliteGraphStore {
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;
-        let result: Option<String> = stmt.query_row(params![module_id], |row| row.get(0)).optional()?;
-        
+        let result: Option<String> = stmt
+            .query_row(params![module_id], |row| row.get(0))
+            .optional()?;
+
         if let Some(path_str) = result {
-            let path: Vec<String> = path_str.trim_end_matches(',').split(',').map(|s| s.to_string()).collect();
+            let path: Vec<String> = path_str
+                .trim_end_matches(',')
+                .split(',')
+                .map(|s| s.to_string())
+                .collect();
             return Ok(Some(path));
         }
-        
+
         Ok(None)
     }
 }
@@ -975,11 +1005,7 @@ impl GraphStoreInsert for SqliteGraphStore {
             (child_id, parent_id, edge_type)
             VALUES (?1, ?2, ?3)
             "#,
-            params![
-                edge.child_id,
-                edge.parent_id,
-                edge.edge_type.to_string(),
-            ],
+            params![edge.child_id, edge.parent_id, edge.edge_type.to_string(),],
         )?;
         Ok(())
     }
@@ -1054,10 +1080,10 @@ mod tests {
     #[test]
     fn test_function_crud() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         let func = create_test_function("test.php#foo#10", "foo", "test");
         store.insert_function(&func).unwrap();
-        
+
         let found = store.get_function("test.php#foo#10");
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "foo");
@@ -1066,18 +1092,18 @@ mod tests {
     #[test]
     fn test_find_by_module() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         let func1 = create_test_function("order.php#create#10", "create", "order");
         let func2 = create_test_function("order.php#update#20", "update", "order");
         let func3 = create_test_function("user.php#login#10", "login", "user");
-        
+
         store.insert_function(&func1).unwrap();
         store.insert_function(&func2).unwrap();
         store.insert_function(&func3).unwrap();
-        
+
         let order_funcs = store.find_by_module("order");
         assert_eq!(order_funcs.len(), 2);
-        
+
         let user_funcs = store.find_by_module("user");
         assert_eq!(user_funcs.len(), 1);
     }
@@ -1085,7 +1111,7 @@ mod tests {
     #[test]
     fn test_repository_crud() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 注意: new_in_memory 创建的 store 的 repo_id 是 "test"
         let repo = Repository {
             id: "test".to_string(),
@@ -1095,9 +1121,9 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        
+
         store.update_repository(&repo).unwrap();
-        
+
         let found = store.get_repository();
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "Test Repo");
@@ -1106,11 +1132,11 @@ mod tests {
     #[test]
     fn test_depth_limit() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 测试正常深度
         let result = store.check_depth(10);
         assert!(result.is_ok());
-        
+
         // 测试超限深度
         let result = store.check_depth(101);
         assert!(matches!(result, Err(GraphError::DepthLimitExceeded(100))));
@@ -1120,24 +1146,28 @@ mod tests {
     fn test_store_manager() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = GraphStoreManager::new(temp_dir.path()).unwrap();
-        
+
         // 测试获取存储
         let store = manager.get_store("github.com/test/repo");
         assert!(store.is_ok());
-        
+
         // 测试仓库存在检查
         assert!(manager.repo_exists("github.com/test/repo"));
         assert!(!manager.repo_exists("github.com/non/exist"));
-        
+
         // 测试列出仓库
         let repos = manager.list_repos();
         assert_eq!(repos.len(), 1);
     }
 
-
     // ==================== Phase 2: Class + Inheritance Tests ====================
 
-    fn create_test_class(id: &str, name: &str, module: &str, parent_id: Option<&str>) -> ClassRecord {
+    fn create_test_class(
+        id: &str,
+        name: &str,
+        module: &str,
+        parent_id: Option<&str>,
+    ) -> ClassRecord {
         ClassRecord {
             id: id.to_string(),
             name: name.to_string(),
@@ -1155,10 +1185,10 @@ mod tests {
     #[test]
     fn test_class_crud() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         let class = create_test_class("test.php#User", "User", "models", None);
         store.insert_class(&class).unwrap();
-        
+
         let found = store.get_class("test.php#User");
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "User");
@@ -1167,35 +1197,44 @@ mod tests {
     #[test]
     fn test_inheritance_chain() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 创建继承链: Admin -> User -> BaseModel
         let base = create_test_class("BaseModel.php#BaseModel", "BaseModel", "models", None);
-        let user = create_test_class("User.php#User", "User", "models", Some("BaseModel.php#BaseModel"));
+        let user = create_test_class(
+            "User.php#User",
+            "User",
+            "models",
+            Some("BaseModel.php#BaseModel"),
+        );
         let admin = create_test_class("Admin.php#Admin", "Admin", "models", Some("User.php#User"));
-        
+
         store.insert_class(&base).unwrap();
         store.insert_class(&user).unwrap();
         store.insert_class(&admin).unwrap();
-        
+
         // 插入继承边
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "User.php#User".to_string(),
-            parent_id: "BaseModel.php#BaseModel".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "Admin.php#Admin".to_string(),
-            parent_id: "User.php#User".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "User.php#User".to_string(),
+                parent_id: "BaseModel.php#BaseModel".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "Admin.php#Admin".to_string(),
+                parent_id: "User.php#User".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
         // 测试查找父类
         let parents = store.find_parents("Admin.php#Admin", 2).unwrap();
         assert_eq!(parents.len(), 2);
         assert_eq!(parents[0].name, "User");
         assert_eq!(parents[1].name, "BaseModel");
-        
+
         // 测试查找子类
         let children = store.find_children("BaseModel.php#BaseModel", 2).unwrap();
         assert_eq!(children.len(), 2);
@@ -1204,39 +1243,45 @@ mod tests {
     #[test]
     fn test_circular_inheritance_detection() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 创建循环继承: A -> B -> C -> A
         let class_a = create_test_class("A.php#A", "A", "models", Some("B.php#B"));
         let class_b = create_test_class("B.php#B", "B", "models", Some("C.php#C"));
         let class_c = create_test_class("C.php#C", "C", "models", Some("A.php#A"));
-        
+
         store.insert_class(&class_a).unwrap();
         store.insert_class(&class_b).unwrap();
         store.insert_class(&class_c).unwrap();
-        
+
         // 插入继承边
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "A.php#A".to_string(),
-            parent_id: "B.php#B".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "B.php#B".to_string(),
-            parent_id: "C.php#C".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "C.php#C".to_string(),
-            parent_id: "A.php#A".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "A.php#A".to_string(),
+                parent_id: "B.php#B".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "B.php#B".to_string(),
+                parent_id: "C.php#C".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "C.php#C".to_string(),
+                parent_id: "A.php#A".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
         // 检测循环继承
         let cycle = store.detect_circular_inheritance("A.php#A").unwrap();
         assert!(cycle.is_some(), "Should detect circular inheritance");
-        
+
         let path = cycle.unwrap();
         assert!(path.contains(&"A.php#A".to_string()));
         assert!(path.contains(&"B.php#B".to_string()));
@@ -1246,20 +1291,22 @@ mod tests {
     #[test]
     fn test_no_circular_inheritance() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 正常继承链: A -> B (无循环)
         let class_a = create_test_class("A.php#A", "A", "models", None);
         let class_b = create_test_class("B.php#B", "B", "models", Some("A.php#A"));
-        
+
         store.insert_class(&class_a).unwrap();
         store.insert_class(&class_b).unwrap();
-        
-        store.insert_inherit_edge(&InheritEdge {
-            child_id: "B.php#B".to_string(),
-            parent_id: "A.php#A".to_string(),
-            edge_type: InheritType::Extends,
-        }).unwrap();
-        
+
+        store
+            .insert_inherit_edge(&InheritEdge {
+                child_id: "B.php#B".to_string(),
+                parent_id: "A.php#A".to_string(),
+                edge_type: InheritType::Extends,
+            })
+            .unwrap();
+
         // 不应检测到循环
         let cycle = store.detect_circular_inheritance("A.php#A").unwrap();
         assert!(cycle.is_none(), "Should not detect circular inheritance");
@@ -1270,52 +1317,60 @@ mod tests {
     #[test]
     fn test_search_graph_callers_callees() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 创建函数调用链: A -> B -> C, D -> B
         let func_a = create_test_function("a.php#a#1", "a", "test");
         let func_b = create_test_function("b.php#b#1", "b", "test");
         let func_c = create_test_function("c.php#c#1", "c", "test");
         let func_d = create_test_function("d.php#d#1", "d", "test");
-        
+
         store.insert_function(&func_a).unwrap();
         store.insert_function(&func_b).unwrap();
         store.insert_function(&func_c).unwrap();
         store.insert_function(&func_d).unwrap();
-        
+
         // A -> B
-        store.insert_call_edge(&CallEdge {
-            caller_id: "a.php#a#1".to_string(),
-            callee_id: "b.php#b#1".to_string(),
-            call_type: CallType::Direct,
-            file_path: Some("a.php".to_string()),
-            line_number: Some(10),
-        }).unwrap();
-        
+        store
+            .insert_call_edge(&CallEdge {
+                caller_id: "a.php#a#1".to_string(),
+                callee_id: "b.php#b#1".to_string(),
+                call_type: CallType::Direct,
+                file_path: Some("a.php".to_string()),
+                line_number: Some(10),
+            })
+            .unwrap();
+
         // B -> C
-        store.insert_call_edge(&CallEdge {
-            caller_id: "b.php#b#1".to_string(),
-            callee_id: "c.php#c#1".to_string(),
-            call_type: CallType::Direct,
-            file_path: Some("b.php".to_string()),
-            line_number: Some(20),
-        }).unwrap();
-        
+        store
+            .insert_call_edge(&CallEdge {
+                caller_id: "b.php#b#1".to_string(),
+                callee_id: "c.php#c#1".to_string(),
+                call_type: CallType::Direct,
+                file_path: Some("b.php".to_string()),
+                line_number: Some(20),
+            })
+            .unwrap();
+
         // D -> B
-        store.insert_call_edge(&CallEdge {
-            caller_id: "d.php#d#1".to_string(),
-            callee_id: "b.php#b#1".to_string(),
-            call_type: CallType::Direct,
-            file_path: Some("d.php".to_string()),
-            line_number: Some(30),
-        }).unwrap();
-        
+        store
+            .insert_call_edge(&CallEdge {
+                caller_id: "d.php#d#1".to_string(),
+                callee_id: "b.php#b#1".to_string(),
+                call_type: CallType::Direct,
+                file_path: Some("d.php".to_string()),
+                line_number: Some(30),
+            })
+            .unwrap();
+
         // 搜索 B 的 callers 和 callees
-        let result = store.search_graph(
-            "b.php#b#1",
-            2,
-            &[SearchInclude::Callers, SearchInclude::Callees]
-        ).unwrap();
-        
+        let result = store
+            .search_graph(
+                "b.php#b#1",
+                2,
+                &[SearchInclude::Callers, SearchInclude::Callees],
+            )
+            .unwrap();
+
         assert_eq!(result.functions.len(), 3); // A, C, D
         let names: Vec<_> = result.functions.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"a"));
@@ -1326,23 +1381,21 @@ mod tests {
     #[test]
     fn test_search_graph_same_file() {
         let store = SqliteGraphStore::new_in_memory().unwrap();
-        
+
         // 创建同文件的多个函数
         let func1 = create_test_function("test.php#foo#1", "foo", "test");
         let func2 = create_test_function("test.php#bar#10", "bar", "test");
         let func3 = create_test_function("test.php#baz#20", "baz", "test");
-        
+
         store.insert_function(&func1).unwrap();
         store.insert_function(&func2).unwrap();
         store.insert_function(&func3).unwrap();
-        
+
         // 搜索同文件函数
-        let result = store.search_graph(
-            "test.php#foo#1",
-            1,
-            &[SearchInclude::SameFile]
-        ).unwrap();
-        
+        let result = store
+            .search_graph("test.php#foo#1", 1, &[SearchInclude::SameFile])
+            .unwrap();
+
         assert_eq!(result.functions.len(), 2); // bar, baz (排除自己)
         let names: Vec<_> = result.functions.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"bar"));

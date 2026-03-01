@@ -215,7 +215,12 @@ boundaries:
     assert!(status.success());
 
     let contract_path = output.join("unibo-api-contract.json");
+    let legacy_contract_path = output.join("api-contract.json");
     assert!(contract_path.exists(), "unibo-api-contract.json should exist");
+    assert!(
+        legacy_contract_path.exists(),
+        "api-contract.json compatibility file should exist"
+    );
 
     let payload: Value = serde_json::from_str(
         &fs::read_to_string(&contract_path).expect("read generated api-contract"),
@@ -233,7 +238,13 @@ boundaries:
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
     files.sort();
-    assert_eq!(files, vec!["unibo-api-contract.json".to_string()]);
+    assert_eq!(
+        files,
+        vec![
+            "api-contract.json".to_string(),
+            "unibo-api-contract.json".to_string()
+        ]
+    );
     assert!(!files.iter().any(|name| {
         name.contains("runtime") || name.contains("controller") || name.contains("resolver")
     }));

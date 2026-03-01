@@ -159,6 +159,39 @@ const UNIBO_TARGET_RUNTIME_VERSION: &str = "1.x";
 const UNIBO_COMPAT_VERSION: &str = "1";
 const UNIBO_API_CONTRACT_FILE: &str = "unibo-api-contract.json";
 const UNIBO_RUNTIME_BRIDGE_FILE: &str = "unibo-runtime-bridge.yaml";
+const LEGACY_API_CONTRACT_SCHEMA_VERSION: &str = "1.0.0";
+const LEGACY_API_CONTRACT_FILE: &str = "api-contract.json";
+const GENERATE_EXIT_INVALID_ARGUMENT: i32 = 10;
+const GENERATE_EXIT_CONTRACT_CONFLICT: i32 = 12;
+const GENERATE_EXIT_OUTPUT_FAILED: i32 = 13;
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractProducer {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractItem {
+    module_id: String,
+    name: String,
+    kind: String,
+    input: BTreeMap<String, String>,
+    output: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyApiContractDocument {
+    contract_schema_version: String,
+    producer: LegacyApiContractProducer,
+    seed_version: String,
+    generated_at: String,
+    contracts: Vec<LegacyApiContractItem>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConflictStrategy {
@@ -2605,16 +2638,23 @@ fn build_unibo_contract_item(
     })
 }
 
+#[derive(Debug)]
+enum UniboContractBuildError {
+    Conflict(String),
+    Other(String),
+}
+
 fn build_unibo_api_contract_document(
     seed: &SeedSpec,
     strategy: ConflictStrategy,
-) -> Result<UniboApiContractDocument, String> {
+) -> Result<UniboApiContractDocument, UniboContractBuildError> {
     let mut contracts_by_key: BTreeMap<String, UniboBoundaryContract> = BTreeMap::new();
     let mut conflicts: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for boundary in &seed.boundaries {
         for contract in &boundary.contracts {
-            let item = build_unibo_contract_item(&boundary.module_id, contract)?;
+            let item = build_unibo_contract_item(&boundary.module_id, contract)
+                .map_err(UniboContractBuildError::Other)?;
             let source = format!("{}.{}", boundary.module_id, contract.name);
             if let Some(prev) = contracts_by_key.get(&item.contract_key) {
                 match strategy {
@@ -2646,16 +2686,16 @@ fn build_unibo_api_contract_document(
             sources.dedup();
             detail.push(format!("{} => {}", key, sources.join(" | ")));
         }
-        return Err(format!(
+        return Err(UniboContractBuildError::Conflict(format!(
             "contract key conflicts detected: {}",
             detail.join("; ")
-        ));
+        )));
     }
 
     if contracts_by_key.is_empty() {
-        return Err(
+        return Err(UniboContractBuildError::Other(
             "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
-        );
+        ));
     }
 
     Ok(UniboApiContractDocument {
@@ -2672,6 +2712,51 @@ fn build_unibo_api_contract_document(
             .unwrap_or_else(|| "unspecified".to_string()),
         generated_at: Utc::now().to_rfc3339(),
         contracts: contracts_by_key.into_values().collect(),
+    })
+}
+
+fn build_legacy_api_contract_document(
+    seed: &SeedSpec,
+) -> Result<LegacyApiContractDocument, String> {
+    let mut contracts = Vec::new();
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            contracts.push(LegacyApiContractItem {
+                module_id: boundary.module_id.clone(),
+                name: contract.name.clone(),
+                kind: normalize_contract_kind(&contract.kind),
+                input: to_sorted_map(&contract.input),
+                output: to_sorted_map(&contract.output),
+                errors: contract.errors.clone(),
+                fields: to_sorted_map(&contract.fields),
+            });
+        }
+    }
+
+    if contracts.is_empty() {
+        return Err(
+            "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
+        );
+    }
+
+    contracts.sort_by(|a, b| {
+        a.module_id
+            .cmp(&b.module_id)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(LegacyApiContractDocument {
+        contract_schema_version: LEGACY_API_CONTRACT_SCHEMA_VERSION.to_string(),
+        producer: LegacyApiContractProducer {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        seed_version: seed
+            .version
+            .clone()
+            .unwrap_or_else(|| "unspecified".to_string()),
+        generated_at: Utc::now().to_rfc3339(),
+        contracts,
     })
 }
 
@@ -2712,6 +2797,35 @@ fn write_unibo_api_contract_document(
         }
         None => {
             println!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
+fn write_legacy_api_contract_document(
+    document: &LegacyApiContractDocument,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(document)
+        .map_err(|e| format!("serialize legacy api-contract failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(LEGACY_API_CONTRACT_FILE);
+            fs::write(&file_path, format!("{}\n", payload))
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出兼容层 API Contract 到 {}（contracts: {}）",
+                file_path.display(),
+                document.contracts.len()
+            );
+        }
+        None => {
+            eprintln!(
+                "[generate] 未指定 --output，跳过写出兼容层文件 {}",
+                LEGACY_API_CONTRACT_FILE
+            );
         }
     }
     Ok(())
@@ -2843,10 +2957,21 @@ pub fn generate(
                 Ok(strategy) => strategy,
                 Err(e) => {
                     eprintln!("[generate] {}", e);
-                    std::process::exit(1);
+                    std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
                 }
             };
             let document = match build_unibo_api_contract_document(&seed, strategy) {
+                Ok(doc) => doc,
+                Err(UniboContractBuildError::Conflict(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_CONTRACT_CONFLICT);
+                }
+                Err(UniboContractBuildError::Other(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let legacy_document = match build_legacy_api_contract_document(&seed) {
                 Ok(doc) => doc,
                 Err(e) => {
                     eprintln!("[generate] {}", e);
@@ -2855,13 +2980,17 @@ pub fn generate(
             };
             if let Err(e) = write_unibo_api_contract_document(&document, output_dir) {
                 eprintln!("[generate] {}", e);
-                std::process::exit(1);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+            }
+            if let Err(e) = write_legacy_api_contract_document(&legacy_document, output_dir) {
+                eprintln!("[generate] {}", e);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
             }
             if emit_runtime_bridge {
                 let runtime_bridge = build_unibo_runtime_bridge_config();
                 if let Err(e) = write_unibo_runtime_bridge_config(&runtime_bridge, output_dir) {
                     eprintln!("[generate] {}", e);
-                    std::process::exit(1);
+                    std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
                 }
             } else {
                 eprintln!("[generate] emit-runtime-bridge=false，仅输出契约桥接产物");
@@ -2870,7 +2999,7 @@ pub fn generate(
         other => {
             eprintln!("[generate] 未知 emit 模式: {}", other);
             eprintln!("[generate] 可选值: code | api-contract | all");
-            std::process::exit(1);
+            std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
         }
     }
 }
@@ -6721,7 +6850,14 @@ relations_expected: []
         let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
         let err = build_unibo_api_contract_document(&seed, ConflictStrategy::ErrorOnConflict)
             .expect_err("expected missing contracts");
-        assert!(err.contains("seed 缺少 contracts"));
+        match err {
+            UniboContractBuildError::Other(msg) => {
+                assert!(msg.contains("seed 缺少 contracts"));
+            }
+            UniboContractBuildError::Conflict(msg) => {
+                panic!("unexpected conflict error: {}", msg);
+            }
+        }
     }
 
     #[test]

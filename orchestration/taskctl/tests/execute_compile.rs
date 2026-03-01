@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use taskctl::{execute, ExecuteInput};
+use taskctl::{ExecuteInput, execute};
 
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

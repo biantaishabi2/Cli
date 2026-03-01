@@ -313,9 +313,14 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
     assert!(status.success(), "emit api-contract should succeed");
 
     let contract_path = output.join("unibo-api-contract.json");
+    let legacy_contract_path = output.join("api-contract.json");
     assert!(
         contract_path.exists(),
         "unibo-api-contract.json should exist"
+    );
+    assert!(
+        legacy_contract_path.exists(),
+        "api-contract.json compatibility file should exist"
     );
     assert!(!output.join("generate-commands.sh").exists());
     assert!(!output.join("billing.ex").exists());
@@ -364,10 +369,11 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
     let files = collect_dir_snapshot(&output);
     assert_eq!(
         files.len(),
-        1,
-        "api-contract output should contain only one file"
+        2,
+        "api-contract output should contain unibo + compatibility files"
     );
     assert!(files.contains_key("unibo-api-contract.json"));
+    assert!(files.contains_key("api-contract.json"));
     assert!(!files.keys().any(|name| {
         name.contains("runtime") || name.contains("controller") || name.contains("resolver")
     }));
@@ -408,6 +414,20 @@ fn arch_generate_emit_all_is_equivalent_to_emit_code() {
     let code_snapshot = collect_dir_snapshot(&code_output);
     let all_snapshot = collect_dir_snapshot(&all_output);
     assert_eq!(code_snapshot, all_snapshot);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn arch_generate_invalid_conflict_strategy_returns_invalid_argument_exit_code() {
+    let root = temp_dir("bcc_arch_generate_invalid_conflict_strategy");
+    let seed = root.join("seed.yaml");
+    let output = root.join("api-contract-out");
+    write(&seed, sample_seed_with_contracts());
+
+    let status = run_arch_generate_with_options(&seed, "api-contract", &output, false, "invalid");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(10));
 
     let _ = fs::remove_dir_all(&root);
 }

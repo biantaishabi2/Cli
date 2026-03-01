@@ -4,12 +4,12 @@
 //! 支持函数级别的调用关系分析和影响分析
 
 pub mod arch;
+pub mod cli;
 pub mod error;
-pub mod schema;
-pub mod store;
-pub mod sqlite;
+pub mod impact;
 pub mod indexer;
 pub mod query;
-pub mod impact;
+pub mod schema;
+pub mod sqlite;
+pub mod store;
 pub mod types;
-pub mod cli;

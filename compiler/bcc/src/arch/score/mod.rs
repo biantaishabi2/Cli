@@ -29,8 +29,6 @@ pub use context::ScoringContext;
 pub use dimensions::{check_layer_transition, check_layer_transition_with_precedence};
 pub use models::{ArchitectureScore, DimensionScore, Grade, Severity};
 
-
-
 /// 执行评分命令
 pub fn score(
     input: &str,
@@ -42,7 +40,16 @@ pub fn score(
     verbose: bool,
     smell_report: Option<&str>,
 ) {
-    if let Err(e) = score_impl(input, config, mode, format, output, threshold, verbose, smell_report) {
+    if let Err(e) = score_impl(
+        input,
+        config,
+        mode,
+        format,
+        output,
+        threshold,
+        verbose,
+        smell_report,
+    ) {
         eprintln!("[score] error: {}", e);
         std::process::exit(1);
     }
@@ -69,7 +76,12 @@ fn score_impl(
         "strict" => ScoringMode::Strict,
         "lenient" => ScoringMode::Lenient,
         "warning" => ScoringMode::Warning,
-        _ => return Err(format!("invalid mode '{}': expected strict|lenient|warning", mode)),
+        _ => {
+            return Err(format!(
+                "invalid mode '{}': expected strict|lenient|warning",
+                mode
+            ))
+        }
     };
 
     // 构建评分上下文
@@ -146,8 +158,8 @@ fn init_config_impl(output: &str, template: &str) -> Result<(), String> {
         }
     };
 
-    let yaml = serde_yaml::to_string(&config)
-        .map_err(|e| format!("serialize config failed: {}", e))?;
+    let yaml =
+        serde_yaml::to_string(&config).map_err(|e| format!("serialize config failed: {}", e))?;
 
     // 添加文件头注释
     let content = format!(
@@ -155,20 +167,14 @@ fn init_config_impl(output: &str, template: &str) -> Result<(), String> {
         template, yaml
     );
 
-    std::fs::write(output, content)
-        .map_err(|e| format!("write config failed: {}", e))?;
+    std::fs::write(output, content).map_err(|e| format!("write config failed: {}", e))?;
 
     println!("config_template_written={}", output);
     Ok(())
 }
 
 /// 对比多个版本
-pub fn compare(
-    inputs: &[String],
-    labels: &[String],
-    format: &str,
-    output: Option<&str>,
-) {
+pub fn compare(inputs: &[String], labels: &[String], format: &str, output: Option<&str>) {
     if let Err(e) = compare_impl(inputs, labels, format, output) {
         eprintln!("[score] error: {}", e);
         std::process::exit(1);
@@ -213,8 +219,7 @@ fn compare_impl(
 
     match output {
         Some(path) => {
-            std::fs::write(path, content)
-                .map_err(|e| format!("write output failed: {}", e))?;
+            std::fs::write(path, content).map_err(|e| format!("write output failed: {}", e))?;
             println!("comparison_report_written={}", path);
         }
         None => println!("{}", content),

@@ -220,7 +220,7 @@ boundaries:
 
     let status = run_arch_generate(&seed, &output, false, "error-on-conflict");
     assert!(!status.success(), "default conflict strategy should fail");
-    assert_eq!(status.code(), Some(1));
+    assert_eq!(status.code(), Some(12));
 
     let _ = fs::remove_dir_all(&root);
 }

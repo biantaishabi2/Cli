@@ -83,6 +83,7 @@ boundaries:
     assert!(status.success());
 
     assert!(out.join("unibo-api-contract.json").exists());
+    assert!(out.join("api-contract.json").exists());
     assert!(!out.join("unibo-runtime-bridge.yaml").exists());
 
     let mut names: Vec<String> = fs::read_dir(&out)
@@ -91,7 +92,13 @@ boundaries:
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, vec!["unibo-api-contract.json".to_string()]);
+    assert_eq!(
+        names,
+        vec![
+            "api-contract.json".to_string(),
+            "unibo-api-contract.json".to_string()
+        ]
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
