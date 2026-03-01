@@ -1,6 +1,6 @@
 module github.com/biantaishabi2/Cli/automation/niuma
 
-go 1.24.0
+go 1.24
 
 require (
 	github.com/google/go-github/v68 v68.0.0
