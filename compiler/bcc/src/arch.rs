@@ -2815,11 +2815,8 @@ fn write_unibo_api_contract_document(
             );
         }
         None => {
-            eprintln!(
-                "[generate] 未指定 --output，保留 stdout 给兼容层；UniBO 契约请使用 --output 获取 {}",
-                UNIBO_API_CONTRACT_FILE
-            );
-            eprintln!("{}", payload);
+            eprintln!("[generate] 未指定 --output，UniBO 契约输出到 stdout（机读）");
+            println!("{}", payload);
         }
     }
     Ok(())
@@ -2845,7 +2842,8 @@ fn write_legacy_api_contract_document(
             );
         }
         None => {
-            println!("{}", payload);
+            eprintln!("[generate] 未指定 --output，兼容层 JSON 输出到 stderr 供人工检查");
+            eprintln!("{}", payload);
         }
     }
     Ok(())

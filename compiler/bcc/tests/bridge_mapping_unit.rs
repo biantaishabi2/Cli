@@ -296,7 +296,7 @@ boundaries:
 }
 
 #[test]
-fn bridge_stdout_with_runtime_bridge_enabled_should_keep_legacy_stdout_json_readable() {
+fn bridge_stdout_with_runtime_bridge_enabled_should_keep_unibo_stdout_json_readable() {
     let root = temp_dir("bcc_bridge_stdout_machine_readable");
     let seed = root.join("seed.yaml");
 
@@ -334,15 +334,15 @@ boundaries:
     assert!(payload.get("contracts").and_then(Value::as_array).is_some());
     assert!(
         payload
-            .get("contract_schema_version")
+            .get("bridgeVersion")
             .and_then(Value::as_str)
             .is_some(),
-        "stdout should remain legacy compatible contract json: {}",
+        "stdout should remain unibo machine-readable contract json: {}",
         stdout
     );
     assert!(
-        payload.get("bridgeVersion").is_none(),
-        "stdout should not switch to unibo-only structure: {}",
+        payload.get("contract_schema_version").is_none(),
+        "stdout should not fall back to legacy-only structure: {}",
         stdout
     );
     assert!(
@@ -358,6 +358,11 @@ boundaries:
     assert!(
         stderr.contains("contractSource:"),
         "stderr should include runtime bridge contractSource yaml: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("\"contract_schema_version\":"),
+        "stderr should include legacy compatibility JSON payload: {}",
         stderr
     );
 
