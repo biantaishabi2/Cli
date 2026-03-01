@@ -258,6 +258,25 @@ scenario_auth_failed_no_retry() {
   return 0
 }
 
+scenario_forbidden_failed_no_retry() {
+  local sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/bin"
+  make_gh_mock "$sandbox/bin"
+
+  INFRA_RETRY_MAX=2 \
+  MOCK_CHECKS_STATE_FILE="$sandbox/checks.state" \
+  MOCK_CHECKS_CALL_1='err|HTTP 403 Forbidden' \
+  run_gate_case "$sandbox" 5146
+
+  local status
+  status=$(cat "$sandbox/status")
+  assert_eq "1" "$status" "403 场景应返回非 0" || return 1
+  assert_eq "AUTH_FAILED" "$(read_output_value "$sandbox/github_output" reason_code)" "403 应分类为 AUTH_FAILED" || return 1
+  assert_eq "0" "$(read_output_value "$sandbox/github_output" retry_count)" "403 不应自动重试" || return 1
+  return 0
+}
+
 scenario_rate_limited_no_retry() {
   local sandbox
   sandbox=$(mktemp -d)
@@ -291,6 +310,7 @@ run_case "代码失败分类" scenario_code_failure_goes_needs_fix_reason
 run_case "网络抖动重试后恢复" scenario_network_transient_recovers_after_retry
 run_case "网络抖动重试耗尽" scenario_network_transient_exhausts_retry
 run_case "认证失败分类" scenario_auth_failed_no_retry
+run_case "鉴权失败分类" scenario_forbidden_failed_no_retry
 run_case "限流失败分类" scenario_rate_limited_no_retry
 
 echo "[gate-reason] pass=$PASS_COUNT fail=$FAIL_COUNT"
