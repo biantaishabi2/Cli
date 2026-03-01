@@ -30,27 +30,16 @@ fn collect_source_files(dir: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                if name == "_build"
-                    || name == "target"
-                    || name == "node_modules"
-                    || name == "deps"
-                    || name == "__tests__"
-                {
+                if name == "_build" || name == "target" || name == "node_modules" || name == "deps" || name == "__tests__" {
                     continue;
                 }
                 files.extend(collect_source_files(&path));
             } else {
                 let ext = path.extension().unwrap_or_default().to_string_lossy();
-                if matches!(
-                    ext.as_ref(),
-                    "ex" | "exs" | "go" | "rs" | "php" | "ts" | "tsx"
-                ) {
+                if matches!(ext.as_ref(), "ex" | "exs" | "go" | "rs" | "php" | "ts" | "tsx") {
                     // 排除测试文件
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if !name.contains("_test.")
-                        && !name.contains(".test.")
-                        && !name.contains("_spec.")
-                    {
+                    if !name.contains("_test.") && !name.contains(".test.") && !name.contains("_spec.") {
                         files.push(path);
                     }
                 }
@@ -62,10 +51,7 @@ fn collect_source_files(dir: &Path) -> Vec<PathBuf> {
 
 /// 计算源文件相对路径
 fn relative_path(file: &Path, base: &Path) -> String {
-    file.strip_prefix(base)
-        .unwrap_or(file)
-        .to_string_lossy()
-        .to_string()
+    file.strip_prefix(base).unwrap_or(file).to_string_lossy().to_string()
 }
 
 /// 对应的文档路径

@@ -5,13 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// 将 AST 序列化为 Elixir 源码并写入文件
-pub fn emit_to_dir(
-    ast: &[QuotedAST],
-    spec: &ModuleSpec,
-    output_dir: &str,
-    force: bool,
-    verbose: bool,
-) {
+pub fn emit_to_dir(ast: &[QuotedAST], spec: &ModuleSpec, output_dir: &str, force: bool, verbose: bool) {
     let module_name_snake = to_snake_case(&spec.module.name);
     let target_dir = Path::new(output_dir).join(&module_name_snake);
 
@@ -38,10 +32,7 @@ pub fn emit_to_dir(
         }
         Err(e) => {
             if verbose {
-                eprintln!(
-                    "[verbose] emit: Elixir 路径失败 ({}), 回退到 emit_simple",
-                    e
-                );
+                eprintln!("[verbose] emit: Elixir 路径失败 ({}), 回退到 emit_simple", e);
             }
             // Elixir 不可用时，用 Rust 侧简易序列化
             emit_simple(ast, spec)
@@ -152,35 +143,22 @@ fn emit_simple(_ast: &[QuotedAST], spec: &ModuleSpec) -> String {
 
     for port in &spec.ports {
         let kind = port.kind.as_deref().unwrap_or("command");
-        let param_names: Vec<String> = port
-            .input
-            .as_ref()
+        let param_names: Vec<String> = port.input.as_ref()
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
 
         // @spec
-        let spec_params: Vec<String> = port
-            .input
-            .as_ref()
+        let spec_params: Vec<String> = port.input.as_ref()
             .map(|m| m.values().map(|t| yaml_type_to_elixir_simple(t)).collect())
             .unwrap_or_default();
         let return_type = match kind {
             "query" => "{:ok, map()} | {:error, term()}".to_string(),
             _ => "{:ok, map()} | {:error, term()}".to_string(),
         };
-        out.push_str(&format!(
-            "  @spec {}({}) :: {}\n",
-            port.name,
-            spec_params.join(", "),
-            return_type
-        ));
+        out.push_str(&format!("  @spec {}({}) :: {}\n", port.name, spec_params.join(", "), return_type));
 
         // def
-        out.push_str(&format!(
-            "  def {}({}) do\n",
-            port.name,
-            param_names.join(", ")
-        ));
+        out.push_str(&format!("  def {}({}) do\n", port.name, param_names.join(", ")));
         out.push_str("    {:ok, nil}\n");
         out.push_str("  end\n\n");
     }

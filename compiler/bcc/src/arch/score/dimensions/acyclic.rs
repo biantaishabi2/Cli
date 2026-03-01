@@ -73,16 +73,18 @@ impl AcyclicDimension {
         let pair_count = ctx.structure.bidirectional_pair_count;
 
         if pair_count > 0 {
-            suggestions
-                .push("Identify the root cause of each bidirectional dependency".to_string());
             suggestions.push(
-                "Consider introducing an abstraction (interface/trait) to break the cycle"
-                    .to_string(),
+                "Identify the root cause of each bidirectional dependency".to_string(),
             );
-            suggestions
-                .push("Evaluate if both directions of dependency are truly necessary".to_string());
-            suggestions
-                .push("Apply the Dependency Inversion Principle to decouple modules".to_string());
+            suggestions.push(
+                "Consider introducing an abstraction (interface/trait) to break the cycle".to_string(),
+            );
+            suggestions.push(
+                "Evaluate if both directions of dependency are truly necessary".to_string(),
+            );
+            suggestions.push(
+                "Apply the Dependency Inversion Principle to decouple modules".to_string(),
+            );
         } else {
             suggestions.push("No circular dependencies detected. Excellent!".to_string());
         }
@@ -186,7 +188,11 @@ mod tests {
     #[test]
     fn test_no_cycles() {
         let ctx = create_context(0, 10);
-        let dim = AcyclicDimension::new(0.10, true, AcyclicDimensionConfig::default());
+        let dim = AcyclicDimension::new(
+            0.10,
+            true,
+            AcyclicDimensionConfig::default(),
+        );
         let result = dim.calculate(&ctx);
 
         assert_eq!(result.score, 100.0);
@@ -197,7 +203,11 @@ mod tests {
     #[test]
     fn test_with_cycles() {
         let ctx = create_context(5, 10);
-        let dim = AcyclicDimension::new(0.10, true, AcyclicDimensionConfig::default());
+        let dim = AcyclicDimension::new(
+            0.10,
+            true,
+            AcyclicDimensionConfig::default(),
+        );
         let result = dim.calculate(&ctx);
 
         assert!(result.score < 100.0);

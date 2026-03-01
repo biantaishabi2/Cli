@@ -655,8 +655,7 @@ fn extract_ts_interface_fields(
                                         for k in 0..child.child_count() {
                                             if let Some(type_node) = child.child(k) {
                                                 if type_node.kind() != ":" {
-                                                    prop_type =
-                                                        common::node_text(type_node, source);
+                                                    prop_type = common::node_text(type_node, source);
                                                 }
                                             }
                                         }
@@ -783,7 +782,10 @@ fn extract_ts_type_info(
 }
 
 /// 扫描 statement_block 内的嵌套函数定义，压入栈以便后续单独处理
-fn push_nested_functions<'a>(body: &tree_sitter::Node<'a>, stack: &mut Vec<tree_sitter::Node<'a>>) {
+fn push_nested_functions<'a>(
+    body: &tree_sitter::Node<'a>,
+    stack: &mut Vec<tree_sitter::Node<'a>>,
+) {
     let mut inner_stack = vec![*body];
     while let Some(node) = inner_stack.pop() {
         if matches!(
@@ -812,9 +814,7 @@ fn extract_ts_param_annotations(
     type_annotations: &mut Vec<TypeAnnotation>,
 ) {
     for i in 0..params.child_count() {
-        let Some(child) = params.child(i) else {
-            continue;
-        };
+        let Some(child) = params.child(i) else { continue };
         // required_parameter 或 optional_parameter
         if !matches!(child.kind(), "required_parameter" | "optional_parameter") {
             continue;

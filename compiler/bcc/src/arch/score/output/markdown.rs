@@ -12,24 +12,9 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
     writeln!(output).unwrap();
 
     // 元信息
-    writeln!(output, "**Generated:** {}", chrono::Utc::now().to_rfc3339()).unwrap();
-    writeln!(
-        output,
-        "**Overall Score:** {:.1}/100 ({})",
-        score.total,
-        format_grade(score.grade)
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "**Status:** {}",
-        if score.passed {
-            "✅ PASSED"
-        } else {
-            "❌ FAILED"
-        }
-    )
-    .unwrap();
+    writeln!(output, "**Generated:** {}" , chrono::Utc::now().to_rfc3339()).unwrap();
+    writeln!(output, "**Overall Score:** {:.1}/100 ({})", score.total, format_grade(score.grade)).unwrap();
+    writeln!(output, "**Status:** {}", if score.passed { "✅ PASSED" } else { "❌ FAILED" }).unwrap();
     writeln!(output, "**Mode:** {}", score.mode).unwrap();
     writeln!(output).unwrap();
 
@@ -40,18 +25,8 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
     writeln!(output, "|--------|-------|").unwrap();
     writeln!(output, "| Total Score | {:.1}/100 |", score.total).unwrap();
     writeln!(output, "| Grade | {} |", format_grade(score.grade)).unwrap();
-    writeln!(
-        output,
-        "| Passed | {} |",
-        if score.passed { "✅" } else { "❌" }
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "| Critical Issues | {} |",
-        score.summary.critical_issues
-    )
-    .unwrap();
+    writeln!(output, "| Passed | {} |", if score.passed { "✅" } else { "❌" }).unwrap();
+    writeln!(output, "| Critical Issues | {} |", score.summary.critical_issues).unwrap();
     writeln!(output, "| Errors | {} |", score.summary.error_issues).unwrap();
     writeln!(output, "| Warnings | {} |", score.summary.warning_issues).unwrap();
     writeln!(output, "| Info | {} |", score.summary.info_issues).unwrap();
@@ -60,16 +35,8 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
     // 维度细分
     writeln!(output, "## Dimension Breakdown").unwrap();
     writeln!(output).unwrap();
-    writeln!(
-        output,
-        "| Dimension | Score | Weight | Contribution | Status |"
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "|-----------|-------|--------|--------------|--------|"
-    )
-    .unwrap();
+    writeln!(output, "| Dimension | Score | Weight | Contribution | Status |").unwrap();
+    writeln!(output, "|-----------|-------|--------|--------------|--------|").unwrap();
 
     for dim in &score.dimensions {
         let status = if dim.passed {
@@ -82,13 +49,8 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
         writeln!(
             output,
             "| {} | {:.1} | {:.0}% | {:.1} | {} |",
-            dim.display_name,
-            dim.score,
-            dim.weight * 100.0,
-            dim.contribution,
-            status
-        )
-        .unwrap();
+            dim.display_name, dim.score, dim.weight * 100.0, dim.contribution, status
+        ).unwrap();
     }
     writeln!(output).unwrap();
 
@@ -119,11 +81,7 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
                 });
 
                 let status_str = metric.passed.map_or("-".to_string(), |p| {
-                    if p {
-                        "✅".to_string()
-                    } else {
-                        "❌".to_string()
-                    }
+                    if p { "✅".to_string() } else { "❌".to_string() }
                 });
 
                 writeln!(
@@ -133,17 +91,14 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
                     value_str,
                     threshold_str,
                     status_str
-                )
-                .unwrap();
+                ).unwrap();
             }
             writeln!(output).unwrap();
         }
     }
 
     // 问题
-    let all_issues: Vec<_> = score
-        .dimensions
-        .iter()
+    let all_issues: Vec<_> = score.dimensions.iter()
         .flat_map(|d| d.issues.iter().map(move |i| (d, i)))
         .collect();
 
@@ -159,17 +114,11 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
                 dim.display_name,
                 issue.metric.as_ref().unwrap_or(&"general".to_string()),
                 issue.message
-            )
-            .unwrap();
+            ).unwrap();
 
             if let Some(actual) = issue.actual {
                 if let Some(threshold) = issue.threshold {
-                    writeln!(
-                        output,
-                        "  - Actual: {:.1}, Threshold: {:.1}",
-                        actual, threshold
-                    )
-                    .unwrap();
+                    writeln!(output, "  - Actual: {:.1}, Threshold: {:.1}", actual, threshold).unwrap();
                 }
             }
 
@@ -189,21 +138,14 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
             writeln!(output, "{}. **{}** - {}", i + 1, rec.category, rec.message).unwrap();
             writeln!(output, "   - Priority: {}", format_priority(rec.priority)).unwrap();
             if !rec.affected_modules.is_empty() {
-                writeln!(
-                    output,
-                    "   - Affected modules: {}",
-                    rec.affected_modules.join(", ")
-                )
-                .unwrap();
+                writeln!(output, "   - Affected modules: {}", rec.affected_modules.join(", ")).unwrap();
             }
             writeln!(output).unwrap();
         }
     }
 
     // 维度建议
-    let dims_with_suggestions: Vec<_> = score
-        .dimensions
-        .iter()
+    let dims_with_suggestions: Vec<_> = score.dimensions.iter()
         .filter(|d| !d.suggestions.is_empty())
         .collect();
 
@@ -247,8 +189,7 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
             score.total,
             format_grade(score.grade),
             if score.passed { "✅" } else { "❌" }
-        )
-        .unwrap();
+        ).unwrap();
     }
     writeln!(output).unwrap();
 
@@ -257,10 +198,7 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
     writeln!(output).unwrap();
 
     // 获取所有维度名称
-    let dim_names: Vec<_> = results[0]
-        .1
-        .dimensions
-        .iter()
+    let dim_names: Vec<_> = results[0].1.dimensions.iter()
         .map(|d| d.name.clone())
         .collect();
 
@@ -280,10 +218,7 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
 
     // 数据行
     for dim_name in &dim_names {
-        let dim_display = results[0]
-            .1
-            .dimensions
-            .iter()
+        let dim_display = results[0].1.dimensions.iter()
             .find(|d| &d.name == dim_name)
             .map(|d| d.display_name.clone())
             .unwrap_or_else(|| dim_name.clone());
@@ -291,9 +226,7 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
         write!(output, "| {} |", dim_display).unwrap();
 
         for (_, score) in results {
-            let dim = score
-                .dimensions
-                .iter()
+            let dim = score.dimensions.iter()
                 .find(|d| &d.name == dim_name)
                 .map(|d| format!("{:.1} {}", d.score, if d.passed { "✅" } else { "❌" }))
                 .unwrap_or_else(|| "-".to_string());
@@ -314,23 +247,9 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
         let change = last.total - first.total;
 
         if change > 0.0 {
-            writeln!(
-                output,
-                "📈 **Improved** by {:.1} points from {} to {}",
-                change,
-                results[0].0,
-                results[results.len() - 1].0
-            )
-            .unwrap();
+            writeln!(output, "📈 **Improved** by {:.1} points from {} to {}", change, results[0].0, results[results.len() - 1].0).unwrap();
         } else if change < 0.0 {
-            writeln!(
-                output,
-                "📉 **Declined** by {:.1} points from {} to {}",
-                change.abs(),
-                results[0].0,
-                results[results.len() - 1].0
-            )
-            .unwrap();
+            writeln!(output, "📉 **Declined** by {:.1} points from {} to {}", change.abs(), results[0].0, results[results.len() - 1].0).unwrap();
         } else {
             writeln!(output, "➡️ **Stable** - no significant change").unwrap();
         }

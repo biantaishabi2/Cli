@@ -17,12 +17,7 @@ pub struct CodeQualityDimension {
 }
 
 impl CodeQualityDimension {
-    pub fn new(
-        weight: f64,
-        blocking: bool,
-        threshold: f64,
-        smell_report_path: Option<String>,
-    ) -> Self {
+    pub fn new(weight: f64, blocking: bool, threshold: f64, smell_report_path: Option<String>) -> Self {
         Self {
             weight,
             blocking,
@@ -38,10 +33,10 @@ impl CodeQualityDimension {
             Some(p) => p,
             None => return Ok(vec![]),
         };
-        let content =
-            fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
-        let reports: Vec<SmellReport> =
-            serde_json::from_str(&content).map_err(|e| format!("cannot parse {}: {}", path, e))?;
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {}", path, e))?;
+        let reports: Vec<SmellReport> = serde_json::from_str(&content)
+            .map_err(|e| format!("cannot parse {}: {}", path, e))?;
         Ok(reports.into_iter().flat_map(|r| r.smells).collect())
     }
 }
@@ -93,8 +88,9 @@ impl ScoringDimension for CodeQualityDimension {
         let warning = smells.iter().filter(|s| s.severity == "warning").count();
         let info = smells.iter().filter(|s| s.severity == "info").count();
 
-        let penalty =
-            (critical as f64 * 20.0) + (error_count as f64 * 10.0) + (warning as f64 * 2.0);
+        let penalty = (critical as f64 * 20.0)
+            + (error_count as f64 * 10.0)
+            + (warning as f64 * 2.0);
 
         let score = (100.0 - penalty).max(0.0);
         // critical smell 存在时直接判定为不通过（blocking 语义）
@@ -212,12 +208,8 @@ mod tests {
     #[test]
     fn empty_smells_returns_100() {
         let f = make_smell_report_file(vec![]);
-        let dim = CodeQualityDimension::new(
-            0.10,
-            true,
-            60.0,
-            Some(f.path().to_str().unwrap().to_string()),
-        );
+        let dim =
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 100.0);
@@ -232,12 +224,8 @@ mod tests {
             make_smell("warning"),
         ];
         let f = make_smell_report_file(smells);
-        let dim = CodeQualityDimension::new(
-            0.10,
-            true,
-            60.0,
-            Some(f.path().to_str().unwrap().to_string()),
-        );
+        let dim =
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 76.0);
@@ -248,12 +236,8 @@ mod tests {
     fn many_critical_floors_at_zero() {
         let smells = (0..10).map(|_| make_smell("critical")).collect();
         let f = make_smell_report_file(smells);
-        let dim = CodeQualityDimension::new(
-            0.10,
-            true,
-            60.0,
-            Some(f.path().to_str().unwrap().to_string()),
-        );
+        let dim =
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
@@ -262,17 +246,14 @@ mod tests {
 
     #[test]
     fn file_not_found_fails_with_zero() {
-        let dim =
-            CodeQualityDimension::new(0.10, true, 60.0, Some("/nonexistent/path.json".to_string()));
+        let dim = CodeQualityDimension::new(0.10, true, 60.0, Some("/nonexistent/path.json".to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
         assert!(!result.passed);
         assert!(!result.issues.is_empty(), "should have an error issue");
         assert!(
-            result.issues[0]
-                .message
-                .contains("Failed to load smell report"),
+            result.issues[0].message.contains("Failed to load smell report"),
             "issue message should indicate load failure"
         );
     }
@@ -281,21 +262,15 @@ mod tests {
     fn invalid_json_fails_with_zero() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(b"not valid json{{{").unwrap();
-        let dim = CodeQualityDimension::new(
-            0.10,
-            true,
-            60.0,
-            Some(f.path().to_str().unwrap().to_string()),
-        );
+        let dim =
+            CodeQualityDimension::new(0.10, true, 60.0, Some(f.path().to_str().unwrap().to_string()));
         let ctx = ScoringContext::default();
         let result = dim.calculate(&ctx);
         assert_eq!(result.score, 0.0);
         assert!(!result.passed);
         assert!(!result.issues.is_empty(), "should have an error issue");
         assert!(
-            result.issues[0]
-                .message
-                .contains("Failed to load smell report"),
+            result.issues[0].message.contains("Failed to load smell report"),
             "issue message should indicate parse failure"
         );
     }

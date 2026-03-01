@@ -31,7 +31,9 @@ pub trait ScoringDimension: Send + Sync {
 }
 
 /// 创建所有启用的维度
-pub fn create_dimensions(config: &ScoringConfig) -> Vec<Box<dyn ScoringDimension>> {
+pub fn create_dimensions(
+    config: &ScoringConfig,
+) -> Vec<Box<dyn ScoringDimension>> {
     let mut dimensions: Vec<Box<dyn ScoringDimension>> = Vec::new();
 
     // 合规性维度

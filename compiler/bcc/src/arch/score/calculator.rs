@@ -147,7 +147,9 @@ impl ScoreCalculator {
     /// 确定通过状态
     fn determine_pass_status(&self, score: f64, blocking_failures: usize) -> bool {
         match self.mode {
-            ScoringMode::Strict => blocking_failures == 0 && score >= self.config.threshold,
+            ScoringMode::Strict => {
+                blocking_failures == 0 && score >= self.config.threshold
+            }
             ScoringMode::Lenient => score >= self.config.threshold,
             ScoringMode::Warning => true, // 警告模式总是通过
         }
@@ -192,8 +194,10 @@ impl ScoreCalculator {
         let mut recommendations = Vec::new();
 
         // 按优先级排序维度问题
-        let mut dim_with_issues: Vec<_> =
-            dimensions.iter().filter(|d| !d.issues.is_empty()).collect();
+        let mut dim_with_issues: Vec<_> = dimensions
+            .iter()
+            .filter(|d| !d.issues.is_empty())
+            .collect();
         dim_with_issues.sort_by(|a, b| {
             // 优先处理 blocking 且分数低的维度
             let a_priority = if a.is_blocking { 1000.0 } else { 0.0 } - a.score;

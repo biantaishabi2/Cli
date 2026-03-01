@@ -192,26 +192,6 @@ bcc arch report \
   --gate-evaluation docs/backend-trace/artifacts/trace2contract/versions/v3-draft/gate-evaluation.tsv \
   --summary docs/backend-trace/artifacts/trace2contract/versions/v3-draft/summary.json \
   --out docs/backend-trace/artifacts/trace2contract/versions/v3-draft/architecture-debt.md
-
-# 5) 从 seed 生成对接产物
-# 兼容模式：沿用原有代码生成（generate-commands.sh + *.ex）
-bcc arch generate \
-  --seed-file docs/backend-trace/module-registry.seed.yaml \
-  --emit code \
-  --output docs/backend-trace/artifacts/arch-generate
-
-# 对接 UniBO：只输出 API Contract，不生成 runtime/controller/resolver
-bcc arch generate \
-  --seed-file docs/backend-trace/module-registry.seed.yaml \
-  --emit api-contract \
-  --output docs/backend-trace/artifacts/arch-generate
-# 输出文件: docs/backend-trace/artifacts/arch-generate/api-contract.json
-
-# 兼容说明：当前版本 emit=all 与 emit=code 等价（冻结语义）
-bcc arch generate \
-  --seed-file docs/backend-trace/module-registry.seed.yaml \
-  --emit all \
-  --output docs/backend-trace/artifacts/arch-generate
 ```
 
 `--detect-injection` 开启后会额外输出 `<version>.relation-classification.json`，每条边包含：
@@ -225,7 +205,6 @@ bcc arch generate \
 兼容性说明：
 - 默认不开启 `--detect-injection`，输出与既有 `target/transition/gates` 一致。
 - `--injection-patterns` 参数已预留，MVP 阶段仅占位，不参与规则匹配。
-- `bcc arch generate --emit api-contract` 缺少 `boundaries[].contracts` 时会报错并非 0 退出。
 
 ### bcc bdd seed
 

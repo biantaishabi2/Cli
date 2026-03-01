@@ -187,7 +187,10 @@ impl ScoringContext {
             if let Some(metric) = row.get("metric") {
                 match metric.as_str() {
                     "directed_density_pct" => {
-                        if let Ok(v) = row.get("actual").unwrap_or(&"0".to_string()).parse::<f64>()
+                        if let Ok(v) = row
+                            .get("actual")
+                            .unwrap_or(&"0".to_string())
+                            .parse::<f64>()
                         {
                             directed_density_pct = v;
                         }
@@ -228,7 +231,9 @@ impl ScoringContext {
         })
     }
 
-    fn build_gate_checks(rows: &[HashMap<String, String>]) -> Result<Vec<GateCheckData>, String> {
+    fn build_gate_checks(
+        rows: &[HashMap<String, String>],
+    ) -> Result<Vec<GateCheckData>, String> {
         let mut checks = Vec::new();
 
         for row in rows {
@@ -264,11 +269,7 @@ impl ScoringContext {
     }
 
     /// 获取特定配置文件的检查
-    pub fn get_gate_check_for_profile(
-        &self,
-        profile: &str,
-        metric: &str,
-    ) -> Option<&GateCheckData> {
+    pub fn get_gate_check_for_profile(&self, profile: &str, metric: &str) -> Option<&GateCheckData> {
         self.gate_checks
             .iter()
             .find(|g| g.profile == profile && g.metric == metric)

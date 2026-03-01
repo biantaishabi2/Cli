@@ -49,10 +49,8 @@ fn run_bcc(args: &[&str]) -> Result<String, String> {
     if output.status.success() {
         Ok(stdout + &stderr)
     } else {
-        Err(format!(
-            "bcc failed: {}\nstdout: {}\nstderr: {}",
-            output.status, stdout, stderr
-        ))
+        Err(format!("bcc failed: {}\nstdout: {}\nstderr: {}", 
+            output.status, stdout, stderr))
     }
 }
 
@@ -68,12 +66,8 @@ fn e2e_full_workflow_openclaw() {
         }
     };
 
-    assert!(
-        repo_path.exists(),
-        "Test repo should exist at {:?}",
-        repo_path
-    );
-
+    assert!(repo_path.exists(), "Test repo should exist at {:?}", repo_path);
+    
     let repo_id = "local/openclaw-full";
     let temp_dir = tempfile::tempdir().unwrap();
     let ast_output = temp_dir.path().join("ast.json");
@@ -84,12 +78,9 @@ fn e2e_full_workflow_openclaw() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "python",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Failed to extract AST");
+        "--lang", "python",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Failed to extract AST");
 
     assert!(ast_output.exists(), "AST output file should be created");
     println!("✓ AST extracted to {:?}", ast_output);
@@ -97,31 +88,22 @@ fn e2e_full_workflow_openclaw() {
     // Step 2: Build index
     println!("Step 2: Building index for {}", repo_id);
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Failed to build index");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Failed to build index");
 
     println!("✓ Index built for {}", repo_id);
 
     // Step 3: List repos to verify
     println!("Step 3: Verifying index");
-    let list_output = run_bcc(&["graph", "list"]).expect("Failed to list repos");
-
-    assert!(
-        list_output.contains(repo_id),
-        "Repo should be in index list"
-    );
+    let list_output = run_bcc(&["graph", "list"])
+        .expect("Failed to list repos");
+    
+    assert!(list_output.contains(repo_id), "Repo should be in index list");
     println!("✓ Repo found in index");
 
     // Step 4: Query a function (if any exist)
@@ -144,11 +126,16 @@ fn e2e_index_performance() {
 
     // 统计仓库规模
     let output = Command::new("find")
-        .args(&[&repo_path.to_string_lossy(), "-name", "*.py"])
+        .args(&[
+            &repo_path.to_string_lossy(),
+            "-name", "*.py",
+        ])
         .output()
         .expect("Failed to count source files");
 
-    let file_count = String::from_utf8_lossy(&output.stdout).lines().count();
+    let file_count = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .count();
 
     println!("Repository has {} Python files", file_count);
 
@@ -158,47 +145,35 @@ fn e2e_index_performance() {
     let repo_id = "local/openclaw-full-perf";
 
     let start = std::time::Instant::now();
-
+    
     // Extract
     run_bcc(&[
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "python",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "python",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     // Build index
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     let duration = start.elapsed();
     println!("Indexed {} files in {:?}", file_count, duration);
-
+    
     // 断言性能指标（根据文件数动态调整）
     let expected_max_secs = (file_count as u64).max(10); // 至少10秒，或按文件数
     assert!(
         duration.as_secs() < expected_max_secs,
         "Indexing {} files took {:?}, expected < {} seconds",
-        file_count,
-        duration,
-        expected_max_secs
+        file_count, duration, expected_max_secs
     );
 }
 
@@ -221,9 +196,7 @@ fn e2e_arch_validation() {
     let violations_path = temp_dir.path().join("violations.json");
 
     // 创建 target-matrix.yaml
-    std::fs::write(
-        &matrix_path,
-        r#"
+    std::fs::write(&matrix_path, r#"
 layers:
   - name: api
     patterns:
@@ -244,49 +217,33 @@ allowed_deps:
     to: service
   - from: service
     to: dao
-"#,
-    )
-    .expect("Failed to write target matrix");
+"#).expect("Failed to write target matrix");
 
     // Extract and index
     run_bcc(&[
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "python",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "python",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     // Run arch validation
     println!("Running arch validation for {}", repo_id);
     let result = run_bcc(&[
-        "graph",
-        "validate-arch",
-        "--repo",
-        repo_id,
-        "--target",
-        &matrix_path.to_string_lossy(),
-        "--output",
-        &violations_path.to_string_lossy(),
+        "graph", "validate-arch",
+        "--repo", repo_id,
+        "--target", &matrix_path.to_string_lossy(),
+        "--output", &violations_path.to_string_lossy()
     ]);
 
     match result {
@@ -296,7 +253,8 @@ allowed_deps:
 
     // Check if violations file was created
     if violations_path.exists() {
-        let content = std::fs::read_to_string(&violations_path).expect("Failed to read violations");
+        let content = std::fs::read_to_string(&violations_path)
+            .expect("Failed to read violations");
         println!("Violations: {}", content);
     }
 }
@@ -322,45 +280,30 @@ fn e2e_search_functionality() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "python",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "python",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     // Test search
     println!("Testing search functionality");
-
+    
     // Search for callers/callees (using a dummy function ID)
     // In real test, we'd use actual function IDs from openclaw
     let search_result = run_bcc(&[
-        "graph",
-        "search",
-        "--repo",
-        repo_id,
-        "--id",
-        "openclaw/agent/tools/registry.py#register_tool#1",
-        "--depth",
-        "2",
-        "--include",
-        "callers,callees",
+        "graph", "search",
+        "--repo", repo_id,
+        "--id", "openclaw/agent/tools/registry.py#register_tool#1",
+        "--depth", "2",
+        "--include", "callers,callees"
     ]);
 
     match search_result {
@@ -382,7 +325,10 @@ fn e2e_verify_openclaw_structure() {
     };
 
     // 验证 openclaw 的关键文件存在
-    let key_files = vec!["src/index.ts", "src/agents"];
+    let key_files = vec![
+        "src/index.ts",
+        "src/agents",
+    ];
 
     for file in key_files {
         let full_path = repo_path.join(file);
@@ -421,104 +367,64 @@ fn e2e_module_deps_query() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "typescript",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Failed to extract AST");
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Failed to extract AST");
 
     // Step 2: Build index
     println!("Step 2: Building index");
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Failed to build index");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Failed to build index");
 
     // Step 3: Query module info
     println!("Step 3: Querying module info");
     let module_output = run_bcc(&[
-        "graph",
-        "module",
-        "--repo",
-        repo_id,
-        "--id",
-        "src/index.ts",
-        "--by",
-        "id",
-    ])
-    .expect("Failed to query module");
-
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/index.ts",
+        "--by", "id"
+    ]).expect("Failed to query module");
+    
     println!("Module info:\n{}", module_output);
-    assert!(
-        module_output.contains("src/index.ts"),
-        "Should show module ID"
-    );
+    assert!(module_output.contains("src/index.ts"), "Should show module ID");
     assert!(module_output.contains("Lines:"), "Should show line count");
-    assert!(
-        module_output.contains("Exports:"),
-        "Should show exports count"
-    );
-    assert!(
-        module_output.contains("Imports:"),
-        "Should show imports count"
-    );
+    assert!(module_output.contains("Exports:"), "Should show exports count");
+    assert!(module_output.contains("Imports:"), "Should show imports count");
 
     // Step 4: Query module dependencies
     println!("Step 4: Querying module dependencies");
     let deps_output = run_bcc(&[
-        "graph",
-        "module",
-        "--repo",
-        repo_id,
-        "--id",
-        "src/index.ts",
-        "--by",
-        "deps",
-        "--depth",
-        "1",
-    ])
-    .expect("Failed to query dependencies");
-
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/index.ts",
+        "--by", "deps",
+        "--depth", "1"
+    ]).expect("Failed to query dependencies");
+    
     println!("Dependencies:\n{}", deps_output);
-    assert!(
-        deps_output.contains("Found") && deps_output.contains("dependencies"),
-        "Should show dependency count"
-    );
+    assert!(deps_output.contains("Found") && deps_output.contains("dependencies"), 
+            "Should show dependency count");
 
     // Step 5: Query module dependents
     println!("Step 5: Querying module dependents");
     let dependents_output = run_bcc(&[
-        "graph",
-        "module",
-        "--repo",
-        repo_id,
-        "--id",
-        "src/utils.ts",
-        "--by",
-        "dependents",
-        "--depth",
-        "1",
-    ])
-    .expect("Failed to query dependents");
-
+        "graph", "module",
+        "--repo", repo_id,
+        "--id", "src/utils.ts",
+        "--by", "dependents",
+        "--depth", "1"
+    ]).expect("Failed to query dependents");
+    
     println!("Dependents:\n{}", dependents_output);
     // utils.ts 应该被很多模块依赖
-    assert!(
-        dependents_output.contains("Found") && dependents_output.contains("dependents"),
-        "Should show dependents count"
-    );
+    assert!(dependents_output.contains("Found") && dependents_output.contains("dependents"),
+            "Should show dependents count");
 
     println!("✓ Module dependency E2E test passed");
 }
@@ -544,28 +450,18 @@ fn e2e_module_deps_stats() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "typescript",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     let build_output = run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     println!("Build output:\n{}", build_output);
 
@@ -580,22 +476,16 @@ fn e2e_module_deps_stats() {
     let modules_count = extract_number(&build_output, "Indexed ", " modules");
     let deps_count = extract_number(&build_output, "modules, ", " module deps");
 
-    println!(
-        "Stats: {} modules, {} module dependencies",
-        modules_count, deps_count
-    );
+    println!("Stats: {} modules, {} module dependencies", modules_count, deps_count);
 
     // 验证模块依赖边数量合理（应该远多于调用边）
     assert!(modules_count > 0, "Should have modules");
     assert!(deps_count > 0, "Should have module dependencies");
-
+    
     // 模块依赖通常比模块数量多（平均每个模块导入多个其他模块）
     let avg_deps_per_module = deps_count as f64 / modules_count as f64;
-    println!(
-        "Average dependencies per module: {:.2}",
-        avg_deps_per_module
-    );
-
+    println!("Average dependencies per module: {:.2}", avg_deps_per_module);
+    
     // 通常每个 TypeScript 文件会导入 3-10 个模块
     assert!(
         avg_deps_per_module >= 1.0 && avg_deps_per_module <= 50.0,
@@ -625,53 +515,33 @@ fn e2e_module_deps_recursive_depth() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "typescript",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     // 测试不同深度的依赖查询
     for depth in [1, 2, 3] {
         println!("Testing depth={}", depth);
-
+        
         let output = run_bcc(&[
-            "graph",
-            "module",
-            "--repo",
-            repo_id,
-            "--id",
-            "src/index.ts",
-            "--by",
-            "deps",
-            "--depth",
-            &depth.to_string(),
-        ])
-        .expect(&format!("Failed to query deps with depth={}", depth));
+            "graph", "module",
+            "--repo", repo_id,
+            "--id", "src/index.ts",
+            "--by", "deps",
+            "--depth", &depth.to_string()
+        ]).expect(&format!("Failed to query deps with depth={}", depth));
 
-        println!(
-            "Depth {} result: {}",
-            depth,
-            output.lines().next().unwrap_or("")
-        );
-
+        println!("Depth {} result: {}", depth, output.lines().next().unwrap_or(""));
+        
         // depth 越大，找到的依赖应该越多（或相等）
         assert!(output.contains("Found"), "Should show result count");
     }
@@ -700,37 +570,34 @@ fn e2e_module_circular_detection() {
         "extract",
         &repo_path.to_string_lossy(),
         "--batch",
-        "--lang",
-        "typescript",
-        "--output",
-        &ast_output.to_string_lossy(),
-    ])
-    .expect("Extract failed");
+        "--lang", "typescript",
+        "--output", &ast_output.to_string_lossy()
+    ]).expect("Extract failed");
 
     run_bcc(&[
-        "graph",
-        "build",
-        "--repo",
-        repo_id,
-        "--name",
-        "openclaw",
-        "--path",
-        &repo_path.to_string_lossy(),
-        "--input",
-        &ast_output.to_string_lossy(),
-        "--commit",
-        "HEAD",
-    ])
-    .expect("Build index failed");
+        "graph", "build",
+        "--repo", repo_id,
+        "--name", "openclaw",
+        "--path", &repo_path.to_string_lossy(),
+        "--input", &ast_output.to_string_lossy(),
+        "--commit", "HEAD"
+    ]).expect("Build index failed");
 
     // 对一些常见模块检测循环依赖
-    let test_modules = vec!["src/index.ts", "src/utils.ts", "src/config/config.ts"];
+    let test_modules = vec![
+        "src/index.ts",
+        "src/utils.ts",
+        "src/config/config.ts",
+    ];
 
     for module_id in test_modules {
         println!("Checking circular deps for: {}", module_id);
-
+        
         let output = run_bcc(&[
-            "graph", "module", "--repo", repo_id, "--id", module_id, "--by", "circular",
+            "graph", "module",
+            "--repo", repo_id,
+            "--id", module_id,
+            "--by", "circular"
         ]);
 
         match output {
@@ -738,8 +605,8 @@ fn e2e_module_circular_detection() {
                 println!("{}", result);
                 // 不管有没有循环，命令应该成功执行
                 assert!(
-                    result.contains("Circular dependency detected")
-                        || result.contains("No circular dependencies"),
+                    result.contains("Circular dependency detected") || 
+                    result.contains("No circular dependencies"),
                     "Should report circular detection result"
                 );
             }

@@ -142,8 +142,7 @@ impl LayeringDimension {
                 "Review layer definitions and ensure they align with the architecture".to_string(),
             );
             suggestions.push(
-                "Consider introducing intermediate layers or facades to resolve violations"
-                    .to_string(),
+                "Consider introducing intermediate layers or facades to resolve violations".to_string(),
             );
             suggestions.push(
                 "Apply the Dependency Inversion Principle for cross-layer dependencies".to_string(),
@@ -251,18 +250,9 @@ mod tests {
     fn create_config() -> LayeringDimensionConfig {
         LayeringDimensionConfig {
             layers: vec![
-                LayerDefinition {
-                    name: "api".to_string(),
-                    precedence: 1,
-                },
-                LayerDefinition {
-                    name: "service".to_string(),
-                    precedence: 2,
-                },
-                LayerDefinition {
-                    name: "dao".to_string(),
-                    precedence: 3,
-                },
+                LayerDefinition { name: "api".to_string(), precedence: 1 },
+                LayerDefinition { name: "service".to_string(), precedence: 2 },
+                LayerDefinition { name: "dao".to_string(), precedence: 3 },
             ],
             allowed_transitions: vec![
                 ("api".to_string(), "service".to_string()),
@@ -295,9 +285,7 @@ mod tests {
     #[test]
     fn test_explicit_allowed() {
         let mut config = create_config();
-        config
-            .allowed_transitions
-            .push(("dao".to_string(), "api".to_string()));
+        config.allowed_transitions.push(("dao".to_string(), "api".to_string()));
         let dim = LayeringDimension::new(0.25, true, config);
 
         // 显式允许的转换应该通过
@@ -307,9 +295,7 @@ mod tests {
     #[test]
     fn test_explicit_forbidden() {
         let mut config = create_config();
-        config
-            .forbidden_transitions
-            .push(("api".to_string(), "dao".to_string()));
+        config.forbidden_transitions.push(("api".to_string(), "dao".to_string()));
         let dim = LayeringDimension::new(0.25, true, config);
 
         // 显式禁止的转换应该失败，即使默认允许

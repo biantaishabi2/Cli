@@ -118,8 +118,8 @@ pub fn bayesian_update(
     };
 
     // P(H|E) = P(H) × L / (P(H) × L + (1-P(H)) × (1-L))
-    let posterior =
-        (prior * likelihood) / (prior * likelihood + (1.0 - prior) * (1.0 - likelihood));
+    let posterior = (prior * likelihood)
+        / (prior * likelihood + (1.0 - prior) * (1.0 - likelihood));
     hypothesis.posterior = posterior.clamp(0.0, 1.0);
     hypothesis.evidence_count += 1;
     hypothesis.verdict = classify_verdict(hypothesis.posterior, options);
@@ -186,8 +186,12 @@ pub fn reduce_with_options(
         let bucket = grouped.entry(evidence.conclusion_id).or_default();
         bucket.total_weight += w;
         match evidence.relation {
-            EvidenceRelation::Supports => bucket.supports.push((evidence.evidence_id, effective)),
-            EvidenceRelation::Conflicts => bucket.conflicts.push((evidence.evidence_id, effective)),
+            EvidenceRelation::Supports => bucket
+                .supports
+                .push((evidence.evidence_id, effective)),
+            EvidenceRelation::Conflicts => bucket
+                .conflicts
+                .push((evidence.evidence_id, effective)),
         }
     }
 
@@ -253,28 +257,15 @@ pub fn reduce_with_options(
         }
         verdict_order(&a.verdict)
             .cmp(&verdict_order(&b.verdict))
-            .then_with(|| {
-                a.confidence
-                    .partial_cmp(&b.confidence)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .then_with(|| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
             .then_with(|| a.conclusion_id.cmp(&b.conclusion_id))
     });
 
     let summary = ResearchSummary {
         total: conclusions.len(),
-        act_count: conclusions
-            .iter()
-            .filter(|c| c.verdict == Verdict::Act)
-            .count(),
-        investigate_count: conclusions
-            .iter()
-            .filter(|c| c.verdict == Verdict::Investigate)
-            .count(),
-        contested_count: conclusions
-            .iter()
-            .filter(|c| c.verdict == Verdict::Contested)
-            .count(),
+        act_count: conclusions.iter().filter(|c| c.verdict == Verdict::Act).count(),
+        investigate_count: conclusions.iter().filter(|c| c.verdict == Verdict::Investigate).count(),
+        contested_count: conclusions.iter().filter(|c| c.verdict == Verdict::Contested).count(),
     };
 
     let mut rules_hit = vec!["research.reduce.supports_merge".to_string()];
@@ -284,10 +275,7 @@ pub fn reduce_with_options(
     rules_hit.push("research.reduce.verdict_classify".to_string());
 
     Ok((
-        ResearchGraph {
-            conclusions,
-            summary,
-        },
+        ResearchGraph { conclusions, summary },
         Diagnostics {
             rules_hit,
             conflicts: diagnostics_conflicts,
@@ -407,11 +395,7 @@ mod tests {
         //   drift = 0.8/(2×1.0) = 0.4 → confidence = 0.9
         let input_deduction = ResearchInput {
             evidences: vec![ev_bond(
-                "e1",
-                "c1",
-                EvidenceRelation::Supports,
-                0.8,
-                BondType::Deduction,
+                "e1", "c1", EvidenceRelation::Supports, 0.8, BondType::Deduction,
             )],
         };
         let (g1, _) = reduce(input_deduction).expect("deduction");
@@ -421,27 +405,9 @@ mod tests {
         // 相同 confidence，但这是 3 条弱证据才达到 1 条强证据的效果
         let input_exploration = ResearchInput {
             evidences: vec![
-                ev_bond(
-                    "e1",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.8,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "e2",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.8,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "e3",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.8,
-                    BondType::Exploration,
-                ),
+                ev_bond("e1", "c1", EvidenceRelation::Supports, 0.8, BondType::Exploration),
+                ev_bond("e2", "c1", EvidenceRelation::Supports, 0.8, BondType::Exploration),
+                ev_bond("e3", "c1", EvidenceRelation::Supports, 0.8, BondType::Exploration),
             ],
         };
         let (g2, _) = reduce(input_exploration).expect("exploration");
@@ -461,48 +427,12 @@ mod tests {
         // 虽然 5 条反对，但因为是 exploration，只拉到 0.41，不会一边倒
         let input = ResearchInput {
             evidences: vec![
-                ev_bond(
-                    "strong",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.9,
-                    BondType::Deduction,
-                ),
-                ev_bond(
-                    "weak1",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.9,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "weak2",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.9,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "weak3",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.9,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "weak4",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.9,
-                    BondType::Exploration,
-                ),
-                ev_bond(
-                    "weak5",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.9,
-                    BondType::Exploration,
-                ),
+                ev_bond("strong", "c1", EvidenceRelation::Supports, 0.9, BondType::Deduction),
+                ev_bond("weak1", "c1", EvidenceRelation::Conflicts, 0.9, BondType::Exploration),
+                ev_bond("weak2", "c1", EvidenceRelation::Conflicts, 0.9, BondType::Exploration),
+                ev_bond("weak3", "c1", EvidenceRelation::Conflicts, 0.9, BondType::Exploration),
+                ev_bond("weak4", "c1", EvidenceRelation::Conflicts, 0.9, BondType::Exploration),
+                ev_bond("weak5", "c1", EvidenceRelation::Conflicts, 0.9, BondType::Exploration),
             ],
         };
         let (graph, _) = reduce(input).expect("reduce");
@@ -515,27 +445,9 @@ mod tests {
     fn verification_conflicts_amplify_doubt() {
         let input = ResearchInput {
             evidences: vec![
-                ev_bond(
-                    "d1",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.8,
-                    BondType::Deduction,
-                ),
-                ev_bond(
-                    "d2",
-                    "c1",
-                    EvidenceRelation::Supports,
-                    0.8,
-                    BondType::Deduction,
-                ),
-                ev_bond(
-                    "v1",
-                    "c1",
-                    EvidenceRelation::Conflicts,
-                    0.8,
-                    BondType::Verification,
-                ),
+                ev_bond("d1", "c1", EvidenceRelation::Supports, 0.8, BondType::Deduction),
+                ev_bond("d2", "c1", EvidenceRelation::Supports, 0.8, BondType::Deduction),
+                ev_bond("v1", "c1", EvidenceRelation::Conflicts, 0.8, BondType::Verification),
             ],
         };
         let (graph, _) = reduce(input).expect("reduce");
@@ -607,13 +519,7 @@ mod tests {
         // exploration 的 supports 对 posterior 影响很小
         let mut hyp = mk_hyp(0.5);
         let options = ReduceOptions::default();
-        let e = ev_bond(
-            "e1",
-            "h1",
-            EvidenceRelation::Supports,
-            0.8,
-            BondType::Exploration,
-        );
+        let e = ev_bond("e1", "h1", EvidenceRelation::Supports, 0.8, BondType::Exploration);
         bayesian_update(&mut hyp, &e, &options);
         // exploration weight=0.3, effective=0.24 → likelihood=0.62 → posterior≈0.62
         assert!(hyp.posterior > 0.5);

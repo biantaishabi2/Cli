@@ -326,9 +326,7 @@ end
     assert!(sc_hints.iter().any(|h| h.target == "Registry"));
     assert!(sc_hints.iter().any(|h| h.target == "DynamicSupervisor"));
     assert!(sc_hints.iter().any(|h| h.target == "MyApp.Worker"));
-    assert!(sc_hints
-        .iter()
-        .all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
+    assert!(sc_hints.iter().all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
 }
 
 #[test]
@@ -351,12 +349,8 @@ end
         .iter()
         .filter(|h| h.call_type_hint == "genserver_runtime_dep")
         .collect();
-    assert!(gs_hints
-        .iter()
-        .any(|h| h.target == "MyApp.Agent" && h.via == "handle_call"));
-    assert!(gs_hints
-        .iter()
-        .any(|h| h.target == "MyApp.Stream" && h.via == "handle_call"));
+    assert!(gs_hints.iter().any(|h| h.target == "MyApp.Agent" && h.via == "handle_call"));
+    assert!(gs_hints.iter().any(|h| h.target == "MyApp.Stream" && h.via == "handle_call"));
 }
 
 #[test]
@@ -379,14 +373,10 @@ end
         .collect();
     assert!(cb_hints.iter().any(|h| h.target == "llm_backend"));
     assert!(cb_hints.iter().any(|h| h.target == "compaction_strategy"));
-    assert!(cb_hints
-        .iter()
-        .all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+    assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
     // via 字段应包含 key 名
     assert!(cb_hints.iter().any(|h| h.via.contains("llm_backend")));
-    assert!(cb_hints
-        .iter()
-        .any(|h| h.via.contains("compaction_strategy")));
+    assert!(cb_hints.iter().any(|h| h.via.contains("compaction_strategy")));
 }
 
 #[test]

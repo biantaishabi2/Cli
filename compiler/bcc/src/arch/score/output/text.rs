@@ -14,20 +14,8 @@ pub fn format(score: &ArchitectureScore, verbose: bool) -> Result<String, String
     writeln!(output).unwrap();
 
     // 总体得分
-    writeln!(
-        output,
-        "Overall Score: {:.1}/100 ({})",
-        score.total,
-        format_grade(score.grade)
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "Status: {} {}",
-        format_status(score.passed),
-        if score.passed { "PASSED" } else { "FAILED" }
-    )
-    .unwrap();
+    writeln!(output, "Overall Score: {:.1}/100 ({})", score.total, format_grade(score.grade)).unwrap();
+    writeln!(output, "Status: {} {}", format_status(score.passed), if score.passed { "PASSED" } else { "FAILED" }).unwrap();
     writeln!(output, "Mode: {}", score.mode).unwrap();
     writeln!(output).unwrap();
 
@@ -50,8 +38,7 @@ pub fn format(score: &ArchitectureScore, verbose: bool) -> Result<String, String
             dim.weight * 100.0,
             dim.contribution,
             blocking_marker
-        )
-        .unwrap();
+        ).unwrap();
     }
     writeln!(output).unwrap();
 
@@ -68,30 +55,21 @@ pub fn format(score: &ArchitectureScore, verbose: bool) -> Result<String, String
         score.summary.error_issues,
         score.summary.warning_issues,
         score.summary.info_issues
-    )
-    .unwrap();
+    ).unwrap();
     writeln!(output).unwrap();
 
     // 详细问题（如果 verbose 或有失败）
     if verbose || !score.passed {
         for dim in &score.dimensions {
             if !dim.issues.is_empty() {
-                writeln!(
-                    output,
-                    "[{}] {} ({:.1}/100):",
-                    if dim.passed { "✓" } else { "✗" },
-                    dim.display_name,
-                    dim.score
-                )
-                .unwrap();
+                writeln!(output, "[{}] {} ({:.1}/100):", if dim.passed { "✓" } else { "✗" }, dim.display_name, dim.score).unwrap();
                 for issue in &dim.issues {
                     writeln!(
                         output,
                         "  {} {}",
                         format_severity(issue.severity),
                         issue.message
-                    )
-                    .unwrap();
+                    ).unwrap();
                     if let Some(location) = &issue.location {
                         writeln!(output, "     Location: {}", location).unwrap();
                     }
