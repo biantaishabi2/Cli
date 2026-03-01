@@ -2,8 +2,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use taskctl::{
-    research, BondType, ContractResult, CoreResponse, EvidenceRelation, ResearchEvidence,
-    ResearchInput,
+    BondType, ContractResult, CoreResponse, EvidenceRelation, ResearchEvidence, ResearchInput,
+    research,
 };
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -36,9 +36,11 @@ fn research_success_fixture_outputs_graph() {
     assert_eq!(json["schema_version"], Value::String("1.0".to_string()));
     assert_eq!(json["result"], Value::String("ok".to_string()));
     assert!(json["graph"].is_object());
-    assert!(json["diagnostics"]["conflicts"]
-        .as_array()
-        .is_some_and(|arr| arr.is_empty()));
+    assert!(
+        json["diagnostics"]["conflicts"]
+            .as_array()
+            .is_some_and(|arr| arr.is_empty())
+    );
 }
 
 #[test]
@@ -67,11 +69,13 @@ fn research_conflict_produces_diagnostics() {
 
     assert_eq!(response.result, ContractResult::Ok);
     assert_eq!(response.schema_version, "1.0");
-    assert!(response
-        .diagnostics
-        .conflicts
-        .iter()
-        .any(|c| c.left == "ev-support" && c.right == "ev-conflict"));
+    assert!(
+        response
+            .diagnostics
+            .conflicts
+            .iter()
+            .any(|c| c.left == "ev-support" && c.right == "ev-conflict")
+    );
 }
 
 #[test]

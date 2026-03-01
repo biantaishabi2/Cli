@@ -1,0 +1,15 @@
+version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: invoice
+        kind: crud
+        fields:
+          amount: decimal
+          buyer_id: uuid

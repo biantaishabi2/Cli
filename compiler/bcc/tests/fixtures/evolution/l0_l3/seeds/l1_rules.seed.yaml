@@ -1,0 +1,27 @@
+version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+  - module_id: risk
+    precedence: 2
+    path_rules:
+      include: ["src/risk/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: invoice
+        kind: crud
+        fields:
+          amount: decimal
+          buyer_id: uuid
+  - module_id: risk
+    contracts:
+      - name: validate_invoice
+        kind: query
+        input:
+          invoice_id: uuid
+        output:
+          valid: boolean

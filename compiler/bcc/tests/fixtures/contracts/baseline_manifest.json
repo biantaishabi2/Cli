@@ -1,0 +1,133 @@
+{
+  "bridgeVersion": "1.0.0",
+  "targetRuntimeVersion": "1.x",
+  "compatVersion": "1",
+  "producer": {
+    "name": "bcc",
+    "version": "0.1.0"
+  },
+  "seedVersion": "v3",
+  "generatedAt": "<normalized-generated-at>",
+  "contracts": [
+    {
+      "contractKey": "account.list_users",
+      "moduleId": "account",
+      "name": "list_users",
+      "sourceKind": "query",
+      "graphqlKind": "query",
+      "fields": {
+        "page": "integer",
+        "users": "array"
+      },
+      "actions": [
+        {
+          "actionKey": "list_users",
+          "action": "list_users",
+          "graphqlKind": "query",
+          "input": {
+            "page": "integer"
+          },
+          "output": {
+            "users": "array"
+          }
+        }
+      ]
+    },
+    {
+      "contractKey": "billing.create_invoice",
+      "moduleId": "billing",
+      "name": "create_invoice",
+      "sourceKind": "command",
+      "graphqlKind": "mutation",
+      "fields": {
+        "invoice_id": "uuid",
+        "order_id": "uuid"
+      },
+      "actions": [
+        {
+          "actionKey": "create_invoice",
+          "action": "create_invoice",
+          "graphqlKind": "mutation",
+          "input": {
+            "order_id": "uuid"
+          },
+          "output": {
+            "invoice_id": "uuid"
+          }
+        }
+      ]
+    },
+    {
+      "contractKey": "billing.invoice",
+      "moduleId": "billing",
+      "name": "invoice",
+      "sourceKind": "crud",
+      "graphqlKind": "mixed",
+      "fields": {
+        "amount": "decimal",
+        "buyer_id": "uuid"
+      },
+      "actions": [
+        {
+          "actionKey": "create",
+          "action": "create",
+          "graphqlKind": "mutation",
+          "input": {
+            "amount": "decimal",
+            "buyer_id": "uuid"
+          },
+          "output": {
+            "amount": "decimal",
+            "buyer_id": "uuid"
+          }
+        },
+        {
+          "actionKey": "delete",
+          "action": "delete",
+          "graphqlKind": "mutation",
+          "input": {
+            "id": "uuid"
+          },
+          "output": {
+            "deleted": "boolean"
+          }
+        },
+        {
+          "actionKey": "list",
+          "action": "list",
+          "graphqlKind": "query",
+          "input": {},
+          "output": {
+            "items": "array"
+          }
+        },
+        {
+          "actionKey": "read",
+          "action": "read",
+          "graphqlKind": "query",
+          "input": {
+            "id": "uuid"
+          },
+          "output": {
+            "amount": "decimal",
+            "buyer_id": "uuid"
+          }
+        },
+        {
+          "actionKey": "update",
+          "action": "update",
+          "graphqlKind": "mutation",
+          "input": {
+            "amount": "decimal",
+            "buyer_id": "uuid",
+            "id": "uuid"
+          },
+          "output": {
+            "amount": "decimal",
+            "buyer_id": "uuid"
+          }
+        }
+      ]
+    }
+  ]
+}

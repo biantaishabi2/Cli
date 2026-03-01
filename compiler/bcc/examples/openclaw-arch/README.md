@@ -17,6 +17,7 @@
 | `seed/v3.target-matrix.yaml` | 目标架构：允许/禁止的模块关系 | `arch matrix` 输入 |
 | `seed/v3.transition-matrix.yaml` | 过渡规则：迁移期临时放行 | `arch validate` 输入 |
 | `seed/v3.gates.yaml` | 门禁阈值：unexpected/forbidden 上限 | `arch validate` 输入 |
+| `seed/v3.complexity-sampling.yaml` | L0-L3 复杂度采样基线 | 集成门禁阈值校准输入 |
 | `artifacts/module_map.json` | 文件→模块映射（1685 文件） | `extract` 产物 |
 | `artifacts/relation_matrix.actual.json` | 实际依赖关系 | `arch validate` 输入 |
 | `versions/v3-draft/gate-evaluation.tsv` | 门禁评估结果 | `arch validate` 输出 |
@@ -114,7 +115,8 @@ openclaw-arch/
 │   ├── v2.research-matrix.yaml        # 研究阶段矩阵
 │   ├── v3.target-matrix.yaml          # ★ 目标架构（生产用）
 │   ├── v3.transition-matrix.yaml      # ★ 过渡规则（生产用）
-│   └── v3.gates.yaml                  # ★ 门禁阈值（生产用）
+│   ├── v3.gates.yaml                  # ★ 门禁阈值（生产用）
+│   └── v3.complexity-sampling.yaml    # L0-L3 复杂度采样输入
 │
 ├── artifacts/                         # 分析产物（工具生成）
 │   ├── module_map.json               # 文件路径 → 模块名

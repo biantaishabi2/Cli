@@ -72,21 +72,14 @@ impl CoverageDimension {
         let mut suggestions = Vec::new();
 
         if bdd < self.config.min_bdd_coverage {
-            suggestions.push(
-                "Add BDD scenarios for uncovered architectural flows".to_string(),
-            );
-            suggestions.push(
-                "Prioritize critical path scenarios first".to_string(),
-            );
+            suggestions.push("Add BDD scenarios for uncovered architectural flows".to_string());
+            suggestions.push("Prioritize critical path scenarios first".to_string());
         }
 
         if contract < self.config.min_contract_coverage {
-            suggestions.push(
-                "Implement contract tests for module boundaries".to_string(),
-            );
-            suggestions.push(
-                "Use consumer-driven contract testing for service dependencies".to_string(),
-            );
+            suggestions.push("Implement contract tests for module boundaries".to_string());
+            suggestions
+                .push("Use consumer-driven contract testing for service dependencies".to_string());
         }
 
         if suggestions.is_empty() {

@@ -9,7 +9,9 @@ fn bcc_bin() -> String {
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "bcc_analyze_noise_{}_{}", prefix, std::time::SystemTime::now()
+        "bcc_analyze_noise_{}_{}",
+        prefix,
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis()
@@ -161,12 +163,7 @@ def foo():
 #[test]
 fn unused_import_python() {
     let source = "import os\nx = 1\n";
-    let result = run_analyze_with_python_source(
-        source,
-        "unused_import",
-        &[("os", "import")],
-        &[],
-    );
+    let result = run_analyze_with_python_source(source, "unused_import", &[("os", "import")], &[]);
     let reports: Vec<serde_json::Value> = serde_json::from_value(result).unwrap();
     let smells = reports[0]["smells"].as_array().unwrap();
     assert!(
@@ -260,10 +257,13 @@ def outer():
     let reports: Vec<serde_json::Value> = serde_json::from_value(result).unwrap();
     let smells = reports[0]["smells"].as_array().unwrap();
     // 外层函数几乎没有注释，不应被误报 excessive_comments
-    let excessive = smells.iter().filter(|s| {
-        s["rule"] == "excessive_comments"
-            && s["message"].as_str().unwrap_or("").contains("outer")
-    }).count();
+    let excessive = smells
+        .iter()
+        .filter(|s| {
+            s["rule"] == "excessive_comments"
+                && s["message"].as_str().unwrap_or("").contains("outer")
+        })
+        .count();
     assert_eq!(
         excessive, 0,
         "三级嵌套不应对 outer 触发 excessive_comments 误报, got: {:?}",

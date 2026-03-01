@@ -14,16 +14,16 @@ pub use text::format as format_text;
 pub fn format_progress_bar(score: f64, width: usize) -> String {
     let filled = ((score / 100.0) * width as f64).round() as usize;
     let empty = width - filled;
-    format!(
-        "[{}{}]",
-        "█".repeat(filled),
-        "░".repeat(empty)
-    )
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
 }
 
 /// 格式化状态图标
 pub fn format_status(passed: bool) -> &'static str {
-    if passed { "✅" } else { "❌" }
+    if passed {
+        "✅"
+    } else {
+        "❌"
+    }
 }
 
 /// 格式化严重级别图标

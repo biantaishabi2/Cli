@@ -81,7 +81,14 @@ fn extract_php_class_properties(
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     // 类型标注（如 ?string, int 等）
-                    if matches!(child.kind(), "union_type" | "named_type" | "primitive_type" | "nullable_type" | "optional_type") {
+                    if matches!(
+                        child.kind(),
+                        "union_type"
+                            | "named_type"
+                            | "primitive_type"
+                            | "nullable_type"
+                            | "optional_type"
+                    ) {
                         prop_type = common::node_text(child, source);
                     }
                     if child.kind() == "property_element" {
@@ -95,9 +102,8 @@ fn extract_php_class_properties(
                             // tree-sitter-php 中 property_element 的默认值可能通过 value/default_value field 或 "=" 子节点表示
                             let has_default = child.child_by_field_name("value").is_some()
                                 || child.child_by_field_name("default_value").is_some()
-                                || (0..child.child_count()).any(|k| {
-                                    child.child(k).map_or(false, |c| c.kind() == "=")
-                                });
+                                || (0..child.child_count())
+                                    .any(|k| child.child(k).map_or(false, |c| c.kind() == "="));
                             let is_nullable = prop_type.starts_with('?');
                             if !name.is_empty() {
                                 schema_fields.push(SchemaField {
@@ -411,9 +417,7 @@ fn extract_namespace_use_declaration(
     }
 
     for clause in clauses {
-        if let Some(specifier) =
-            format_namespace_use_clause(clause, source, prefix.as_deref())
-        {
+        if let Some(specifier) = format_namespace_use_clause(clause, source, prefix.as_deref()) {
             imports.push(ImportRecord {
                 specifier,
                 kind: "use".into(),
@@ -429,7 +433,9 @@ fn format_namespace_use_clause(
 ) -> Option<String> {
     let mut target: Option<String> = None;
     for i in 0..clause.child_count() {
-        let Some(child) = clause.child(i) else { continue };
+        let Some(child) = clause.child(i) else {
+            continue;
+        };
         if !child.is_named() {
             continue;
         }
@@ -557,8 +563,16 @@ class Config {
 }
 "#;
         let record = extract(source, "app/Config.php");
-        let a = record.schema_fields.iter().find(|f| f.name == "a").expect("should find $a");
-        let b = record.schema_fields.iter().find(|f| f.name == "b").expect("should find $b");
+        let a = record
+            .schema_fields
+            .iter()
+            .find(|f| f.name == "a")
+            .expect("should find $a");
+        let b = record
+            .schema_fields
+            .iter()
+            .find(|f| f.name == "b")
+            .expect("should find $b");
         // $a 有默认值 → required=false
         assert!(!a.required, "$a has default, should not be required");
         // $b 无默认值 → required=true
