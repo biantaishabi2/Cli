@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,6 +53,75 @@ jobs:
           else
             echo "GATE_FAIL_ON_DANGEROUS=false" >> "$GITHUB_ENV"
           fi
+
+      - name: Enforce baseline/whitelist governance
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const governedFiles = new Set([
+              "compiler/bcc/tests/fixtures/contracts/baseline_manifest.json",
+              "compiler/bcc/tests/fixtures/contracts/whitelist.toml",
+            ]);
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100,
+            });
+
+            const touched = files
+              .map((item) => item.filename)
+              .filter((name) => governedFiles.has(name));
+
+            if (touched.length === 0) {
+              core.info("baseline/whitelist 未变更，跳过治理校验");
+              return;
+            }
+
+            core.notice(`检测到治理文件变更: ${touched.join(", ")}`);
+
+            const prBody = context.payload.pull_request.body || "";
+            const hasScope = /(baseline|whitelist|基线|白名单)/i.test(prBody);
+            const hasReason = /(reason|原因|governance|治理)/i.test(prBody);
+            if (!(hasScope && hasReason)) {
+              core.setFailed(
+                "baseline/whitelist 变更必须在 PR 描述中写明治理原因（需包含 baseline/whitelist 与 reason/原因 关键词）"
+              );
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100,
+            });
+
+            const latestStateByUser = new Map();
+            for (const review of reviews) {
+              const login = review.user?.login;
+              if (!login) {
+                continue;
+              }
+              latestStateByUser.set(login, review.state);
+            }
+
+            const approvers = [...latestStateByUser.entries()]
+              .filter(([, state]) => state === "APPROVED")
+              .map(([login]) => login);
+
+            if (approvers.length === 0) {
+              core.setFailed(
+                "baseline/whitelist 变更至少需要 1 个 APPROVED review 才允许通过门禁"
+              );
+              return;
+            }
+
+            core.info(`治理审批通过，approvers: ${approvers.join(", ")}`);
 
       - name: Run BCC + UniBO gate regression
         run: |
