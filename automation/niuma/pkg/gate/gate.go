@@ -18,10 +18,18 @@ const (
 	integrationGateFailedLabel      = "integration-gate-failed" // 瞬时失败辅助标签：仅表达“当前 gate 阻塞”，恢复后由 control 归一化清理
 	defaultGateScriptRelativePath   = ".github/scripts/niuma-test-gate.sh"
 	defaultNeedsFixCommentTemplate  = "## ❌ Gate 未通过\n\n自动测试门禁失败，已回退为 `bot:pr-needs-fix`，请继续迭代修复。\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`"
+	defaultDeferredCommentTemplate  = "## ⏳ Gate 暂未形成代码失败结论\n\n本轮 gate 失败原因为 `%s`（通常是 checks 未就绪或查询异常），已保留当前状态，不回退 `bot:pr-needs-fix`，避免无效 iterate 循环。\n\n- attempt_key=`%s`"
 	defaultEscalatedCommentTemplate = "## 🚨 Gate 已超限，升级人工处理\n\nintegration gate 失败次数已超过上限，本轮不再触发自动修复。\n\n- retry_count=%d\n- max_retries=%d\n- attempt_key=`%s`"
 )
 
 var ErrGateFailed = errors.New("gate failed")
+
+type FailureClass string
+
+const (
+	FailureClassCode     FailureClass = "code_failure"
+	FailureClassDeferred FailureClass = "deferred"
+)
 
 type RunGateFunc func(ctx context.Context, repoDir string, pr int) (string, error)
 type MarkNeedsFixFunc func(ctx context.Context, repo string, issue int) error
@@ -62,6 +70,8 @@ type Result struct {
 	RetryCount               int
 	MaxRetries               int
 	AttemptKey               string
+	ReasonCode               string
+	FailureClass             FailureClass
 	Escalated                bool
 	EscalationCommentSkipped bool
 }
@@ -116,15 +126,45 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if gateErr == nil {
 		// gate 通过，重置计数
 		result.Passed = true
+		result.ReasonCode = "PASS"
 		if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, 0, ""); err != nil {
 			return result, fmt.Errorf("gate 通过后重置 retry_count 失败: %w", err)
 		}
 		return result, nil
 	}
 
-	attemptKey := buildAttemptKey(r.opts.Issue, r.opts.PR, r.opts.Now(), r.opts.RunID, r.opts.RunAttempt)
+	reasonCode := normalizeReasonCode(extractGateField(gateOutput, "reason_code"))
+	if reasonCode == "" {
+		reasonCode = "UNKNOWN"
+	}
+	result.ReasonCode = reasonCode
+	result.FailureClass = classifyFailureReason(reasonCode)
+
+	headSHA := extractGateField(gateOutput, "head_sha")
+	attemptKey := buildAttemptKey(r.opts.Issue, r.opts.PR, r.opts.Now(), r.opts.RunID, r.opts.RunAttempt, headSHA)
 	result.AttemptKey = attemptKey
 	gateFailure := trimGateError(gateOutput, gateErr)
+
+	// checks 未就绪/查询异常等未决失败，不应触发 pr-needs-fix 循环。
+	if result.FailureClass == FailureClassDeferred {
+		result.RetryCount = 0
+		if err := r.opts.UpsertGateRetryCount(ctx, r.opts.Issue, 0, ""); err != nil {
+			return result, fmt.Errorf("gate 未决场景重置 retry_count 失败: %w", err)
+		}
+		if !r.opts.SelfCheck {
+			commentBody := fmt.Sprintf(defaultDeferredCommentTemplate, result.ReasonCode, attemptKey)
+			if err := r.opts.AddComment(ctx, r.opts.Repo, r.opts.Issue, commentBody); err != nil {
+				return result, fmt.Errorf("%w: gate 未决评论发布失败: %v", ErrGateFailed, err)
+			}
+		}
+		if r.opts.AddPRReview != nil {
+			reviewBody := fmt.Sprintf("## ⏳ Gate 暂未形成代码失败结论\n\n```\n%s\n```\n\n- reason_code=%s\n- attempt_key=`%s`", gateFailure, result.ReasonCode, attemptKey)
+			if err := r.opts.AddPRReview(ctx, r.opts.Repo, r.opts.PR, reviewBody); err != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: gate 未决信息写入 PR review 失败: %v\n", err)
+			}
+		}
+		return result, fmt.Errorf("%w: gate deferred (%s): %s", ErrGateFailed, result.ReasonCode, gateFailure)
+	}
 
 	// 从 marker 读取上次 retry_count（仅同 attempt_key 延续；否则从 0 开始）
 	prevCount, prevAttemptKey, err := r.opts.FindGateRetryState(ctx, r.opts.Issue)
@@ -199,7 +239,10 @@ func runGateScript(ctx context.Context, repoDir string, pr int) (string, error) 
 	return strings.TrimSpace(string(out)), err
 }
 
-func buildAttemptKey(issue, pr int, now time.Time, runID, runAttempt string) string {
+func buildAttemptKey(issue, pr int, now time.Time, runID, runAttempt, headSHA string) string {
+	if sanitizedHead := sanitizeHeadSHA(headSHA); sanitizedHead != "" {
+		return fmt.Sprintf("issue-%d-pr-%d-head-%s", issue, pr, sanitizedHead)
+	}
 	if strings.TrimSpace(runID) != "" {
 		attempt := strings.TrimSpace(runAttempt)
 		if attempt == "" {
@@ -233,4 +276,53 @@ func trimGateError(output string, runErr error) string {
 		return joined
 	}
 	return joined[:maxGateErrorMessageLen]
+}
+
+func classifyFailureReason(reasonCode string) FailureClass {
+	switch normalizeReasonCode(reasonCode) {
+	case
+		"CHECKS_QUERY_FAILED",
+		"REQUIRED_JOBS_PENDING",
+		"PENDING_RETRYING",
+		"PENDING_BLOCKED",
+		"REQUIRED_JOBS_MISSING",
+		"CRITICAL_REGRESSION_MISSING",
+		"INSUFFICIENT_COVERAGE_FOR_HIGH_RISK",
+		"REQUIRED_JOBS_NOT_EXECUTED",
+		"REQUIRED_JOBS_TIMEOUT",
+		"TIMEOUT_RETRYING",
+		"TIMEOUT_BLOCKED":
+		return FailureClassDeferred
+	default:
+		return FailureClassCode
+	}
+}
+
+func normalizeReasonCode(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}
+
+func extractGateField(output, key string) string {
+	wantPrefix := key + "="
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "[gate] ")
+		if line == "" {
+			continue
+		}
+		for _, token := range strings.Fields(line) {
+			if strings.HasPrefix(token, wantPrefix) {
+				return strings.TrimSpace(strings.TrimPrefix(token, wantPrefix))
+			}
+		}
+	}
+	return ""
+}
+
+func sanitizeHeadSHA(raw string) string {
+	head := strings.ToLower(strings.TrimSpace(raw))
+	if head == "" || head == "unknown" {
+		return ""
+	}
+	return head
 }

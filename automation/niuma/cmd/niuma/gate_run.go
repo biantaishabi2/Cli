@@ -170,9 +170,11 @@ func runGateRun(cmd *cobra.Command, args []string) error {
 	if errors.Is(err, gate.ErrGateFailed) {
 		displayRetryCount := retryCountForDisplay(result.RetryCount, result.AttemptKey)
 		fmt.Printf(
-			"gate 未通过: issue=%d pr=%d retry_count=%d max_retries=%d attempt_key=%s escalated=%t dedup=%t\n",
+			"gate 未通过: issue=%d pr=%d reason_code=%s failure_class=%s retry_count=%d max_retries=%d attempt_key=%s escalated=%t dedup=%t\n",
 			flagIssue,
 			flagPR,
+			result.ReasonCode,
+			result.FailureClass,
 			displayRetryCount,
 			result.MaxRetries,
 			result.AttemptKey,

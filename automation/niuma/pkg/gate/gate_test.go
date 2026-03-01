@@ -108,6 +108,8 @@ func TestRunner_FirstFailureMarksNeedsFix(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGateFailed)
 	assert.False(t, result.Passed)
+	assert.Equal(t, "UNKNOWN", result.ReasonCode)
+	assert.Equal(t, FailureClassCode, result.FailureClass)
 	assert.False(t, result.Escalated)
 	assert.Equal(t, defaultAttemptKey(358, 9010), result.AttemptKey)
 	assert.Equal(t, 1, result.RetryCount)
@@ -119,6 +121,75 @@ func TestRunner_FirstFailureMarksNeedsFix(t *testing.T) {
 	assert.Contains(t, comments[0], "retry_count=1")
 	assert.Contains(t, comments[0], "max_retries=2")
 	assert.Contains(t, comments[0], defaultAttemptKey(358, 9010))
+}
+
+func TestRunner_DeferredFailureSkipsNeedsFix(t *testing.T) {
+	markCalled := 0
+	labelCalled := 0
+	issueComments := make([]string, 0, 1)
+	prReviews := make([]string, 0, 1)
+	upsertCalls := make([]struct {
+		count      int
+		attemptKey string
+	}, 0, 1)
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9015,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 2,
+		Now:        fixedNow,
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "[gate] reason_code=CHECKS_QUERY_FAILED\n[gate] head_sha=abc123\n[gate][warning] 查询 PR checks 失败", errors.New("exit status 1")
+		},
+		MarkNeedsFix: func(context.Context, string, int) error {
+			markCalled++
+			return nil
+		},
+		AddLabels: func(context.Context, string, int, []string) error {
+			labelCalled++
+			return nil
+		},
+		AddComment: func(_ context.Context, _ string, _ int, body string) error {
+			issueComments = append(issueComments, body)
+			return nil
+		},
+		FindGateRetryState: func(context.Context, int) (int, string, error) {
+			return 1, "issue-358-pr-9015-head-abc123", nil
+		},
+		UpsertGateRetryCount: func(_ context.Context, _ int, count int, attemptKey string) error {
+			upsertCalls = append(upsertCalls, struct {
+				count      int
+				attemptKey string
+			}{count: count, attemptKey: attemptKey})
+			return nil
+		},
+		HasLabel: func(context.Context, int, string) (bool, error) { return false, nil },
+		AddPRReview: func(_ context.Context, _ string, _ int, body string) error {
+			prReviews = append(prReviews, body)
+			return nil
+		},
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.False(t, result.Passed)
+	assert.Equal(t, "CHECKS_QUERY_FAILED", result.ReasonCode)
+	assert.Equal(t, FailureClassDeferred, result.FailureClass)
+	assert.Equal(t, "issue-358-pr-9015-head-abc123", result.AttemptKey)
+	assert.Equal(t, 0, result.RetryCount, "deferred 场景不应进入自动修复计数")
+	assert.Equal(t, 0, markCalled, "deferred 场景不应回退到 pr-needs-fix")
+	assert.Equal(t, 0, labelCalled, "deferred 场景不应升级标签")
+	require.Len(t, issueComments, 1)
+	assert.Contains(t, issueComments[0], "Gate 暂未形成代码失败结论")
+	assert.Contains(t, issueComments[0], "CHECKS_QUERY_FAILED")
+	require.Len(t, prReviews, 1)
+	assert.Contains(t, prReviews[0], "reason_code=CHECKS_QUERY_FAILED")
+	require.Len(t, upsertCalls, 1)
+	assert.Equal(t, 0, upsertCalls[0].count)
+	assert.Equal(t, "", upsertCalls[0].attemptKey)
 }
 
 func TestRunner_SameRunRetryCountAccumulates(t *testing.T) {
@@ -153,6 +224,47 @@ func TestRunner_SameRunRetryCountAccumulates(t *testing.T) {
 	assert.Equal(t, 2, result.RetryCount, "同 run 内 retry_count 应为 1+1=2")
 	assert.Equal(t, 2, upsertedCount)
 	assert.False(t, result.Escalated, "retry_count=2 == maxRetries=2，不应 escalate")
+}
+
+func TestRunner_HeadScopedAttemptKeyAccumulatesAcrossRuns(t *testing.T) {
+	var upsertedCount int
+	var upsertedAttemptKey string
+
+	runner := newRunnerForTest(t, Options{
+		Repo:       "biantaishabi2/Cli",
+		Issue:      358,
+		PR:         9020,
+		RepoDir:    t.TempDir(),
+		MaxRetries: 5,
+		Now:        fixedNow,
+		RunID:      "new-run-id",
+		RunAttempt: "9",
+		RunGate: func(context.Context, string, int) (string, error) {
+			return "[gate] reason_code=REQUIRED_JOBS_FAILED\n[gate] head_sha=abc999\n[gate] run_mode=critical", errors.New("exit status 1")
+		},
+		MarkNeedsFix: func(context.Context, string, int) error { return nil },
+		AddLabels:    func(context.Context, string, int, []string) error { return nil },
+		AddComment:   func(context.Context, string, int, string) error { return nil },
+		FindGateRetryState: func(context.Context, int) (int, string, error) {
+			return 2, "issue-358-pr-9020-head-abc999", nil
+		},
+		UpsertGateRetryCount: func(_ context.Context, _ int, count int, attemptKey string) error {
+			upsertedCount = count
+			upsertedAttemptKey = attemptKey
+			return nil
+		},
+		HasLabel: func(context.Context, int, string) (bool, error) { return false, nil },
+	})
+
+	result, err := runner.Run(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGateFailed)
+	assert.Equal(t, FailureClassCode, result.FailureClass)
+	assert.Equal(t, "REQUIRED_JOBS_FAILED", result.ReasonCode)
+	assert.Equal(t, "issue-358-pr-9020-head-abc999", result.AttemptKey)
+	assert.Equal(t, 3, result.RetryCount, "同一 head 跨 run 应继续累计")
+	assert.Equal(t, 3, upsertedCount)
+	assert.Equal(t, "issue-358-pr-9020-head-abc999", upsertedAttemptKey)
 }
 
 func TestRunner_CrossRunRetryCountResets(t *testing.T) {
