@@ -210,7 +210,7 @@ jobs:
               return;
             }
 
-            const requiredOwners = new Set();
+            const fileOwnerChecks = [];
             const unmappedFiles = [];
             for (const file of touched) {
               const owners = resolveOwnersForPath(codeownerEntries, file);
@@ -218,9 +218,10 @@ jobs:
                 unmappedFiles.push(file);
                 continue;
               }
-              for (const ownerName of owners) {
-                requiredOwners.add(ownerName.toLowerCase());
-              }
+              fileOwnerChecks.push({
+                file,
+                owners: owners.map((ownerName) => ownerName.toLowerCase()),
+              });
             }
 
             if (unmappedFiles.length > 0) {
@@ -233,18 +234,36 @@ jobs:
             const approverHandles = new Set(
               approvers.map((login) => `@${login.toLowerCase()}`)
             );
-            const matchedCodeowners = [...requiredOwners].filter((ownerName) =>
-              approverHandles.has(ownerName)
+            const fileApprovals = fileOwnerChecks.map((item) => ({
+              ...item,
+              approvedOwners: item.owners.filter((ownerName) =>
+                approverHandles.has(ownerName)
+              ),
+            }));
+            const unapprovedFiles = fileApprovals.filter(
+              (item) => item.approvedOwners.length === 0
             );
-            if (matchedCodeowners.length === 0) {
+            if (unapprovedFiles.length > 0) {
+              const missingDetail = unapprovedFiles
+                .map(
+                  (item) =>
+                    `${item.file} requires one of [${item.owners.join(", ")}]`
+                )
+                .join("; ");
               core.setFailed(
-                `治理文件变更需要 CODEOWNERS 审批。required=${[...requiredOwners].join(", ")} approvers=${approvers.join(", ")}`
+                `治理文件变更需要逐文件 CODEOWNERS 审批。${missingDetail}; approvers=${approvers.join(", ")}`
               );
               return;
             }
 
+            const approvedDetail = fileApprovals
+              .map(
+                (item) =>
+                  `${item.file} approved_by [${item.approvedOwners.join(", ")}]`
+              )
+              .join("; ");
             core.info(
-              `治理审批通过，approvers: ${approvers.join(", ")}，codeowners: ${matchedCodeowners.join(", ")}`
+              `治理审批通过，approvers: ${approvers.join(", ")}，per-file: ${approvedDetail}`
             );
 
       - name: Run BCC + UniBO gate regression

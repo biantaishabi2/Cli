@@ -1,0 +1,3 @@
+# BCC + UniBO 契约治理文件 owner
+/compiler/bcc/tests/fixtures/contracts/baseline_manifest.json @biantaishabi2
+/compiler/bcc/tests/fixtures/contracts/whitelist.toml @biantaishabi2
