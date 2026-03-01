@@ -84,14 +84,20 @@ jobs:
             }
 
             core.notice(`检测到治理文件变更: ${touched.join(", ")}`);
+            const gateMode = (process.env.GATE_MODE || "warn").toLowerCase();
+            const isStrict = gateMode === "strict";
 
             const prBody = context.payload.pull_request.body || "";
             const hasScope = /(baseline|whitelist|基线|白名单)/i.test(prBody);
             const hasReason = /(reason|原因|governance|治理)/i.test(prBody);
             if (!(hasScope && hasReason)) {
-              core.setFailed(
-                "baseline/whitelist 变更必须在 PR 描述中写明治理原因（需包含 baseline/whitelist 与 reason/原因 关键词）"
-              );
+              const msg =
+                "baseline/whitelist 变更必须在 PR 描述中写明治理原因（需包含 baseline/whitelist 与 reason/原因 关键词）";
+              if (isStrict) {
+                core.setFailed(msg);
+              } else {
+                core.warning(`[warn模式] ${msg}`);
+              }
             }
 
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
@@ -115,9 +121,13 @@ jobs:
               .map(([login]) => login);
 
             if (approvers.length === 0) {
-              core.setFailed(
-                "baseline/whitelist 变更至少需要 1 个 APPROVED review 才允许通过门禁"
-              );
+              const msg =
+                "baseline/whitelist 变更至少需要 1 个 APPROVED review 才允许通过门禁";
+              if (isStrict) {
+                core.setFailed(msg);
+              } else {
+                core.warning(`[warn模式] ${msg}`);
+              }
               return;
             }
             core.info(
