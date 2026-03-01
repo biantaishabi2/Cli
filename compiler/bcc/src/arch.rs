@@ -1,5 +1,6 @@
 //! 架构矩阵与门禁工具
 
+use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -146,6 +147,36 @@ struct BoundaryContract {
 
 fn default_contract_kind() -> String {
     "command".to_string()
+}
+
+const API_CONTRACT_SCHEMA_VERSION: &str = "1.0.0";
+
+#[derive(Debug, Serialize)]
+struct ApiContractProducer {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiContractItem {
+    module_id: String,
+    name: String,
+    kind: String,
+    input: BTreeMap<String, String>,
+    output: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiContractDocument {
+    contract_schema_version: String,
+    producer: ApiContractProducer,
+    seed_version: String,
+    generated_at: String,
+    contracts: Vec<ApiContractItem>,
 }
 
 /// 契约复杂度分类
@@ -2430,6 +2461,89 @@ fn generate_from_seed(seed: &SeedSpec) -> Vec<(String, String, ContractComplexit
     results
 }
 
+fn build_api_contract_document(seed: &SeedSpec) -> Result<ApiContractDocument, String> {
+    let mut contracts = Vec::new();
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            contracts.push(ApiContractItem {
+                module_id: boundary.module_id.clone(),
+                name: contract.name.clone(),
+                kind: if contract.kind.trim().is_empty() {
+                    default_contract_kind()
+                } else {
+                    contract.kind.clone()
+                },
+                input: contract
+                    .input
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                output: contract
+                    .output
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                errors: contract.errors.clone(),
+                fields: contract
+                    .fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            });
+        }
+    }
+
+    if contracts.is_empty() {
+        return Err("seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string());
+    }
+
+    contracts.sort_by(|a, b| {
+        a.module_id
+            .cmp(&b.module_id)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(ApiContractDocument {
+        contract_schema_version: API_CONTRACT_SCHEMA_VERSION.to_string(),
+        producer: ApiContractProducer {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        seed_version: seed
+            .version
+            .clone()
+            .unwrap_or_else(|| "unspecified".to_string()),
+        generated_at: Utc::now().to_rfc3339(),
+        contracts,
+    })
+}
+
+fn write_api_contract_document(
+    document: &ApiContractDocument,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(document)
+        .map_err(|e| format!("serialize api-contract failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join("api-contract.json");
+            fs::write(&file_path, format!("{}\n", payload))
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出 API Contract 到 {}（contracts: {}）",
+                file_path.display(),
+                document.contracts.len()
+            );
+        }
+        None => {
+            println!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
 /// 公共入口：从 seed 生成代码
 pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
     let seed_raw = match fs::read_to_string(seed_file) {
@@ -2447,16 +2561,17 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
         }
     };
 
-    let results = generate_from_seed(&seed);
-
-    if results.is_empty() {
-        eprintln!("[generate] seed 中没有 boundary contracts，无产出");
-        return;
-    }
-
     // 按 emit 模式输出
     match emit {
         "code" | "all" => {
+            if emit == "all" {
+                eprintln!("[generate] emit=all 当前与 emit=code 等价（兼容保留）");
+            }
+            let results = generate_from_seed(&seed);
+            if results.is_empty() {
+                eprintln!("[generate] seed 中没有 boundary contracts，无产出");
+                return;
+            }
             let crud_count = results.iter().filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud)).count();
             let other_count = results.len() - crud_count;
 
@@ -2519,8 +2634,22 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
                 );
             }
         }
+        "api-contract" => {
+            let document = match build_api_contract_document(&seed) {
+                Ok(doc) => doc,
+                Err(e) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = write_api_contract_document(&document, output_dir) {
+                eprintln!("[generate] {}", e);
+                std::process::exit(1);
+            }
+        }
         other => {
             eprintln!("[generate] 未知 emit 模式: {}", other);
+            eprintln!("[generate] 可选值: code | api-contract | all");
             std::process::exit(1);
         }
     }
@@ -6215,6 +6344,59 @@ boundaries:
         assert!(results[1].3.contains("defmodule MyApp.Shop do"));
         assert!(results[1].3.contains("def create_order("));
         assert!(results[1].3.contains("@spec create_order("));
+    }
+
+    #[test]
+    fn build_api_contract_document_contains_required_fields() {
+        let yaml = r#"
+version: v1
+modules:
+  - module_id: shop
+    precedence: 1
+    path_rules:
+      include: ["src/shop/**"]
+relations_expected: []
+boundaries:
+  - module_id: shop
+    contracts:
+      - name: create_order
+        kind: command
+        input:
+          user_id: uuid
+        output:
+          order_id: uuid
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        let document = build_api_contract_document(&seed).expect("build api contract");
+        assert_eq!(document.contract_schema_version, API_CONTRACT_SCHEMA_VERSION);
+        assert_eq!(document.seed_version, "v1");
+        assert_eq!(document.contracts.len(), 1);
+        assert_eq!(document.contracts[0].module_id, "shop");
+        assert_eq!(document.contracts[0].name, "create_order");
+        assert_eq!(document.contracts[0].kind, "command");
+
+        let payload = serde_json::to_value(&document).expect("serialize");
+        let generated_at = payload
+            .get("generated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(generated_at.contains('T'));
+    }
+
+    #[test]
+    fn build_api_contract_document_requires_contracts() {
+        let yaml = r#"
+version: v1
+modules:
+  - module_id: shop
+    precedence: 1
+    path_rules:
+      include: ["src/shop/**"]
+relations_expected: []
+"#;
+        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
+        let err = build_api_contract_document(&seed).expect_err("expected missing contracts");
+        assert!(err.contains("seed 缺少 contracts"));
     }
 
     #[test]

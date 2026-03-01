@@ -365,7 +365,7 @@ enum ArchAction {
     Generate {
         #[arg(long)]
         seed_file: String,
-        /// 输出模式：code | all
+        /// 输出模式：code | api-contract | all
         #[arg(long, default_value = "code")]
         emit: String,
         /// 输出目录（不指定则输出到 stdout）
