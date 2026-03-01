@@ -81,34 +81,28 @@ impl ComplianceDimension {
         let mut suggestions = Vec::new();
 
         if ctx.scenario.forbidden_edges_count > 0 {
+            suggestions.push("Review and refactor forbidden dependencies immediately".to_string());
             suggestions.push(
-                "Review and refactor forbidden dependencies immediately".to_string(),
-            );
-            suggestions.push(
-                "Consider introducing abstraction layers to break forbidden dependencies".to_string(),
+                "Consider introducing abstraction layers to break forbidden dependencies"
+                    .to_string(),
             );
         }
 
         if ctx.scenario.unexpected_edges_count > 0 {
-            suggestions.push(
-                "Update target contract to include legitimate new dependencies".to_string(),
-            );
-            suggestions.push(
-                "Refactor code to remove unnecessary dependencies".to_string(),
-            );
+            suggestions
+                .push("Update target contract to include legitimate new dependencies".to_string());
+            suggestions.push("Refactor code to remove unnecessary dependencies".to_string());
         }
 
         if ctx.scenario.missing_edges_count > 0 {
-            suggestions.push(
-                "Verify if expected dependencies are still required".to_string(),
-            );
-            suggestions.push(
-                "Update target contract if dependencies are no longer needed".to_string(),
-            );
+            suggestions.push("Verify if expected dependencies are still required".to_string());
+            suggestions
+                .push("Update target contract if dependencies are no longer needed".to_string());
         }
 
         if suggestions.is_empty() {
-            suggestions.push("Architecture compliance is excellent. Keep up the good work!".to_string());
+            suggestions
+                .push("Architecture compliance is excellent. Keep up the good work!".to_string());
         }
 
         suggestions
@@ -225,11 +219,7 @@ impl ScoringDimension for ComplianceDimension {
 mod tests {
     use super::*;
 
-    fn create_context(
-        matched: i64,
-        unexpected: i64,
-        forbidden: i64,
-    ) -> ScoringContext {
+    fn create_context(matched: i64, unexpected: i64, forbidden: i64) -> ScoringContext {
         ScoringContext {
             scenario: crate::arch::score::context::ScenarioData {
                 matched_edges_count: matched,
@@ -248,11 +238,7 @@ mod tests {
     #[test]
     fn test_perfect_compliance() {
         let ctx = create_context(100, 0, 0);
-        let dim = ComplianceDimension::new(
-            0.3,
-            true,
-            ComplianceDimensionConfig::default(),
-        );
+        let dim = ComplianceDimension::new(0.3, true, ComplianceDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert_eq!(result.score, 100.0);
@@ -263,11 +249,7 @@ mod tests {
     #[test]
     fn test_with_forbidden_edges() {
         let ctx = create_context(80, 0, 5);
-        let dim = ComplianceDimension::new(
-            0.3,
-            true,
-            ComplianceDimensionConfig::default(),
-        );
+        let dim = ComplianceDimension::new(0.3, true, ComplianceDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert!(result.score < 100.0);
@@ -278,11 +260,7 @@ mod tests {
     #[test]
     fn test_with_unexpected_edges() {
         let ctx = create_context(80, 10, 0);
-        let dim = ComplianceDimension::new(
-            0.3,
-            true,
-            ComplianceDimensionConfig::default(),
-        );
+        let dim = ComplianceDimension::new(0.3, true, ComplianceDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert!(result.score < 100.0);
@@ -292,11 +270,7 @@ mod tests {
     #[test]
     fn test_empty_dependencies() {
         let ctx = create_context(0, 0, 0);
-        let dim = ComplianceDimension::new(
-            0.3,
-            true,
-            ComplianceDimensionConfig::default(),
-        );
+        let dim = ComplianceDimension::new(0.3, true, ComplianceDimensionConfig::default());
         let result = dim.calculate(&ctx);
 
         assert_eq!(result.score, 100.0);

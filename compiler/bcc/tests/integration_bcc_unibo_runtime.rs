@@ -2,12 +2,15 @@
 mod gate_common;
 
 use gate_common::GateFinding;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
@@ -210,62 +213,170 @@ fn load_runtime_visible_actions(
     (queries, mutations)
 }
 
-fn execute_runtime_action(
-    payload: &RuntimeConsumableContractDocument,
-    action_key: &str,
-    input: &Value,
-) -> Result<Value, String> {
-    let Some((contract_key, action_name)) = action_key.split_once(':') else {
-        return Err(format!("invalid action key: {}", action_key));
-    };
-    let Some(input_map) = input.as_object() else {
-        return Err(format!("action {} expects object input", action_key));
-    };
+#[derive(Debug, Default)]
+struct RuntimeState {
+    resources: BTreeMap<String, serde_json::Map<String, Value>>,
+}
 
-    let contract = payload
-        .contracts
-        .iter()
-        .find(|item| item.contract_key == contract_key)
-        .ok_or_else(|| format!("contract not found: {}", contract_key))?;
-    let action = contract
-        .actions
-        .iter()
-        .find(|item| item.action == action_name)
-        .ok_or_else(|| format!("action not found: {}", action_key))?;
+#[derive(Debug)]
+struct RuntimeHarness {
+    payload: RuntimeConsumableContractDocument,
+    state: Mutex<RuntimeState>,
+}
 
-    for (field, ty) in &action.input {
-        let (_, required) = parse_type_token(ty);
-        match input_map.get(field) {
-            Some(value) => {
-                if !validate_typed_value(ty, value) {
+impl RuntimeHarness {
+    fn new(payload: RuntimeConsumableContractDocument) -> Self {
+        Self {
+            payload,
+            state: Mutex::new(RuntimeState::default()),
+        }
+    }
+
+    fn execute_graphql(&self, document: &str, input: &Value) -> Result<Value, String> {
+        let (operation, action_key) = parse_graphql_document(document)?;
+        self.execute_action(&operation, &action_key, input)
+    }
+
+    fn execute_action(
+        &self,
+        operation: &str,
+        action_key: &str,
+        input: &Value,
+    ) -> Result<Value, String> {
+        let Some((contract_key, action_name)) = action_key.split_once(':') else {
+            return Err(format!("invalid action key: {}", action_key));
+        };
+        let Some(input_map) = input.as_object() else {
+            return Err(format!("action {} expects object input", action_key));
+        };
+
+        let contract = self
+            .payload
+            .contracts
+            .iter()
+            .find(|item| item.contract_key == contract_key)
+            .ok_or_else(|| format!("contract not found: {}", contract_key))?;
+        let action = contract
+            .actions
+            .iter()
+            .find(|item| item.action == action_name)
+            .ok_or_else(|| format!("action not found: {}", action_key))?;
+
+        if action.graphql_kind != operation {
+            return Err(format!(
+                "operation kind mismatch: {} expects {}, got {}",
+                action_key, action.graphql_kind, operation
+            ));
+        }
+
+        for (field, ty) in &action.input {
+            let (_, required) = parse_type_token(ty);
+            match input_map.get(field) {
+                Some(value) => {
+                    if !validate_typed_value(ty, value) {
+                        return Err(format!(
+                            "invalid input type: {}.{} expects {}",
+                            action_key, field, ty
+                        ));
+                    }
+                }
+                None if required => {
                     return Err(format!(
-                        "invalid input type: {}.{} expects {}",
+                        "missing required input: {}.{} expects {}",
                         action_key, field, ty
                     ));
                 }
+                None => {}
             }
-            None if required => {
-                return Err(format!(
-                    "missing required input: {}.{} expects {}",
-                    action_key, field, ty
-                ));
+        }
+
+        for key in input_map.keys() {
+            if !action.input.contains_key(key) {
+                return Err(format!("unexpected input field: {}.{}", action_key, key));
             }
-            None => {}
+        }
+
+        let stored = {
+            let mut state = self.state.lock().expect("lock runtime state");
+            let resource_key = extract_resource_key(contract_key, input_map);
+            if operation == "mutation" {
+                match action.action.as_str() {
+                    "delete" => {
+                        if let Some(key) = resource_key.as_deref() {
+                            state.resources.remove(key);
+                        }
+                    }
+                    _ => {
+                        if let Some(key) = resource_key {
+                            let mut current = state.resources.remove(&key).unwrap_or_default();
+                            for (field, value) in input_map {
+                                if field != "id" {
+                                    current.insert(field.clone(), value.clone());
+                                }
+                            }
+                            state.resources.insert(key.clone(), current);
+                        }
+                    }
+                }
+            }
+            resource_key.and_then(|key| state.resources.get(&key).cloned())
+        };
+
+        let mut output = serde_json::Map::new();
+        for (field, ty) in &action.output {
+            if let Some(value) = input_map.get(field) {
+                output.insert(field.clone(), value.clone());
+                continue;
+            }
+            if let Some(value) = stored.as_ref().and_then(|record| record.get(field)) {
+                output.insert(field.clone(), value.clone());
+                continue;
+            }
+            output.insert(field.clone(), sample_value_for_type(ty));
+        }
+        Ok(Value::Object(output))
+    }
+}
+
+fn parse_graphql_document(document: &str) -> Result<(String, String), String> {
+    let normalized = document.trim();
+    let operation = if normalized.starts_with("query") {
+        "query"
+    } else if normalized.starts_with("mutation") {
+        "mutation"
+    } else {
+        return Err(format!(
+            "unsupported graphql operation document: {}",
+            normalized
+        ));
+    };
+
+    let action_re = Regex::new(r#"action\s*:\s*"([^"]+)""#).expect("valid graphql action regex");
+    let action_key = action_re
+        .captures(normalized)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| format!("graphql document missing action marker: {}", normalized))?;
+
+    Ok((operation.to_string(), action_key))
+}
+
+fn extract_resource_key(
+    contract_key: &str,
+    input_map: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if let Some(id) = input_map.get("id").and_then(Value::as_str) {
+        return Some(format!("{}#{}", contract_key, id));
+    }
+    for (field, value) in input_map {
+        if !field.ends_with("_id") {
+            continue;
+        }
+        if let Some(id) = value.as_str() {
+            return Some(format!("{}#{}", contract_key, id));
         }
     }
-
-    for key in input_map.keys() {
-        if !action.input.contains_key(key) {
-            return Err(format!("unexpected input field: {}.{}", action_key, key));
-        }
-    }
-
-    // 模拟 UniBO runtime 的最小执行路径：按契约输出结构返回可序列化结果。
-    let mut output = serde_json::Map::new();
-    for (field, ty) in &action.output {
-        output.insert(field.clone(), sample_value_for_type(ty));
-    }
-    Ok(Value::Object(output))
+    None
 }
 
 #[test]
@@ -311,6 +422,7 @@ fn bcc_unibo_runtime_bridge_smoke_should_keep_runtime_reuse_contract() {
     let load_started = Instant::now();
     let payload = load_runtime_contract(&out);
     let (queries, mutations) = load_runtime_visible_actions(&payload);
+    let runtime = RuntimeHarness::new(payload);
     let load_elapsed = load_started.elapsed().as_millis();
 
     let expected_queries: BTreeSet<String> = expected_queries_raw.into_iter().collect();
@@ -325,12 +437,12 @@ fn bcc_unibo_runtime_bridge_smoke_should_keep_runtime_reuse_contract() {
     );
 
     let query_started = Instant::now();
-    let query_output = execute_runtime_action(
-        &payload,
-        "account.list_users:list_users",
-        &json!({"page": 1}),
-    )
-    .expect("query action should execute");
+    let query_output = runtime
+        .execute_graphql(
+            r#"query RuntimeSmokeQuery { invoke(action: "account.list_users:list_users") }"#,
+            &json!({"page": 1}),
+        )
+        .expect("query action should execute");
     assert!(
         query_output.get("users").is_some_and(Value::is_array),
         "query output should include users array"
@@ -350,9 +462,9 @@ fn bcc_unibo_runtime_bridge_smoke_should_keep_runtime_reuse_contract() {
     ));
 
     let mutation_started = Instant::now();
-    let mutation_output = execute_runtime_action(
-        &payload,
-        "billing.create_invoice:create_invoice",
+    let mutation_output = runtime
+        .execute_graphql(
+            r#"mutation RuntimeSmokeMutation { invoke(action: "billing.create_invoice:create_invoice") }"#,
         &json!({"order_id": "11111111-1111-1111-1111-111111111111"}),
     )
     .expect("mutation action should execute");
@@ -423,47 +535,104 @@ fn bcc_unibo_runtime_bridge_should_reject_null_and_malformed_inputs() {
     let out = temp_dir("bcc_unibo_runtime_invalid_inputs");
 
     run_arch_generate(&seed, &out);
-    let payload = load_runtime_contract(&out);
+    let runtime = RuntimeHarness::new(load_runtime_contract(&out));
 
-    let null_input =
-        execute_runtime_action(&payload, "account.list_users:list_users", &Value::Null)
-            .expect_err("null input should be rejected");
+    let null_input = runtime
+        .execute_graphql(
+            r#"query RuntimeRejectNull { invoke(action: "account.list_users:list_users") }"#,
+            &Value::Null,
+        )
+        .expect_err("null input should be rejected");
     assert!(
         null_input.contains("expects object input"),
         "null input error should mention object input"
     );
 
-    let malformed_type = execute_runtime_action(
-        &payload,
-        "account.list_users:list_users",
-        &json!({"page": "not-integer"}),
-    )
-    .expect_err("malformed input type should be rejected");
+    let malformed_type = runtime
+        .execute_graphql(
+            r#"query RuntimeRejectType { invoke(action: "account.list_users:list_users") }"#,
+            &json!({"page": "not-integer"}),
+        )
+        .expect_err("malformed input type should be rejected");
     assert!(
         malformed_type.contains("invalid input type"),
         "type error should be reported"
     );
 
-    let missing_required = execute_runtime_action(
-        &payload,
-        "billing.create_invoice:create_invoice",
-        &json!({}),
-    )
+    let missing_required = runtime
+        .execute_graphql(
+            r#"mutation RuntimeRejectRequired { invoke(action: "billing.create_invoice:create_invoice") }"#,
+            &json!({}),
+        )
     .expect_err("missing required field should be rejected");
     assert!(
         missing_required.contains("missing required input"),
         "missing input error should be reported"
     );
 
-    let unknown_action = execute_runtime_action(
-        &payload,
-        "billing.invoice:unknown_action",
-        &json!({"id": "11111111-1111-1111-1111-111111111111"}),
-    )
-    .expect_err("unknown action should be rejected");
+    let unknown_action = runtime
+        .execute_graphql(
+            r#"mutation RuntimeRejectUnknown { invoke(action: "billing.invoice:unknown_action") }"#,
+            &json!({"id": "11111111-1111-1111-1111-111111111111"}),
+        )
+        .expect_err("unknown action should be rejected");
     assert!(
         unknown_action.contains("action not found"),
         "unknown action should fail fast"
+    );
+
+    let _ = fs::remove_dir_all(&out);
+}
+
+#[test]
+fn bcc_unibo_runtime_bridge_should_handle_same_resource_concurrent_writes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let seed = root.join("examples/unibo-bridge-smoke/bridge.seed.yaml");
+    let out = temp_dir("bcc_unibo_runtime_concurrent_writes");
+
+    run_arch_generate(&seed, &out);
+    let runtime = Arc::new(RuntimeHarness::new(load_runtime_contract(&out)));
+    let invoice_id = "33333333-3333-3333-3333-333333333333";
+
+    let mut handles = Vec::new();
+    for idx in 0..8 {
+        let runtime = Arc::clone(&runtime);
+        handles.push(thread::spawn(move || {
+            runtime.execute_graphql(
+                r#"mutation RuntimeConcurrentWrite { invoke(action: "billing.invoice:update") }"#,
+                &json!({
+                    "id": invoice_id,
+                    "amount": idx as f64 + 1.0,
+                    "buyer_id": "11111111-1111-1111-1111-111111111111"
+                }),
+            )
+        }));
+    }
+
+    for handle in handles {
+        let output = handle
+            .join()
+            .expect("join concurrent writer")
+            .expect("concurrent mutation should succeed");
+        assert!(
+            output.get("amount").is_some_and(Value::is_number),
+            "mutation output should keep typed amount"
+        );
+    }
+
+    let read_back = runtime
+        .execute_graphql(
+            r#"query RuntimeConcurrentRead { invoke(action: "billing.invoice:read") }"#,
+            &json!({ "id": invoice_id }),
+        )
+        .expect("read after concurrent mutation should succeed");
+    assert!(
+        read_back.get("amount").is_some_and(Value::is_number),
+        "read output should include amount after concurrent writes"
+    );
+    assert!(
+        read_back.get("buyer_id").is_some_and(Value::is_string),
+        "read output should include buyer_id after concurrent writes"
     );
 
     let _ = fs::remove_dir_all(&out);

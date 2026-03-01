@@ -231,11 +231,26 @@ pub struct LayeringDimensionConfig {
 
 fn default_layers() -> Vec<LayerDefinition> {
     vec![
-        LayerDefinition { name: "api".to_string(), precedence: 1 },
-        LayerDefinition { name: "service".to_string(), precedence: 2 },
-        LayerDefinition { name: "dao".to_string(), precedence: 3 },
-        LayerDefinition { name: "core".to_string(), precedence: 2 },
-        LayerDefinition { name: "support".to_string(), precedence: 2 },
+        LayerDefinition {
+            name: "api".to_string(),
+            precedence: 1,
+        },
+        LayerDefinition {
+            name: "service".to_string(),
+            precedence: 2,
+        },
+        LayerDefinition {
+            name: "dao".to_string(),
+            precedence: 3,
+        },
+        LayerDefinition {
+            name: "core".to_string(),
+            precedence: 2,
+        },
+        LayerDefinition {
+            name: "support".to_string(),
+            precedence: 2,
+        },
     ]
 }
 
@@ -513,11 +528,7 @@ impl ScoringConfig {
                         max_acceptable: 50.0,
                     },
                 ),
-                layering: DimensionConfig::enabled(
-                    0.25,
-                    true,
-                    LayeringDimensionConfig::default(),
-                ),
+                layering: DimensionConfig::enabled(0.25, true, LayeringDimensionConfig::default()),
                 acyclic: DimensionConfig::enabled(
                     0.10,
                     true,

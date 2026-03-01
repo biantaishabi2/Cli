@@ -2,12 +2,15 @@
 mod gate_common;
 
 use gate_common::GateFinding;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const WARN_THRESHOLD: i64 = 30;
@@ -213,62 +216,173 @@ fn collect_action_keys(document: &RuntimeContractDocument) -> BTreeSet<String> {
     keys
 }
 
-fn execute_runtime_action(
-    payload: &RuntimeContractDocument,
-    action_key: &str,
-    input: &Value,
-) -> Result<Value, String> {
-    let Some((contract_key, action_name)) = action_key.split_once(':') else {
-        return Err(format!("invalid action key: {}", action_key));
-    };
-    let Some(input_map) = input.as_object() else {
-        return Err(format!("action {} expects object input", action_key));
-    };
+#[derive(Debug, Default)]
+struct RuntimeState {
+    resources: BTreeMap<String, serde_json::Map<String, Value>>,
+}
 
-    let contract = payload
-        .contracts
-        .iter()
-        .find(|item| item.contract_key == contract_key)
-        .ok_or_else(|| format!("contract not found: {}", contract_key))?;
-    let action = contract
-        .actions
-        .iter()
-        .find(|item| item.action == action_name)
-        .ok_or_else(|| format!("action not found: {}", action_key))?;
+#[derive(Debug)]
+struct RuntimeHarness {
+    payload: RuntimeContractDocument,
+    state: Mutex<RuntimeState>,
+}
 
-    for (field, ty) in &action.input {
-        let (_, required) = parse_type_token(ty);
-        match input_map.get(field) {
-            Some(value) => {
-                if !validate_typed_value(ty, value) {
+impl RuntimeHarness {
+    fn new(payload: RuntimeContractDocument) -> Self {
+        Self {
+            payload,
+            state: Mutex::new(RuntimeState::default()),
+        }
+    }
+
+    fn execute_graphql(&self, document: &str, input: &Value) -> Result<Value, String> {
+        let (operation, action_key) = parse_graphql_document(document)?;
+        self.execute_action(&operation, &action_key, input)
+    }
+
+    fn execute_action(
+        &self,
+        operation: &str,
+        action_key: &str,
+        input: &Value,
+    ) -> Result<Value, String> {
+        let Some((contract_key, action_name)) = action_key.split_once(':') else {
+            return Err(format!("invalid action key: {}", action_key));
+        };
+        let Some(input_map) = input.as_object() else {
+            return Err(format!("action {} expects object input", action_key));
+        };
+
+        let contract = self
+            .payload
+            .contracts
+            .iter()
+            .find(|item| item.contract_key == contract_key)
+            .ok_or_else(|| format!("contract not found: {}", contract_key))?;
+        let action = contract
+            .actions
+            .iter()
+            .find(|item| item.action == action_name)
+            .ok_or_else(|| format!("action not found: {}", action_key))?;
+
+        if action.graphql_kind != operation {
+            return Err(format!(
+                "operation kind mismatch: {} expects {}, got {}",
+                action_key, action.graphql_kind, operation
+            ));
+        }
+
+        for (field, ty) in &action.input {
+            let (_, required) = parse_type_token(ty);
+            match input_map.get(field) {
+                Some(value) => {
+                    if !validate_typed_value(ty, value) {
+                        return Err(format!(
+                            "invalid input type: {}.{} expects {}",
+                            action_key, field, ty
+                        ));
+                    }
+                }
+                None if required => {
                     return Err(format!(
-                        "invalid input type: {}.{} expects {}",
+                        "missing required input: {}.{} expects {}",
                         action_key, field, ty
                     ));
                 }
+                None => {}
             }
-            None if required => {
-                return Err(format!(
-                    "missing required input: {}.{} expects {}",
-                    action_key, field, ty
-                ));
+        }
+
+        for key in input_map.keys() {
+            if !action.input.contains_key(key) {
+                return Err(format!("unexpected input field: {}.{}", action_key, key));
             }
-            None => {}
+        }
+
+        let stored = {
+            let mut state = self.state.lock().expect("lock runtime state");
+            let resource_key = extract_resource_key(contract_key, input_map);
+            if operation == "mutation" {
+                match action.action.as_str() {
+                    "delete" => {
+                        if let Some(key) = resource_key.as_deref() {
+                            state.resources.remove(key);
+                        }
+                    }
+                    _ => {
+                        if let Some(key) = resource_key {
+                            let mut current = state.resources.remove(&key).unwrap_or_default();
+                            for (field, value) in input_map {
+                                if field != "id" {
+                                    current.insert(field.clone(), value.clone());
+                                }
+                            }
+                            state.resources.insert(key.clone(), current);
+                        }
+                    }
+                }
+            }
+            resource_key.and_then(|key| state.resources.get(&key).cloned())
+        };
+
+        let mut output = serde_json::Map::new();
+        for (field, ty) in &action.output {
+            if let Some(value) = input_map.get(field) {
+                output.insert(field.clone(), value.clone());
+                continue;
+            }
+            if let Some(value) = stored.as_ref().and_then(|record| record.get(field)) {
+                output.insert(field.clone(), value.clone());
+                continue;
+            }
+            output.insert(field.clone(), sample_value_for_type(ty));
+        }
+        Ok(Value::Object(output))
+    }
+}
+
+fn parse_graphql_document(document: &str) -> Result<(String, String), String> {
+    let normalized = document.trim();
+    let operation = if normalized.starts_with("query") {
+        "query"
+    } else if normalized.starts_with("mutation") {
+        "mutation"
+    } else {
+        return Err(format!(
+            "unsupported graphql operation document: {}",
+            normalized
+        ));
+    };
+
+    let action_re = Regex::new(r#"action\s*:\s*"([^"]+)""#).expect("valid graphql action regex");
+    let action_key = action_re
+        .captures(normalized)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| format!("graphql document missing action marker: {}", normalized))?;
+    Ok((operation.to_string(), action_key))
+}
+
+fn extract_resource_key(
+    contract_key: &str,
+    input_map: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if let Some(id) = input_map.get("id").and_then(Value::as_str) {
+        return Some(format!("{}#{}", contract_key, id));
+    }
+    for (field, value) in input_map {
+        if !field.ends_with("_id") {
+            continue;
+        }
+        if let Some(id) = value.as_str() {
+            return Some(format!("{}#{}", contract_key, id));
         }
     }
+    None
+}
 
-    for key in input_map.keys() {
-        if !action.input.contains_key(key) {
-            return Err(format!("unexpected input field: {}.{}", action_key, key));
-        }
-    }
-
-    // 按契约构造返回，确保链路测试真实覆盖 query/mutation 调用而非仅检查 action 列表。
-    let mut output = serde_json::Map::new();
-    for (field, ty) in &action.output {
-        output.insert(field.clone(), sample_value_for_type(ty));
-    }
-    Ok(Value::Object(output))
+fn graphql_doc(operation: &str, action_key: &str) -> String {
+    format!(r#"{operation} RuntimeGate {{ invoke(action: "{action_key}") }}"#)
 }
 
 fn build_complexity_findings(cases: &[EvolutionFixture]) -> Vec<GateFinding> {
@@ -394,6 +508,7 @@ fn l0_l3_runtime_chain_should_cover_crud_rules_use_case() {
         run_arch_generate(&seed, &out);
         let runtime_contract = load_runtime_contract(&out.join("unibo-api-contract.json"));
         let current_actions = collect_action_keys(&runtime_contract);
+        let runtime = RuntimeHarness::new(runtime_contract);
 
         assert!(
             current_actions.contains(&case.query_action),
@@ -416,21 +531,21 @@ fn l0_l3_runtime_chain_should_cover_crud_rules_use_case() {
             );
         }
 
-        let query_output =
-            execute_runtime_action(&runtime_contract, &case.query_action, &case.query_input)
-                .unwrap_or_else(|err| panic!("scenario {} query failed: {}", case.scenario, err));
+        let query_output = runtime
+            .execute_graphql(&graphql_doc("query", &case.query_action), &case.query_input)
+            .unwrap_or_else(|err| panic!("scenario {} query failed: {}", case.scenario, err));
         assert!(
             query_output.is_object(),
             "scenario {} query should return object output",
             case.scenario
         );
 
-        let mutation_output = execute_runtime_action(
-            &runtime_contract,
-            &case.mutation_action,
-            &case.mutation_input,
-        )
-        .unwrap_or_else(|err| panic!("scenario {} mutation failed: {}", case.scenario, err));
+        let mutation_output = runtime
+            .execute_graphql(
+                &graphql_doc("mutation", &case.mutation_action),
+                &case.mutation_input,
+            )
+            .unwrap_or_else(|err| panic!("scenario {} mutation failed: {}", case.scenario, err));
         assert!(
             mutation_output.is_object(),
             "scenario {} mutation should return object output",
@@ -480,4 +595,64 @@ fn l0_l3_depth_boundary_should_flag_invalid_depth_values() {
     assert!(findings
         .iter()
         .any(|item| item.id == "BREAKING:depth_exceeds_limit:too_deep"));
+}
+
+#[test]
+fn l0_l3_runtime_chain_should_handle_same_resource_concurrent_writes() {
+    let fixture = load_fixtures()
+        .into_iter()
+        .find(|item| item.scenario == "l3_use_case")
+        .expect("should load l3 use_case fixture");
+    let seed = fixture_dir().join(&fixture.seed_file);
+    assert!(seed.exists(), "l3 seed should exist");
+
+    let out = temp_dir("bcc_l0_l3_concurrent_writes");
+    run_arch_generate(&seed, &out);
+    let runtime = Arc::new(RuntimeHarness::new(load_runtime_contract(
+        &out.join("unibo-api-contract.json"),
+    )));
+    let invoice_id = "44444444-4444-4444-4444-444444444444";
+
+    let mut handles = Vec::new();
+    for idx in 0..8 {
+        let runtime = Arc::clone(&runtime);
+        handles.push(thread::spawn(move || {
+            runtime.execute_graphql(
+                &graphql_doc("mutation", "billing.invoice:update"),
+                &serde_json::json!({
+                    "id": invoice_id,
+                    "amount": idx as f64 + 10.0,
+                    "buyer_id": "11111111-1111-1111-1111-111111111111"
+                }),
+            )
+        }));
+    }
+
+    for handle in handles {
+        let output = handle
+            .join()
+            .expect("join l3 concurrent writer")
+            .expect("concurrent mutation should succeed");
+        assert!(
+            output.get("amount").is_some_and(Value::is_number),
+            "mutation output should keep amount field"
+        );
+    }
+
+    let read_back = runtime
+        .execute_graphql(
+            &graphql_doc("query", "billing.invoice:read"),
+            &serde_json::json!({ "id": invoice_id }),
+        )
+        .expect("read after concurrent writes should succeed");
+    assert!(
+        read_back.get("amount").is_some_and(Value::is_number),
+        "read output should include amount after concurrent writes"
+    );
+    assert!(
+        read_back.get("buyer_id").is_some_and(Value::is_string),
+        "read output should include buyer_id after concurrent writes"
+    );
+
+    let _ = fs::remove_dir_all(&out);
 }

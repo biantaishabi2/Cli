@@ -47,7 +47,10 @@ fn run_linter(config: &LinterConfig) -> Vec<SmellRecord> {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[linter] warn: linter '{}' failed to start: {}", config.name, e);
+            eprintln!(
+                "[linter] warn: linter '{}' failed to start: {}",
+                config.name, e
+            );
             return vec![];
         }
     };

@@ -638,6 +638,107 @@ fn manifest_drift_parallel_evaluation_should_be_stable() {
 }
 
 #[test]
+fn manifest_drift_parallel_shared_report_path_should_be_safe() {
+    let baseline = parse_manifest_from_raw(
+        r#"{
+  "contracts": [
+    {
+      "contractKey": "billing.invoice",
+      "graphqlKind": "mutation",
+      "fields": {
+        "invoice_id": "uuid?",
+        "status": "enum[draft|paid]"
+      },
+      "actions": [
+        {
+          "actionKey": "update",
+          "action": "update",
+          "graphqlKind": "mutation",
+          "input": {
+            "trace_id": "string?",
+            "status": "enum[draft|paid]"
+          },
+          "output": {
+            "invoice_id": "uuid?"
+          }
+        }
+      ]
+    }
+  ]
+}"#,
+    );
+    let generated = parse_manifest_from_raw(
+        r#"{
+  "contracts": [
+    {
+      "contractKey": "billing.invoice",
+      "graphqlKind": "mutation",
+      "fields": {
+        "invoice_id": "uuid?",
+        "status": "enum[draft|paid]"
+      },
+      "actions": [
+        {
+          "actionKey": "update",
+          "action": "update",
+          "graphqlKind": "mutation",
+          "input": {
+            "trace_id": "string!",
+            "status": "enum[draft]"
+          },
+          "output": {
+            "invoice_id": "uuid!"
+          }
+        }
+      ]
+    }
+  ]
+}"#,
+    );
+    let whitelist =
+        gate_common::load_whitelist(&bcc_root().join("tests/fixtures/contracts/whitelist.toml"))
+            .expect("load whitelist");
+
+    let gate_name = "contract-manifest-drift-parallel-shared-report";
+    let mut handles = Vec::new();
+    for _ in 0..6 {
+        let baseline = baseline.clone();
+        let generated = generated.clone();
+        let whitelist = whitelist.clone();
+        let gate_name = gate_name.to_string();
+        handles.push(thread::spawn(move || {
+            let findings = diff_manifests(&baseline, &generated);
+            let outcome = gate_common::evaluate_gate(
+                &gate_name,
+                GateConfig::from_env(),
+                findings,
+                &whitelist,
+            );
+            assert!(outcome.report_path.exists(), "report should be written");
+            outcome.report_path
+        }));
+    }
+
+    let mut report_path = None;
+    for handle in handles {
+        let path = handle.join().expect("join shared report workers");
+        report_path = Some(path);
+    }
+
+    let report_path = report_path.expect("shared report path should exist");
+    let report_raw = fs::read_to_string(&report_path).expect("read shared report output");
+    let report_json: Value = serde_json::from_str(&report_raw).expect("parse shared report json");
+    assert_eq!(
+        report_json
+            .get("gate_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        gate_name,
+        "shared report should keep gate metadata"
+    );
+}
+
+#[test]
 fn manifest_drift_should_reject_malformed_manifest_input() {
     let malformed_json = std::panic::catch_unwind(|| parse_manifest_from_raw("{not-json"));
     assert!(malformed_json.is_err(), "invalid json should panic");

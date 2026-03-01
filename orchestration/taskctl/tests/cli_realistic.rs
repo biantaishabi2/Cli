@@ -17,7 +17,10 @@ fn temp_store_path(suffix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("taskctl-it-{}-{suffix}-{ts}.json", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "taskctl-it-{}-{suffix}-{ts}.json",
+        std::process::id()
+    ))
 }
 
 fn run_cli(args: &[String]) -> String {
@@ -52,11 +55,7 @@ fn realistic_fixture_generates_expected_dag() {
     let validate_json: Value = serde_json::from_str(&validate).expect("validate json");
     assert_eq!(validate_json["ok"], Value::Bool(true));
 
-    let dag_raw = run_cli(&[
-        "--store".into(),
-        store.display().to_string(),
-        "dag".into(),
-    ]);
+    let dag_raw = run_cli(&["--store".into(), store.display().to_string(), "dag".into()]);
     let generate_raw = run_cli(&[
         "--store".into(),
         store.display().to_string(),

@@ -3,13 +3,11 @@ use std::fs;
 
 /// 解析 YAML 文件为 ModuleSpec
 pub fn parse_yaml(path: &str) -> Result<ModuleSpec, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("cannot read '{}': {}", path, e))?;
-    let spec: ModuleSpec = serde_yaml::from_str(&content)
-        .map_err(|e| {
-            // serde_yaml 错误信息包含行号
-            format!("{}", e)
-        })?;
+    let content = fs::read_to_string(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+    let spec: ModuleSpec = serde_yaml::from_str(&content).map_err(|e| {
+        // serde_yaml 错误信息包含行号
+        format!("{}", e)
+    })?;
     Ok(spec)
 }
 
@@ -25,21 +23,36 @@ pub fn validate(spec: &ModuleSpec, path: &str) -> (Vec<String>, Vec<String>) {
 
     for (i, port) in spec.ports.iter().enumerate() {
         if port.name.is_empty() {
-            errors.push(format!("[ERROR] {}:ports[{}].name: must not be empty", path, i));
+            errors.push(format!(
+                "[ERROR] {}:ports[{}].name: must not be empty",
+                path, i
+            ));
         }
         if port.kind.is_none() {
-            errors.push(format!("[ERROR] {}:ports[{}].kind: missing required field `kind`", path, i));
+            errors.push(format!(
+                "[ERROR] {}:ports[{}].kind: missing required field `kind`",
+                path, i
+            ));
         }
 
         // 推荐项
         if port.errors.is_empty() {
-            warnings.push(format!("[WARNING] {}:ports[{}].errors: no error codes defined", path, i));
+            warnings.push(format!(
+                "[WARNING] {}:ports[{}].errors: no error codes defined",
+                path, i
+            ));
         }
         if port.input.is_none() {
-            warnings.push(format!("[WARNING] {}:ports[{}].input: no input type defined", path, i));
+            warnings.push(format!(
+                "[WARNING] {}:ports[{}].input: no input type defined",
+                path, i
+            ));
         }
         if port.output.is_none() {
-            warnings.push(format!("[WARNING] {}:ports[{}].output: no output type defined", path, i));
+            warnings.push(format!(
+                "[WARNING] {}:ports[{}].output: no output type defined",
+                path, i
+            ));
         }
     }
 
@@ -56,7 +69,15 @@ pub fn validate(spec: &ModuleSpec, path: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// compile 命令入口
-pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Option<&str>, force: bool, verbose: bool) {
+pub fn run(
+    path: &str,
+    dry_run: bool,
+    emit_ast: bool,
+    passes: &str,
+    output: Option<&str>,
+    force: bool,
+    verbose: bool,
+) {
     // Step 1: 解析 YAML
     let spec = match parse_yaml(path) {
         Ok(s) => s,
@@ -83,7 +104,11 @@ pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Opti
         println!("module: {}", spec.module.name);
         println!("ports: {}", spec.ports.len());
         for port in &spec.ports {
-            println!("  - {} ({})", port.name, port.kind.as_deref().unwrap_or("unknown"));
+            println!(
+                "  - {} ({})",
+                port.name,
+                port.kind.as_deref().unwrap_or("unknown")
+            );
         }
         println!("relations: {}", spec.relations.len());
         return;
@@ -115,5 +140,5 @@ pub fn run(path: &str, dry_run: bool, emit_ast: bool, passes: &str, output: Opti
 }
 
 pub mod ast;
-pub mod passes;
 pub mod emit;
+pub mod passes;

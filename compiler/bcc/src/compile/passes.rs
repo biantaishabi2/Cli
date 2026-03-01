@@ -2,7 +2,11 @@ use crate::compile::ast::QuotedAST;
 use crate::spec::ModuleSpec;
 
 /// 根据 --passes 参数应用 pass pipeline
-pub fn apply_passes(mut ast: Vec<QuotedAST>, spec: &ModuleSpec, passes_str: &str) -> Vec<QuotedAST> {
+pub fn apply_passes(
+    mut ast: Vec<QuotedAST>,
+    spec: &ModuleSpec,
+    passes_str: &str,
+) -> Vec<QuotedAST> {
     if passes_str == "none" {
         return ast;
     }
@@ -25,18 +29,18 @@ pub fn apply_passes(mut ast: Vec<QuotedAST>, spec: &ModuleSpec, passes_str: &str
 
 /// envelope_pass: 将函数返回值包装为 Envelope 结构
 fn envelope_pass(ast: Vec<QuotedAST>, _spec: &ModuleSpec) -> Vec<QuotedAST> {
-    ast.into_iter().map(|node| transform_node_envelope(node)).collect()
+    ast.into_iter()
+        .map(|node| transform_node_envelope(node))
+        .collect()
 }
 
 fn transform_node_envelope(node: QuotedAST) -> QuotedAST {
     match node {
-        QuotedAST::Call { name, meta, args } if name == "defmodule" => {
-            QuotedAST::Call {
-                name,
-                meta,
-                args: args.into_iter().map(transform_node_envelope).collect(),
-            }
-        }
+        QuotedAST::Call { name, meta, args } if name == "defmodule" => QuotedAST::Call {
+            name,
+            meta,
+            args: args.into_iter().map(transform_node_envelope).collect(),
+        },
         // 透传 List/Tuple，递归到内部 Block
         QuotedAST::List(items) => {
             QuotedAST::List(items.into_iter().map(transform_node_envelope).collect())
@@ -62,10 +66,15 @@ fn transform_node_envelope(node: QuotedAST) -> QuotedAST {
         QuotedAST::Call { name, meta, args } if name == "def" => {
             // def 的 args: [call_head, [do: body]]
             // 需要递归进入 [do: body] 中的 body 部分来包装返回值
-            let new_args: Vec<QuotedAST> = args.into_iter().map(|arg| {
-                wrap_envelope_in_do_block(arg)
-            }).collect();
-            QuotedAST::Call { name, meta, args: new_args }
+            let new_args: Vec<QuotedAST> = args
+                .into_iter()
+                .map(|arg| wrap_envelope_in_do_block(arg))
+                .collect();
+            QuotedAST::Call {
+                name,
+                meta,
+                args: new_args,
+            }
         }
         other => other,
     }
@@ -107,16 +116,16 @@ fn wrap_return_tuple(node: QuotedAST) -> QuotedAST {
                             name: "%".into(),
                             meta: vec![],
                             args: vec![
-                                QuotedAST::Aliases { segments: vec!["Envelope".into()] },
+                                QuotedAST::Aliases {
+                                    segments: vec!["Envelope".into()],
+                                },
                                 QuotedAST::Call {
                                     name: "%{}".into(),
                                     meta: vec![],
-                                    args: vec![QuotedAST::List(vec![
-                                        QuotedAST::Tuple(vec![
-                                            QuotedAST::Atom("data".into()),
-                                            items[1].clone(),
-                                        ]),
-                                    ])],
+                                    args: vec![QuotedAST::List(vec![QuotedAST::Tuple(vec![
+                                        QuotedAST::Atom("data".into()),
+                                        items[1].clone(),
+                                    ])])],
                                 },
                             ],
                         },
@@ -145,25 +154,34 @@ fn error_code_pass(ast: Vec<QuotedAST>, spec: &ModuleSpec) -> Vec<QuotedAST> {
         return ast;
     }
 
-    ast.into_iter().map(|node| inject_error_codes(node, &all_codes)).collect()
+    ast.into_iter()
+        .map(|node| inject_error_codes(node, &all_codes))
+        .collect()
 }
 
 fn inject_error_codes(node: QuotedAST, codes: &[String]) -> QuotedAST {
     match node {
-        QuotedAST::Call { name, meta, args } if name == "defmodule" => {
-            QuotedAST::Call {
-                name,
-                meta,
-                args: args.into_iter().map(|a| inject_error_codes(a, codes)).collect(),
-            }
-        }
+        QuotedAST::Call { name, meta, args } if name == "defmodule" => QuotedAST::Call {
+            name,
+            meta,
+            args: args
+                .into_iter()
+                .map(|a| inject_error_codes(a, codes))
+                .collect(),
+        },
         // 透传 List/Tuple，递归到内部 Block
-        QuotedAST::List(items) => {
-            QuotedAST::List(items.into_iter().map(|a| inject_error_codes(a, codes)).collect())
-        }
-        QuotedAST::Tuple(items) => {
-            QuotedAST::Tuple(items.into_iter().map(|a| inject_error_codes(a, codes)).collect())
-        }
+        QuotedAST::List(items) => QuotedAST::List(
+            items
+                .into_iter()
+                .map(|a| inject_error_codes(a, codes))
+                .collect(),
+        ),
+        QuotedAST::Tuple(items) => QuotedAST::Tuple(
+            items
+                .into_iter()
+                .map(|a| inject_error_codes(a, codes))
+                .collect(),
+        ),
         QuotedAST::Block(items) => {
             let mut new_items = Vec::new();
 
@@ -172,7 +190,7 @@ fn inject_error_codes(node: QuotedAST, codes: &[String]) -> QuotedAST {
                 name: "@error_codes".into(),
                 meta: vec![],
                 args: vec![QuotedAST::List(
-                    codes.iter().map(|c| QuotedAST::String(c.clone())).collect()
+                    codes.iter().map(|c| QuotedAST::String(c.clone())).collect(),
                 )],
             });
 
@@ -185,37 +203,53 @@ fn inject_error_codes(node: QuotedAST, codes: &[String]) -> QuotedAST {
                         name: "error_code".into(),
                         meta: vec![],
                         args: vec![
-                            QuotedAST::Call { name: "code".into(), meta: vec![], args: vec![] },
-                            QuotedAST::Call { name: "message".into(), meta: vec![], args: vec![] },
+                            QuotedAST::Call {
+                                name: "code".into(),
+                                meta: vec![],
+                                args: vec![],
+                            },
+                            QuotedAST::Call {
+                                name: "message".into(),
+                                meta: vec![],
+                                args: vec![],
+                            },
                         ],
                     },
-                    QuotedAST::List(vec![
-                        QuotedAST::Tuple(vec![
-                            QuotedAST::Atom("do".into()),
-                            // %ErrorCode{code: code, message: message}
-                            QuotedAST::Call {
-                                name: "%".into(),
-                                meta: vec![],
-                                args: vec![
-                                    QuotedAST::Aliases { segments: vec!["ErrorCode".into()] },
-                                    QuotedAST::Call {
-                                        name: "%{}".into(),
-                                        meta: vec![],
-                                        args: vec![QuotedAST::List(vec![
-                                            QuotedAST::Tuple(vec![
-                                                QuotedAST::Atom("code".into()),
-                                                QuotedAST::Call { name: "code".into(), meta: vec![], args: vec![] },
-                                            ]),
-                                            QuotedAST::Tuple(vec![
-                                                QuotedAST::Atom("message".into()),
-                                                QuotedAST::Call { name: "message".into(), meta: vec![], args: vec![] },
-                                            ]),
-                                        ])],
-                                    },
-                                ],
-                            },
-                        ]),
-                    ]),
+                    QuotedAST::List(vec![QuotedAST::Tuple(vec![
+                        QuotedAST::Atom("do".into()),
+                        // %ErrorCode{code: code, message: message}
+                        QuotedAST::Call {
+                            name: "%".into(),
+                            meta: vec![],
+                            args: vec![
+                                QuotedAST::Aliases {
+                                    segments: vec!["ErrorCode".into()],
+                                },
+                                QuotedAST::Call {
+                                    name: "%{}".into(),
+                                    meta: vec![],
+                                    args: vec![QuotedAST::List(vec![
+                                        QuotedAST::Tuple(vec![
+                                            QuotedAST::Atom("code".into()),
+                                            QuotedAST::Call {
+                                                name: "code".into(),
+                                                meta: vec![],
+                                                args: vec![],
+                                            },
+                                        ]),
+                                        QuotedAST::Tuple(vec![
+                                            QuotedAST::Atom("message".into()),
+                                            QuotedAST::Call {
+                                                name: "message".into(),
+                                                meta: vec![],
+                                                args: vec![],
+                                            },
+                                        ]),
+                                    ])],
+                                },
+                            ],
+                        },
+                    ])]),
                 ],
             });
 

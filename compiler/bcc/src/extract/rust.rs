@@ -504,7 +504,9 @@ fn extract_rust_param_annotations(
     type_annotations: &mut Vec<TypeAnnotation>,
 ) {
     for i in 0..params.child_count() {
-        let Some(child) = params.child(i) else { continue };
+        let Some(child) = params.child(i) else {
+            continue;
+        };
         if child.kind() != "parameter" {
             continue;
         }
@@ -578,7 +580,9 @@ fn extract_rust_type_guards(
         // downcast_ref::<Type>() 调用
         if node.kind() == "call_expression" {
             let call_text = common::node_text(node, source);
-            if let Some(guard) = parse_downcast_ref(&call_text, func_name, node.start_position().row + 1) {
+            if let Some(guard) =
+                parse_downcast_ref(&call_text, func_name, node.start_position().row + 1)
+            {
                 type_guards.push(guard);
             }
         }
@@ -890,7 +894,11 @@ fn main() {
             vec_call.args
         );
         // println! 应提取 args
-        let println_call = record.calls.iter().find(|c| c.callee == "println!").unwrap();
+        let println_call = record
+            .calls
+            .iter()
+            .find(|c| c.callee == "println!")
+            .unwrap();
         assert!(
             !println_call.args.is_empty(),
             "println! 宏调用应提取 args，实际: {:?}",

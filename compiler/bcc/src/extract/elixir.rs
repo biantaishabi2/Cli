@@ -565,7 +565,9 @@ fn extract_def_param_names(call_node: &tree_sitter::Node, source: &[u8]) -> Vec<
 /// 从参数列表节点中收集参数名
 fn collect_param_names(args_node: tree_sitter::Node, source: &[u8], names: &mut Vec<String>) {
     for i in 0..args_node.child_count() {
-        let Some(child) = args_node.child(i) else { continue };
+        let Some(child) = args_node.child(i) else {
+            continue;
+        };
         let kind = child.kind();
         if kind == "identifier" {
             let text = common::node_text(child, source);
@@ -623,7 +625,9 @@ fn extract_ecto_schema_fields(
                         for j in 0..args.child_count() {
                             if let Some(arg) = args.child(j) {
                                 // 跳过分隔符
-                                if arg.kind() == "," { continue; }
+                                if arg.kind() == "," {
+                                    continue;
+                                }
                                 let text = common::node_text(arg, source);
                                 if arg_idx == 0 {
                                     // 第一个参数：字段名（atom）
@@ -759,7 +763,12 @@ struct DetectContext<'a> {
 }
 
 trait HintDetector {
-    fn detect(&self, node: tree_sitter::Node, source: &[u8], ctx: &DetectContext) -> Option<Vec<RelationHintRecord>>;
+    fn detect(
+        &self,
+        node: tree_sitter::Node,
+        source: &[u8],
+        ctx: &DetectContext,
+    ) -> Option<Vec<RelationHintRecord>>;
 }
 
 /// 统一 AST 遍历：skip 逻辑只写一份，每个节点调用所有 detector
@@ -770,7 +779,10 @@ fn walk_tree(
     ctx: &DetectContext,
     hints: &mut Vec<RelationHintRecord>,
 ) {
-    if matches!(node.kind(), "string" | "quoted_content" | "charlist" | "sigil" | "comment") {
+    if matches!(
+        node.kind(),
+        "string" | "quoted_content" | "charlist" | "sigil" | "comment"
+    ) {
         return;
     }
     for detector in detectors {
@@ -788,24 +800,44 @@ fn walk_tree(
 struct SupervisorChildrenDetector;
 
 impl HintDetector for SupervisorChildrenDetector {
-    fn detect(&self, node: tree_sitter::Node, source: &[u8], _ctx: &DetectContext) -> Option<Vec<RelationHintRecord>> {
-        if node.kind() != "binary_operator" { return None; }
+    fn detect(
+        &self,
+        node: tree_sitter::Node,
+        source: &[u8],
+        _ctx: &DetectContext,
+    ) -> Option<Vec<RelationHintRecord>> {
+        if node.kind() != "binary_operator" {
+            return None;
+        }
         let op = node.child_by_field_name("operator")?;
-        if common::node_text(op, source) != "=" { return None; }
+        if common::node_text(op, source) != "=" {
+            return None;
+        }
         let left = node.child_by_field_name("left")?;
-        if common::node_text(left, source) != "children" { return None; }
+        if common::node_text(left, source) != "children" {
+            return None;
+        }
         let right = node.child_by_field_name("right")?;
-        if right.kind() != "list" { return None; }
+        if right.kind() != "list" {
+            return None;
+        }
         let mut modules = Vec::new();
         extract_modules_from_list(right, source, &mut modules);
         modules.sort();
         modules.dedup();
-        Some(modules.into_iter().map(|m| RelationHintRecord {
-            target: m, call_type_hint: "supervisor_child".into(),
-            via: "children list".into(), confidence: 0.90,
-            detector: "elixir.supervisor_children".into(),
-            reason: "Supervisor children 列表中的模块引用".into(),
-        }).collect())
+        Some(
+            modules
+                .into_iter()
+                .map(|m| RelationHintRecord {
+                    target: m,
+                    call_type_hint: "supervisor_child".into(),
+                    via: "children list".into(),
+                    confidence: 0.90,
+                    detector: "elixir.supervisor_children".into(),
+                    reason: "Supervisor children 列表中的模块引用".into(),
+                })
+                .collect(),
+        )
     }
 }
 
@@ -813,15 +845,26 @@ struct GenServerCallDetector;
 
 impl HintDetector for GenServerCallDetector {
     /// 匹配 dot 节点（Module.func），检查是否在 handle_call/handle_cast do_block 内
-    fn detect(&self, node: tree_sitter::Node, source: &[u8], _ctx: &DetectContext) -> Option<Vec<RelationHintRecord>> {
-        if node.kind() != "dot" { return None; }
+    fn detect(
+        &self,
+        node: tree_sitter::Node,
+        source: &[u8],
+        _ctx: &DetectContext,
+    ) -> Option<Vec<RelationHintRecord>> {
+        if node.kind() != "dot" {
+            return None;
+        }
         let left = node.child_by_field_name("left")?;
         let module = common::node_text(left, source);
-        if module.is_empty() || !module.starts_with(|c: char| c.is_uppercase()) { return None; }
+        if module.is_empty() || !module.starts_with(|c: char| c.is_uppercase()) {
+            return None;
+        }
         let handler_kind = find_enclosing_handler(node, source)?;
         Some(vec![RelationHintRecord {
-            target: module, call_type_hint: "genserver_runtime_dep".into(),
-            via: handler_kind, confidence: 0.80,
+            target: module,
+            call_type_hint: "genserver_runtime_dep".into(),
+            via: handler_kind,
+            confidence: 0.80,
             detector: "elixir.genserver_call".into(),
             reason: "GenServer handler 内的外部模块调用".into(),
         }])
@@ -831,18 +874,30 @@ impl HintDetector for GenServerCallDetector {
 struct KeywordGetDetector;
 
 impl HintDetector for KeywordGetDetector {
-    fn detect(&self, node: tree_sitter::Node, source: &[u8], _ctx: &DetectContext) -> Option<Vec<RelationHintRecord>> {
-        if node.kind() != "call" { return None; }
+    fn detect(
+        &self,
+        node: tree_sitter::Node,
+        source: &[u8],
+        _ctx: &DetectContext,
+    ) -> Option<Vec<RelationHintRecord>> {
+        if node.kind() != "call" {
+            return None;
+        }
         let target = node.child_by_field_name("target")?;
         let target_text = common::node_text(target, source);
-        if !matches!(target_text.as_str(), "Keyword.get" | "Keyword.fetch" | "Keyword.fetch!" | "Keyword.get_lazy") {
+        if !matches!(
+            target_text.as_str(),
+            "Keyword.get" | "Keyword.fetch" | "Keyword.fetch!" | "Keyword.get_lazy"
+        ) {
             return None;
         }
         let args = find_child_by_kind(&node, "arguments")?;
         let key = extract_keyword_atom_key(&common::node_text(args, source))?;
         Some(vec![RelationHintRecord {
-            target: key.clone(), call_type_hint: "callback_injection".into(),
-            via: format!("Keyword.get :{}", key), confidence: 0.75,
+            target: key.clone(),
+            call_type_hint: "callback_injection".into(),
+            via: format!("Keyword.get :{}", key),
+            confidence: 0.75,
             detector: "elixir.callback_injection".into(),
             reason: "Keyword.get opts 回调注入模式".into(),
         }])
@@ -852,15 +907,24 @@ impl HintDetector for KeywordGetDetector {
 struct ExternalRegisterDetector;
 
 impl HintDetector for ExternalRegisterDetector {
-    fn detect(&self, node: tree_sitter::Node, source: &[u8], ctx: &DetectContext) -> Option<Vec<RelationHintRecord>> {
-        if node.kind() != "call" { return None; }
+    fn detect(
+        &self,
+        node: tree_sitter::Node,
+        source: &[u8],
+        ctx: &DetectContext,
+    ) -> Option<Vec<RelationHintRecord>> {
+        if node.kind() != "call" {
+            return None;
+        }
         let (lib_chain, target_module) = parse_external_register_call(node, source)?;
         if has_register_namespace_conflict(&lib_chain, &target_module, &ctx.alias_bindings) {
             return None;
         }
         Some(vec![RelationHintRecord {
-            target: target_module, call_type_hint: "external_registration".into(),
-            via: format!("{}.register", lib_chain), confidence: 0.97,
+            target: target_module,
+            call_type_hint: "external_registration".into(),
+            via: format!("{}.register", lib_chain),
+            confidence: 0.97,
             detector: "elixir.external_register".into(),
             reason: "外部库 register 调用内部模块".into(),
         }])
@@ -981,7 +1045,9 @@ fn find_enclosing_handler(node: tree_sitter::Node, source: &[u8]) -> Option<Stri
     let mut current = node.parent();
     let mut inside_do_block = false;
     while let Some(n) = current {
-        if n.kind() == "do_block" { inside_do_block = true; }
+        if n.kind() == "do_block" {
+            inside_do_block = true;
+        }
         if n.kind() == "call" && inside_do_block {
             if let Some(target) = n.child_by_field_name("target") {
                 if common::node_text(target, source) == "def" {
@@ -1000,8 +1066,12 @@ fn extract_handler_kind(def_node: &tree_sitter::Node, source: &[u8]) -> Option<S
     for i in 0..args.child_count() {
         if let Some(child) = args.child(i) {
             let text = common::node_text(child, source);
-            if text.starts_with("handle_call") { return Some("handle_call".into()); }
-            if text.starts_with("handle_cast") { return Some("handle_cast".into()); }
+            if text.starts_with("handle_call") {
+                return Some("handle_call".into());
+            }
+            if text.starts_with("handle_cast") {
+                return Some("handle_cast".into());
+            }
         }
     }
     None
@@ -1065,23 +1135,36 @@ fn collect_alias_bindings(imports: &[ImportRecord]) -> HashMap<String, Vec<Strin
 
 fn parse_alias_binding(specifier: &str) -> Option<(String, String)> {
     let trimmed = specifier.trim();
-    if trimmed.is_empty() || trimmed.starts_with('{') { return None; }
+    if trimmed.is_empty() || trimmed.starts_with('{') {
+        return None;
+    }
     let mut parts = trimmed.splitn(2, ',');
     let module_path = parts.next()?.trim();
-    if !is_module_chain(module_path, false) { return None; }
+    if !is_module_chain(module_path, false) {
+        return None;
+    }
     let default_alias = module_path.rsplit('.').next().unwrap_or("").to_string();
     let alias_name = match parts.next() {
         Some(rest) => match rest.trim().find("as:") {
             Some(idx) => {
-                let alias: String = rest.trim()[idx + 3..].trim()
-                    .chars().take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_').collect();
-                if alias.is_empty() { default_alias } else { alias }
+                let alias: String = rest.trim()[idx + 3..]
+                    .trim()
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                    .collect();
+                if alias.is_empty() {
+                    default_alias
+                } else {
+                    alias
+                }
             }
             None => default_alias,
         },
         None => default_alias,
     };
-    if alias_name.is_empty() { return None; }
+    if alias_name.is_empty() {
+        return None;
+    }
     Some((alias_name, module_path.to_string()))
 }
 
@@ -1091,9 +1174,13 @@ fn first_module_segment(module_path: &str) -> Option<&str> {
 
 fn is_module_chain(value: &str, require_nested: bool) -> bool {
     let trimmed = value.trim();
-    if trimmed.is_empty() { return false; }
+    if trimmed.is_empty() {
+        return false;
+    }
     let segments: Vec<&str> = trimmed.split('.').collect();
-    if require_nested && segments.len() < 2 { return false; }
+    if require_nested && segments.len() < 2 {
+        return false;
+    }
     segments.iter().all(|seg| {
         let mut chars = seg.chars();
         chars.next().map_or(false, |c| c.is_ascii_uppercase())
@@ -1102,14 +1189,26 @@ fn is_module_chain(value: &str, require_nested: bool) -> bool {
 }
 
 fn has_register_namespace_conflict(
-    lib_chain: &str, target_module: &str, alias_bindings: &HashMap<String, Vec<String>>,
+    lib_chain: &str,
+    target_module: &str,
+    alias_bindings: &HashMap<String, Vec<String>>,
 ) -> bool {
-    let Some(lib_root) = first_module_segment(lib_chain) else { return true; };
-    let Some(target_root) = first_module_segment(target_module) else { return true; };
+    let Some(lib_root) = first_module_segment(lib_chain) else {
+        return true;
+    };
+    let Some(target_root) = first_module_segment(target_module) else {
+        return true;
+    };
     // 同根命名空间无法确定是外部注册还是内部模块调用，保守降级 direct_call
-    if lib_root == target_root { return true; }
-    let Some(resolved) = alias_bindings.get(lib_root) else { return false; };
-    if resolved.len() != 1 { return true; }
+    if lib_root == target_root {
+        return true;
+    }
+    let Some(resolved) = alias_bindings.get(lib_root) else {
+        return false;
+    };
+    if resolved.len() != 1 {
+        return true;
+    }
     first_module_segment(&resolved[0]).map_or(true, |r| r == target_root)
 }
 
@@ -1477,10 +1576,24 @@ end
             .filter(|h| h.call_type_hint == "supervisor_child")
             .collect();
         let targets: Vec<&str> = supervisor_hints.iter().map(|h| h.target.as_str()).collect();
-        assert!(targets.contains(&"Registry"), "should contain Registry, got: {:?}", targets);
-        assert!(targets.contains(&"DynamicSupervisor"), "should contain DynamicSupervisor, got: {:?}", targets);
-        assert!(targets.contains(&"MyApp.Worker"), "should contain MyApp.Worker, got: {:?}", targets);
-        assert!(supervisor_hints.iter().all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
+        assert!(
+            targets.contains(&"Registry"),
+            "should contain Registry, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"DynamicSupervisor"),
+            "should contain DynamicSupervisor, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"MyApp.Worker"),
+            "should contain MyApp.Worker, got: {:?}",
+            targets
+        );
+        assert!(supervisor_hints
+            .iter()
+            .all(|h| (h.confidence - 0.90).abs() < f64::EPSILON));
     }
 
     #[test]
@@ -1520,8 +1633,16 @@ end
             .filter(|h| h.call_type_hint == "genserver_runtime_dep")
             .collect();
         let targets: Vec<&str> = gs_hints.iter().map(|h| h.target.as_str()).collect();
-        assert!(targets.contains(&"MyApp.Agent"), "should contain MyApp.Agent, got: {:?}", targets);
-        assert!(targets.contains(&"MyApp.Stream"), "should contain MyApp.Stream, got: {:?}", targets);
+        assert!(
+            targets.contains(&"MyApp.Agent"),
+            "should contain MyApp.Agent, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"MyApp.Stream"),
+            "should contain MyApp.Stream, got: {:?}",
+            targets
+        );
         assert!(gs_hints.iter().all(|h| h.via == "handle_call"));
     }
 
@@ -1566,12 +1687,24 @@ end
             .filter(|h| h.call_type_hint == "callback_injection")
             .collect();
         let targets: Vec<&str> = cb_hints.iter().map(|h| h.target.as_str()).collect();
-        assert!(targets.contains(&"llm_backend"), "should contain llm_backend, got: {:?}", targets);
-        assert!(targets.contains(&"compaction_strategy"), "should contain compaction_strategy, got: {:?}", targets);
-        assert!(cb_hints.iter().all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
+        assert!(
+            targets.contains(&"llm_backend"),
+            "should contain llm_backend, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"compaction_strategy"),
+            "should contain compaction_strategy, got: {:?}",
+            targets
+        );
+        assert!(cb_hints
+            .iter()
+            .all(|h| (h.confidence - 0.75).abs() < f64::EPSILON));
         // via 字段应包含 key 名
         assert!(cb_hints.iter().any(|h| h.via.contains("llm_backend")));
-        assert!(cb_hints.iter().any(|h| h.via.contains("compaction_strategy")));
+        assert!(cb_hints
+            .iter()
+            .any(|h| h.via.contains("compaction_strategy")));
     }
 
     #[test]
@@ -1591,7 +1724,11 @@ end
             .filter(|h| h.call_type_hint == "callback_injection")
             .collect();
         // key 是变量而非 :atom，不应产生 hint；:fallback 是默认值，也不应产生 hint
-        assert!(cb_hints.is_empty(), "should not extract default value atom as key, got: {:?}", cb_hints);
+        assert!(
+            cb_hints.is_empty(),
+            "should not extract default value atom as key, got: {:?}",
+            cb_hints
+        );
     }
 
     #[test]
@@ -1624,11 +1761,26 @@ end
             .iter()
             .map(|h| h.call_type_hint.as_str())
             .collect();
-        assert!(types.contains(&"framework_injection"), "missing framework_injection");
-        assert!(types.contains(&"external_registration"), "missing external_registration");
-        assert!(types.contains(&"supervisor_child"), "missing supervisor_child");
-        assert!(types.contains(&"genserver_runtime_dep"), "missing genserver_runtime_dep");
-        assert!(types.contains(&"callback_injection"), "missing callback_injection");
+        assert!(
+            types.contains(&"framework_injection"),
+            "missing framework_injection"
+        );
+        assert!(
+            types.contains(&"external_registration"),
+            "missing external_registration"
+        );
+        assert!(
+            types.contains(&"supervisor_child"),
+            "missing supervisor_child"
+        );
+        assert!(
+            types.contains(&"genserver_runtime_dep"),
+            "missing genserver_runtime_dep"
+        );
+        assert!(
+            types.contains(&"callback_injection"),
+            "missing callback_injection"
+        );
     }
 
     #[test]
@@ -1698,9 +1850,21 @@ end
             .filter(|h| h.call_type_hint == "genserver_runtime_dep")
             .collect();
         let targets: Vec<&str> = gs_hints.iter().map(|h| h.target.as_str()).collect();
-        assert!(targets.contains(&"MyApp.Validator"), "missing MyApp.Validator in nested if, got: {:?}", targets);
-        assert!(targets.contains(&"MyApp.Notifier"), "missing MyApp.Notifier in nested case, got: {:?}", targets);
-        assert!(targets.contains(&"MyApp.ErrorHandler"), "missing MyApp.ErrorHandler in nested case, got: {:?}", targets);
+        assert!(
+            targets.contains(&"MyApp.Validator"),
+            "missing MyApp.Validator in nested if, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"MyApp.Notifier"),
+            "missing MyApp.Notifier in nested case, got: {:?}",
+            targets
+        );
+        assert!(
+            targets.contains(&"MyApp.ErrorHandler"),
+            "missing MyApp.ErrorHandler in nested case, got: {:?}",
+            targets
+        );
         assert!(gs_hints.iter().all(|h| h.via == "handle_call"));
     }
 

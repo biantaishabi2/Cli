@@ -49,8 +49,7 @@ pub fn format(score: &ArchitectureScore, _verbose: bool) -> Result<String, Strin
         })).collect::<Vec<_>>()
     });
 
-    serde_json::to_string_pretty(&json_value)
-        .map_err(|e| format!("serialize json failed: {}", e))
+    serde_json::to_string_pretty(&json_value).map_err(|e| format!("serialize json failed: {}", e))
 }
 
 /// 格式化为对比 JSON
@@ -71,6 +70,5 @@ pub fn format_comparison(results: &[(String, ArchitectureScore)]) -> Result<Stri
         })).collect::<Vec<_>>()
     });
 
-    serde_json::to_string_pretty(&json_value)
-        .map_err(|e| format!("serialize json failed: {}", e))
+    serde_json::to_string_pretty(&json_value).map_err(|e| format!("serialize json failed: {}", e))
 }

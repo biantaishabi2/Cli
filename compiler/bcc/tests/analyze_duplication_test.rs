@@ -9,7 +9,9 @@ fn bcc_bin() -> String {
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "bcc_analyze_dup_{}_{}", prefix, std::time::SystemTime::now()
+        "bcc_analyze_dup_{}_{}",
+        prefix,
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis()
@@ -156,9 +158,7 @@ def multiply(a, b):
     let smells = reports[0]["smells"].as_array().unwrap();
     let dup_smells: Vec<_> = smells
         .iter()
-        .filter(|s| {
-            s["rule"] == "structural_duplication" || s["rule"] == "boilerplate_skeleton"
-        })
+        .filter(|s| s["rule"] == "structural_duplication" || s["rule"] == "boilerplate_skeleton")
         .collect();
     assert!(
         dup_smells.is_empty(),
