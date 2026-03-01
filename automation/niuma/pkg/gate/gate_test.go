@@ -637,3 +637,15 @@ func TestRunner_SelfCheck_EscalationStillWorks(t *testing.T) {
 	assert.Equal(t, 1, labelCalled, "超限时应打标签")
 	assert.Equal(t, 1, commentCalled, "超限时应写评论")
 }
+
+func TestClassifyFailureReason_NewInfraReasonsAreDeferred(t *testing.T) {
+	cases := []string{
+		"NETWORK_TRANSIENT",
+		"AUTH_FAILED",
+		"RATE_LIMITED",
+	}
+
+	for _, reason := range cases {
+		assert.Equalf(t, FailureClassDeferred, classifyFailureReason(reason), "%s 应归类为 deferred", reason)
+	}
+}

@@ -166,12 +166,17 @@ func TestWorkflowContract_ReviewGateFailureUsesReasonCodeRouting(t *testing.T) {
 	assert.Contains(t, content, "Decide Gate Failure Action")
 	assert.Contains(t, content, "reason_code")
 	assert.Contains(t, content, "REQUIRED_JOBS_FAILED")
+	assert.Contains(t, content, "NETWORK_TRANSIENT")
+	assert.Contains(t, content, "AUTH_FAILED")
+	assert.Contains(t, content, "RATE_LIMITED")
 	assert.Contains(t, content, "action == 'needs_fix'")
 	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
 	assert.Contains(t, content, "--from bot:pr-created")
 	assert.Contains(t, content, "--to bot:pr-needs-fix")
 	assert.Contains(t, content, "Gate Deferred -> Keep PR Created")
 	assert.Contains(t, content, "action == 'defer'")
+	assert.Contains(t, content, "retry_count")
+	assert.Contains(t, content, "last_error")
 	assert.Contains(t, content, "steps.pr_gate.outcome == 'success'")
 	assert.NotContains(t, content, "skip_test_gate")
 }
@@ -210,6 +215,10 @@ func TestWorkflowContract_GateScriptTimeoutRetryAndStructuredLogContract(t *test
 	assert.Contains(t, content, "missing_jobs=")
 	assert.Contains(t, content, "reason_code=")
 	assert.Contains(t, content, "retry_count=")
+	assert.Contains(t, content, "last_error=")
+	assert.Contains(t, content, "NETWORK_TRANSIENT")
+	assert.Contains(t, content, "AUTH_FAILED")
+	assert.Contains(t, content, "RATE_LIMITED")
 }
 
 func TestWorkflowContract_EntryWorkflowsPropagateGatePolicyVars(t *testing.T) {

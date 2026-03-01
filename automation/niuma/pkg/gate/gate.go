@@ -282,6 +282,9 @@ func classifyFailureReason(reasonCode string) FailureClass {
 	switch normalizeReasonCode(reasonCode) {
 	case
 		"CHECKS_QUERY_FAILED",
+		"NETWORK_TRANSIENT",
+		"AUTH_FAILED",
+		"RATE_LIMITED",
 		"REQUIRED_JOBS_PENDING",
 		"PENDING_RETRYING",
 		"PENDING_BLOCKED",

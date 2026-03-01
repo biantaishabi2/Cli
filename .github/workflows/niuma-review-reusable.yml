@@ -136,6 +136,8 @@ jobs:
           echo "risk_level=${{ steps.pr_gate.outputs.risk_level }}"
           echo "required_jobs=${{ steps.pr_gate.outputs.required_jobs }}"
           echo "reason_code=${{ steps.pr_gate.outputs.reason_code }}"
+          echo "retry_count=${{ steps.pr_gate.outputs.retry_count }}"
+          echo "last_error=${{ steps.pr_gate.outputs.last_error }}"
 
       - name: Restore Workspace After Gate
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
@@ -147,14 +149,26 @@ jobs:
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'
         env:
           REASON_CODE: ${{ steps.pr_gate.outputs.reason_code }}
+          RETRY_COUNT: ${{ steps.pr_gate.outputs.retry_count }}
+          LAST_ERROR: ${{ steps.pr_gate.outputs.last_error }}
         run: |
           reason="${REASON_CODE:-UNKNOWN}"
           action="defer"
-          if [ "$reason" = "REQUIRED_JOBS_FAILED" ]; then
-            action="needs_fix"
-          fi
+          case "$reason" in
+            REQUIRED_JOBS_FAILED)
+              action="needs_fix"
+              ;;
+            CHECKS_QUERY_FAILED|NETWORK_TRANSIENT|TIMEOUT_BLOCKED|PENDING_BLOCKED|AUTH_FAILED|RATE_LIMITED)
+              action="defer"
+              ;;
+            *)
+              action="defer"
+              ;;
+          esac
           echo "action=$action" >> "$GITHUB_OUTPUT"
           echo "reason_code=$reason" >> "$GITHUB_OUTPUT"
+          echo "retry_count=${RETRY_COUNT:-0}" >> "$GITHUB_OUTPUT"
+          echo "last_error=${LAST_ERROR:-none}" >> "$GITHUB_OUTPUT"
 
       - name: Gate Failed (Code) -> Transition to PR Needs Fix
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure' && steps.gate_failure_action.outputs.action == 'needs_fix'
@@ -176,11 +190,27 @@ jobs:
           REPO: ${{ inputs.repo }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           REASON_CODE: ${{ steps.gate_failure_action.outputs.reason_code }}
+          RETRY_COUNT: ${{ steps.gate_failure_action.outputs.retry_count }}
+          LAST_ERROR: ${{ steps.gate_failure_action.outputs.last_error }}
         run: |
           reason="${REASON_CODE:-UNKNOWN}"
+          retry_count="${RETRY_COUNT:-0}"
+          last_error="${LAST_ERROR:-none}"
+          guidance="本轮未检测到明确代码失败，保持 \`bot:pr-created\`，避免无效 \`bot:pr-needs-fix -> iterate\` 循环。"
+          case "$reason" in
+            AUTH_FAILED)
+              guidance="检测到认证/权限异常，请检查 \`NIUMA_PAT/GITHUB_TOKEN\` scope 与仓库访问权限。"
+              ;;
+            RATE_LIMITED)
+              guidance="检测到 GitHub API 限流，请稍后重试或降低触发频率。"
+              ;;
+            CHECKS_QUERY_FAILED|NETWORK_TRANSIENT)
+              guidance="检测到网络/API 抖动，建议等待自动重试或稍后重触发 workflow。"
+              ;;
+          esac
           gh issue comment "$ISSUE_NUMBER" \
             --repo "$REPO" \
-            --body "## ⏳ Gate 未决，暂不触发迭代\n\n- reason_code=\`$reason\`\n\n本轮未检测到明确代码失败，保持 \`bot:pr-created\`，避免无效 \`bot:pr-needs-fix -> iterate\` 循环。"
+            --body "## ⏳ Gate 未决，暂不触发迭代\n\n- reason_code=\`$reason\`\n- retry_count=\`$retry_count\`\n- last_error=\`$last_error\`\n\n$guidance"
 
       - name: AI Self-Review
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
