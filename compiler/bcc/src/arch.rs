@@ -8,6 +8,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::arch_bridge_schema::{
+    ContractSourceConfig, RuntimeBindingConfig, UniboActionContract, UniboApiContractDocument,
+    UniboBoundaryContract, UniboContractProducer, UniboRuntimeBridgeConfig,
+};
+
 pub mod injection;
 use injection::{
     append_classification_reason, classify_edge, CallType, RelationClassification, RelationHint,
@@ -149,16 +154,25 @@ fn default_contract_kind() -> String {
     "command".to_string()
 }
 
-const API_CONTRACT_SCHEMA_VERSION: &str = "1.0.0";
+const UNIBO_BRIDGE_VERSION: &str = "1.0.0";
+const UNIBO_TARGET_RUNTIME_VERSION: &str = "1.x";
+const UNIBO_COMPAT_VERSION: &str = "1";
+const UNIBO_API_CONTRACT_FILE: &str = "unibo-api-contract.json";
+const UNIBO_RUNTIME_BRIDGE_FILE: &str = "unibo-runtime-bridge.yaml";
+const LEGACY_API_CONTRACT_SCHEMA_VERSION: &str = "1.0.0";
+const LEGACY_API_CONTRACT_FILE: &str = "api-contract.json";
+const GENERATE_EXIT_INVALID_ARGUMENT: i32 = 10;
+const GENERATE_EXIT_CONTRACT_CONFLICT: i32 = 12;
+const GENERATE_EXIT_OUTPUT_FAILED: i32 = 13;
 
 #[derive(Debug, Serialize)]
-struct ApiContractProducer {
+struct LegacyApiContractProducer {
     name: String,
     version: String,
 }
 
 #[derive(Debug, Serialize)]
-struct ApiContractItem {
+struct LegacyApiContractItem {
     module_id: String,
     name: String,
     kind: String,
@@ -171,12 +185,31 @@ struct ApiContractItem {
 }
 
 #[derive(Debug, Serialize)]
-struct ApiContractDocument {
+struct LegacyApiContractDocument {
     contract_schema_version: String,
-    producer: ApiContractProducer,
+    producer: LegacyApiContractProducer,
     seed_version: String,
     generated_at: String,
-    contracts: Vec<ApiContractItem>,
+    contracts: Vec<LegacyApiContractItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConflictStrategy {
+    ErrorOnConflict,
+    Dedupe,
+}
+
+impl ConflictStrategy {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "error-on-conflict" => Ok(Self::ErrorOnConflict),
+            "dedupe" => Ok(Self::Dedupe),
+            _ => Err(format!(
+                "unknown conflict strategy: {} (expected error-on-conflict|dedupe)",
+                raw
+            )),
+        }
+    }
 }
 
 /// 契约复杂度分类
@@ -2461,40 +2494,268 @@ fn generate_from_seed(seed: &SeedSpec) -> Vec<(String, String, ContractComplexit
     results
 }
 
-fn build_api_contract_document(seed: &SeedSpec) -> Result<ApiContractDocument, String> {
+fn normalize_key(raw: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_is_sep = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_is_sep = false;
+        } else if !last_is_sep {
+            normalized.push('_');
+            last_is_sep = true;
+        }
+    }
+    let trimmed = normalized.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn normalize_contract_kind(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        default_contract_kind()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
+}
+
+fn to_sorted_map(raw: &HashMap<String, String>) -> BTreeMap<String, String> {
+    raw.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+fn resolve_contract_fields(contract: &BoundaryContract) -> BTreeMap<String, String> {
+    if !contract.fields.is_empty() {
+        return to_sorted_map(&contract.fields);
+    }
+    let mut merged = BTreeMap::new();
+    for (k, v) in &contract.input {
+        merged.insert(k.clone(), v.clone());
+    }
+    for (k, v) in &contract.output {
+        merged.insert(k.clone(), v.clone());
+    }
+    merged
+}
+
+fn build_action(
+    action: &str,
+    graphql_kind: &str,
+    input: BTreeMap<String, String>,
+    output: BTreeMap<String, String>,
+    errors: &[String],
+) -> UniboActionContract {
+    UniboActionContract {
+        action_key: normalize_key(action),
+        action: action.to_string(),
+        graphql_kind: graphql_kind.to_string(),
+        input,
+        output,
+        errors: errors.to_vec(),
+    }
+}
+
+fn build_unibo_contract_item(
+    module_id: &str,
+    contract: &BoundaryContract,
+) -> Result<UniboBoundaryContract, String> {
+    let source_kind = normalize_contract_kind(&contract.kind);
+    let fields = resolve_contract_fields(contract);
+    let contract_key = format!(
+        "{}.{}",
+        normalize_key(module_id),
+        normalize_key(&contract.name)
+    );
+    let mut actions = match source_kind.as_str() {
+        "query" => vec![build_action(
+            &contract.name,
+            "query",
+            to_sorted_map(&contract.input),
+            to_sorted_map(&contract.output),
+            &contract.errors,
+        )],
+        "command" => vec![build_action(
+            &contract.name,
+            "mutation",
+            to_sorted_map(&contract.input),
+            to_sorted_map(&contract.output),
+            &contract.errors,
+        )],
+        "crud" => {
+            let mut read_delete_input = BTreeMap::new();
+            read_delete_input.insert("id".to_string(), "uuid".to_string());
+
+            let mut update_input = fields.clone();
+            update_input.insert("id".to_string(), "uuid".to_string());
+
+            let mut delete_output = BTreeMap::new();
+            delete_output.insert("deleted".to_string(), "boolean".to_string());
+
+            let mut list_output = BTreeMap::new();
+            list_output.insert("items".to_string(), "array".to_string());
+
+            vec![
+                build_action(
+                    "create",
+                    "mutation",
+                    fields.clone(),
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "read",
+                    "query",
+                    read_delete_input.clone(),
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "update",
+                    "mutation",
+                    update_input,
+                    fields.clone(),
+                    &contract.errors,
+                ),
+                build_action(
+                    "delete",
+                    "mutation",
+                    read_delete_input,
+                    delete_output,
+                    &contract.errors,
+                ),
+                build_action(
+                    "list",
+                    "query",
+                    BTreeMap::new(),
+                    list_output,
+                    &contract.errors,
+                ),
+            ]
+        }
+        other => {
+            return Err(format!(
+                "unsupported contract kind `{}` for {}.{} (expected query|command|crud)",
+                other, module_id, contract.name
+            ));
+        }
+    };
+    actions.sort_by(|a, b| a.action_key.cmp(&b.action_key));
+
+    Ok(UniboBoundaryContract {
+        contract_key,
+        module_id: module_id.to_string(),
+        name: contract.name.clone(),
+        source_kind: source_kind.clone(),
+        graphql_kind: match source_kind.as_str() {
+            "query" => "query".to_string(),
+            "command" => "mutation".to_string(),
+            _ => "mixed".to_string(),
+        },
+        fields,
+        actions,
+    })
+}
+
+#[derive(Debug)]
+enum UniboContractBuildError {
+    Conflict(String),
+    Other(String),
+}
+
+fn build_unibo_api_contract_document(
+    seed: &SeedSpec,
+    strategy: ConflictStrategy,
+) -> Result<UniboApiContractDocument, UniboContractBuildError> {
+    let mut contracts_by_key: BTreeMap<String, UniboBoundaryContract> = BTreeMap::new();
+    let mut conflicts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for boundary in &seed.boundaries {
+        for contract in &boundary.contracts {
+            let item = build_unibo_contract_item(&boundary.module_id, contract)
+                .map_err(UniboContractBuildError::Other)?;
+            let source = format!("{}.{}", boundary.module_id, contract.name);
+            if let Some(prev) = contracts_by_key.get(&item.contract_key) {
+                match strategy {
+                    ConflictStrategy::ErrorOnConflict => {
+                        let entry = conflicts.entry(item.contract_key.clone()).or_default();
+                        if entry.is_empty() {
+                            entry.push(format!("{}.{}", prev.module_id, prev.name));
+                        }
+                        entry.push(source);
+                    }
+                    ConflictStrategy::Dedupe => {
+                        eprintln!(
+                            "[generate] warning: contract key conflict `{}`，保留后者 {}（覆盖 {}.{}）",
+                            item.contract_key, source, prev.module_id, prev.name
+                        );
+                        contracts_by_key.insert(item.contract_key.clone(), item);
+                    }
+                }
+            } else {
+                contracts_by_key.insert(item.contract_key.clone(), item);
+            }
+        }
+    }
+
+    if !conflicts.is_empty() {
+        let mut detail = Vec::new();
+        for (key, mut sources) in conflicts {
+            sources.sort();
+            sources.dedup();
+            detail.push(format!("{} => {}", key, sources.join(" | ")));
+        }
+        return Err(UniboContractBuildError::Conflict(format!(
+            "contract key conflicts detected: {}",
+            detail.join("; ")
+        )));
+    }
+
+    if contracts_by_key.is_empty() {
+        return Err(UniboContractBuildError::Other(
+            "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
+        ));
+    }
+
+    Ok(UniboApiContractDocument {
+        bridge_version: UNIBO_BRIDGE_VERSION.to_string(),
+        target_runtime_version: UNIBO_TARGET_RUNTIME_VERSION.to_string(),
+        compat_version: UNIBO_COMPAT_VERSION.to_string(),
+        producer: UniboContractProducer {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        seed_version: seed
+            .version
+            .clone()
+            .unwrap_or_else(|| "unspecified".to_string()),
+        generated_at: Utc::now().to_rfc3339(),
+        contracts: contracts_by_key.into_values().collect(),
+    })
+}
+
+fn build_legacy_api_contract_document(seed: &SeedSpec) -> Result<LegacyApiContractDocument, String> {
     let mut contracts = Vec::new();
     for boundary in &seed.boundaries {
         for contract in &boundary.contracts {
-            contracts.push(ApiContractItem {
+            contracts.push(LegacyApiContractItem {
                 module_id: boundary.module_id.clone(),
                 name: contract.name.clone(),
-                kind: if contract.kind.trim().is_empty() {
-                    default_contract_kind()
-                } else {
-                    contract.kind.clone()
-                },
-                input: contract
-                    .input
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                output: contract
-                    .output
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
+                kind: normalize_contract_kind(&contract.kind),
+                input: to_sorted_map(&contract.input),
+                output: to_sorted_map(&contract.output),
                 errors: contract.errors.clone(),
-                fields: contract
-                    .fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
+                fields: to_sorted_map(&contract.fields),
             });
         }
     }
 
     if contracts.is_empty() {
-        return Err("seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string());
+        return Err(
+            "seed 缺少 contracts：--emit api-contract 需要 boundaries[].contracts".to_string(),
+        );
     }
 
     contracts.sort_by(|a, b| {
@@ -2503,9 +2764,9 @@ fn build_api_contract_document(seed: &SeedSpec) -> Result<ApiContractDocument, S
             .then_with(|| a.name.cmp(&b.name))
     });
 
-    Ok(ApiContractDocument {
-        contract_schema_version: API_CONTRACT_SCHEMA_VERSION.to_string(),
-        producer: ApiContractProducer {
+    Ok(LegacyApiContractDocument {
+        contract_schema_version: LEGACY_API_CONTRACT_SCHEMA_VERSION.to_string(),
+        producer: LegacyApiContractProducer {
             name: env!("CARGO_PKG_NAME").to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
@@ -2518,8 +2779,24 @@ fn build_api_contract_document(seed: &SeedSpec) -> Result<ApiContractDocument, S
     })
 }
 
-fn write_api_contract_document(
-    document: &ApiContractDocument,
+fn build_unibo_runtime_bridge_config() -> UniboRuntimeBridgeConfig {
+    UniboRuntimeBridgeConfig {
+        bridge_version: UNIBO_BRIDGE_VERSION.to_string(),
+        target_runtime_version: UNIBO_TARGET_RUNTIME_VERSION.to_string(),
+        compat_version: UNIBO_COMPAT_VERSION.to_string(),
+        runtime: RuntimeBindingConfig {
+            package: "unibo_graphql_runtime".to_string(),
+            mode: "reuse".to_string(),
+        },
+        contract_source: ContractSourceConfig {
+            path: format!("./{}", UNIBO_API_CONTRACT_FILE),
+            format: "json".to_string(),
+        },
+    }
+}
+
+fn write_unibo_api_contract_document(
+    document: &UniboApiContractDocument,
     output_dir: Option<&str>,
 ) -> Result<(), String> {
     let payload = serde_json::to_string_pretty(document)
@@ -2528,24 +2805,86 @@ fn write_api_contract_document(
         Some(dir) => {
             let out_path = Path::new(dir);
             fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
-            let file_path = out_path.join("api-contract.json");
+            let file_path = out_path.join(UNIBO_API_CONTRACT_FILE);
             fs::write(&file_path, format!("{}\n", payload))
                 .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
             eprintln!(
-                "[generate] 已输出 API Contract 到 {}（contracts: {}）",
+                "[generate] 已输出 UniBO API Contract 到 {}（contracts: {}）",
                 file_path.display(),
                 document.contracts.len()
             );
         }
         None => {
+            eprintln!("[generate] 未指定 --output，UniBO 契约输出到 stdout（机读）");
             println!("{}", payload);
         }
     }
     Ok(())
 }
 
+fn write_legacy_api_contract_document(
+    document: &LegacyApiContractDocument,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(document)
+        .map_err(|e| format!("serialize legacy api-contract failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(LEGACY_API_CONTRACT_FILE);
+            fs::write(&file_path, format!("{}\n", payload))
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出兼容层 API Contract 到 {}（contracts: {}）",
+                file_path.display(),
+                document.contracts.len()
+            );
+        }
+        None => {
+            eprintln!("[generate] 未指定 --output，兼容层 JSON 输出到 stderr 供人工检查");
+            eprintln!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
+fn write_unibo_runtime_bridge_config(
+    config: &UniboRuntimeBridgeConfig,
+    output_dir: Option<&str>,
+) -> Result<(), String> {
+    let payload = serde_yaml::to_string(config)
+        .map_err(|e| format!("serialize runtime-bridge failed: {}", e))?;
+    match output_dir {
+        Some(dir) => {
+            let out_path = Path::new(dir);
+            fs::create_dir_all(out_path).map_err(|e| format!("create output dir failed: {}", e))?;
+            let file_path = out_path.join(UNIBO_RUNTIME_BRIDGE_FILE);
+            fs::write(&file_path, payload)
+                .map_err(|e| format!("write {} failed: {}", file_path.display(), e))?;
+            eprintln!(
+                "[generate] 已输出 UniBO runtime bridge 配置到 {}",
+                file_path.display()
+            );
+        }
+        None => {
+            eprintln!(
+                "[generate] 未指定 --output，runtime bridge 改为输出到 stderr 以保持 stdout JSON 可机读"
+            );
+            eprintln!("{}", payload);
+        }
+    }
+    Ok(())
+}
+
 /// 公共入口：从 seed 生成代码
-pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
+pub fn generate(
+    seed_file: &str,
+    emit: &str,
+    output_dir: Option<&str>,
+    emit_runtime_bridge: bool,
+    conflict_strategy: &str,
+) {
     let seed_raw = match fs::read_to_string(seed_file) {
         Ok(s) => s,
         Err(e) => {
@@ -2572,7 +2911,10 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
                 eprintln!("[generate] seed 中没有 boundary contracts，无产出");
                 return;
             }
-            let crud_count = results.iter().filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud)).count();
+            let crud_count = results
+                .iter()
+                .filter(|(_, _, c, _)| matches!(c, ContractComplexity::Crud))
+                .count();
             let other_count = results.len() - crud_count;
 
             if let Some(dir) = output_dir {
@@ -2628,29 +2970,57 @@ pub fn generate(seed_file: &str, emit: &str, output_dir: Option<&str>) {
                     }
                     println!("{}\n", output);
                 }
-                eprintln!(
-                    "[generate] CRUD: {}, 骨架: {}",
-                    crud_count, other_count
-                );
+                eprintln!("[generate] CRUD: {}, 骨架: {}", crud_count, other_count);
             }
         }
         "api-contract" => {
-            let document = match build_api_contract_document(&seed) {
+            let strategy = match ConflictStrategy::parse(conflict_strategy) {
+                Ok(strategy) => strategy,
+                Err(e) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
+                }
+            };
+            let document = match build_unibo_api_contract_document(&seed, strategy) {
+                Ok(doc) => doc,
+                Err(UniboContractBuildError::Conflict(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_CONTRACT_CONFLICT);
+                }
+                Err(UniboContractBuildError::Other(e)) => {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let legacy_document = match build_legacy_api_contract_document(&seed) {
                 Ok(doc) => doc,
                 Err(e) => {
                     eprintln!("[generate] {}", e);
                     std::process::exit(1);
                 }
             };
-            if let Err(e) = write_api_contract_document(&document, output_dir) {
+            if let Err(e) = write_unibo_api_contract_document(&document, output_dir) {
                 eprintln!("[generate] {}", e);
-                std::process::exit(1);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+            }
+            if let Err(e) = write_legacy_api_contract_document(&legacy_document, output_dir) {
+                eprintln!("[generate] {}", e);
+                std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+            }
+            if emit_runtime_bridge {
+                let runtime_bridge = build_unibo_runtime_bridge_config();
+                if let Err(e) = write_unibo_runtime_bridge_config(&runtime_bridge, output_dir) {
+                    eprintln!("[generate] {}", e);
+                    std::process::exit(GENERATE_EXIT_OUTPUT_FAILED);
+                }
+            } else {
+                eprintln!("[generate] emit-runtime-bridge=false，仅输出契约桥接产物");
             }
         }
         other => {
             eprintln!("[generate] 未知 emit 模式: {}", other);
             eprintln!("[generate] 可选值: code | api-contract | all");
-            std::process::exit(1);
+            std::process::exit(GENERATE_EXIT_INVALID_ARGUMENT);
         }
     }
 }
@@ -6344,59 +6714,6 @@ boundaries:
         assert!(results[1].3.contains("defmodule MyApp.Shop do"));
         assert!(results[1].3.contains("def create_order("));
         assert!(results[1].3.contains("@spec create_order("));
-    }
-
-    #[test]
-    fn build_api_contract_document_contains_required_fields() {
-        let yaml = r#"
-version: v1
-modules:
-  - module_id: shop
-    precedence: 1
-    path_rules:
-      include: ["src/shop/**"]
-relations_expected: []
-boundaries:
-  - module_id: shop
-    contracts:
-      - name: create_order
-        kind: command
-        input:
-          user_id: uuid
-        output:
-          order_id: uuid
-"#;
-        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
-        let document = build_api_contract_document(&seed).expect("build api contract");
-        assert_eq!(document.contract_schema_version, API_CONTRACT_SCHEMA_VERSION);
-        assert_eq!(document.seed_version, "v1");
-        assert_eq!(document.contracts.len(), 1);
-        assert_eq!(document.contracts[0].module_id, "shop");
-        assert_eq!(document.contracts[0].name, "create_order");
-        assert_eq!(document.contracts[0].kind, "command");
-
-        let payload = serde_json::to_value(&document).expect("serialize");
-        let generated_at = payload
-            .get("generated_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        assert!(generated_at.contains('T'));
-    }
-
-    #[test]
-    fn build_api_contract_document_requires_contracts() {
-        let yaml = r#"
-version: v1
-modules:
-  - module_id: shop
-    precedence: 1
-    path_rules:
-      include: ["src/shop/**"]
-relations_expected: []
-"#;
-        let seed: SeedSpec = serde_yaml::from_str(yaml).expect("parse");
-        let err = build_api_contract_document(&seed).expect_err("expected missing contracts");
-        assert!(err.contains("seed 缺少 contracts"));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 pub mod analyze;
 pub mod arch;
+pub mod arch_bridge_schema;
 pub mod compile;
 pub mod extract;
 pub mod graph;

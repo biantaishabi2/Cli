@@ -205,6 +205,8 @@ boundaries:
             &seed.to_string_lossy(),
             "--emit",
             "api-contract",
+            "--emit-runtime-bridge",
+            "false",
             "--output",
             &output.to_string_lossy(),
         ])
@@ -212,14 +214,23 @@ boundaries:
         .expect("run arch generate api-contract");
     assert!(status.success());
 
-    let contract_path = output.join("api-contract.json");
-    assert!(contract_path.exists(), "api-contract.json should exist");
+    let contract_path = output.join("unibo-api-contract.json");
+    let legacy_contract_path = output.join("api-contract.json");
+    assert!(contract_path.exists(), "unibo-api-contract.json should exist");
+    assert!(
+        legacy_contract_path.exists(),
+        "api-contract.json compatibility file should exist"
+    );
 
     let payload: Value = serde_json::from_str(
         &fs::read_to_string(&contract_path).expect("read generated api-contract"),
     )
     .expect("parse generated api-contract json");
     assert!(payload.get("contracts").and_then(Value::as_array).is_some());
+    assert_eq!(
+        payload.get("bridgeVersion"),
+        Some(&Value::String("1.0.0".to_string()))
+    );
 
     let mut files: Vec<String> = fs::read_dir(&output)
         .expect("read output dir")
@@ -227,7 +238,13 @@ boundaries:
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
     files.sort();
-    assert_eq!(files, vec!["api-contract.json".to_string()]);
+    assert_eq!(
+        files,
+        vec![
+            "api-contract.json".to_string(),
+            "unibo-api-contract.json".to_string()
+        ]
+    );
     assert!(!files.iter().any(|name| {
         name.contains("runtime") || name.contains("controller") || name.contains("resolver")
     }));
