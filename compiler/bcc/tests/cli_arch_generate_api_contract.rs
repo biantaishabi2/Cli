@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -36,6 +37,174 @@ fn run_arch_generate(seed: &Path, emit: &str, output: &Path) -> ExitStatus {
         ])
         .status()
         .expect("run arch generate")
+}
+
+fn api_contract_schema_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("docs")
+        .join("schemas")
+        .join("api-contract.v1.schema.json")
+}
+
+fn validate_api_contract_schema(payload: &Value) {
+    let schema_raw =
+        fs::read_to_string(api_contract_schema_path()).expect("read api-contract v1 schema");
+    let schema_json: Value = serde_json::from_str(&schema_raw).expect("parse api-contract schema");
+    if let Err(err) = validate_schema_node(payload, &schema_json, "$") {
+        panic!("api-contract payload does not satisfy schema: {}", err);
+    }
+}
+
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn validate_schema_node(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    let schema_obj = schema
+        .as_object()
+        .ok_or_else(|| format!("{} schema should be object", path))?;
+
+    if let Some(expected_type) = schema_obj.get("type").and_then(Value::as_str) {
+        validate_value_type(value, expected_type, path)?;
+        match expected_type {
+            "object" => validate_object_node(value, schema_obj, path)?,
+            "array" => validate_array_node(value, schema_obj, path)?,
+            "string" => validate_string_node(value, schema_obj, path)?,
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    if schema_obj.contains_key("required") || schema_obj.contains_key("properties") {
+        validate_value_type(value, "object", path)?;
+        validate_object_node(value, schema_obj, path)?;
+    }
+    if schema_obj.contains_key("items") || schema_obj.contains_key("minItems") {
+        validate_value_type(value, "array", path)?;
+        validate_array_node(value, schema_obj, path)?;
+    }
+    if schema_obj.contains_key("pattern") || schema_obj.contains_key("format") {
+        validate_value_type(value, "string", path)?;
+        validate_string_node(value, schema_obj, path)?;
+    }
+    Ok(())
+}
+
+fn validate_value_type(value: &Value, expected_type: &str, path: &str) -> Result<(), String> {
+    let matched = match expected_type {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    if matched {
+        return Ok(());
+    }
+    Err(format!(
+        "{} expected type `{}`, got `{}`",
+        path,
+        expected_type,
+        value_type_name(value)
+    ))
+}
+
+fn validate_object_node(
+    value: &Value,
+    schema_obj: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<(), String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| format!("{} should be object", path))?;
+    if let Some(required) = schema_obj.get("required").and_then(Value::as_array) {
+        for field in required.iter().filter_map(Value::as_str) {
+            if !obj.contains_key(field) {
+                return Err(format!("{} missing required field `{}`", path, field));
+            }
+        }
+    }
+
+    let properties = schema_obj.get("properties").and_then(Value::as_object);
+    let additional = schema_obj.get("additionalProperties");
+    for (key, child) in obj {
+        let child_path = format!("{}.{}", path, key);
+        if let Some(prop_schema) = properties.and_then(|props| props.get(key)) {
+            validate_schema_node(child, prop_schema, &child_path)?;
+            continue;
+        }
+        if let Some(additional_schema) = additional {
+            if let Some(false) = additional_schema.as_bool() {
+                return Err(format!("{} is not allowed by schema", child_path));
+            }
+            if additional_schema.is_object() {
+                validate_schema_node(child, additional_schema, &child_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_array_node(
+    value: &Value,
+    schema_obj: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<(), String> {
+    let arr = value
+        .as_array()
+        .ok_or_else(|| format!("{} should be array", path))?;
+    if let Some(min_items) = schema_obj.get("minItems").and_then(Value::as_u64) {
+        if (arr.len() as u64) < min_items {
+            return Err(format!(
+                "{} requires at least {} items, got {}",
+                path,
+                min_items,
+                arr.len()
+            ));
+        }
+    }
+    if let Some(item_schema) = schema_obj.get("items") {
+        for (idx, item) in arr.iter().enumerate() {
+            validate_schema_node(item, item_schema, &format!("{}[{}]", path, idx))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_node(
+    value: &Value,
+    schema_obj: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<(), String> {
+    let s = value
+        .as_str()
+        .ok_or_else(|| format!("{} should be string", path))?;
+    if let Some(pattern) = schema_obj.get("pattern").and_then(Value::as_str) {
+        let re = Regex::new(pattern)
+            .map_err(|e| format!("{} has invalid pattern `{}`: {}", path, pattern, e))?;
+        if !re.is_match(s) {
+            return Err(format!(
+                "{} value `{}` does not match pattern `{}`",
+                path, s, pattern
+            ));
+        }
+    }
+    if let Some(format) = schema_obj.get("format").and_then(Value::as_str) {
+        if format == "date-time" && chrono::DateTime::parse_from_rfc3339(s).is_err() {
+            return Err(format!("{} value `{}` is not RFC3339 date-time", path, s));
+        }
+    }
+    Ok(())
 }
 
 fn sample_seed_with_contracts() -> &'static str {
@@ -137,6 +306,7 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
     let payload: Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).expect("read contract file"))
             .expect("parse contract json");
+    validate_api_contract_schema(&payload);
     assert_eq!(
         payload.get("contract_schema_version"),
         Some(&Value::String("1.0.0".to_string()))
