@@ -24,6 +24,16 @@ fn write(path: &Path, content: &str) {
 }
 
 fn run_arch_generate(seed: &Path, emit: &str, output: &Path) -> ExitStatus {
+    run_arch_generate_with_options(seed, emit, output, false, "error-on-conflict")
+}
+
+fn run_arch_generate_with_options(
+    seed: &Path,
+    emit: &str,
+    output: &Path,
+    emit_runtime_bridge: bool,
+    conflict_strategy: &str,
+) -> ExitStatus {
     Command::new(env!("CARGO_BIN_EXE_bcc"))
         .args([
             "arch",
@@ -32,6 +42,10 @@ fn run_arch_generate(seed: &Path, emit: &str, output: &Path) -> ExitStatus {
             &seed.to_string_lossy(),
             "--emit",
             emit,
+            "--emit-runtime-bridge",
+            if emit_runtime_bridge { "true" } else { "false" },
+            "--conflict-strategy",
+            conflict_strategy,
             "--output",
             &output.to_string_lossy(),
         ])
@@ -41,14 +55,13 @@ fn run_arch_generate(seed: &Path, emit: &str, output: &Path) -> ExitStatus {
 
 fn api_contract_schema_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("docs")
         .join("schemas")
-        .join("api-contract.v1.schema.json")
+        .join("unibo-api-contract.schema.json")
 }
 
 fn validate_api_contract_schema(payload: &Value) {
     let schema_raw =
-        fs::read_to_string(api_contract_schema_path()).expect("read api-contract v1 schema");
+        fs::read_to_string(api_contract_schema_path()).expect("read unibo api-contract schema");
     let schema_json: Value = serde_json::from_str(&schema_raw).expect("parse api-contract schema");
     if let Err(err) = validate_schema_node(payload, &schema_json, "$") {
         panic!("api-contract payload does not satisfy schema: {}", err);
@@ -295,29 +308,42 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
     let output = root.join("api-contract-out");
     write(&seed, sample_seed_with_contracts());
 
-    let status = run_arch_generate(&seed, "api-contract", &output);
+    let status =
+        run_arch_generate_with_options(&seed, "api-contract", &output, false, "error-on-conflict");
     assert!(status.success(), "emit api-contract should succeed");
 
-    let contract_path = output.join("api-contract.json");
-    assert!(contract_path.exists(), "api-contract.json should exist");
+    let contract_path = output.join("unibo-api-contract.json");
+    assert!(
+        contract_path.exists(),
+        "unibo-api-contract.json should exist"
+    );
     assert!(!output.join("generate-commands.sh").exists());
     assert!(!output.join("billing.ex").exists());
+    assert!(!output.join("unibo-runtime-bridge.yaml").exists());
 
     let payload: Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).expect("read contract file"))
             .expect("parse contract json");
     validate_api_contract_schema(&payload);
     assert_eq!(
-        payload.get("contract_schema_version"),
+        payload.get("bridgeVersion"),
         Some(&Value::String("1.0.0".to_string()))
     );
     assert_eq!(
-        payload.get("seed_version"),
+        payload.get("targetRuntimeVersion"),
+        Some(&Value::String("1.x".to_string()))
+    );
+    assert_eq!(
+        payload.get("compatVersion"),
+        Some(&Value::String("1".to_string()))
+    );
+    assert_eq!(
+        payload.get("seedVersion"),
         Some(&Value::String("v1".to_string()))
     );
     assert!(
         payload
-            .get("generated_at")
+            .get("generatedAt")
             .and_then(|v| v.as_str())
             .map(|v| v.contains('T'))
             .unwrap_or(false),
@@ -330,7 +356,10 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
     assert_eq!(contracts.len(), 2);
     assert!(contracts
         .iter()
-        .all(|item| item.get("module_id") == Some(&Value::String("billing".to_string()))));
+        .all(|item| item.get("moduleId") == Some(&Value::String("billing".to_string()))));
+    assert!(contracts
+        .iter()
+        .all(|item| item.get("actions").and_then(Value::as_array).is_some()));
 
     let files = collect_dir_snapshot(&output);
     assert_eq!(
@@ -338,6 +367,7 @@ fn arch_generate_emit_api_contract_only_outputs_contract_file() {
         1,
         "api-contract output should contain only one file"
     );
+    assert!(files.contains_key("unibo-api-contract.json"));
     assert!(!files.keys().any(|name| {
         name.contains("runtime") || name.contains("controller") || name.contains("resolver")
     }));

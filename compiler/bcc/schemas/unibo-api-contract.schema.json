@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/biantaishabi2/Cli/compiler/bcc/schemas/unibo-api-contract.schema.json",
+  "title": "BCC UniBO API Contract Bridge",
+  "type": "object",
+  "required": [
+    "bridgeVersion",
+    "targetRuntimeVersion",
+    "compatVersion",
+    "producer",
+    "seedVersion",
+    "generatedAt",
+    "contracts"
+  ],
+  "properties": {
+    "bridgeVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "targetRuntimeVersion": {
+      "type": "string"
+    },
+    "compatVersion": {
+      "type": "string"
+    },
+    "producer": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "seedVersion": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "contractKey",
+          "moduleId",
+          "name",
+          "sourceKind",
+          "graphqlKind",
+          "actions"
+        ],
+        "properties": {
+          "contractKey": { "type": "string" },
+          "moduleId": { "type": "string" },
+          "name": { "type": "string" },
+          "sourceKind": { "type": "string" },
+          "graphqlKind": { "type": "string" },
+          "fields": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "actionKey",
+                "action",
+                "graphqlKind",
+                "input",
+                "output"
+              ],
+              "properties": {
+                "actionKey": { "type": "string" },
+                "action": { "type": "string" },
+                "graphqlKind": { "type": "string" },
+                "input": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                },
+                "output": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                },
+                "errors": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,9 @@
+bridgeVersion: 1.0.0
+targetRuntimeVersion: 1.x
+compatVersion: '1'
+runtime:
+  package: unibo_graphql_runtime
+  mode: reuse
+contractSource:
+  path: ./unibo-api-contract.json
+  format: json
