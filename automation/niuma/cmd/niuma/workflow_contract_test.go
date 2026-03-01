@@ -155,7 +155,7 @@ func TestWorkflowContract_IterateGateUsesUnifiedCommand(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(content, "--max-retries \"$GATE_MAX_RETRIES\""))
 }
 
-func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
+func TestWorkflowContract_ReviewGateFailureUsesReasonCodeRouting(t *testing.T) {
 	content := loadWorkflowFile(t, "niuma-review-reusable.yml")
 
 	assert.Contains(t, content, "id: pr_gate")
@@ -163,9 +163,15 @@ func TestWorkflowContract_ReviewGateFailureTransitionsToNeedsFix(t *testing.T) {
 	assert.Contains(t, content, "Restore Workspace After Gate")
 	assert.Contains(t, content, "git checkout --force \"$GITHUB_SHA\"")
 	assert.Contains(t, content, "steps.pr_gate.outcome == 'failure'")
+	assert.Contains(t, content, "Decide Gate Failure Action")
+	assert.Contains(t, content, "reason_code")
+	assert.Contains(t, content, "REQUIRED_JOBS_FAILED")
+	assert.Contains(t, content, "action == 'needs_fix'")
 	assert.Contains(t, content, "\"$NIUMA_BIN\" state-label set")
 	assert.Contains(t, content, "--from bot:pr-created")
 	assert.Contains(t, content, "--to bot:pr-needs-fix")
+	assert.Contains(t, content, "Gate Deferred -> Keep PR Created")
+	assert.Contains(t, content, "action == 'defer'")
 	assert.Contains(t, content, "steps.pr_gate.outcome == 'success'")
 	assert.NotContains(t, content, "skip_test_gate")
 }

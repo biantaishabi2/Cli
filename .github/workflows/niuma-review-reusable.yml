@@ -135,14 +135,29 @@ jobs:
           echo "run_mode=${{ steps.pr_gate.outputs.run_mode }}"
           echo "risk_level=${{ steps.pr_gate.outputs.risk_level }}"
           echo "required_jobs=${{ steps.pr_gate.outputs.required_jobs }}"
+          echo "reason_code=${{ steps.pr_gate.outputs.reason_code }}"
 
       - name: Restore Workspace After Gate
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
         run: |
           git checkout --force "$GITHUB_SHA"
 
-      - name: Gate Failed -> Transition to PR Needs Fix
+      - name: Decide Gate Failure Action
+        id: gate_failure_action
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure'
+        env:
+          REASON_CODE: ${{ steps.pr_gate.outputs.reason_code }}
+        run: |
+          reason="${REASON_CODE:-UNKNOWN}"
+          action="defer"
+          if [ "$reason" = "REQUIRED_JOBS_FAILED" ]; then
+            action="needs_fix"
+          fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "reason_code=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: Gate Failed (Code) -> Transition to PR Needs Fix
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure' && steps.gate_failure_action.outputs.action == 'needs_fix'
         env:
           GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
           REPO: ${{ inputs.repo }}
@@ -153,6 +168,19 @@ jobs:
             --issue "$ISSUE_NUMBER" \
             --from bot:pr-created \
             --to bot:pr-needs-fix
+
+      - name: Gate Deferred -> Keep PR Created
+        if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'failure' && steps.gate_failure_action.outputs.action == 'defer'
+        env:
+          GITHUB_TOKEN: ${{ secrets.NIUMA_PAT }}
+          REPO: ${{ inputs.repo }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REASON_CODE: ${{ steps.gate_failure_action.outputs.reason_code }}
+        run: |
+          reason="${REASON_CODE:-UNKNOWN}"
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPO" \
+            --body "## ⏳ Gate 未决，暂不触发迭代\n\n- reason_code=\`$reason\`\n\n本轮未检测到明确代码失败，保持 \`bot:pr-created\`，避免无效 \`bot:pr-needs-fix -> iterate\` 循环。"
 
       - name: AI Self-Review
         if: steps.find_pr.outputs.pr_number != '' && steps.pr_gate.outcome == 'success'
