@@ -25,10 +25,9 @@ struct RuntimeProbeResult {
 
 impl RuntimeProbe {
     pub fn resolve() -> RuntimeProbeAvailability {
-        let strict = matches!(
-            super::gate_common::GateConfig::from_env().mode,
-            super::gate_common::GateMode::Strict
-        );
+        let strict = std::env::var("GATE_MODE")
+            .map(|raw| raw.eq_ignore_ascii_case("strict"))
+            .unwrap_or(false);
         match std::env::var("UNIBO_RUNTIME_PROBE_CMD") {
             Ok(raw) if !raw.trim().is_empty() => {
                 RuntimeProbeAvailability::Available(Self { command: raw })
