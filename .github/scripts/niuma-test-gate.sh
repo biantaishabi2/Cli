@@ -105,6 +105,46 @@ state_category() {
   esac
 }
 
+normalize_last_error() {
+  local value="$1"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="$(trim "$value")"
+  while [[ "$value" == *"  "* ]]; do
+    value="${value//  / }"
+  done
+  if [[ -z "$value" ]]; then
+    value="unknown_error"
+  fi
+  if [[ ${#value} -gt 240 ]]; then
+    value="${value:0:240}"
+  fi
+  printf '%s' "$value"
+}
+
+classify_checks_query_reason() {
+  local err_msg="$1"
+  local err_lower
+  err_lower="$(to_lower "$err_msg")"
+
+  if [[ "$err_lower" == *"rate limit"* || "$err_lower" == *"too many requests"* || "$err_lower" == *"http 429"* || "$err_lower" == *"429"* ]]; then
+    echo "RATE_LIMITED"
+    return 0
+  fi
+
+  if [[ "$err_lower" == *"http 401"* || "$err_lower" == *"401 unauthorized"* || "$err_lower" == *"http 403"* || "$err_lower" == *"403 forbidden"* || "$err_lower" == *"bad credentials"* || "$err_lower" == *"requires authentication"* || "$err_lower" == *"resource not accessible by integration"* || "$err_lower" == *"insufficient permission"* || "$err_lower" == *"permission denied"* ]]; then
+    echo "AUTH_FAILED"
+    return 0
+  fi
+
+  if [[ "$err_lower" == *"eof"* || "$err_lower" == *"timeout"* || "$err_lower" == *"timed out"* || "$err_lower" == *"connection reset"* || "$err_lower" == *"connection refused"* || "$err_lower" == *"temporary failure"* || "$err_lower" == *"tls handshake timeout"* || "$err_lower" == *"i/o timeout"* || "$err_lower" == *"context deadline exceeded"* || "$err_lower" == *"no such host"* || "$err_lower" == *"network is unreachable"* || "$err_lower" == *"request canceled"* || "$err_lower" == *"transport is closing"* ]]; then
+    echo "NETWORK_TRANSIENT"
+    return 0
+  fi
+
+  echo "CHECKS_QUERY_FAILED"
+}
+
 emit_gate_outputs() {
   if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
     return 0
@@ -121,14 +161,16 @@ emit_gate_outputs() {
     echo "missing_jobs=$(join_csv "${MISSING_JOBS[@]}")"
     echo "reason_code=$REASON_CODE"
     echo "retry_count=$RETRY_COUNT"
+    echo "last_error=$LAST_ERROR"
   } >> "$GITHUB_OUTPUT"
   }; then
     return 0
   fi
+  EMIT_COUNT=$((EMIT_COUNT + 1))
 }
 
 emit_decision_log() {
-  log "run_mode=$RUN_MODE risk_level=$RISK_LEVEL required_jobs=$(join_csv "${REQUIRED_JOBS[@]}") actual_jobs=$(join_csv "${ACTUAL_JOBS[@]}") missing_jobs=$(join_csv "${MISSING_JOBS[@]}") reason_code=$REASON_CODE retry_count=$RETRY_COUNT"
+  log "run_mode=$RUN_MODE risk_level=$RISK_LEVEL required_jobs=$(join_csv "${REQUIRED_JOBS[@]}") actual_jobs=$(join_csv "${ACTUAL_JOBS[@]}") missing_jobs=$(join_csv "${MISSING_JOBS[@]}") reason_code=$REASON_CODE retry_count=$RETRY_COUNT last_error=$LAST_ERROR"
 }
 
 parse_critical_jobs_config() {
@@ -214,35 +256,52 @@ match_required_job() {
 
 fetch_checks() {
   local checks_raw=""
-  if ! checks_raw="$(gh pr checks "$PR_NUMBER" --json name,state --jq '.[] | "\(.name)\t\(.state)"' 2>/tmp/niuma-gate-checks.err)"; then
+  local query_retry_count=0
+
+  while true; do
+    local err_file
+    err_file="$(mktemp /tmp/niuma-gate-checks.XXXXXX.err)"
+    if checks_raw="$(gh pr checks "$PR_NUMBER" --json name,state --jq '.[] | "\(.name)\t\(.state)"' 2>"$err_file")"; then
+      rm -f "$err_file"
+      CHECK_NAMES=()
+      CHECK_STATES=()
+      ACTUAL_JOBS=()
+      LAST_ERROR="none"
+      local row=""
+      while IFS= read -r row || [[ -n "$row" ]]; do
+        [[ -z "$row" ]] && continue
+        local name="${row%%$'\t'*}"
+        local state="${row#*$'\t'}"
+        if [[ "$row" != *$'\t'* ]]; then
+          name="$row"
+          state="UNKNOWN"
+        fi
+        CHECK_NAMES+=("$name")
+        CHECK_STATES+=("$state")
+        ACTUAL_JOBS+=("$name:$state")
+      done <<< "$checks_raw"
+      return 0
+    fi
+
     local err_msg
-    err_msg="$(tail -n 1 /tmp/niuma-gate-checks.err 2>/dev/null || true)"
-    REASON_CODE="CHECKS_QUERY_FAILED"
+    err_msg="$(tail -n 1 "$err_file" 2>/dev/null || true)"
+    rm -f "$err_file"
+    LAST_ERROR="$(normalize_last_error "${err_msg:-unknown error}")"
+    REASON_CODE="$(classify_checks_query_reason "$LAST_ERROR")"
     ACTUAL_JOBS=()
     MISSING_JOBS=("${REQUIRED_JOBS[@]}")
-    warn "查询 PR checks 失败: ${err_msg:-unknown error}"
-    rm -f /tmp/niuma-gate-checks.err
-    return 1
-  fi
-  rm -f /tmp/niuma-gate-checks.err
 
-  CHECK_NAMES=()
-  CHECK_STATES=()
-  ACTUAL_JOBS=()
-  local row=""
-  while IFS= read -r row || [[ -n "$row" ]]; do
-    [[ -z "$row" ]] && continue
-    local name="${row%%$'\t'*}"
-    local state="${row#*$'\t'}"
-    if [[ "$row" != *$'\t'* ]]; then
-      name="$row"
-      state="UNKNOWN"
+    if [[ ("$REASON_CODE" == "CHECKS_QUERY_FAILED" || "$REASON_CODE" == "NETWORK_TRANSIENT") && "$query_retry_count" -lt "$INFRA_RETRY_MAX" ]]; then
+      query_retry_count=$((query_retry_count + 1))
+      RETRY_COUNT=$((RETRY_COUNT + 1))
+      warn "查询 PR checks 失败（$REASON_CODE），重试 ${query_retry_count}/${INFRA_RETRY_MAX}: $LAST_ERROR"
+      sleep $((query_retry_count * 5))
+      continue
     fi
-    CHECK_NAMES+=("$name")
-    CHECK_STATES+=("$state")
-    ACTUAL_JOBS+=("$name:$state")
-  done <<< "$checks_raw"
-  return 0
+
+    warn "查询 PR checks 失败（$REASON_CODE）: $LAST_ERROR"
+    return 1
+  done
 }
 
 evaluate_required_jobs() {
@@ -343,6 +402,39 @@ evaluate_required_jobs() {
   REASON_CODE="PASS"
   return 0
 }
+
+RUN_MODE="unknown"
+RISK_LEVEL="unknown"
+REASON_CODE="INIT"
+RETRY_COUNT=0
+LAST_ERROR="none"
+EMIT_COUNT=0
+declare -a REQUIRED_JOBS=()
+declare -a ACTUAL_JOBS=()
+declare -a MISSING_JOBS=()
+declare -a CHECK_NAMES=()
+declare -a CHECK_STATES=()
+declare -a CRITICAL_JOBS=()
+
+on_exit_emit_failure_context() {
+  local status=$?
+  if [[ "$status" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${EMIT_COUNT:-0}" -ne 0 ]]; then
+    return 0
+  fi
+  if [[ -z "${REASON_CODE:-}" || "$REASON_CODE" == "INIT" ]]; then
+    REASON_CODE="GATE_SCRIPT_FAILED"
+  fi
+  if [[ -z "${LAST_ERROR:-}" || "$LAST_ERROR" == "none" ]]; then
+    LAST_ERROR="script_exit_status_${status}"
+  fi
+  emit_gate_outputs || true
+  emit_decision_log || true
+}
+
+trap on_exit_emit_failure_context EXIT
 
 if [[ $# -ne 1 ]]; then
   usage
@@ -554,13 +646,7 @@ else
   fi
 fi
 
-REASON_CODE="INIT"
-RETRY_COUNT=0
 PENDING_RETRY_COUNT=0
-ACTUAL_JOBS=()
-MISSING_JOBS=()
-CHECK_NAMES=()
-CHECK_STATES=()
 
 log "risk_level=$RISK_LEVEL risk_reason=$RISK_REASON"
 
@@ -572,15 +658,21 @@ while true; do
   fi
 
   if evaluate_required_jobs; then
+    LAST_ERROR="none"
     emit_gate_outputs
     emit_decision_log
     log "all required checks passed"
     exit 0
   fi
 
+  if [[ "$REASON_CODE" != "PASS" && "$LAST_ERROR" == "none" ]]; then
+    LAST_ERROR="$(to_lower "$REASON_CODE")"
+  fi
+
   if [[ "$REASON_CODE" == "REQUIRED_JOBS_TIMEOUT" && "$RETRY_COUNT" -lt "$INFRA_RETRY_MAX" ]]; then
     RETRY_COUNT=$((RETRY_COUNT + 1))
     REASON_CODE="TIMEOUT_RETRYING"
+    LAST_ERROR="required_jobs_timeout"
     emit_gate_outputs
     emit_decision_log
     sleep $((RETRY_COUNT * 5))
@@ -590,6 +682,7 @@ while true; do
   if [[ "$REASON_CODE" == "REQUIRED_JOBS_PENDING" && "$PENDING_RETRY_COUNT" -lt "$PENDING_RETRY_MAX" ]]; then
     PENDING_RETRY_COUNT=$((PENDING_RETRY_COUNT + 1))
     REASON_CODE="PENDING_RETRYING"
+    LAST_ERROR="required_jobs_pending"
     emit_gate_outputs
     emit_decision_log
     sleep "$PENDING_RETRY_INTERVAL"
