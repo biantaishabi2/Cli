@@ -121,7 +121,131 @@ jobs:
               return;
             }
 
-            core.info(`治理审批通过，approvers: ${approvers.join(", ")}`);
+            const loadCodeowners = async () => {
+              const candidates = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+              for (const path of candidates) {
+                try {
+                  const response = await github.rest.repos.getContent({
+                    owner,
+                    repo,
+                    path,
+                    ref: context.payload.pull_request.head.sha,
+                  });
+                  if (!("content" in response.data) || !response.data.content) {
+                    continue;
+                  }
+                  const raw = Buffer.from(
+                    response.data.content,
+                    response.data.encoding || "base64"
+                  ).toString("utf8");
+                  return { path, raw };
+                } catch (error) {
+                  if (error.status === 404) {
+                    continue;
+                  }
+                  throw error;
+                }
+              }
+              return null;
+            };
+
+            const globToRegExp = (pattern) => {
+              const anchored = pattern.startsWith("/");
+              let normalized = pattern.replace(/^\/+/, "");
+              if (normalized.endsWith("/")) {
+                normalized = `${normalized}**`;
+              }
+              const escaped = normalized.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+              const regexBody = escaped
+                .replace(/\*\*/g, "___DOUBLE_STAR___")
+                .replace(/\*/g, "[^/]*")
+                .replace(/\?/g, "[^/]")
+                .replace(/___DOUBLE_STAR___/g, ".*");
+              if (anchored) {
+                return new RegExp(`^${regexBody}$`);
+              }
+              return new RegExp(`(^|.*/)${regexBody}$`);
+            };
+
+            const parseCodeowners = (raw) =>
+              raw
+                .split(/\r?\n/)
+                .map((line) => line.replace(/\s+#.*$/, "").trim())
+                .filter((line) => line && !line.startsWith("#") && !line.startsWith("["))
+                .map((line) => line.split(/\s+/).filter(Boolean))
+                .filter((parts) => parts.length >= 2)
+                .map((parts) => ({
+                  pattern: parts[0],
+                  owners: parts.slice(1).filter((owner) => owner.startsWith("@")),
+                }))
+                .filter((entry) => entry.owners.length > 0)
+                .map((entry) => ({
+                  ...entry,
+                  regex: globToRegExp(entry.pattern),
+                }));
+
+            const resolveOwnersForPath = (entries, filePath) => {
+              let matched = null;
+              for (const entry of entries) {
+                if (entry.regex.test(filePath)) {
+                  matched = entry;
+                }
+              }
+              return matched ? matched.owners : [];
+            };
+
+            const codeowners = await loadCodeowners();
+            if (!codeowners) {
+              core.setFailed(
+                "baseline/whitelist 变更需要 CODEOWNERS 审批，但仓库未找到 CODEOWNERS 文件（.github/CODEOWNERS/CODEOWNERS/docs/CODEOWNERS）"
+              );
+              return;
+            }
+
+            const codeownerEntries = parseCodeowners(codeowners.raw);
+            if (codeownerEntries.length === 0) {
+              core.setFailed(
+                `baseline/whitelist 变更需要 CODEOWNERS 审批，但 ${codeowners.path} 无有效 owner 规则`
+              );
+              return;
+            }
+
+            const requiredOwners = new Set();
+            const unmappedFiles = [];
+            for (const file of touched) {
+              const owners = resolveOwnersForPath(codeownerEntries, file);
+              if (owners.length === 0) {
+                unmappedFiles.push(file);
+                continue;
+              }
+              for (const ownerName of owners) {
+                requiredOwners.add(ownerName.toLowerCase());
+              }
+            }
+
+            if (unmappedFiles.length > 0) {
+              core.setFailed(
+                `治理文件未匹配到 CODEOWNERS owner，请补充规则: ${unmappedFiles.join(", ")}`
+              );
+              return;
+            }
+
+            const approverHandles = new Set(
+              approvers.map((login) => `@${login.toLowerCase()}`)
+            );
+            const matchedCodeowners = [...requiredOwners].filter((ownerName) =>
+              approverHandles.has(ownerName)
+            );
+            if (matchedCodeowners.length === 0) {
+              core.setFailed(
+                `治理文件变更需要 CODEOWNERS 审批。required=${[...requiredOwners].join(", ")} approvers=${approvers.join(", ")}`
+              );
+              return;
+            }
+
+            core.info(
+              `治理审批通过，approvers: ${approvers.join(", ")}，codeowners: ${matchedCodeowners.join(", ")}`
+            );
 
       - name: Run BCC + UniBO gate regression
         run: |

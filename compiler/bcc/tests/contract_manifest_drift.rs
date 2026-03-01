@@ -128,7 +128,7 @@ fn parse_type_shape(raw: &str) -> TypeShape {
         token.pop();
         false
     } else {
-        false
+        true
     };
 
     let base = token.trim().to_string();
