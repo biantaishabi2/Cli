@@ -11,12 +11,8 @@ use regex::Regex;
 pub struct SwallowedErrorDetector;
 
 impl Detector for SwallowedErrorDetector {
-    fn name(&self) -> &str {
-        "swallowed_error"
-    }
-    fn category(&self) -> &str {
-        "error_handling"
-    }
+    fn name(&self) -> &str { "swallowed_error" }
+    fn category(&self) -> &str { "error_handling" }
 
     fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
@@ -37,19 +33,15 @@ impl Detector for SwallowedErrorDetector {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
                     severity: "critical".to_string(),
-                    message: "Discarding Result/Error with `let _ =` silently swallows errors"
-                        .to_string(),
+                    message: "Discarding Result/Error with `let _ =` silently swallows errors".to_string(),
                     file: file_path.to_string(),
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
-                    fix_hint:
-                        "Handle the error explicitly or use .ok() with a comment explaining why"
-                            .to_string(),
+                    fix_hint: "Handle the error explicitly or use .ok() with a comment explaining why".to_string(),
                     code_snippet: extract_code_snippet(source, i + 1, 2),
                     offending_code: line.trim().to_string(),
-                    suggested_fix: "match expr { Ok(_) => {}, Err(e) => log::warn!(\"{}\", e) }"
-                        .to_string(),
+                    suggested_fix: "match expr { Ok(_) => {}, Err(e) => log::warn!(\"{}\", e) }".to_string(),
                     evidence: vec![],
                 });
                 continue;
@@ -74,8 +66,7 @@ impl Detector for SwallowedErrorDetector {
                             category: "error_handling".to_string(),
                             rule: "swallowed_error".to_string(),
                             severity: "critical".to_string(),
-                            message: "Exception caught but swallowed (empty handler or pass)"
-                                .to_string(),
+                            message: "Exception caught but swallowed (empty handler or pass)".to_string(),
                             file: file_path.to_string(),
                             line: i + 1,
                             source: "bcc".to_string(),
@@ -83,8 +74,7 @@ impl Detector for SwallowedErrorDetector {
                             fix_hint: "Log the exception or re-raise it".to_string(),
                             code_snippet: extract_code_snippet(source, i + 1, 2),
                             offending_code: trimmed.to_string(),
-                            suggested_fix: "except ValueError as e:\n    logger.error(e)"
-                                .to_string(),
+                            suggested_fix: "except ValueError as e:\n    logger.error(e)".to_string(),
                             evidence: vec![],
                         });
                     }
@@ -121,8 +111,7 @@ impl Detector for SwallowedErrorDetector {
                                 category: "error_handling".to_string(),
                                 rule: "swallowed_error".to_string(),
                                 severity: "critical".to_string(),
-                                message: "Exception caught but swallowed (trivial return)"
-                                    .to_string(),
+                                message: "Exception caught but swallowed (trivial return)".to_string(),
                                 file: file_path.to_string(),
                                 line: i + 1,
                                 source: "bcc".to_string(),
@@ -130,8 +119,7 @@ impl Detector for SwallowedErrorDetector {
                                 fix_hint: "Log the exception or handle it meaningfully".to_string(),
                                 code_snippet: extract_code_snippet(source, i + 1, 2),
                                 offending_code: trimmed.to_string(),
-                                suggested_fix: "rescue e -> Logger.error(Exception.message(e))"
-                                    .to_string(),
+                                suggested_fix: "rescue e -> Logger.error(Exception.message(e))".to_string(),
                                 evidence: vec![],
                             });
                         }
@@ -140,8 +128,7 @@ impl Detector for SwallowedErrorDetector {
             }
 
             // TypeScript/JavaScript: catch (e) { } 或 catch (e) { /* empty */ }
-            if (lang == "typescript" || lang == "javascript") && js_empty_catch_re.is_match(trimmed)
-            {
+            if (lang == "typescript" || lang == "javascript") && js_empty_catch_re.is_match(trimmed) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "swallowed_error".to_string(),
@@ -151,8 +138,7 @@ impl Detector for SwallowedErrorDetector {
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
-                    fix_hint: "Handle the error or add a comment explaining why it is ignored"
-                        .to_string(),
+                    fix_hint: "Handle the error or add a comment explaining why it is ignored".to_string(),
                     code_snippet: extract_code_snippet(source, i + 1, 2),
                     offending_code: trimmed.to_string(),
                     suggested_fix: "catch (e) { console.error(e); }".to_string(),
@@ -173,20 +159,15 @@ impl Detector for SwallowedErrorDetector {
 pub struct BroadCatchDetector;
 
 impl Detector for BroadCatchDetector {
-    fn name(&self) -> &str {
-        "broad_catch"
-    }
-    fn category(&self) -> &str {
-        "error_handling"
-    }
+    fn name(&self) -> &str { "broad_catch" }
+    fn category(&self) -> &str { "error_handling" }
 
     fn detect(&self, source: &str, file_path: &str, lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
 
         // 预编译正则，避免在循环中重复创建
         let bare_except_re = Regex::new(r#"^\s*except\s*:\s*$"#).unwrap();
-        let broad_except_re =
-            Regex::new(r#"(?i)^\s*except\s+(Exception|BaseException)\b"#).unwrap();
+        let broad_except_re = Regex::new(r#"(?i)^\s*except\s+(Exception|BaseException)\b"#).unwrap();
         let elixir_rescue_inline_re = Regex::new(r#"^\s*rescue\s+_\s*->"#).unwrap();
         let elixir_rescue_alone_re = Regex::new(r#"^\s*rescue\s*$"#).unwrap();
         let elixir_wildcard_clause_re = Regex::new(r#"^\s*_\s*->"#).unwrap();
@@ -222,8 +203,7 @@ impl Detector for BroadCatchDetector {
                     line: i + 1,
                     source: "bcc".to_string(),
                     confidence: 0.9,
-                    fix_hint: "Catch specific exception types instead of Exception/BaseException"
-                        .to_string(),
+                    fix_hint: "Catch specific exception types instead of Exception/BaseException".to_string(),
                     code_snippet: extract_code_snippet(source, i + 1, 2),
                     offending_code: line.trim().to_string(),
                     suggested_fix: "except (ValueError, KeyError) as e:".to_string(),
@@ -261,8 +241,7 @@ impl Detector for BroadCatchDetector {
                             line: i + 1,
                             source: "bcc".to_string(),
                             confidence: 0.9,
-                            fix_hint: "Rescue specific exception types instead of wildcard _"
-                                .to_string(),
+                            fix_hint: "Rescue specific exception types instead of wildcard _".to_string(),
                             code_snippet: extract_code_snippet(source, i + 1, 2),
                             offending_code: line.trim().to_string(),
                             suggested_fix: "rescue e in ArgumentError -> handle(e)".to_string(),
@@ -273,8 +252,7 @@ impl Detector for BroadCatchDetector {
             }
 
             // TypeScript/JavaScript: catch { } 无参数的 catch（省略异常变量）
-            if (lang == "typescript" || lang == "javascript") && js_catch_no_param_re.is_match(line)
-            {
+            if (lang == "typescript" || lang == "javascript") && js_catch_no_param_re.is_match(line) {
                 results.push(SmellRecord {
                     category: "error_handling".to_string(),
                     rule: "broad_catch".to_string(),
@@ -420,11 +398,7 @@ mod tests {
         // except: 后第一行是注释，第二行是 pass → 应检出
         let source = "try:\n    risky()\nexcept:\n    # ignore error\n    pass\n";
         let results = d.detect(source, "main.py", "python");
-        assert_eq!(
-            results.len(),
-            1,
-            "Comment followed by pass should be detected as swallowed error"
-        );
+        assert_eq!(results.len(), 1, "Comment followed by pass should be detected as swallowed error");
         assert_eq!(results[0].rule, "swallowed_error");
     }
 
@@ -434,11 +408,7 @@ mod tests {
         // except: 后跟空行再跟有意义的处理代码 → 不应误报
         let source = "try:\n    risky()\nexcept:\n\n    log(e)\n";
         let results = d.detect(source, "main.py", "python");
-        assert!(
-            results.is_empty(),
-            "Empty line after except should not trigger false positive, got: {:?}",
-            results
-        );
+        assert!(results.is_empty(), "Empty line after except should not trigger false positive, got: {:?}", results);
     }
 
     // --- Rust 支持测试 ---
@@ -465,8 +435,7 @@ mod tests {
     fn broad_catch_not_applicable_for_rust() {
         let d = BroadCatchDetector;
         // Rust 无异常捕获，broad_catch 不适用
-        let source =
-            "fn main() {\n    match result {\n        Err(_) => {}\n        _ => {}\n    }\n}\n";
+        let source = "fn main() {\n    match result {\n        Err(_) => {}\n        _ => {}\n    }\n}\n";
         let results = d.detect(source, "main.rs", "rust");
         assert!(results.is_empty());
     }

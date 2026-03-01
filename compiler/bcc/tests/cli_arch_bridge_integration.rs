@@ -58,6 +58,18 @@ fn load_runtime_visible_actions(output: &Path) -> (BTreeSet<String>, BTreeSet<St
         .expect("read runtime bridge config");
     let bridge_yaml: serde_yaml::Value =
         serde_yaml::from_str(&bridge_raw).expect("parse runtime bridge config");
+    let runtime_package = bridge_yaml
+        .get("runtime")
+        .and_then(|v| v.get("package"))
+        .and_then(|v| v.as_str())
+        .expect("runtime bridge runtime.package");
+    assert_eq!(runtime_package, "unibo_graphql_runtime");
+    let runtime_mode = bridge_yaml
+        .get("runtime")
+        .and_then(|v| v.get("mode"))
+        .and_then(|v| v.as_str())
+        .expect("runtime bridge runtime.mode");
+    assert_eq!(runtime_mode, "reuse");
 
     let contract_source = bridge_yaml
         .get("contractSource")
@@ -220,6 +232,47 @@ fn openclaw_bridge_example_should_match_expected_artifacts() {
     assert!(mutations.contains("billing.invoice:delete"));
 
     let _ = fs::remove_dir_all(&out);
+}
+
+#[test]
+fn runtime_bridge_should_bootstrap_runtime_loader_from_contract_source() {
+    let root = temp_dir("bcc_cli_bridge_runtime_loader");
+    let seed = root.join("seed.yaml");
+    let out = root.join("out");
+
+    fs::write(
+        &seed,
+        r#"version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: create_invoice
+        kind: command
+        input:
+          order_id: uuid
+        output:
+          invoice_id: uuid
+"#,
+    )
+    .expect("write seed");
+
+    let status = run_arch_generate(&seed, &out, true, "error-on-conflict");
+    assert!(status.success(), "bridge generation should succeed");
+
+    let (queries, mutations) = load_runtime_visible_actions(&out);
+    assert!(
+        queries.is_empty(),
+        "command-only seed should not expose query"
+    );
+    assert!(mutations.contains("billing.create_invoice:create_invoice"));
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

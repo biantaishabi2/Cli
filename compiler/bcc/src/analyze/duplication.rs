@@ -64,13 +64,7 @@ pub fn extract_functions(
     }
 
     let mut functions = Vec::new();
-    extract_functions_recursive(
-        file_path,
-        source,
-        tree.root_node(),
-        language,
-        &mut functions,
-    );
+    extract_functions_recursive(file_path, source, tree.root_node(), language, &mut functions);
     functions
 }
 
@@ -124,12 +118,7 @@ fn normalize_ast(node: Node, source: &str, config: &lang::LangConfig) -> String 
     result
 }
 
-fn normalize_ast_recursive(
-    node: Node,
-    source: &str,
-    config: &lang::LangConfig,
-    result: &mut String,
-) {
+fn normalize_ast_recursive(node: Node, source: &str, config: &lang::LangConfig, result: &mut String) {
     let kind = node.kind();
     if config.identifier_kinds.contains(&kind) {
         result.push_str("$VAR");
@@ -182,7 +171,10 @@ fn build_skeleton_recursive(node: Node, config: &lang::LangConfig, result: &mut 
 pub fn detect_structural_duplication(functions: &[FunctionInfo]) -> Vec<SmellRecord> {
     let mut groups: HashMap<&str, Vec<&FunctionInfo>> = HashMap::new();
     for func in functions {
-        groups.entry(&func.structural_hash).or_default().push(func);
+        groups
+            .entry(&func.structural_hash)
+            .or_default()
+            .push(func);
     }
 
     let mut smells = Vec::new();

@@ -333,6 +333,14 @@ boundaries:
     let payload: Value = serde_json::from_str(&stdout).expect("stdout should be valid JSON");
     assert!(payload.get("contracts").and_then(Value::as_array).is_some());
     assert!(
+        payload
+            .get("bridgeVersion")
+            .and_then(Value::as_str)
+            .is_some(),
+        "stdout should remain unibo contract json: {}",
+        stdout
+    );
+    assert!(
         !stdout.contains("runtime:\n"),
         "stdout should not contain YAML runtime bridge: {}",
         stdout
@@ -340,6 +348,11 @@ boundaries:
     assert!(
         stderr.contains("unibo_graphql_runtime"),
         "stderr should include runtime bridge yaml content: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("contractSource:"),
+        "stderr should include runtime bridge contractSource yaml: {}",
         stderr
     );
 

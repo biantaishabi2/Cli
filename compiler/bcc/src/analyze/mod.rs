@@ -34,31 +34,20 @@ fn type_compatible(ann_type: &str, guard_type: &str, lang: &str) -> bool {
         "elixir" => {
             matches!(
                 (ann, guard),
-                ("map()", "map()")
-                    | ("integer()", "integer()")
-                    | ("binary()", "binary()")
-                    | ("atom()", "atom()")
-                    | ("list()", "list()")
-                    | ("float()", "float()")
-                    | ("number()", "number()")
-                    | ("boolean()", "boolean()")
-                    | ("tuple()", "tuple()")
-                    | ("pid()", "pid()")
-                    | ("reference()", "reference()")
-                    | ("function()", "function()")
-                    | ("bitstring()", "bitstring()")
+                ("map()", "map()") | ("integer()", "integer()") | ("binary()", "binary()")
+                | ("atom()", "atom()") | ("list()", "list()") | ("float()", "float()")
+                | ("number()", "number()") | ("boolean()", "boolean()")
+                | ("tuple()", "tuple()") | ("pid()", "pid()")
+                | ("reference()", "reference()") | ("function()", "function()")
+                | ("bitstring()", "bitstring()")
             )
         }
         "typescript" | "tsx" => {
             matches!(
                 (ann, guard),
-                ("string", "string")
-                    | ("number", "number")
-                    | ("boolean", "boolean")
-                    | ("bigint", "bigint")
-                    | ("symbol", "symbol")
-                    | ("object", "object")
-                    | ("undefined", "undefined")
+                ("string", "string") | ("number", "number") | ("boolean", "boolean")
+                | ("bigint", "bigint") | ("symbol", "symbol") | ("object", "object")
+                | ("undefined", "undefined")
             ) || {
                 if guard == "Array" {
                     ann.ends_with("[]") || ann.starts_with("Array")
@@ -68,7 +57,9 @@ fn type_compatible(ann_type: &str, guard_type: &str, lang: &str) -> bool {
             }
         }
         "rust" => {
-            if guard == "Some" && (ann.starts_with("Option") || ann.starts_with("&Option")) {
+            if guard == "Some"
+                && (ann.starts_with("Option") || ann.starts_with("&Option"))
+            {
                 return true;
             }
             if (guard == "Ok" || guard == "Err")
@@ -97,7 +88,11 @@ fn detect_redundant_type_check(record: &FileRecord) -> Vec<SmellRecord> {
                 && type_compatible(&ann.type_expr, &guard.guarded_type, lang)
             {
                 let (severity, confidence, extra_msg) = match lang {
-                    "elixir" => ("warning", 0.7, " (guard may serve as pattern dispatch)"),
+                    "elixir" => (
+                        "warning",
+                        0.7,
+                        " (guard may serve as pattern dispatch)",
+                    ),
                     _ => ("critical", 0.9, ""),
                 };
                 smells.push(SmellRecord {
@@ -361,12 +356,7 @@ fn build_ts_detectors() -> Vec<Box<dyn SmellDetector>> {
 /// - ast_file: extract 输出的 JSON 文件路径（Vec<FileRecord> 或单个 FileRecord）
 /// - output: SmellReport JSON 输出路径
 /// - rules: 可选的逗号分隔规则类别过滤（如 security,error_handling,noise,duplication,defensive）
-pub fn run(
-    ast_file: &str,
-    output: &str,
-    rules: Option<String>,
-    linters: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(ast_file: &str, output: &str, rules: Option<String>, linters: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     // 解析 rules 参数
     let rule_filter: Option<Vec<String>> = rules.map(|r| {
         r.split(',')
@@ -376,17 +366,15 @@ pub fn run(
     });
 
     // 读取 AST JSON
-    let content =
-        fs::read_to_string(ast_file).map_err(|e| format!("cannot read '{}': {}", ast_file, e))?;
+    let content = fs::read_to_string(ast_file)
+        .map_err(|e| format!("cannot read '{}': {}", ast_file, e))?;
 
     // 支持三种输入格式：Vec<FileRecord>、单个 FileRecord、{ source_count, records: [...] } wrapper
     let records: Vec<FileRecord> = serde_json::from_str::<Vec<FileRecord>>(&content)
         .or_else(|_| serde_json::from_str::<FileRecord>(&content).map(|r| vec![r]))
         .or_else(|_| {
             #[derive(Deserialize)]
-            struct AstBatch {
-                records: Vec<FileRecord>,
-            }
+            struct AstBatch { records: Vec<FileRecord> }
             serde_json::from_str::<AstBatch>(&content).map(|b| b.records)
         })
         .map_err(|e| format!("failed to parse '{}': {}", ast_file, e))?;
@@ -593,16 +581,8 @@ pub fn run(
             // 按文件分组合并到对应的 SmellReport
             for smell in external_smells {
                 if let Some(report) = reports.iter_mut().find(|r| r.file == smell.file) {
-                    *report
-                        .summary
-                        .by_severity
-                        .entry(smell.severity.clone())
-                        .or_insert(0) += 1;
-                    *report
-                        .summary
-                        .by_category
-                        .entry(smell.category.clone())
-                        .or_insert(0) += 1;
+                    *report.summary.by_severity.entry(smell.severity.clone()).or_insert(0) += 1;
+                    *report.summary.by_category.entry(smell.category.clone()).or_insert(0) += 1;
                     report.summary.total_smells += 1;
                     report.smells.push(smell);
                 } else {
@@ -635,10 +615,7 @@ pub fn run(
     eprintln!(
         "[analyze] {} files processed, {} total smells → {}",
         reports.len(),
-        reports
-            .iter()
-            .map(|r| r.summary.total_smells)
-            .sum::<usize>(),
+        reports.iter().map(|r| r.summary.total_smells).sum::<usize>(),
         output
     );
 
@@ -706,11 +683,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src_path = dir.path().join("lib");
         fs::create_dir_all(&src_path).unwrap();
-        fs::write(
-            src_path.join("foo.ex"),
-            "defmodule Foo do\n  def bar, do: :ok\nend\n",
-        )
-        .unwrap();
+        fs::write(src_path.join("foo.ex"), "defmodule Foo do\n  def bar, do: :ok\nend\n").unwrap();
 
         let ast_path = dir.path().join("valid.json");
         let out_path = dir.path().join("smells.json");
@@ -1018,13 +991,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1064,13 +1031,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1106,13 +1067,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1146,13 +1101,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1226,13 +1175,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1270,13 +1213,7 @@ mod tests {
         }]"#;
         fs::write(&ast_path, ast_json).unwrap();
 
-        run(
-            ast_path.to_str().unwrap(),
-            out_path.to_str().unwrap(),
-            None,
-            vec![],
-        )
-        .unwrap();
+        run(ast_path.to_str().unwrap(), out_path.to_str().unwrap(), None, vec![]).unwrap();
 
         let result: Vec<SmellReport> =
             serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -1299,48 +1236,23 @@ function process(data: Map<string, string>) {
         let record = crate::extract::typescript::extract(ts_src, "test.ts", "typescript");
 
         assert!(
-            record
-                .schema_fields
-                .iter()
-                .any(|f| f.name == "email" && f.required),
+            record.schema_fields.iter().any(|f| f.name == "email" && f.required),
             "should extract required field 'email'"
         );
         assert!(
-            record
-                .schema_fields
-                .iter()
-                .any(|f| f.name == "nickname" && !f.required),
+            record.schema_fields.iter().any(|f| f.name == "nickname" && !f.required),
             "should extract optional field 'nickname'"
         );
 
-        let get_calls: Vec<_> = record
-            .calls
-            .iter()
-            .filter(|c| c.callee.ends_with(".get") || c.callee == "get")
-            .collect();
+        let get_calls: Vec<_> = record.calls.iter().filter(|c| c.callee.ends_with(".get") || c.callee == "get").collect();
         assert!(!get_calls.is_empty(), "should have .get calls extracted");
 
         let smells = detect_unnecessary_default(&record);
 
-        let email_smells: Vec<_> = smells
-            .iter()
-            .filter(|s| s.message.contains("email"))
-            .collect();
-        assert_eq!(
-            email_smells.len(),
-            1,
-            "required field 'email' should produce exactly 1 smell, got {}",
-            email_smells.len()
-        );
+        let email_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("email")).collect();
+        assert_eq!(email_smells.len(), 1, "required field 'email' should produce exactly 1 smell, got {}", email_smells.len());
 
-        let nick_smells: Vec<_> = smells
-            .iter()
-            .filter(|s| s.message.contains("nickname"))
-            .collect();
-        assert_eq!(
-            nick_smells.len(),
-            0,
-            "optional field 'nickname' should produce 0 smells"
-        );
+        let nick_smells: Vec<_> = smells.iter().filter(|s| s.message.contains("nickname")).collect();
+        assert_eq!(nick_smells.len(), 0, "optional field 'nickname' should produce 0 smells");
     }
 }

@@ -7,42 +7,29 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 // 预编译正则，避免每次 detect() 调用重复编译
-static CREDENTIAL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+static CREDENTIAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|password|access[_-]?token|private[_-]?key|client[_-]?secret)\s*[=:]\s*["'][^"']{8,}["']"#
-).unwrap()
-});
-static CREDENTIAL_ENV_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)(environ|getenv|env\[|env\.get|ENV\[|System\.get_env|std::env)"#).unwrap()
-});
-static INJECTION_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+).unwrap());
+static CREDENTIAL_ENV_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)(environ|getenv|env\[|env\.get|ENV\[|System\.get_env|std::env)"#
+).unwrap());
+static INJECTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)\b(cursor\.execute|db\.query|conn\.execute|session\.execute|\.raw_query|\.run_query|os\.system|subprocess\.call|Runtime\.exec)\s*\([^)]*(\+|\.format\(|f["']|\$\{|#\{)"#
-).unwrap()
-});
-static DESER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+).unwrap());
+static DESER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)\b(pickle\.loads?\s*\(|yaml\.load\s*\(|marshal\.loads?\s*\(|shelve\.open\s*\(|jsonpickle\.decode\s*\()"#
-).unwrap()
-});
+).unwrap());
 static DESER_SAFE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)yaml\.safe_load"#).unwrap());
 static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)\beval\s*\("#).unwrap());
-static WEAK_CRYPTO_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+static WEAK_CRYPTO_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)\b(hashlib\.md5|hashlib\.sha1|MD5\.new|SHA1\.new|DES\.new|RC4\.new|Digest::MD5|Digest::SHA1|md5\(|sha1\(|createHash\s*\(\s*['"](?:md5|sha1)['"])"#
-).unwrap()
-});
-static LOG_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?i)\b(logger\.\w+|log\.\w+|console\.log|IO\.inspect|Logger\.\w+|logging\.\w+)\s*\("#,
-    )
-    .unwrap()
-});
-static SENSITIVE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+).unwrap());
+static LOG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"(?i)\b(logger\.\w+|log\.\w+|console\.log|IO\.inspect|Logger\.\w+|logging\.\w+)\s*\("#
+).unwrap());
+static SENSITIVE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
     r#"(?i)(password|passwd|secret|api_key|api_token|auth_token|access_token|private_key|credential)"#
-).unwrap()
-});
+).unwrap());
 
 /// 判断匹配行的值部分是否为 UI 标签（纯自然语言文本，非真实凭证）
 fn is_ui_label_value(line: &str) -> bool {
@@ -58,8 +45,9 @@ fn is_ui_label_value(line: &str) -> bool {
     false
 }
 
-static UI_LABEL_VALUE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"[=:]\s*["']([^"']+)["']"#).unwrap());
+static UI_LABEL_VALUE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(
+    r#"[=:]\s*["']([^"']+)["']"#
+).unwrap());
 
 /// 硬编码凭证检测器
 ///
@@ -67,21 +55,14 @@ static UI_LABEL_VALUE_RE: Lazy<Regex> =
 pub struct HardcodedCredentialDetector;
 
 impl Detector for HardcodedCredentialDetector {
-    fn name(&self) -> &str {
-        "hardcoded_credential"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
+    fn name(&self) -> &str { "hardcoded_credential" }
+    fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         // 排除 i18n/locale/翻译文件（路径含 i18n/locale/lang/translation）
         let fp = file_path.to_lowercase();
-        if fp.contains("/i18n/")
-            || fp.contains("/locale")
-            || fp.contains("/lang/")
-            || fp.contains("/translation")
-            || fp.contains("/messages")
+        if fp.contains("/i18n/") || fp.contains("/locale") || fp.contains("/lang/")
+            || fp.contains("/translation") || fp.contains("/messages")
         {
             return Vec::new();
         }
@@ -106,8 +87,7 @@ impl Detector for HardcodedCredentialDetector {
                     line: ln,
                     source: "bcc".to_string(),
                     confidence: 0.7,
-                    fix_hint: "Move credential to environment variable or secrets manager"
-                        .to_string(),
+                    fix_hint: "Move credential to environment variable or secrets manager".to_string(),
                     code_snippet: extract_code_snippet(source, ln, 2),
                     offending_code: line.trim().to_string(),
                     suggested_fix: "Use std::env::var(\"KEY\") or dotenv".to_string(),
@@ -125,12 +105,8 @@ impl Detector for HardcodedCredentialDetector {
 pub struct InjectionRiskDetector;
 
 impl Detector for InjectionRiskDetector {
-    fn name(&self) -> &str {
-        "injection_risk"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
+    fn name(&self) -> &str { "injection_risk" }
+    fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
@@ -164,12 +140,8 @@ impl Detector for InjectionRiskDetector {
 pub struct UnsafeDeserializationDetector;
 
 impl Detector for UnsafeDeserializationDetector {
-    fn name(&self) -> &str {
-        "unsafe_deserialization"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
+    fn name(&self) -> &str { "unsafe_deserialization" }
+    fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
@@ -186,8 +158,7 @@ impl Detector for UnsafeDeserializationDetector {
                     line: ln,
                     source: "bcc".to_string(),
                     confidence: 0.9,
-                    fix_hint: "Use safe deserialization (e.g. yaml.safe_load instead of yaml.load)"
-                        .to_string(),
+                    fix_hint: "Use safe deserialization (e.g. yaml.safe_load instead of yaml.load)".to_string(),
                     code_snippet: extract_code_snippet(source, ln, 2),
                     offending_code: line.trim().to_string(),
                     suggested_fix: "yaml.safe_load(f) or json.loads(data)".to_string(),
@@ -206,8 +177,7 @@ impl Detector for UnsafeDeserializationDetector {
                     line: ln2,
                     source: "bcc".to_string(),
                     confidence: 0.9,
-                    fix_hint: "Replace eval() with a safe alternative (e.g. ast.literal_eval)"
-                        .to_string(),
+                    fix_hint: "Replace eval() with a safe alternative (e.g. ast.literal_eval)".to_string(),
                     code_snippet: extract_code_snippet(source, ln2, 2),
                     offending_code: line.trim().to_string(),
                     suggested_fix: "ast.literal_eval(expr) or json.loads(data)".to_string(),
@@ -225,12 +195,8 @@ impl Detector for UnsafeDeserializationDetector {
 pub struct WeakCryptoDetector;
 
 impl Detector for WeakCryptoDetector {
-    fn name(&self) -> &str {
-        "weak_crypto"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
+    fn name(&self) -> &str { "weak_crypto" }
+    fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();
@@ -264,12 +230,8 @@ impl Detector for WeakCryptoDetector {
 pub struct SensitiveDataLogDetector;
 
 impl Detector for SensitiveDataLogDetector {
-    fn name(&self) -> &str {
-        "sensitive_data_log"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
+    fn name(&self) -> &str { "sensitive_data_log" }
+    fn category(&self) -> &str { "security" }
 
     fn detect(&self, source: &str, file_path: &str, _lang: &str) -> Vec<SmellRecord> {
         let mut results = Vec::new();

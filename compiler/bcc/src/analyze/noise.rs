@@ -43,15 +43,15 @@ impl SmellDetector for CommentDensityDetector {
             let nested_ranges: Vec<(usize, usize)> = functions
                 .iter()
                 .enumerate()
-                .filter(|(i, (_, ns, ne))| *i != func_idx && *ns > *start_line && *ne <= *end_line)
+                .filter(|(i, (_, ns, ne))| {
+                    *i != func_idx && *ns > *start_line && *ne <= *end_line
+                })
                 .map(|(_, (_, ns, ne))| (*ns, *ne))
                 .collect();
 
             // 判断行是否在某个嵌套函数范围内
             let in_nested = |line: usize| -> bool {
-                nested_ranges
-                    .iter()
-                    .any(|(ns, ne)| line >= *ns && line <= *ne)
+                nested_ranges.iter().any(|(ns, ne)| line >= *ns && line <= *ne)
             };
 
             let func_comment_lines: usize = comment_nodes
@@ -267,11 +267,7 @@ fn detect_empty_functions(
 
         if is_empty {
             let body_text = source[body.byte_range()].trim();
-            let display = if body_text.len() > 30 {
-                &body_text[..30]
-            } else {
-                body_text
-            };
+            let display = if body_text.len() > 30 { &body_text[..30] } else { body_text };
             smells.push(SmellRecord {
                 category: "noise".to_string(),
                 rule: "empty_function_body".to_string(),
@@ -320,7 +316,11 @@ fn detect_unused_imports(record: &FileRecord, smells: &mut Vec<SmellRecord>) {
         }
 
         // 提取最后一段名字作为使用名（如 os.path → path, Foo.Bar → Bar）
-        let short_name = specifier.rsplit('.').next().unwrap_or(specifier).trim();
+        let short_name = specifier
+            .rsplit('.')
+            .next()
+            .unwrap_or(specifier)
+            .trim();
 
         // 交叉比对 imports specifier 与 calls + local_call_targets（精确匹配）
         let used = call_names.contains(specifier) || call_names.contains(short_name);
@@ -398,10 +398,7 @@ fn detect_commented_out_code(
             let code_text: String = (start..i)
                 .map(|idx| {
                     let trimmed = lines[idx].trim();
-                    trimmed
-                        .strip_prefix(comment_prefix)
-                        .unwrap_or(trimmed)
-                        .trim_start()
+                    trimmed.strip_prefix(comment_prefix).unwrap_or(trimmed).trim_start()
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -624,7 +621,8 @@ fn detect_unreachable_recursive(
 
 /// 递归收集所有 comment 节点的行范围 (start_line, end_line)
 fn collect_comments(node: Node, comments: &mut Vec<(usize, usize)>) {
-    if node.kind() == "comment" || node.kind() == "line_comment" || node.kind() == "block_comment" {
+    if node.kind() == "comment" || node.kind() == "line_comment" || node.kind() == "block_comment"
+    {
         comments.push((node.start_position().row, node.end_position().row));
         return;
     }
@@ -636,11 +634,7 @@ fn collect_comments(node: Node, comments: &mut Vec<(usize, usize)>) {
 }
 
 /// 收集函数范围：(函数名, start_line, end_line)
-fn collect_function_ranges(
-    node: Node,
-    language: &str,
-    source: &str,
-) -> Vec<(String, usize, usize)> {
+fn collect_function_ranges(node: Node, language: &str, source: &str) -> Vec<(String, usize, usize)> {
     let mut functions = Vec::new();
     collect_function_ranges_recursive(node, language, source, &mut functions);
     functions
@@ -654,18 +648,16 @@ fn collect_function_ranges_recursive(
 ) {
     let is_func = match language {
         "python" => node.kind() == "function_definition",
-        "elixir" => {
-            node.kind() == "call" && {
-                node.child(0)
-                    .map(|c| {
-                        c.kind() == "identifier" && {
-                            let name = &source[c.byte_range()];
-                            matches!(name, "def" | "defp" | "defmacro" | "defmacrop")
-                        }
-                    })
-                    .unwrap_or(false)
-            }
-        }
+        "elixir" => node.kind() == "call" && {
+            node.child(0)
+                .map(|c| {
+                    c.kind() == "identifier" && {
+                        let name = &source[c.byte_range()];
+                        matches!(name, "def" | "defp" | "defmacro" | "defmacrop")
+                    }
+                })
+                .unwrap_or(false)
+        },
         "rust" => node.kind() == "function_item",
         "typescript" | "tsx" => {
             node.kind() == "function_declaration"
@@ -729,7 +721,7 @@ fn normalize_for_comparison(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::{ImportRecord, SideEffects};
+    use crate::extract::{SideEffects, ImportRecord};
 
     fn make_record(language: &str, file_path: &str) -> FileRecord {
         FileRecord {
@@ -1142,16 +1134,8 @@ fn real_function() -> Result<(), Error> {
         let record = make_record("rust", "test.rs");
         let detector = LeftoverBoilerplateDetector;
         let smells = detector.detect(&record, source, &tree);
-        let empty_smells: Vec<_> = smells
-            .iter()
-            .filter(|s| s.rule == "empty_function_body")
-            .collect();
-        assert_eq!(
-            empty_smells.len(),
-            1,
-            "应只检出 stub_ok，不检出 real_function: {:?}",
-            empty_smells
-        );
+        let empty_smells: Vec<_> = smells.iter().filter(|s| s.rule == "empty_function_body").collect();
+        assert_eq!(empty_smells.len(), 1, "应只检出 stub_ok，不检出 real_function: {:?}", empty_smells);
         assert!(empty_smells[0].message.contains("stub_ok"));
     }
 
