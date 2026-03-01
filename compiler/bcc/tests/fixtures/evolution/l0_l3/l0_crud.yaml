@@ -1,0 +1,6 @@
+scenario: l0_crud
+level: L0
+rules: 4
+max_depth: 1
+branches: 1
+description: 基础 CRUD

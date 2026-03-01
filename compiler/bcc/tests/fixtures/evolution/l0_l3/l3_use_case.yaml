@@ -1,0 +1,6 @@
+scenario: l3_use_case
+level: L3
+rules: 18
+max_depth: 5
+branches: 10
+description: use_case 回流与复杂编排

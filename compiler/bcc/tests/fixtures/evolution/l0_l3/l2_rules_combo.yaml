@@ -1,0 +1,6 @@
+scenario: l2_rules_combo
+level: L2
+rules: 14
+max_depth: 3
+branches: 5
+description: 规则组合与分支扩张

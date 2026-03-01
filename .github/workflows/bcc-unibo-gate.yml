@@ -1,0 +1,71 @@
+name: BCC UniBO Gate
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/bcc/**'
+      - '.github/workflows/bcc-unibo-gate.yml'
+  push:
+    branches:
+      - master
+      - 'release/**'
+    tags:
+      - 'v*'
+    paths:
+      - 'compiler/bcc/**'
+      - '.github/workflows/bcc-unibo-gate.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bcc-unibo-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve gate mode
+        id: gate_mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODE="warn"
+          if [[ "${GITHUB_REF}" == refs/heads/release/* || "${GITHUB_REF}" == refs/tags/* ]]; then
+            MODE="strict"
+          fi
+
+          echo "gate_mode=${MODE}" >> "$GITHUB_OUTPUT"
+          echo "GATE_MODE=${MODE}" >> "$GITHUB_ENV"
+
+          if [[ "${MODE}" == "strict" ]]; then
+            echo "GATE_FAIL_ON_DANGEROUS=true" >> "$GITHUB_ENV"
+          else
+            echo "GATE_FAIL_ON_DANGEROUS=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run BCC + UniBO gate regression
+        run: |
+          echo "GATE_MODE=${GATE_MODE}"
+          echo "GATE_FAIL_ON_DANGEROUS=${GATE_FAIL_ON_DANGEROUS}"
+          cargo test -p bcc \
+            --test contract_manifest_drift \
+            --test integration_bcc_unibo_runtime \
+            --test regression_l0_l3_evolution
+
+      - name: Upload gate reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcc-unibo-gate-reports-${{ steps.gate_mode.outputs.gate_mode }}
+          path: target/gate-reports/*.json
+          if-no-files-found: warn

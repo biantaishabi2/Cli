@@ -1,0 +1,6 @@
+scenario: l1_rules
+level: L1
+rules: 8
+max_depth: 2
+branches: 2
+description: 引入单规则校验

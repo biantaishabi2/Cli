@@ -1,0 +1,11 @@
+[[entry]]
+id = "BREAKING:action_removed:billing.invoice:archive"
+reason = "archive 动作迁移到 use_case 层，短期允许兼容"
+approved_by = "arch-owner"
+expires_at = "2026-12-31T00:00:00Z"
+
+[[entry]]
+id = "BREAKING:contract_removed:billing.legacy"
+reason = "legacy 契约下线豁免已过期，需严格拦截"
+approved_by = "arch-owner"
+expires_at = "2025-12-01T00:00:00Z"
