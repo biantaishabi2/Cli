@@ -2850,7 +2850,10 @@ fn write_unibo_runtime_bridge_config(
             );
         }
         None => {
-            println!("{}", payload);
+            eprintln!(
+                "[generate] 未指定 --output，runtime bridge 改为输出到 stderr 以保持 stdout JSON 可机读"
+            );
+            eprintln!("{}", payload);
         }
     }
     Ok(())

@@ -46,6 +46,22 @@ fn run_arch_generate(
         .expect("run arch generate")
 }
 
+fn run_arch_generate_stdout(seed: &Path, emit_runtime_bridge: bool) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_bcc"))
+        .args([
+            "arch",
+            "generate",
+            "--seed-file",
+            &seed.to_string_lossy(),
+            "--emit",
+            "api-contract",
+            "--emit-runtime-bridge",
+            if emit_runtime_bridge { "true" } else { "false" },
+        ])
+        .output()
+        .expect("run arch generate stdout")
+}
+
 fn read_contract(output: &Path) -> Value {
     let path = output.join("unibo-api-contract.json");
     let raw = fs::read_to_string(&path).expect("read unibo-api-contract.json");
@@ -274,6 +290,57 @@ boundaries:
     assert_eq!(
         contracts[0].pointer("/actions/0/input/order_id"),
         Some(&Value::String("uuid".to_string()))
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn bridge_stdout_with_runtime_bridge_enabled_should_keep_stdout_json_readable() {
+    let root = temp_dir("bcc_bridge_stdout_machine_readable");
+    let seed = root.join("seed.yaml");
+
+    write(
+        &seed,
+        r#"version: v1
+modules:
+  - module_id: billing
+    precedence: 1
+    path_rules:
+      include: ["src/billing/**"]
+relations_expected: []
+boundaries:
+  - module_id: billing
+    contracts:
+      - name: create_invoice
+        kind: command
+        input:
+          order_id: uuid
+        output:
+          invoice_id: uuid
+"#,
+    );
+
+    let output = run_arch_generate_stdout(&seed, true);
+    assert!(
+        output.status.success(),
+        "stdout mode with runtime bridge should succeed"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let payload: Value = serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+    assert!(payload.get("contracts").and_then(Value::as_array).is_some());
+    assert!(
+        !stdout.contains("runtime:\n"),
+        "stdout should not contain YAML runtime bridge: {}",
+        stdout
+    );
+    assert!(
+        stderr.contains("unibo_graphql_runtime"),
+        "stderr should include runtime bridge yaml content: {}",
+        stderr
     );
 
     let _ = fs::remove_dir_all(&root);

@@ -1,7 +1,9 @@
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -49,6 +51,68 @@ fn sanitize_generated_at(mut payload: Value) -> Value {
         }
     }
     payload
+}
+
+fn load_runtime_visible_actions(output: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
+    let bridge_raw = fs::read_to_string(output.join("unibo-runtime-bridge.yaml"))
+        .expect("read runtime bridge config");
+    let bridge_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&bridge_raw).expect("parse runtime bridge config");
+
+    let contract_source = bridge_yaml
+        .get("contractSource")
+        .and_then(|v| v.get("path"))
+        .and_then(|v| v.as_str())
+        .expect("runtime bridge contractSource.path");
+    let format = bridge_yaml
+        .get("contractSource")
+        .and_then(|v| v.get("format"))
+        .and_then(|v| v.as_str())
+        .expect("runtime bridge contractSource.format");
+    assert_eq!(format, "json");
+
+    let relative_path = contract_source.trim_start_matches("./");
+    let contract_path = output.join(relative_path);
+    let contract_raw = fs::read_to_string(&contract_path).expect("read runtime contract source");
+    let payload: Value = serde_json::from_str(&contract_raw).expect("parse runtime contract json");
+    let contracts = payload
+        .get("contracts")
+        .and_then(Value::as_array)
+        .expect("runtime contract list");
+
+    let mut queries = BTreeSet::new();
+    let mut mutations = BTreeSet::new();
+    for contract in contracts {
+        let contract_key = contract
+            .get("contractKey")
+            .and_then(Value::as_str)
+            .expect("contractKey");
+        let actions = contract
+            .get("actions")
+            .and_then(Value::as_array)
+            .expect("actions");
+        for action in actions {
+            let action_name = action
+                .get("action")
+                .and_then(Value::as_str)
+                .expect("action name");
+            let graph_kind = action
+                .get("graphqlKind")
+                .and_then(Value::as_str)
+                .expect("action graphqlKind");
+            let normalized = format!("{}:{}", contract_key, action_name);
+            match graph_kind {
+                "query" => {
+                    queries.insert(normalized);
+                }
+                "mutation" => {
+                    mutations.insert(normalized);
+                }
+                other => panic!("unexpected graphql kind for runtime visibility: {}", other),
+            }
+        }
+    }
+    (queries, mutations)
 }
 
 #[test]
@@ -144,6 +208,57 @@ fn openclaw_bridge_example_should_match_expected_artifacts() {
     assert_eq!(
         actual_bridge, expected_bridge_raw,
         "openclaw unibo-runtime-bridge.yaml should match expected"
+    );
+
+    let (queries, mutations) = load_runtime_visible_actions(&out);
+    assert!(queries.contains("account.list_users:list_users"));
+    assert!(queries.contains("billing.invoice:list"));
+    assert!(queries.contains("billing.invoice:read"));
+    assert!(mutations.contains("billing.create_invoice:create_invoice"));
+    assert!(mutations.contains("billing.invoice:create"));
+    assert!(mutations.contains("billing.invoice:update"));
+    assert!(mutations.contains("billing.invoice:delete"));
+
+    let _ = fs::remove_dir_all(&out);
+}
+
+#[test]
+fn bridge_parallel_writes_to_same_output_should_keep_artifacts_parseable() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let seed = manifest_dir.join("examples/openclaw-arch/bridge.seed.yaml");
+    let out = temp_dir("bcc_cli_bridge_parallel_write");
+    fs::create_dir_all(&out).expect("create output dir");
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let seed = seed.clone();
+        let out = out.clone();
+        handles.push(thread::spawn(move || {
+            run_arch_generate(&seed, &out, true, "error-on-conflict")
+        }));
+    }
+
+    for handle in handles {
+        let status = handle.join().expect("join parallel bridge generation");
+        assert!(
+            status.success(),
+            "parallel bridge generation should succeed"
+        );
+    }
+
+    let contract_raw =
+        fs::read_to_string(out.join("unibo-api-contract.json")).expect("read contract output");
+    let _: Value = serde_json::from_str(&contract_raw).expect("contract output should be valid");
+    let bridge_raw =
+        fs::read_to_string(out.join("unibo-runtime-bridge.yaml")).expect("read bridge output");
+    let _: serde_yaml::Value =
+        serde_yaml::from_str(&bridge_raw).expect("bridge output should be valid");
+
+    let (queries, mutations) = load_runtime_visible_actions(&out);
+    assert!(!queries.is_empty(), "runtime queries should not be empty");
+    assert!(
+        !mutations.is_empty(),
+        "runtime mutations should not be empty"
     );
 
     let _ = fs::remove_dir_all(&out);
