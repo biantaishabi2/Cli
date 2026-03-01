@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,10 +387,7 @@ fn manifest_drift_on_openclaw_baseline_should_pass_strict_gate() {
 
     let outcome = gate_common::evaluate_gate(
         "contract-manifest-drift-openclaw",
-        GateConfig {
-            mode: GateMode::Strict,
-            fail_on_dangerous: true,
-        },
+        GateConfig::from_env(),
         findings,
         &whitelist,
     );
@@ -552,5 +550,102 @@ fn manifest_drift_warn_and_strict_should_follow_whitelist_policy() {
     assert!(
         strict_outcome.report_path.exists(),
         "report should be written"
+    );
+}
+
+#[test]
+fn manifest_drift_parallel_evaluation_should_be_stable() {
+    let baseline = parse_manifest_from_raw(
+        r#"{
+  "contracts": [
+    {
+      "contractKey": "billing.invoice",
+      "graphqlKind": "mutation",
+      "fields": {
+        "invoice_id": "uuid?",
+        "status": "enum[draft|paid]"
+      },
+      "actions": [
+        {
+          "actionKey": "update",
+          "action": "update",
+          "graphqlKind": "mutation",
+          "input": {
+            "trace_id": "string?",
+            "status": "enum[draft|paid]"
+          },
+          "output": {
+            "invoice_id": "uuid?"
+          }
+        }
+      ]
+    }
+  ]
+}"#,
+    );
+    let generated = parse_manifest_from_raw(
+        r#"{
+  "contracts": [
+    {
+      "contractKey": "billing.invoice",
+      "graphqlKind": "mutation",
+      "fields": {
+        "invoice_id": "uuid?",
+        "status": "enum[draft|paid]"
+      },
+      "actions": [
+        {
+          "actionKey": "update",
+          "action": "update",
+          "graphqlKind": "mutation",
+          "input": {
+            "trace_id": "string!",
+            "status": "enum[draft]"
+          },
+          "output": {
+            "invoice_id": "uuid!"
+          }
+        }
+      ]
+    }
+  ]
+}"#,
+    );
+    let whitelist =
+        gate_common::load_whitelist(&bcc_root().join("tests/fixtures/contracts/whitelist.toml"))
+            .expect("load whitelist");
+
+    let mut handles = Vec::new();
+    for idx in 0..6 {
+        let baseline = baseline.clone();
+        let generated = generated.clone();
+        let whitelist = whitelist.clone();
+        handles.push(thread::spawn(move || {
+            let findings = diff_manifests(&baseline, &generated);
+            let outcome = gate_common::evaluate_gate(
+                &format!("contract-manifest-drift-parallel-{}", idx),
+                GateConfig::from_env(),
+                findings,
+                &whitelist,
+            );
+            assert!(outcome.report_path.exists(), "report should be written");
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("join manifest drift workers");
+    }
+}
+
+#[test]
+fn manifest_drift_should_reject_malformed_manifest_input() {
+    let malformed_json = std::panic::catch_unwind(|| parse_manifest_from_raw("{not-json"));
+    assert!(malformed_json.is_err(), "invalid json should panic");
+
+    let invalid_shape =
+        std::panic::catch_unwind(|| parse_manifest_from_raw(r#"{"contracts":"invalid"}"#));
+    assert!(
+        invalid_shape.is_err(),
+        "invalid manifest shape should panic"
     );
 }
