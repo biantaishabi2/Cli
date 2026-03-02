@@ -1,0 +1,4 @@
+interface:
+  display_name: "Business to Model Card"
+  short_description: "Convert business narratives into model cards and YAML-ready modeling artifacts"
+  default_prompt: "Analyze business requirements, produce a complete model card with actions/validations/events/custom overlays, score quality gate, and prepare handoff inputs for ubo-yaml-writing."

@@ -20,6 +20,10 @@ Each CLI tool should map to exactly one skill folder under a category.
   - Tool `github-issue-taskctl`
     - Path: `skills/orchestration/github-issue-taskctl/`
     - Purpose: GitHub Issue/PR operation and synchronization with taskctl task states
+- Category `scaffolding`
+  - Tool `business-to-model-card`
+    - Path: `skills/scaffolding/business-to-model-card/`
+    - Purpose: Convert business/product descriptions into model cards, quality-gated refinement tasks, and handoff-ready inputs for `ubo-yaml-writing`
 
 ## Category Guidelines
 
