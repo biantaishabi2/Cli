@@ -146,14 +146,10 @@ defmodule BDDCompiler.InstructionSet do
     Enum.into(args, %{}, fn {k, v} ->
       arg_spec = %{
         type: v |> Map.get("type", "string") |> String.to_atom(),
-        required?: Map.get(v, "required", false)
+        required?: Map.get(v, "required", false),
+        # 确保 :allowed 键始终存在，避免 Validator 访问时 KeyError
+        allowed: Map.get(v, "allowed")
       }
-
-      arg_spec =
-        case Map.get(v, "allowed") do
-          nil -> arg_spec
-          list when is_list(list) -> Map.put(arg_spec, :allowed, list)
-        end
 
       {String.to_atom(k), arg_spec}
     end)

@@ -115,13 +115,30 @@ defmodule BDDCompiler.CLI do
 
     target = parse_target(Keyword.get(opts, :target, "elixir"))
 
+    # 对于 Go target，--go-module 优先，否则回退到 --module-prefix
+    module_prefix =
+      if target == :go do
+        go_mod = Keyword.get(opts, :go_module)
+        fallback = Keyword.get(opts, :module_prefix)
+
+        cond do
+          is_binary(go_mod) and go_mod != "" -> go_mod
+          is_binary(fallback) and fallback != "" -> fallback
+          true ->
+            IO.puts(:stderr, "[warn] --target go 未指定 --go-module，将使用 GoEmitter 默认值")
+            nil
+        end
+      else
+        Keyword.get(opts, :module_prefix, "BDD.Generated")
+      end
+
     compile_opts =
       [
         docs_root: docs_root,
         target: target,
         runtime_module: Keyword.get(opts, :runtime_module, "BDD.Instructions.V1"),
         test_case: Keyword.get(opts, :test_case, "ExUnit.Case"),
-        module_prefix: Keyword.get(opts, :module_prefix, "BDD.Generated")
+        module_prefix: module_prefix
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
@@ -671,6 +688,8 @@ defmodule BDDCompiler.CLI do
     |> maybe_put_from_cfg(cfg, section, :out, "out")
     |> maybe_put_from_cfg(cfg, section, :test_case, "test_case")
     |> maybe_put_from_cfg(cfg, section, :module_prefix, "module_prefix")
+    |> maybe_put_from_cfg(cfg, section, :target, "target")
+    |> maybe_put_from_cfg(cfg, section, :go_module, "go_module")
     |> maybe_put_runtime_sources_from_cfg(cfg, section, project_root)
     |> maybe_put_instructions_from_cfg(cfg, section, project_root)
   end
@@ -802,7 +821,8 @@ defmodule BDDCompiler.CLI do
         {:rerun_failures, :integer},
         {:skip_annotations_check, :boolean},
         {:skip_bdd_test, :boolean},
-        {:target, :string}
+        {:target, :string},
+        {:go_module, :string}
       ])
 
     {opts, rest, invalid} = OptionParser.parse(args, switches: switches)
@@ -828,7 +848,8 @@ defmodule BDDCompiler.CLI do
         :rerun_failures,
         :skip_annotations_check,
         :skip_bdd_test,
-        :target
+        :target,
+        :go_module
       ])
 
     required =
