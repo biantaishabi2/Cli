@@ -45,6 +45,64 @@ defmodule BDDCompiler.InstructionSet do
 
   defstruct v1: %{}, v2: %{}
 
+  @doc """
+  从 JSON manifest 文件加载指令集（仅 v1）。
+
+  JSON 格式为 unibo 编译器输出的 instruction_manifest.json：
+  `{"total": N, "entries": [...]}`
+
+  每个 entry 包含 name, kind, args, outputs, scopes, boundary 等字段，
+  缺失字段使用默认值。
+  """
+  @spec load_json!(String.t()) :: t()
+  def load_json!(path) when is_binary(path) do
+    content = File.read!(path)
+    data = BDDCompiler.JsonParser.parse!(content)
+
+    entries = Map.get(data, "entries", [])
+
+    specs =
+      Enum.into(entries, %{}, fn entry ->
+        name = entry |> Map.fetch!("name") |> String.to_atom()
+        kind = entry |> Map.fetch!("kind") |> String.to_atom()
+
+        args = convert_args(Map.get(entry, "args", %{}))
+        outputs = convert_outputs(Map.get(entry, "outputs", %{}))
+
+        scopes =
+          entry
+          |> Map.get("scopes", ["integration", "e2e"])
+          |> Enum.map(&String.to_atom/1)
+
+        boundary =
+          case Map.get(entry, "boundary") do
+            nil -> :service
+            b when is_binary(b) -> String.to_atom(b)
+          end
+
+        spec = %{
+          name: name,
+          kind: kind,
+          args: args,
+          outputs: outputs,
+          scopes: scopes,
+          boundary: boundary
+        }
+
+        {name, spec}
+      end)
+
+    v1 = normalize_specs(specs)
+    %__MODULE__{v1: v1, v2: %{}}
+  rescue
+    e ->
+      raise CompileError,
+        message: "JSON 指令集文件加载失败：#{Exception.message(e)}",
+        file: path,
+        line: nil,
+        raw: nil
+  end
+
   @spec load!([String.t()], [String.t()]) :: t()
   def load!(v1_paths, v2_paths) when is_list(v1_paths) and is_list(v2_paths) do
     v1 =
@@ -80,6 +138,39 @@ defmodule BDDCompiler.InstructionSet do
   def supported_versions(%__MODULE__{} = set, name) when is_atom(name) do
     [:v1, :v2]
     |> Enum.filter(fn v -> match?({:ok, _}, fetch(set, name, v)) end)
+  end
+
+  # JSON args 转换：{"name": {"type": "string", "required": true}} -> %{name: %{type: :string, required?: true}}
+  defp convert_args(nil), do: %{}
+  defp convert_args(args) when is_map(args) do
+    Enum.into(args, %{}, fn {k, v} ->
+      arg_spec = %{
+        type: v |> Map.get("type", "string") |> String.to_atom(),
+        required?: Map.get(v, "required", false)
+      }
+
+      arg_spec =
+        case Map.get(v, "allowed") do
+          nil -> arg_spec
+          list when is_list(list) -> Map.put(arg_spec, :allowed, list)
+        end
+
+      {String.to_atom(k), arg_spec}
+    end)
+  end
+
+  # JSON outputs 转换：{"id": {"type": "uuid"}} -> %{id: :uuid}
+  defp convert_outputs(nil), do: %{}
+  defp convert_outputs(outputs) when is_map(outputs) do
+    Enum.into(outputs, %{}, fn {k, v} ->
+      type =
+        case v do
+          %{"type" => t} -> String.to_atom(t)
+          t when is_binary(t) -> String.to_atom(t)
+        end
+
+      {String.to_atom(k), type}
+    end)
   end
 
   defp read_specs_file!(path) when is_binary(path) do

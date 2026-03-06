@@ -594,10 +594,23 @@ defmodule BDDCompiler.CLI do
   defp load_instruction_set!(opts, cfg_section) do
     project_root = Keyword.get(opts, :project_root, File.cwd!())
     registry_module = Keyword.get(opts, :registry_module)
+    json_path = Keyword.get(opts, :instructions_json)
     v1_paths = Keyword.get_values(opts, :instructions) |> Enum.map(&expand_path(&1, project_root))
     v2_paths = Keyword.get_values(opts, :instructions_v2) |> Enum.map(&expand_path(&1, project_root))
 
+    # --instructions-json 和 --instructions 互斥
+    if json_path != nil and v1_paths != [] do
+      raise CompileError,
+        message: "--instructions-json 和 --instructions 不能同时使用",
+        file: nil,
+        line: nil,
+        raw: nil
+    end
+
     cond do
+      json_path != nil ->
+        InstructionSet.load_json!(expand_path(json_path, project_root))
+
       v1_paths != [] ->
         InstructionSet.load!(v1_paths, v2_paths)
 
@@ -761,6 +774,7 @@ defmodule BDDCompiler.CLI do
         {:in, :string},
         {:out, :string},
         {:instructions, :keep},
+        {:instructions_json, :string},
         {:instructions_v2, :keep},
         {:project_root, :string},
         {:registry_module, :string},
@@ -785,6 +799,7 @@ defmodule BDDCompiler.CLI do
         :in,
         :out,
         :instructions,
+        :instructions_json,
         :instructions_v2,
         :project_root,
         :registry_module,

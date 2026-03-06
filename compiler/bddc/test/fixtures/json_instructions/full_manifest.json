@@ -1,0 +1,31 @@
+{
+  "total": 2,
+  "entries": [
+    {
+      "name": "unibo_accounting_gl_account_action_create",
+      "domain": "Accounting",
+      "entity": "GlAccount",
+      "source_kind": "action",
+      "source_name": "create",
+      "kind": "when",
+      "dedup_index": 0,
+      "args": {"name": {"type": "string", "required": true}, "code": {"type": "string", "required": false}},
+      "outputs": {"id": {"type": "uuid"}},
+      "scopes": ["integration", "e2e"],
+      "boundary": "service"
+    },
+    {
+      "name": "unibo_accounting_gl_account_read_by_id",
+      "domain": "Accounting",
+      "entity": "GlAccount",
+      "source_kind": "read",
+      "source_name": "by_id",
+      "kind": "then",
+      "dedup_index": 0,
+      "args": {"id": {"type": "uuid", "required": true}},
+      "outputs": {},
+      "scopes": ["integration"],
+      "boundary": "service"
+    }
+  ]
+}
