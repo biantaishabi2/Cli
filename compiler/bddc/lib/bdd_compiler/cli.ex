@@ -113,9 +113,12 @@ defmodule BDDCompiler.CLI do
     out_dir = opts |> Keyword.get(:out, "test/bdd_generated") |> expand_path(project_root)
     docs_root = opts |> Keyword.get(:docs_root) |> expand_optional_path(project_root)
 
+    target = parse_target(Keyword.get(opts, :target, "elixir"))
+
     compile_opts =
       [
         docs_root: docs_root,
+        target: target,
         runtime_module: Keyword.get(opts, :runtime_module, "BDD.Instructions.V1"),
         test_case: Keyword.get(opts, :test_case, "ExUnit.Case"),
         module_prefix: Keyword.get(opts, :module_prefix, "BDD.Generated")
@@ -768,6 +771,15 @@ defmodule BDDCompiler.CLI do
   defp expand_optional_path(nil, _project_root), do: nil
   defp expand_optional_path(path, project_root), do: expand_path(path, project_root)
 
+  # 解析 --target 参数，默认 :elixir
+  defp parse_target("elixir"), do: :elixir
+  defp parse_target("go"), do: :go
+
+  defp parse_target(other) do
+    IO.puts(:stderr, "不支持的 target: #{other}（可选值: elixir, go）")
+    System.halt(1)
+  end
+
   defp parse_common_args(args, extra_keys) do
     switches =
       Enum.uniq([
@@ -789,7 +801,8 @@ defmodule BDDCompiler.CLI do
         {:exclude_flaky, :boolean},
         {:rerun_failures, :integer},
         {:skip_annotations_check, :boolean},
-        {:skip_bdd_test, :boolean}
+        {:skip_bdd_test, :boolean},
+        {:target, :string}
       ])
 
     {opts, rest, invalid} = OptionParser.parse(args, switches: switches)
@@ -814,7 +827,8 @@ defmodule BDDCompiler.CLI do
         :exclude_flaky,
         :rerun_failures,
         :skip_annotations_check,
-        :skip_bdd_test
+        :skip_bdd_test,
+        :target
       ])
 
     required =

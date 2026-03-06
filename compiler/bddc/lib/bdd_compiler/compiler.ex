@@ -6,20 +6,23 @@ defmodule BDDCompiler.Compiler do
   - 从 docs/*.md 的 fenced code block（```bdd/```dsl/```bdd-dsl）抽取 DSL 并参与编译。
   """
 
-  alias BDDCompiler.{DslParser, Emitter, MarkdownExtractor, Validator}
+  alias BDDCompiler.{DslParser, Emitter, GoEmitter, MarkdownExtractor, Validator}
 
   @spec compile_file!(String.t(), String.t(), BDDCompiler.InstructionSet.t(), keyword()) :: String.t()
   def compile_file!(dsl_path, out_dir, instruction_set, opts \\ [])
       when is_binary(dsl_path) and is_binary(out_dir) and is_list(opts) do
+    target = Keyword.get(opts, :target, :elixir)
     scenarios = DslParser.parse_file!(dsl_path)
     :ok = Validator.validate!(dsl_path, scenarios, instruction_set)
 
-    source = Emitter.emit_to_string(dsl_path, scenarios, opts)
+    source = emit_with_target(target, dsl_path, scenarios, opts)
     File.mkdir_p!(out_dir)
+
+    ext = output_extension(target)
 
     out_path =
       out_dir
-      |> Path.join(Path.basename(dsl_path, ".dsl") <> "_generated_test.exs")
+      |> Path.join(Path.basename(dsl_path, ".dsl") <> ext)
 
     File.write!(out_path, source)
     out_path
@@ -71,18 +74,34 @@ defmodule BDDCompiler.Compiler do
 
     File.mkdir_p!(out_dir)
 
+    target = Keyword.get(opts, :target, :elixir)
+    ext = output_extension(target)
+
     Enum.map(parsed, fn {source_id, validate_path, module_base, scenarios} ->
       :ok = Validator.validate!(validate_path, scenarios, instruction_set)
-      source = Emitter.emit_to_string(source_id, scenarios, Keyword.put(opts, :module_base, module_base))
+      source = emit_with_target(target, source_id, scenarios, Keyword.put(opts, :module_base, module_base))
 
       out_path =
         out_dir
-        |> Path.join(module_base <> "_generated_test.exs")
+        |> Path.join(module_base <> ext)
 
       File.write!(out_path, source)
       out_path
     end)
   end
+
+  # 根据 target 选择对应的 emitter
+  defp emit_with_target(:go, source_id, scenarios, opts) do
+    GoEmitter.emit_to_string(source_id, scenarios, opts)
+  end
+
+  defp emit_with_target(_elixir, source_id, scenarios, opts) do
+    Emitter.emit_to_string(source_id, scenarios, opts)
+  end
+
+  # 根据 target 选择输出文件扩展名
+  defp output_extension(:go), do: "_generated_test.go"
+  defp output_extension(_elixir), do: "_generated_test.exs"
 
   # 仅在默认目录结构（docs/bdd）下启用 Markdown 内嵌 DSL。
   defp default_docs_root(in_dir) do
