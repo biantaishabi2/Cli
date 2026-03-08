@@ -141,7 +141,7 @@ func TestDaemonTickQueuedToWorking(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	assert.Equal(t, int32(1), executor.fixCount.Load(), "应该执行了一次 fix")
-	assert.Equal(t, StatusReview, tracker.getStatus("item-1"), "成功后应该变成 Review")
+	assert.Equal(t, StatusDone, tracker.getStatus("item-1"), "无 PR 时成功后应该直接 Done")
 }
 
 func TestDaemonTickDependencyBlocked(t *testing.T) {
@@ -193,7 +193,7 @@ func TestDaemonTickDependencySatisfied(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	assert.Equal(t, int32(1), executor.fixCount.Load(), "依赖满足，应该执行")
-	assert.Equal(t, StatusReview, tracker.getStatus("item-3"), "成功后应该变成 Review")
+	assert.Equal(t, StatusDone, tracker.getStatus("item-3"), "无 PR 时成功后应该直接 Done")
 }
 
 func TestDaemonTickFixFailureRollback(t *testing.T) {

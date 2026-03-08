@@ -225,13 +225,25 @@ func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
 	delete(d.retries, issue.ID)
 	d.mu.Unlock()
 
-	// 成功 → Review
-	statusReview := d.config.mapStatus("review")
-	if err := d.tracker.SetStatus(ctx, issue.ID, statusReview); err != nil {
-		log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusReview, err)
-		return
+	// 成功后检查 issue 是否有关联 PR
+	// 有 PR → Review（等 PR 合并后变 Done）
+	// 无 PR → 直接 Done（AI 可能已内部完成所有工作）
+	updated, _ := d.tracker.GetIssue(ctx, issue.ID)
+	if updated != nil && updated.PRNumber > 0 {
+		statusReview := d.config.mapStatus("review")
+		if err := d.tracker.SetStatus(ctx, issue.ID, statusReview); err != nil {
+			log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusReview, err)
+			return
+		}
+		log.Printf("[daemon] #%d 完成 → %s（PR #%d）", issue.Number, statusReview, updated.PRNumber)
+	} else {
+		statusDone := d.config.mapStatus("done")
+		if err := d.tracker.SetStatus(ctx, issue.ID, statusDone); err != nil {
+			log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusDone, err)
+			return
+		}
+		log.Printf("[daemon] #%d 完成 → %s（无 PR）", issue.Number, statusDone)
 	}
-	log.Printf("[daemon] #%d 完成 → %s", issue.Number, statusReview)
 }
 
 // dependenciesMet 检查 issue 的所有依赖是否已完成
