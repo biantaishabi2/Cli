@@ -1,0 +1,264 @@
+// pkg/daemon/loop.go
+// daemon 轮询主循环：驱动 issue 状态流转
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+)
+
+// Config daemon 运行配置
+type Config struct {
+	PollInterval  time.Duration     // 轮询间隔（默认 15s）
+	MaxConcurrent int               // 最大并行任务数（默认 1）
+	StatusMapping map[string]string // 状态名映射（内部名 → tracker 实际值）
+}
+
+// DefaultConfig 返回默认配置
+func DefaultConfig() *Config {
+	return &Config{
+		PollInterval:  15 * time.Second,
+		MaxConcurrent: 1,
+		StatusMapping: map[string]string{
+			"queued":  StatusQueued,
+			"working": StatusWorking,
+			"review":  StatusReview,
+			"done":    StatusDone,
+		},
+	}
+}
+
+// mapStatus 将内部状态名映射到 tracker 实际值
+func (c *Config) mapStatus(internal string) string {
+	if mapped, ok := c.StatusMapping[internal]; ok {
+		return mapped
+	}
+	// 回退：首字母大写
+	if len(internal) > 0 {
+		return string(internal[0]-32) + internal[1:]
+	}
+	return internal
+}
+
+// Daemon 轮询守护进程
+type Daemon struct {
+	tracker  Tracker
+	executor Executor
+	config   *Config
+
+	mu      sync.Mutex
+	running map[string]bool // 正在执行的 issue ID → 防重复派发
+	sem     chan struct{}    // 并发控制信号量
+}
+
+// New 创建 daemon 实例
+func New(tracker Tracker, executor Executor, config *Config) *Daemon {
+	if config == nil {
+		config = DefaultConfig()
+	}
+	if config.MaxConcurrent <= 0 {
+		config.MaxConcurrent = 1
+	}
+	return &Daemon{
+		tracker:  tracker,
+		executor: executor,
+		config:   config,
+		running:  make(map[string]bool),
+		sem:      make(chan struct{}, config.MaxConcurrent),
+	}
+}
+
+// Run 启动轮询主循环，直到 context 取消
+func (d *Daemon) Run(ctx context.Context) error {
+	log.Printf("[daemon] 启动，轮询间隔 %s，最大并行 %d", d.config.PollInterval, d.config.MaxConcurrent)
+
+	// 启动时立即执行一轮
+	d.tick(ctx)
+
+	ticker := time.NewTicker(d.config.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[daemon] 收到停止信号，等待进行中的任务完成...")
+			d.waitRunning()
+			log.Println("[daemon] 已停止")
+			return nil
+		case <-ticker.C:
+			d.tick(ctx)
+		}
+	}
+}
+
+// tick 单轮轮询
+func (d *Daemon) tick(ctx context.Context) {
+	// 阶段 1: Queued → Working（依赖检查 + 派发）
+	d.processQueued(ctx)
+
+	// 阶段 2: Review → Done（PR 合并检测）
+	d.processReview(ctx)
+}
+
+// processQueued 处理排队中的 issues
+func (d *Daemon) processQueued(ctx context.Context) {
+	statusQueued := d.config.mapStatus("queued")
+	queued, err := d.tracker.FetchByStatus(ctx, statusQueued)
+	if err != nil {
+		log.Printf("[daemon] 拉取 %s issues 失败: %v", statusQueued, err)
+		return
+	}
+
+	for _, issue := range queued {
+		if ctx.Err() != nil {
+			return
+		}
+
+		d.mu.Lock()
+		alreadyRunning := d.running[issue.ID]
+		d.mu.Unlock()
+		if alreadyRunning {
+			continue
+		}
+
+		// 检查依赖
+		if !d.dependenciesMet(ctx, issue) {
+			log.Printf("[daemon] #%d 依赖未满足，跳过", issue.Number)
+			continue
+		}
+
+		// 尝试获取信号量（非阻塞）
+		select {
+		case d.sem <- struct{}{}:
+			// 获取到并发槽位
+		default:
+			log.Printf("[daemon] 并发已满（%d），#%d 等待下轮", d.config.MaxConcurrent, issue.Number)
+			return
+		}
+
+		// 设置状态为 Working
+		statusWorking := d.config.mapStatus("working")
+		if err := d.tracker.SetStatus(ctx, issue.ID, statusWorking); err != nil {
+			log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusWorking, err)
+			<-d.sem
+			continue
+		}
+
+		d.mu.Lock()
+		d.running[issue.ID] = true
+		d.mu.Unlock()
+
+		// 异步派发
+		go d.dispatch(ctx, issue)
+	}
+}
+
+// processReview 处理等待 review 的 issues
+func (d *Daemon) processReview(ctx context.Context) {
+	statusReview := d.config.mapStatus("review")
+	reviewing, err := d.tracker.FetchByStatus(ctx, statusReview)
+	if err != nil {
+		log.Printf("[daemon] 拉取 %s issues 失败: %v", statusReview, err)
+		return
+	}
+
+	statusDone := d.config.mapStatus("done")
+	for _, issue := range reviewing {
+		if ctx.Err() != nil {
+			return
+		}
+		if issue.PRMerged {
+			if err := d.tracker.SetStatus(ctx, issue.ID, statusDone); err != nil {
+				log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusDone, err)
+				continue
+			}
+			log.Printf("[daemon] #%d PR 已合并 → %s", issue.Number, statusDone)
+		}
+	}
+}
+
+// dispatch 异步执行 niuma fix
+func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
+	defer func() {
+		<-d.sem
+		d.mu.Lock()
+		delete(d.running, issue.ID)
+		d.mu.Unlock()
+	}()
+
+	log.Printf("[daemon] 开始处理 #%d: %s", issue.Number, issue.Title)
+
+	err := d.executor.Fix(ctx, issue)
+	if err != nil {
+		log.Printf("[daemon] #%d 执行失败: %v，回退到 Queued", issue.Number, err)
+		statusQueued := d.config.mapStatus("queued")
+		if setErr := d.tracker.SetStatus(ctx, issue.ID, statusQueued); setErr != nil {
+			log.Printf("[daemon] #%d 回退状态失败: %v", issue.Number, setErr)
+		}
+		return
+	}
+
+	// 成功 → Review
+	statusReview := d.config.mapStatus("review")
+	if err := d.tracker.SetStatus(ctx, issue.ID, statusReview); err != nil {
+		log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusReview, err)
+		return
+	}
+	log.Printf("[daemon] #%d 完成 → %s", issue.Number, statusReview)
+}
+
+// dependenciesMet 检查 issue 的所有依赖是否已完成
+func (d *Daemon) dependenciesMet(ctx context.Context, issue Issue) bool {
+	deps := issue.DependsOn
+	if len(deps) == 0 {
+		// 没有 DependsOn 字段时尝试从 body 解析
+		deps = ParseDependsOn(issue.Body)
+	}
+	if len(deps) == 0 {
+		return true
+	}
+
+	statuses, err := d.tracker.CheckDependencies(ctx, deps)
+	if err != nil {
+		log.Printf("[daemon] #%d 检查依赖失败: %v", issue.Number, err)
+		return false
+	}
+
+	statusDone := d.config.mapStatus("done")
+	for _, dep := range deps {
+		s, ok := statuses[dep]
+		if !ok || s != statusDone {
+			return false
+		}
+	}
+	return true
+}
+
+// waitRunning 等待所有进行中的任务完成
+func (d *Daemon) waitRunning() {
+	for i := 0; i < cap(d.sem); i++ {
+		d.sem <- struct{}{}
+	}
+	// 全部槽位回收，所有任务已完成
+	for i := 0; i < cap(d.sem); i++ {
+		<-d.sem
+	}
+}
+
+// RunningCount 返回当前正在执行的任务数（用于测试）
+func (d *Daemon) RunningCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.running)
+}
+
+// String 返回 daemon 状态摘要
+func (d *Daemon) String() string {
+	d.mu.Lock()
+	n := len(d.running)
+	d.mu.Unlock()
+	return fmt.Sprintf("daemon(interval=%s, max=%d, running=%d)", d.config.PollInterval, d.config.MaxConcurrent, n)
+}
