@@ -213,17 +213,17 @@ func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
 		return
 	}
 
-	// 成功 → 清除重试计数
-	d.mu.Lock()
-	delete(d.retries, issue.ID)
-	d.mu.Unlock()
-
 	// 检查是否创建了 PR
 	updated, _ := d.tracker.GetIssue(ctx, issue.ID)
 	if updated == nil || updated.PRNumber == 0 {
 		d.failAndComment(ctx, issue, fmt.Errorf("AI 执行完成但未创建 PR"))
 		return
 	}
+
+	// 全部成功 → 清除重试计数
+	d.mu.Lock()
+	delete(d.retries, issue.ID)
+	d.mu.Unlock()
 
 	// 有 PR → Review（等 PR 合并后变 Done）
 	statusReview := d.config.mapStatus("review")
