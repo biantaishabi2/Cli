@@ -14,6 +14,7 @@ import (
 type Config struct {
 	PollInterval  time.Duration     // 轮询间隔（默认 15s）
 	MaxConcurrent int               // 最大并行任务数（默认 1）
+	MaxRetries    int               // 单个 issue 最大重试次数（默认 3，0=无限）
 	StatusMapping map[string]string // 状态名映射（内部名 → tracker 实际值）
 }
 
@@ -22,6 +23,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		PollInterval:  15 * time.Second,
 		MaxConcurrent: 1,
+		MaxRetries:    3,
 		StatusMapping: map[string]string{
 			"queued":  StatusQueued,
 			"working": StatusWorking,
@@ -51,6 +53,7 @@ type Daemon struct {
 
 	mu      sync.Mutex
 	running map[string]bool // 正在执行的 issue ID → 防重复派发
+	retries map[string]int  // issue ID → 连续失败次数
 	sem     chan struct{}    // 并发控制信号量
 }
 
@@ -67,6 +70,7 @@ func New(tracker Tracker, executor Executor, config *Config) *Daemon {
 		executor: executor,
 		config:   config,
 		running:  make(map[string]bool),
+		retries:  make(map[string]int),
 		sem:      make(chan struct{}, config.MaxConcurrent),
 	}
 }
@@ -122,6 +126,17 @@ func (d *Daemon) processQueued(ctx context.Context) {
 		d.mu.Unlock()
 		if alreadyRunning {
 			continue
+		}
+
+		// 检查重试次数
+		if d.config.MaxRetries > 0 {
+			d.mu.Lock()
+			failures := d.retries[issue.ID]
+			d.mu.Unlock()
+			if failures >= d.config.MaxRetries {
+				log.Printf("[daemon] #%d 已失败 %d 次（上限 %d），不再重试", issue.Number, failures, d.config.MaxRetries)
+				continue
+			}
 		}
 
 		// 检查依赖
@@ -193,13 +208,22 @@ func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
 
 	err := d.executor.Fix(ctx, issue)
 	if err != nil {
-		log.Printf("[daemon] #%d 执行失败: %v，回退到 Queued", issue.Number, err)
+		d.mu.Lock()
+		d.retries[issue.ID]++
+		failures := d.retries[issue.ID]
+		d.mu.Unlock()
+		log.Printf("[daemon] #%d 执行失败 (%d/%d): %v，回退到 Queued", issue.Number, failures, d.config.MaxRetries, err)
 		statusQueued := d.config.mapStatus("queued")
 		if setErr := d.tracker.SetStatus(ctx, issue.ID, statusQueued); setErr != nil {
 			log.Printf("[daemon] #%d 回退状态失败: %v", issue.Number, setErr)
 		}
 		return
 	}
+
+	// 成功 → 清除重试计数
+	d.mu.Lock()
+	delete(d.retries, issue.ID)
+	d.mu.Unlock()
 
 	// 成功 → Review
 	statusReview := d.config.mapStatus("review")
