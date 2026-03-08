@@ -31,6 +31,9 @@ type Tracker interface {
 	// CheckDependencies 批量检查依赖 issue 的状态
 	// 返回 map[issueID]status
 	CheckDependencies(ctx context.Context, ids []string) (map[string]string, error)
+
+	// AddComment 在 issue 上添加评论
+	AddComment(ctx context.Context, issue Issue, body string) error
 }
 
 // 标准状态常量

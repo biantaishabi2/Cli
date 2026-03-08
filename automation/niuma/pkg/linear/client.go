@@ -125,6 +125,13 @@ func (c *Client) CheckDependencies(ctx context.Context, ids []string) (map[strin
 	return result, nil
 }
 
+// AddComment 在 issue 上添加评论
+func (c *Client) AddComment(ctx context.Context, issue daemon.Issue, body string) error {
+	m := `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
+	_, err := c.gql(ctx, m, map[string]interface{}{"issueId": issue.ID, "body": body})
+	return err
+}
+
 // --- GraphQL + JSON 辅助 ---
 
 func (c *Client) gql(ctx context.Context, query string, vars map[string]interface{}) (map[string]interface{}, error) {

@@ -163,6 +163,25 @@ func (c *Client) fetchItems(ctx context.Context) ([]daemon.Issue, error) {
 	return result, nil
 }
 
+// AddComment 在 issue 上添加评论（REST API）
+func (c *Client) AddComment(ctx context.Context, issue daemon.Issue, body string) error {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d/comments", issue.Repo, issue.Number)
+	b, _ := json.Marshal(map[string]string{"body": body})
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
 // --- GraphQL + JSON 辅助 ---
 
 func (c *Client) gql(ctx context.Context, query string, vars map[string]interface{}) (map[string]interface{}, error) {

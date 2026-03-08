@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -208,15 +209,7 @@ func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
 
 	err := d.executor.Fix(ctx, issue)
 	if err != nil {
-		d.mu.Lock()
-		d.retries[issue.ID]++
-		failures := d.retries[issue.ID]
-		d.mu.Unlock()
-		log.Printf("[daemon] #%d 执行失败 (%d/%d): %v，回退到 Queued", issue.Number, failures, d.config.MaxRetries, err)
-		statusQueued := d.config.mapStatus("queued")
-		if setErr := d.tracker.SetStatus(ctx, issue.ID, statusQueued); setErr != nil {
-			log.Printf("[daemon] #%d 回退状态失败: %v", issue.Number, setErr)
-		}
+		d.failAndComment(ctx, issue, err)
 		return
 	}
 
@@ -225,24 +218,52 @@ func (d *Daemon) dispatch(ctx context.Context, issue Issue) {
 	delete(d.retries, issue.ID)
 	d.mu.Unlock()
 
-	// 成功后检查 issue 是否有关联 PR
-	// 有 PR → Review（等 PR 合并后变 Done）
-	// 无 PR → 直接 Done（AI 可能已内部完成所有工作）
+	// 检查是否创建了 PR
 	updated, _ := d.tracker.GetIssue(ctx, issue.ID)
-	if updated != nil && updated.PRNumber > 0 {
-		statusReview := d.config.mapStatus("review")
-		if err := d.tracker.SetStatus(ctx, issue.ID, statusReview); err != nil {
-			log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusReview, err)
-			return
+	if updated == nil || updated.PRNumber == 0 {
+		d.failAndComment(ctx, issue, fmt.Errorf("AI 执行完成但未创建 PR"))
+		return
+	}
+
+	// 有 PR → Review（等 PR 合并后变 Done）
+	statusReview := d.config.mapStatus("review")
+	if err := d.tracker.SetStatus(ctx, issue.ID, statusReview); err != nil {
+		log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusReview, err)
+		return
+	}
+	log.Printf("[daemon] #%d 完成 → %s（PR #%d）", issue.Number, statusReview, updated.PRNumber)
+}
+
+// failAndComment 失败处理：累加重试、回退 Queued、在 issue 上留评论
+func (d *Daemon) failAndComment(ctx context.Context, issue Issue, err error) {
+	d.mu.Lock()
+	d.retries[issue.ID]++
+	failures := d.retries[issue.ID]
+	d.mu.Unlock()
+
+	log.Printf("[daemon] #%d 失败 (%d/%d): %v，回退到 Queued", issue.Number, failures, d.config.MaxRetries, err)
+
+	statusQueued := d.config.mapStatus("queued")
+	if setErr := d.tracker.SetStatus(ctx, issue.ID, statusQueued); setErr != nil {
+		log.Printf("[daemon] #%d 回退状态失败: %v", issue.Number, setErr)
+	}
+
+	// 构造评论
+	phase := "AI 执行"
+	detail := err.Error()
+	var gateErr *GateError
+	if errors.As(err, &gateErr) {
+		phase = "gate 验证"
+		if gateErr.Output != "" {
+			detail = gateErr.Output
 		}
-		log.Printf("[daemon] #%d 完成 → %s（PR #%d）", issue.Number, statusReview, updated.PRNumber)
-	} else {
-		statusDone := d.config.mapStatus("done")
-		if err := d.tracker.SetStatus(ctx, issue.ID, statusDone); err != nil {
-			log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusDone, err)
-			return
-		}
-		log.Printf("[daemon] #%d 完成 → %s（无 PR）", issue.Number, statusDone)
+	}
+
+	comment := fmt.Sprintf("🔴 自动处理失败（第 %d/%d 次）\n\n**阶段：** %s\n**错误：**\n```\n%s\n```\n\n下次重试将参考此反馈。",
+		failures, d.config.MaxRetries, phase, detail)
+
+	if cmtErr := d.tracker.AddComment(ctx, issue, comment); cmtErr != nil {
+		log.Printf("[daemon] #%d 留言失败: %v", issue.Number, cmtErr)
 	}
 }
 
