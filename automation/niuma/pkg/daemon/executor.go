@@ -1,55 +1,54 @@
 // pkg/daemon/executor.go
-// 派发器：调用 niuma fix 子进程执行实际工作
+// 派发器：直接调用 AI provider 处理 issue
 package daemon
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"strconv"
+	"log"
+
+	"github.com/biantaishabi2/Cli/automation/niuma/pkg/ai"
 )
 
 // Executor 任务执行接口
 type Executor interface {
-	// Fix 派发 niuma fix 处理指定 issue
 	Fix(ctx context.Context, issue Issue) error
 }
 
-// CLIExecutor 通过 CLI 子进程执行 niuma fix
-type CLIExecutor struct {
-	NiumaBin string // niuma 二进制路径（默认使用自身）
-	RepoDir  string // 仓库目录
+// AIExecutor 直接调用 AI provider 执行
+type AIExecutor struct {
+	Provider ai.Provider // AI provider（claude/codex）
+	WorkDir  string      // 工作目录
 }
 
-// Fix 调用 niuma fix --repo <repo> --issue <N> --workdir <dir>
-func (e *CLIExecutor) Fix(ctx context.Context, issue Issue) error {
-	bin := e.NiumaBin
-	if bin == "" {
-		var err error
-		bin, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("无法获取 niuma 二进制路径: %w", err)
-		}
-	}
+// Fix 组装 prompt 并调用 AI provider 处理 issue
+func (e *AIExecutor) Fix(ctx context.Context, issue Issue) error {
+	prompt := buildPrompt(issue)
 
-	args := []string{
-		"fix",
-		"--repo", issue.Repo,
-		"--issue", strconv.Itoa(issue.Number),
-	}
-	if e.RepoDir != "" {
-		args = append(args, "--repo-dir", e.RepoDir, "--workdir", e.RepoDir)
-	}
+	log.Printf("[executor] 调用 %s 处理 #%d", e.Provider.Name(), issue.Number)
 
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// 继承环境变量（GITHUB_TOKEN 等）
-	cmd.Env = os.Environ()
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("niuma fix #%d 执行失败: %w", issue.Number, err)
+	_, err := e.Provider.Execute(ctx, prompt, ai.WithWorkDir(e.WorkDir))
+	if err != nil {
+		return fmt.Errorf("AI 执行失败: %w", err)
 	}
 	return nil
+}
+
+// buildPrompt 从 issue 信息组装 prompt
+func buildPrompt(issue Issue) string {
+	return fmt.Sprintf(`你需要处理以下 GitHub Issue，请阅读需求并实现代码，然后创建 PR。
+
+## Issue #%d: %s
+
+仓库: %s
+
+%s
+
+## 要求
+
+1. 阅读 issue 描述，理解需求
+2. 实现代码修改
+3. 编写或更新相关测试
+4. 提交代码并创建 PR（标题包含 #%d，body 包含 Closes #%d）
+`, issue.Number, issue.Title, issue.Repo, issue.Body, issue.Number, issue.Number)
 }
