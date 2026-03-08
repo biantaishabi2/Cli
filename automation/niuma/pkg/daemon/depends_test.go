@@ -57,6 +57,26 @@ func TestParseDependsOn(t *testing.T) {
 			body:     "Depends-On: #99",
 			expected: []string{"99"},
 		},
+		{
+			name:     "blocked-by 格式",
+			body:     "blocked-by: #77",
+			expected: []string{"77"},
+		},
+		{
+			name:     "blocked by 格式（空格）",
+			body:     "blocked by: #88, #99",
+			expected: []string{"88", "99"},
+		},
+		{
+			name:     "Blocked-By 大写",
+			body:     "Blocked-By: #55",
+			expected: []string{"55"},
+		},
+		{
+			name:     "混合 depends-on 和 blocked-by",
+			body:     "depends-on: #1\nblocked-by: #2",
+			expected: []string{"1", "2"},
+		},
 	}
 
 	for _, tt := range tests {

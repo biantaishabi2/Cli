@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// dependsOnRe 匹配 "depends-on: #123, #456" 或 "depends-on: owner/repo#789"
-var dependsOnRe = regexp.MustCompile(`(?im)^depends-on:\s*(.+)$`)
+// dependsOnRe 匹配 depends-on / blocked-by / blocked by 等格式
+var dependsOnRe = regexp.MustCompile(`(?im)^(?:depends[- ]on|blocked[- ]by):\s*(.+)$`)
 
 // issueRefRe 匹配单个 issue 引用：#123 或 owner/repo#123
 var issueRefRe = regexp.MustCompile(`(?:[\w\-]+/[\w\-]+)?#(\d+)`)
