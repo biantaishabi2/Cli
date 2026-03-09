@@ -20,6 +20,65 @@ type Config struct {
 	Workflow   WorkflowConfig   `yaml:"workflow"`
 	Control    ControlConfig    `yaml:"control"`
 	LabelGuard LabelGuardConfig `yaml:"label_guard"`
+	Daemon     DaemonConfig     `yaml:"daemon"`
+}
+
+// DaemonConfig daemon 轮询配置
+type DaemonConfig struct {
+	PollInterval  string            `yaml:"poll_interval"`  // 轮询间隔（默认 15s）
+	MaxConcurrent int               `yaml:"max_concurrent"` // 最大并行任务数（默认 1）
+	Tracker       string            `yaml:"tracker"`        // github | linear（默认 github）
+	GitHub        GitHubDaemonCfg   `yaml:"github"`
+	Linear        LinearDaemonCfg   `yaml:"linear"`
+	StatusMapping map[string]string `yaml:"status_mapping"` // 内部状态名 → tracker 实际值
+}
+
+// GitHubDaemonCfg GitHub Projects 配置
+type GitHubDaemonCfg struct {
+	Owner         string `yaml:"owner"`          // Project 所属 user/org
+	ProjectNumber int    `yaml:"project_number"` // Project 编号
+	RepoDir       string `yaml:"repo_dir"`       // 工作仓库目录
+}
+
+// LinearDaemonCfg Linear 配置
+type LinearDaemonCfg struct {
+	Team      string `yaml:"team"`        // Team key（如 "UNI"）
+	APIKeyEnv string `yaml:"api_key_env"` // API key 环境变量名（默认 LINEAR_API_KEY）
+}
+
+// GetPollInterval 返回轮询间隔
+func (c *DaemonConfig) GetPollInterval() time.Duration {
+	d, err := time.ParseDuration(c.PollInterval)
+	if err != nil || d <= 0 {
+		return 15 * time.Second
+	}
+	return d
+}
+
+// GetMaxConcurrent 返回最大并行数
+func (c *DaemonConfig) GetMaxConcurrent() int {
+	if c.MaxConcurrent <= 0 {
+		return 1
+	}
+	return c.MaxConcurrent
+}
+
+// GetStatusMapping 返回状态映射（含默认值）
+func (c *DaemonConfig) GetStatusMapping() map[string]string {
+	defaults := map[string]string{
+		"queued":  "Queued",
+		"working": "Working",
+		"review":  "Review",
+		"done":    "Done",
+	}
+	if len(c.StatusMapping) == 0 {
+		return defaults
+	}
+	// 用配置覆盖默认值
+	for k, v := range c.StatusMapping {
+		defaults[k] = v
+	}
+	return defaults
 }
 
 // LabelGuardConfig label-guard 配置
