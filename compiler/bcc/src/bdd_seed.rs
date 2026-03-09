@@ -195,11 +195,24 @@ fn run_context(
         let stem = file.file_stem().and_then(|x| x.to_str()).unwrap_or("seed");
         let id = sanitize_id(&format!("{}_{}", module, stem));
 
-        let summary = raw.lines().take(8).collect::<Vec<_>>().join("\\n");
+        // 从 YAML 中提取结构化字段，避免截断污染
+        let yaml_val: serde_yaml::Value = serde_yaml::from_str(&raw)
+            .unwrap_or_else(|_| serde_yaml::Value::Mapping(Default::default()));
+        let summary = yaml_val
+            .get("source_summary")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let file_edge_class = yaml_val
+            .get("edge_class")
+            .and_then(|x| x.as_str())
+            .unwrap_or(edge_class)
+            .to_string();
+
         let ctx = SeedContext {
             id: id.clone(),
             module,
-            edge_class: edge_class.to_string(),
+            edge_class: file_edge_class,
             source_file: rel,
             source_summary: summary,
         };
@@ -546,12 +559,16 @@ mod tests {
             &source.join("account.yaml"),
             r#"module: ACCOUNT
 contract: create account
+edge_class: action_contract
+source_summary: "GIVEN 实体 ACCOUNT 的动作 create 可执行 / WHEN 执行动作 create / THEN 账户应被创建"
 "#,
         );
         write(
             &source.join("billing.yml"),
             r#"module: BILLING
 contract: issue invoice
+edge_class: integration_contract
+source_summary: "GIVEN 实体 BILLING 声明 integration invoice / WHEN 触发外部调用 / THEN 应返回发票编号"
 "#,
         );
         write(
@@ -574,6 +591,14 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         .expect("context");
         assert_eq!(contexts.len(), 2);
         assert!(contexts.iter().any(|c| c.module == "BILLING"));
+        // 验证 source_summary 从 YAML 字段提取，非截断
+        let account_ctx = contexts.iter().find(|c| c.module == "ACCOUNT").unwrap();
+        assert!(account_ctx.source_summary.contains("账户应被创建"));
+        assert!(!account_ctx.source_summary.starts_with("module:"));
+        // 验证 edge_class 从 YAML 字段提取，非 CLI 参数
+        assert_eq!(account_ctx.edge_class, "action_contract");
+        let billing_ctx = contexts.iter().find(|c| c.module == "BILLING").unwrap();
+        assert_eq!(billing_ctx.edge_class, "integration_contract");
 
         run_generate(
             &output.to_string_lossy(),
@@ -612,12 +637,16 @@ THEN then_seed_contract_should_hold module="{MODULE}"
             &source.join("account.yaml"),
             r#"module: ACCOUNT
 contract: account contract
+edge_class: action_contract
+source_summary: "GIVEN account / WHEN create / THEN ok"
 "#,
         );
         write(
             &source.join("billing.yaml"),
             r#"module: BILLING
 contract: billing contract
+edge_class: action_contract
+source_summary: "GIVEN billing / WHEN invoice / THEN ok"
 "#,
         );
 
@@ -726,6 +755,40 @@ contract: account contract
         assert_eq!(contexts[0].module, "ACCOUNT");
         assert!(output.join("contexts/account_account.json").exists());
         assert!(!output.join("contexts/source_summary.json").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_context_fallback_when_no_summary_field() {
+        let root = temp_dir("bcc_bdd_no_summary");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        // YAML 无 source_summary 和 edge_class 字段
+        write(
+            &source.join("legacy.yaml"),
+            r#"module: LEGACY
+contract: legacy contract
+"#,
+        );
+
+        let contexts = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "all",
+            None,
+            true,
+        )
+        .expect("context");
+
+        assert_eq!(contexts.len(), 1);
+        // 缺少 source_summary 时降级为空字符串
+        assert_eq!(contexts[0].source_summary, "");
+        // 缺少 edge_class 时降级为 CLI 参数值
+        assert_eq!(contexts[0].edge_class, "all");
 
         let _ = fs::remove_dir_all(&root);
     }
