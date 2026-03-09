@@ -67,7 +67,24 @@ func (e *GateError) Error() string {
 
 func (e *GateError) Unwrap() error { return e.Err }
 
-// buildPrompt 用 agent.BuildImplementPrompt 组装完整 prompt
+// gitPRSuffix daemon 模式下追加的 git/PR 指令（原 orchestrator 负责的步骤）
+const gitPRSuffix = `
+
+## 提交与 PR（必须完成）
+
+代码改完并验证通过后，你必须执行以下步骤：
+
+1. 创建新分支：git checkout -b fix/%d-auto
+2. 暂存所有改动：git add -A
+3. 提交：git commit -m "fix: %s (#%d)"
+4. 推送：git push origin fix/%d-auto
+5. 创建 PR：gh pr create --title "fix: %s (#%d)" --body "Closes #%d"
+
+如果分支已存在，先删除再创建。如果 push 失败，检查远程配置。
+必须完成以上所有步骤，否则视为失败。
+`
+
+// buildPrompt 用 agent.BuildImplementPrompt 组装完整 prompt + git/PR 指令
 func buildPrompt(issue Issue) (string, error) {
 	input := &agent.PromptInput{
 		IssueTitle: fmt.Sprintf("#%d %s", issue.Number, issue.Title),
@@ -75,23 +92,20 @@ func buildPrompt(issue Issue) (string, error) {
 	}
 	prompt, err := agent.BuildImplementPrompt(input)
 	if err != nil {
-		// 回退到简单模板
 		log.Printf("[executor] BuildImplementPrompt 失败，使用简单模板: %v", err)
-		return fmt.Sprintf(`你需要处理以下 GitHub Issue，请阅读需求并实现代码，然后创建 PR。
+		prompt = fmt.Sprintf(`你需要处理以下 GitHub Issue，请阅读需求并实现代码，然后创建 PR。
 
 ## Issue #%d: %s
 
 仓库: %s
 
 %s
-
-## 要求
-
-1. 阅读 issue 描述，理解需求
-2. 实现代码修改
-3. 编写或更新相关测试
-4. 提交代码并创建 PR（标题包含 #%d，body 包含 Closes #%d）
-`, issue.Number, issue.Title, issue.Repo, issue.Body, issue.Number, issue.Number), nil
+`, issue.Number, issue.Title, issue.Repo, issue.Body)
 	}
-	return prompt, nil
+
+	// 追加 git/PR 指令
+	suffix := fmt.Sprintf(gitPRSuffix,
+		issue.Number, issue.Title, issue.Number,
+		issue.Number, issue.Title, issue.Number, issue.Number)
+	return prompt + suffix, nil
 }
