@@ -63,7 +63,7 @@ const itemsQuery = `query($pid: ID!) { node(id: $pid) { ... on ProjectV2 { items
 	id
 	fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
 	content { ... on Issue { number title body repository { nameWithOwner }
-		closedByPullRequestsReferences(first: 3) { nodes { number merged } }
+		closedByPullRequestsReferences(first: 3) { nodes { number merged mergeable } }
 	} }
 } } } } }`
 
@@ -155,6 +155,7 @@ func (c *Client) fetchItems(ctx context.Context) ([]daemon.Issue, error) {
 			pr := toMap(prn)
 			issue.PRNumber = intVal(pr, "number")
 			issue.PRMerged, _ = pr["merged"].(bool)
+			issue.PRMergeable = str(pr, "mergeable")
 			break
 		}
 		issue.DependsOn = daemon.ParseDependsOn(issue.Body)
@@ -178,6 +179,28 @@ func (c *Client) AddComment(ctx context.Context, issue daemon.Issue, body string
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
+// MergePR 合并 PR（REST API）
+func (c *Client) MergePR(ctx context.Context, issue daemon.Issue) error {
+	if issue.PRNumber == 0 {
+		return fmt.Errorf("issue #%d 没有关联 PR", issue.Number)
+	}
+	url := fmt.Sprintf("https://api.github.com/repos/%s/pulls/%d/merge", issue.Repo, issue.PRNumber)
+	b, _ := json.Marshal(map[string]string{"merge_method": "squash"})
+	req, _ := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("合并 PR #%d 失败 HTTP %d: %s", issue.PRNumber, resp.StatusCode, respBody)
 	}
 	return nil
 }

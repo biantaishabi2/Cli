@@ -13,8 +13,9 @@ type Issue struct {
 	Body      string   // issue 描述
 	Status    string   // 当前状态（Backlog/Queued/Working/Review/Done）
 	DependsOn []string // 解析 body 中的 depends-on（issue 编号字符串）
-	PRNumber  int      // 关联的 PR 编号（0 = 无）
-	PRMerged  bool     // PR 是否已合并
+	PRNumber    int      // 关联的 PR 编号（0 = 无）
+	PRMerged    bool     // PR 是否已合并
+	PRMergeable string   // PR 可合并状态："MERGEABLE" / "CONFLICTING" / "UNKNOWN"
 }
 
 // Tracker 统一的 issue tracker 接口
@@ -34,6 +35,9 @@ type Tracker interface {
 
 	// AddComment 在 issue 上添加评论
 	AddComment(ctx context.Context, issue Issue, body string) error
+
+	// MergePR 合并 PR
+	MergePR(ctx context.Context, issue Issue) error
 }
 
 // 标准状态常量

@@ -172,7 +172,7 @@ func (d *Daemon) processQueued(ctx context.Context) {
 	}
 }
 
-// processReview 处理等待 review 的 issues
+// processReview 处理等待 review 的 issues（自动合并 + 状态推进）
 func (d *Daemon) processReview(ctx context.Context) {
 	statusReview := d.config.mapStatus("review")
 	reviewing, err := d.tracker.FetchByStatus(ctx, statusReview)
@@ -186,12 +186,30 @@ func (d *Daemon) processReview(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+
+		// 已合并 → Done
 		if issue.PRMerged {
 			if err := d.tracker.SetStatus(ctx, issue.ID, statusDone); err != nil {
 				log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusDone, err)
 				continue
 			}
 			log.Printf("[daemon] #%d PR 已合并 → %s", issue.Number, statusDone)
+			continue
+		}
+
+		// 未合并但可合并 → 自动合并
+		if issue.PRNumber > 0 && issue.PRMergeable == "MERGEABLE" {
+			log.Printf("[daemon] #%d PR #%d 可合并，尝试自动合并", issue.Number, issue.PRNumber)
+			if err := d.tracker.MergePR(ctx, issue); err != nil {
+				log.Printf("[daemon] #%d 自动合并失败: %v", issue.Number, err)
+				continue
+			}
+			// 合并成功 → Done
+			if err := d.tracker.SetStatus(ctx, issue.ID, statusDone); err != nil {
+				log.Printf("[daemon] #%d 设置 %s 失败: %v", issue.Number, statusDone, err)
+				continue
+			}
+			log.Printf("[daemon] #%d PR #%d 自动合并成功 → %s", issue.Number, issue.PRNumber, statusDone)
 		}
 	}
 }

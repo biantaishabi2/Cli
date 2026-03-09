@@ -132,6 +132,11 @@ func (c *Client) AddComment(ctx context.Context, issue daemon.Issue, body string
 	return err
 }
 
+// MergePR Linear 不管理 PR，返回 nil（由外部 CI 合并）
+func (c *Client) MergePR(_ context.Context, _ daemon.Issue) error {
+	return nil
+}
+
 // --- GraphQL + JSON 辅助 ---
 
 func (c *Client) gql(ctx context.Context, query string, vars map[string]interface{}) (map[string]interface{}, error) {

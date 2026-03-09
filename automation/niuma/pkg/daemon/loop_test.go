@@ -13,18 +13,20 @@ import (
 
 // mockTracker 用于测试的 tracker 实现
 type mockTracker struct {
-	mu       sync.Mutex
-	issues   map[string][]Issue         // status → issues
-	states   map[string]string          // itemID → status
-	deps     map[string]map[string]string // 依赖检查结果
-	noPR     map[string]bool            // issueID → true 表示不模拟 PR
-	comments map[string][]string       // issueID → 评论列表
+	mu         sync.Mutex
+	issues     map[string][]Issue           // status → issues
+	states     map[string]string            // itemID → status
+	deps       map[string]map[string]string // 依赖检查结果
+	noPR       map[string]bool              // issueID → true 表示不模拟 PR
+	comments   map[string][]string          // issueID → 评论列表
+	mergeErr   error                        // MergePR 返回的错误
+	mergeCalls int                          // MergePR 调用次数
 }
 
 func newMockTracker() *mockTracker {
 	return &mockTracker{
-		issues: make(map[string][]Issue),
-		states: make(map[string]string),
+		issues:   make(map[string][]Issue),
+		states:   make(map[string]string),
 		deps:     make(map[string]map[string]string),
 		noPR:     make(map[string]bool),
 		comments: make(map[string][]string),
@@ -95,10 +97,23 @@ func (m *mockTracker) AddComment(_ context.Context, issue Issue, body string) er
 	return nil
 }
 
+func (m *mockTracker) MergePR(_ context.Context, _ Issue) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mergeCalls++
+	return m.mergeErr
+}
+
 func (m *mockTracker) getComments(itemID string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.comments[itemID]
+}
+
+func (m *mockTracker) getMergeCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mergeCalls
 }
 
 func (m *mockTracker) addIssue(issue Issue) {
@@ -459,6 +474,81 @@ func TestDaemonMaxConcurrent(t *testing.T) {
 	// 等任务完成
 	time.Sleep(500 * time.Millisecond)
 	assert.Equal(t, int32(1), executor.fixCount.Load(), "只应该完成 1 个任务")
+}
+
+func TestDaemonAutoMergeMergeablePR(t *testing.T) {
+	tracker := newMockTracker()
+	executor := &mockExecutor{}
+	cfg := DefaultConfig()
+
+	// PR 可合并但未合并
+	tracker.addIssue(Issue{
+		ID:          "item-am",
+		Number:      70,
+		Repo:        "owner/repo",
+		Title:       "Auto merge test",
+		Status:      StatusReview,
+		PRNumber:    700,
+		PRMerged:    false,
+		PRMergeable: "MERGEABLE",
+	})
+
+	d := New(tracker, executor, cfg)
+	ctx := context.Background()
+	d.tick(ctx)
+
+	assert.Equal(t, StatusDone, tracker.getStatus("item-am"), "MERGEABLE PR 应该自动合并后变 Done")
+	assert.Equal(t, 1, tracker.getMergeCalls(), "应该调用一次 MergePR")
+}
+
+func TestDaemonAutoMergeConflicting(t *testing.T) {
+	tracker := newMockTracker()
+	executor := &mockExecutor{}
+	cfg := DefaultConfig()
+
+	// PR 有冲突
+	tracker.addIssue(Issue{
+		ID:          "item-cf",
+		Number:      71,
+		Repo:        "owner/repo",
+		Title:       "Conflicting PR",
+		Status:      StatusReview,
+		PRNumber:    710,
+		PRMerged:    false,
+		PRMergeable: "CONFLICTING",
+	})
+
+	d := New(tracker, executor, cfg)
+	ctx := context.Background()
+	d.tick(ctx)
+
+	assert.Equal(t, StatusReview, tracker.getStatus("item-cf"), "CONFLICTING PR 应该保持 Review")
+	assert.Equal(t, 0, tracker.getMergeCalls(), "不应该调用 MergePR")
+}
+
+func TestDaemonAutoMergeFailure(t *testing.T) {
+	tracker := newMockTracker()
+	tracker.mergeErr = fmt.Errorf("merge conflict")
+	executor := &mockExecutor{}
+	cfg := DefaultConfig()
+
+	tracker.addIssue(Issue{
+		ID:          "item-mf",
+		Number:      72,
+		Repo:        "owner/repo",
+		Title:       "Merge will fail",
+		Status:      StatusReview,
+		PRNumber:    720,
+		PRMerged:    false,
+		PRMergeable: "MERGEABLE",
+	})
+
+	d := New(tracker, executor, cfg)
+	ctx := context.Background()
+	d.tick(ctx)
+
+	assert.Equal(t, StatusReview, tracker.getStatus("item-mf"), "合并失败应该保持 Review")
+	assert.Equal(t, 1, tracker.getMergeCalls(), "应该尝试合并")
 }
 
 func TestDaemonGracefulShutdown(t *testing.T) {
