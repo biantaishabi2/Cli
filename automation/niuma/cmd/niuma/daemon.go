@@ -31,7 +31,7 @@ func init() {
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
-	configDir := "."
+	configDir := flagWorkDir
 	if flagRepoDir != "" {
 		configDir = flagRepoDir
 	}

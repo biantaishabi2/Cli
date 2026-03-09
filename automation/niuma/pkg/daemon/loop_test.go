@@ -522,8 +522,36 @@ func TestDaemonAutoMergeConflicting(t *testing.T) {
 	ctx := context.Background()
 	d.tick(ctx)
 
-	assert.Equal(t, StatusReview, tracker.getStatus("item-cf"), "CONFLICTING PR 应该保持 Review")
+	assert.Equal(t, StatusQueued, tracker.getStatus("item-cf"), "CONFLICTING PR 应该回退到 Queued 重做")
 	assert.Equal(t, 0, tracker.getMergeCalls(), "不应该调用 MergePR")
+}
+
+func TestDaemonAutoMergeConflictingRetry(t *testing.T) {
+	tracker := newMockTracker()
+	executor := &mockExecutor{}
+	cfg := DefaultConfig()
+
+	// PR 有冲突
+	tracker.addIssue(Issue{
+		ID:          "item-conflict",
+		Number:      73,
+		Repo:        "owner/repo",
+		Title:       "Conflicting PR retry",
+		Status:      StatusReview,
+		PRNumber:    730,
+		PRMerged:    false,
+		PRMergeable: "CONFLICTING",
+	})
+
+	d := New(tracker, executor, cfg)
+	ctx := context.Background()
+	d.tick(ctx)
+
+	assert.Equal(t, StatusQueued, tracker.getStatus("item-conflict"), "CONFLICTING PR 应该回退到 Queued")
+	assert.Equal(t, 0, tracker.getMergeCalls(), "不应该尝试合并")
+	comments := tracker.getComments("item-conflict")
+	assert.Equal(t, 1, len(comments), "应该留一条冲突评论")
+	assert.Contains(t, comments[0], "合并冲突", "评论应提到冲突")
 }
 
 func TestDaemonAutoMergeFailure(t *testing.T) {

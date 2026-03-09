@@ -210,6 +210,21 @@ func (d *Daemon) processReview(ctx context.Context) {
 				continue
 			}
 			log.Printf("[daemon] #%d PR #%d 自动合并成功 → %s", issue.Number, issue.PRNumber, statusDone)
+			continue
+		}
+
+		// PR 有冲突 → 回退到 Queued 让 AI 基于最新代码重做
+		if issue.PRNumber > 0 && issue.PRMergeable == "CONFLICTING" {
+			log.Printf("[daemon] #%d PR #%d 有冲突，回退到 Queued 重做", issue.Number, issue.PRNumber)
+			statusQueued := d.config.mapStatus("queued")
+			if err := d.tracker.SetStatus(ctx, issue.ID, statusQueued); err != nil {
+				log.Printf("[daemon] #%d 回退状态失败: %v", issue.Number, err)
+				continue
+			}
+			comment := fmt.Sprintf("🔄 PR #%d 有合并冲突，回退到 Queued 基于最新代码重做。", issue.PRNumber)
+			if cmtErr := d.tracker.AddComment(ctx, issue, comment); cmtErr != nil {
+				log.Printf("[daemon] #%d 留言失败: %v", issue.Number, cmtErr)
+			}
 		}
 	}
 }
