@@ -38,11 +38,7 @@ defmodule BDDCompiler.Compiler do
         :error -> default_docs_root(in_dir)
       end
 
-    dsl_paths =
-      in_dir
-      |> Path.join("*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    dsl_paths = discover_dsl_paths(in_dir)
 
     md_paths =
       if is_binary(docs_root) do
@@ -112,6 +108,14 @@ defmodule BDDCompiler.Compiler do
     end
   end
 
+  # 兼容平铺目录，同时支持 docs/bdd/**/*.dsl 的嵌套布局。
+  defp discover_dsl_paths(in_dir) do
+    in_dir
+    |> Path.join("**/*.dsl")
+    |> Path.wildcard()
+    |> Enum.sort()
+  end
+
   defp assert_unique_scenario_ids!(parsed) when is_list(parsed) do
     parsed
     |> Enum.flat_map(fn {_source_id, _validate_path, _module_base, scenarios} -> scenarios end)
@@ -136,4 +140,3 @@ defmodule BDDCompiler.Compiler do
     :ok
   end
 end
-
