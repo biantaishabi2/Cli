@@ -35,11 +35,7 @@ defmodule BDDCompiler.Compiler do
         :error -> default_docs_root(in_dir)
       end
 
-    dsl_paths =
-      in_dir
-      |> Path.join("*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    dsl_paths = discover_dsl_paths(in_dir)
 
     md_paths =
       if is_binary(docs_root) do
@@ -93,6 +89,37 @@ defmodule BDDCompiler.Compiler do
     end
   end
 
+  # 优先消费 bcc organize 产出的 features/*.dsl，避免与 scenarios/*.dsl 重复读入同一 scenario。
+  # 若不存在 features 目录，则兼容历史结构：根目录 *.dsl；再回退到递归扫描。
+  defp discover_dsl_paths(in_dir) when is_binary(in_dir) do
+    feature_paths =
+      in_dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+
+    cond do
+      feature_paths != [] ->
+        feature_paths
+
+      true ->
+        root_paths =
+          in_dir
+          |> Path.join("*.dsl")
+          |> Path.wildcard()
+          |> Enum.sort()
+
+        if root_paths != [] do
+          root_paths
+        else
+          in_dir
+          |> Path.join("**/*.dsl")
+          |> Path.wildcard()
+          |> Enum.sort()
+        end
+    end
+  end
+
   defp assert_unique_scenario_ids!(parsed) when is_list(parsed) do
     parsed
     |> Enum.flat_map(fn {_source_id, _validate_path, _module_base, scenarios} -> scenarios end)
@@ -117,4 +144,3 @@ defmodule BDDCompiler.Compiler do
     :ok
   end
 end
-

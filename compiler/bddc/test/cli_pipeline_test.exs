@@ -55,6 +55,53 @@ defmodule BDDCompiler.CLIPipelineTest do
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
   end
 
+  test "compile 会递归扫描 docs/bdd 子目录下的 dsl 文件" do
+    project_root = tmp_dir!("compile_nested_project")
+    out_dir = tmp_dir!("compile_nested_out")
+    nested_dir = Path.join(project_root, "docs/bdd/features")
+    File.mkdir_p!(nested_dir)
+
+    File.write!(
+      Path.join(nested_dir, "simple.dsl"),
+      """
+      [SCENARIO: FX-NESTED-001] TITLE: nested fixture flow TAGS: integration
+      GIVEN given_seed id="seed-1"
+      WHEN when_do id=$id
+      THEN assert_done id=$id
+      """
+    )
+
+    File.cp!(Path.join(@fixture_project, "mix.exs"), Path.join(project_root, "mix.exs"))
+    File.mkdir_p!(Path.join(project_root, "lib"))
+    File.cp_r!(Path.join(@fixture_project, "lib/bdd_compiler"), Path.join(project_root, "lib/bdd_compiler"))
+    File.mkdir_p!(Path.join(project_root, "test/support"))
+    File.cp_r!(Path.join(@fixture_project, "test/support/bdd"), Path.join(project_root, "test/support/bdd"))
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          project_root,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          "docs/bdd",
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ "BDD 编译完成"
+    assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+  end
+
   test "check 在 runtime 不实现 capabilities/0 时失败" do
     {out, status} =
       System.cmd(
