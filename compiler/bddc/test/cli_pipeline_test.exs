@@ -16,6 +16,21 @@ defmodule BDDCompiler.CLIPipelineTest do
     dir
   end
 
+  defp write_nested_dsl_fixture!(root) do
+    nested_dir = Path.join(root, "docs/bdd/features")
+    File.mkdir_p!(nested_dir)
+
+    File.write!(
+      Path.join(nested_dir, "nested.dsl"),
+      """
+      [SCENARIO: FX-NESTED-001] TITLE: nested dsl TAGS: smoke
+      GIVEN given_seed id="seed-nested"
+      WHEN when_do id=$id
+      THEN assert_done id=$id
+      """
+    )
+  end
+
   test "缺少指令来源时 compile 失败" do
     {out, status} =
       System.cmd(@escript, ["compile", "--in", "docs/bdd", "--out", "/tmp/bdd_compiler_missing_src"],
@@ -53,6 +68,38 @@ defmodule BDDCompiler.CLIPipelineTest do
     assert status == 0
     assert out =~ "BDD 编译完成"
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+  end
+
+  test "compile 会递归扫描 docs/bdd/**/*.dsl" do
+    root = tmp_dir!("nested_compile_project")
+    File.cp_r!(@fixture_project, root)
+    write_nested_dsl_fixture!(root)
+    out_dir = Path.join(root, "tmp_out")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          root,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          "docs/bdd",
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ "BDD 编译完成"
+    assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+    assert File.exists?(Path.join(out_dir, "nested_generated_test.exs"))
   end
 
   test "check 在 runtime 不实现 capabilities/0 时失败" do
