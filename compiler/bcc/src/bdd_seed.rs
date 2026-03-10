@@ -51,6 +51,12 @@ fn read_source_entries(source: &Path) -> Result<SourceScanResult, String> {
                 skipped_non_yaml += 1;
                 continue;
             };
+            let Some(file_name) = p.file_name().and_then(|x| x.to_str()) else {
+                continue;
+            };
+            if file_name == "bdd_export_summary.json" || file_name.ends_with("_bdd_export_summary.json") {
+                continue;
+            }
             if ["yaml", "yml"].contains(&ext) {
                 out.push(p);
             } else {
@@ -572,6 +578,10 @@ source_summary: "GIVEN 实体 BILLING 声明 integration invoice / WHEN 触发�
 "#,
         );
         write(
+            &source.join("bdd_export_summary.json"),
+            r#"{"generated_files":2,"note":"should be ignored"}"#,
+        );
+        write(
             &template,
             r#"[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}
 GIVEN given_seed_context id="{ID}" module="{MODULE}"
@@ -591,6 +601,10 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         .expect("context");
         assert_eq!(contexts.len(), 2);
         assert!(contexts.iter().any(|c| c.module == "BILLING"));
+        assert!(
+            !output.join("contexts/sources_bdd_export_summary.json").exists(),
+            "导出摘要不应被当作 seed context"
+        );
         // 验证 source_summary 从 YAML 字段提取，非截断
         let account_ctx = contexts.iter().find(|c| c.module == "ACCOUNT").unwrap();
         assert!(account_ctx.source_summary.contains("账户应被创建"));
@@ -614,6 +628,10 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         assert!(output.join("scenarios/billing_billing.dsl").exists());
         assert!(output.join("features/ACCOUNT.dsl").exists());
         assert!(output.join("features/BILLING.dsl").exists());
+        assert!(
+            !output.join("features/SOURCES.dsl").exists(),
+            "导出摘要不应生成 sources.dsl"
+        );
         assert!(output.join("coverage.md").exists());
 
         let feature =
