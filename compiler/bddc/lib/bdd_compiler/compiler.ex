@@ -108,12 +108,26 @@ defmodule BDDCompiler.Compiler do
     end
   end
 
-  # 兼容平铺目录，同时支持 docs/bdd/**/*.dsl 的嵌套布局。
+  # 中文注释：标准 bcc organize 产物优先落在 docs/bdd/features。
+  # 若存在 features 目录，则只扫描 features，避免与 scenarios 重复吃入同一批场景。
+  # 没有 features 时，再兼容旧的平铺根目录布局。
   defp discover_dsl_paths(in_dir) do
-    in_dir
-    |> Path.join("**/*.dsl")
-    |> Path.wildcard()
-    |> Enum.sort()
+    feature_paths =
+      in_dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+
+    case feature_paths do
+      [] ->
+        in_dir
+        |> Path.join("*.dsl")
+        |> Path.wildcard()
+        |> Enum.sort()
+
+      paths ->
+        paths
+    end
   end
 
   defp assert_unique_scenario_ids!(parsed) when is_list(parsed) do

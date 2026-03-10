@@ -31,6 +31,17 @@ defmodule BDDCompiler.CLIPipelineTest do
     )
   end
 
+  defp write_duplicate_scenario_fixture!(root) do
+    features_dir = Path.join(root, "docs/bdd/features")
+    scenarios_dir = Path.join(root, "docs/bdd/scenarios")
+    File.mkdir_p!(features_dir)
+    File.mkdir_p!(scenarios_dir)
+
+    source = File.read!(Path.join(root, "docs/bdd/simple.dsl"))
+    File.write!(Path.join(features_dir, "simple.dsl"), source)
+    File.write!(Path.join(scenarios_dir, "simple.dsl"), source)
+  end
+
   test "缺少指令来源时 compile 失败" do
     {out, status} =
       System.cmd(@escript, ["compile", "--in", "docs/bdd", "--out", "/tmp/bdd_compiler_missing_src"],
@@ -39,10 +50,11 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 1
-    assert out =~ "必须提供指令来源"
+    assert out =~ "--instructions"
+    assert out =~ "registry_module"
   end
 
-  test "可通过 --registry-module 自动装载指令并 compile 成功" do
+  test "可通过 --registry-module 自动装载指令并 compile 成功，并默认推导 runtime module" do
     out_dir = "/tmp/bdd_compiler_fixture_out"
 
     {out, status} =
@@ -54,8 +66,6 @@ defmodule BDDCompiler.CLIPipelineTest do
           @fixture_project,
           "--registry-module",
           "Fixture.BDD.InstructionRegistry",
-          "--runtime-module",
-          "Fixture.BDD.Instructions.V1",
           "--in",
           "docs/bdd",
           "--out",
@@ -66,14 +76,45 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+    assert File.read!(Path.join(out_dir, "simple_generated_test.exs")) =~
+             "Fixture.BDD.Instructions.V1.run_step!"
   end
 
-  test "compile 会递归扫描 docs/bdd/**/*.dsl" do
+  test "显式 --runtime-module 优先于 registry 推导" do
+    out_dir = tmp_dir!("compile_runtime_override")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          @fixture_project,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Custom.Runtime.V1",
+          "--in",
+          "docs/bdd",
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ out_dir
+    assert File.read!(Path.join(out_dir, "simple_generated_test.exs")) =~ "Custom.Runtime.V1.run_step!"
+  end
+
+  test "compile 在 features 布局下优先扫描 docs/bdd/features/**/*.dsl 并忽略 scenarios 重复" do
     root = tmp_dir!("nested_compile_project")
     File.cp_r!(@fixture_project, root)
     write_nested_dsl_fixture!(root)
+    write_duplicate_scenario_fixture!(root)
     out_dir = Path.join(root, "tmp_out")
 
     {out, status} =
@@ -97,9 +138,9 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
-    assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "nested_generated_test.exs"))
+    assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
   end
 
   test "check 在 runtime 不实现 capabilities/0 时失败" do
@@ -211,7 +252,7 @@ defmodule BDDCompiler.CLIPipelineTest do
     assert status3 == 2
   end
 
-  test "check 默认会运行生成测试（可用 --skip-bdd-test 跳过）" do
+  test "check 默认会推导 runtime module 并运行生成测试（可用 --skip-bdd-test 跳过）" do
     out_dir = tmp_dir!("check_out")
 
     {out, status} =
@@ -223,8 +264,6 @@ defmodule BDDCompiler.CLIPipelineTest do
           @fixture_project,
           "--registry-module",
           "Fixture.BDD.InstructionRegistry",
-          "--runtime-module",
-          "Fixture.BDD.Instructions.V1",
           "--in",
           "docs/bdd",
           "--out",
@@ -249,8 +288,6 @@ defmodule BDDCompiler.CLIPipelineTest do
           @fixture_project,
           "--registry-module",
           "Fixture.BDD.InstructionRegistry",
-          "--runtime-module",
-          "Fixture.BDD.Instructions.V1",
           "--in",
           "docs/bdd",
           "--out",
