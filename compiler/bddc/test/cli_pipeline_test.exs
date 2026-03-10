@@ -66,7 +66,8 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 1
-    assert out =~ "必须提供指令来源"
+    assert out =~ "--instructions"
+    assert out =~ "--registry-module"
   end
 
   test "可通过 --registry-module 自动装载指令并 compile 成功" do
@@ -93,7 +94,7 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
   end
 
@@ -124,7 +125,7 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
     assert File.exists?(Path.join(out_dir, "nested_generated_test.exs"))
   end
