@@ -32,10 +32,19 @@ defmodule BDDCompiler.CLIPipelineTest do
   end
 
   defp write_seed_root_fixture!(root) do
+    root_dir = Path.join(root, "seed")
     features_dir = Path.join(root, "seed/features")
     scenarios_dir = Path.join(root, "seed/scenarios")
+    File.mkdir_p!(root_dir)
     File.mkdir_p!(features_dir)
     File.mkdir_p!(scenarios_dir)
+
+    root_dsl = """
+    [SCENARIO: FX-SEED-ROOT-001] TITLE: root copy TAGS: smoke
+    GIVEN given_seed id="seed-root"
+    WHEN when_do id=$id
+    THEN assert_done id=$id
+    """
 
     feature_dsl = """
     [SCENARIO: FX-SEED-001] TITLE: feature copy TAGS: smoke
@@ -44,6 +53,7 @@ defmodule BDDCompiler.CLIPipelineTest do
     THEN assert_done id=$id
     """
 
+    File.write!(Path.join(root_dir, "root.dsl"), root_dsl)
     File.write!(Path.join(features_dir, "feature.dsl"), feature_dsl)
     File.write!(Path.join(scenarios_dir, "scenario.dsl"), feature_dsl)
   end
@@ -147,6 +157,7 @@ defmodule BDDCompiler.CLIPipelineTest do
 
     assert status == 0
     assert out =~ "tmp_seed_out"
+    assert File.exists?(Path.join(out_dir, "root_generated_test.exs"))
     assert File.exists?(Path.join(out_dir, "feature_generated_test.exs"))
     refute File.exists?(Path.join(out_dir, "scenario_generated_test.exs"))
   end

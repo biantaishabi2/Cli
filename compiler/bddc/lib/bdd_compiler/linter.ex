@@ -59,7 +59,8 @@ defmodule BDDCompiler.Linter do
     paths
     |> Enum.flat_map(fn path ->
       scenarios = DslParser.parse_file!(path)
-      Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set, %{}))
+      seed_contracts = load_seed_contracts(Path.dirname(path))
+      Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set, seed_contracts))
     end)
   end
 
@@ -203,17 +204,18 @@ defmodule BDDCompiler.Linter do
   end
 
   defp discover_dsl_paths(dir) when is_binary(dir) do
-    features_dir = Path.join(dir, "features")
+    root_paths =
+      dir
+      |> Path.join("*.dsl")
+      |> Path.wildcard()
 
-    pattern =
-      if File.dir?(features_dir) do
-        Path.join(features_dir, "**/*.dsl")
-      else
-        Path.join(dir, "**/*.dsl")
-      end
+    feature_paths =
+      dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
 
-    pattern
-    |> Path.wildcard()
+    (root_paths ++ feature_paths)
+    |> Enum.uniq()
     |> Enum.sort()
   end
 

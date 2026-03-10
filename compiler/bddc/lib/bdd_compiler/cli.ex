@@ -442,20 +442,19 @@ defmodule BDDCompiler.CLI do
         true -> nil
       end
 
-    features_dir = Path.join(in_dir, "features")
-
     dsl_paths =
-      if File.dir?(features_dir) do
-        features_dir
-        |> Path.join("**/*.dsl")
-        |> Path.wildcard()
-        |> Enum.sort()
-      else
+      (
         in_dir
-        |> Path.join("**/*.dsl")
+        |> Path.join("*.dsl")
         |> Path.wildcard()
-        |> Enum.sort()
-      end
+      ) ++
+        (
+          in_dir
+          |> Path.join("features/**/*.dsl")
+          |> Path.wildcard()
+        )
+      |> Enum.uniq()
+      |> Enum.sort()
 
     dsl_items =
       Enum.flat_map(dsl_paths, fn path ->

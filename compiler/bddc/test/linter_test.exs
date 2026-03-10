@@ -95,9 +95,10 @@ defmodule BDDCompiler.LinterTest do
 
   test "workflow single-step seed contract remains weak" do
     root = temp_dir("bddc_linter_workflow_weak")
+    features_dir = Path.join(root, "features")
 
     write(
-      Path.join(root, "scenarios/shipment_status.dsl"),
+      Path.join(features_dir, "shipment_status.dsl"),
       """
       [SCENARIO: BDD-DELIVERY_SHIPMENT_STATUS-SEED-shipment_status_record_flow] TITLE: workflow TAGS: seed workflow_contract
       GIVEN given_seed_context id="shipment_status_record_flow" module="DELIVERY_SHIPMENT_STATUS"
@@ -129,5 +130,42 @@ defmodule BDDCompiler.LinterTest do
                  &1.scenario_id ==
                    "BDD-DELIVERY_SHIPMENT_STATUS-SEED-shipment_status_record_flow")
            )
+  end
+
+  test "lint_paths also consumes structured seed contract from sibling contexts" do
+    root = temp_dir("bddc_linter_paths_seed_contract")
+    features_dir = Path.join(root, "features")
+    contexts_dir = Path.join(root, "contexts")
+
+    write(
+      Path.join(features_dir, "travel_order.dsl"),
+      """
+      [SCENARIO: BDD-TRAVEL_TRAVEL_ORDER-SEED-travel_order_submit] TITLE: submit TAGS: seed action_contract
+      GIVEN given_seed_context id="travel_order_submit" module="TRAVEL_TRAVEL_ORDER"
+      WHEN when_execute_seed_contract module="TRAVEL_TRAVEL_ORDER"
+      THEN then_seed_contract_should_hold module="TRAVEL_TRAVEL_ORDER"
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "travel_order_submit.json"),
+      ~s|{
+        "id": "travel_order_submit",
+        "module": "TRAVEL_TRAVEL_ORDER",
+        "edge_class": "action_contract",
+        "source_file": "travel/action_travel_order_submit.yaml",
+        "source_summary": "GIVEN ...",
+        "expected_facts": ["record_persisted"],
+        "action_path": [],
+        "branch_hints": [],
+        "declared_error_codes": [],
+        "business_post_conditions": []
+      }|
+    )
+
+    warnings =
+      Linter.lint_paths([Path.join(features_dir, "travel_order.dsl")], instruction_set())
+
+    refute Enum.any?(warnings, &(&1.rule == :weak_assertion))
   end
 end

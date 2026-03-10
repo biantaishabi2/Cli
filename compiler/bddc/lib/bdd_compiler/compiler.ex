@@ -110,17 +110,18 @@ defmodule BDDCompiler.Compiler do
 
   # 兼容平铺目录，同时支持 docs/bdd/**/*.dsl 的嵌套布局。
   defp discover_dsl_paths(in_dir) do
-    features_dir = Path.join(in_dir, "features")
+    root_paths =
+      in_dir
+      |> Path.join("*.dsl")
+      |> Path.wildcard()
 
-    pattern =
-      if File.dir?(features_dir) do
-        Path.join(features_dir, "**/*.dsl")
-      else
-        Path.join(in_dir, "**/*.dsl")
-      end
+    feature_paths =
+      in_dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
 
-    pattern
-    |> Path.wildcard()
+    (root_paths ++ feature_paths)
+    |> Enum.uniq()
     |> Enum.sort()
   end
 
