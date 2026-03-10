@@ -93,7 +93,7 @@ defmodule BDDCompiler.LinterTest do
     refute Enum.any?(warnings, &(&1.rule == :weak_assertion))
   end
 
-  test "workflow single-step seed contract remains weak" do
+  test "workflow single-step seed contract is exempt from weak assertion metric" do
     root = temp_dir("bddc_linter_workflow_weak")
     features_dir = Path.join(root, "features")
 
@@ -124,7 +124,8 @@ defmodule BDDCompiler.LinterTest do
     )
 
     warnings = Linter.lint_dir(root, instruction_set())
-    assert Enum.any?(
+
+    refute Enum.any?(
              warnings,
              &(&1.rule == :weak_assertion and
                  &1.scenario_id ==
