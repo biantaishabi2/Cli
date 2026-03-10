@@ -102,8 +102,9 @@ defmodule BDDCompiler.CLIRuntimeCapsSyncTest do
       )
 
     assert status == 1
-    assert out =~ "未找到 runtime 源文件"
-    assert out =~ "instructions*missing.ex"
+    normalized_out = normalize_cli_output(out)
+    assert normalized_out =~ "未找到 runtime 源文件"
+    assert normalized_out =~ "instructions*missing.ex"
   end
 
   test "runtime.caps.sync 在未提取到指令时失败" do
@@ -129,7 +130,7 @@ defmodule BDDCompiler.CLIRuntimeCapsSyncTest do
       )
 
     assert status == 1
-    assert out =~ "未提取到任何 runtime 指令"
+    assert normalize_cli_output(out) =~ "未提取到任何 runtime 指令"
   end
 
   test "runtime.caps.sync 在指令名非法时失败" do
@@ -155,7 +156,7 @@ defmodule BDDCompiler.CLIRuntimeCapsSyncTest do
       )
 
     assert status == 1
-    assert out =~ "runtime 指令名非法"
+    assert normalize_cli_output(out) =~ "runtime 指令名非法"
   end
 
   test "runtime.caps.sync 在同名跨 step 类型冲突时失败" do
@@ -181,7 +182,7 @@ defmodule BDDCompiler.CLIRuntimeCapsSyncTest do
       )
 
     assert status == 1
-    assert out =~ "runtime 指令冲突"
+    assert normalize_cli_output(out) =~ "runtime 指令冲突"
   end
 
   test "runtime.caps.sync 支持多个 --runtime-source 合并提取" do
@@ -333,5 +334,12 @@ defmodule BDDCompiler.CLIRuntimeCapsSyncTest do
       def run!(_ctx, :then, :c_then, _args, _meta), do: :ok
     end
     """
+  end
+
+  defp normalize_cli_output(output) when is_binary(output) do
+    Regex.replace(~r/\\x\{([0-9A-Fa-f]+)\}/, output, fn _, hex ->
+      {codepoint, ""} = Integer.parse(hex, 16)
+      <<codepoint::utf8>>
+    end)
   end
 end

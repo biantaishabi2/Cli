@@ -263,7 +263,7 @@ defmodule BDDCompiler.CLIDomainAutowireTest do
       )
 
     assert status == 1
-    assert out =~ "参数缺失: --module"
+    assert normalize_cli_output(out) =~ "参数缺失: --module"
   end
 
   defp ensure_factory_dirs! do
@@ -275,5 +275,12 @@ defmodule BDDCompiler.CLIDomainAutowireTest do
 
     File.write!(Path.join(generated_dir, "order_factory.ex"), "defmodule Fixture.OrderFactory do\nend\n")
     File.write!(Path.join(semantic_dir, "order_semantic_given.ex"), "defmodule Fixture.OrderSemanticGiven do\nend\n")
+  end
+
+  defp normalize_cli_output(output) when is_binary(output) do
+    Regex.replace(~r/\\x\{([0-9A-Fa-f]+)\}/, output, fn _, hex ->
+      {codepoint, ""} = Integer.parse(hex, 16)
+      <<codepoint::utf8>>
+    end)
   end
 end

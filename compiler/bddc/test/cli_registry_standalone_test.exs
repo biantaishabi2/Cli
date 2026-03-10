@@ -87,7 +87,14 @@ defmodule BDDCompiler.CLIRegistryStandaloneTest do
       )
 
     assert status_compile == 0
-    assert out_compile =~ "BDD 编译完成"
+    assert normalize_cli_output(out_compile) =~ "BDD 编译完成"
     assert File.exists?(Path.join(root, "test/bdd_generated/reg_generated_test.exs"))
+  end
+
+  defp normalize_cli_output(output) when is_binary(output) do
+    Regex.replace(~r/\\x\{([0-9A-Fa-f]+)\}/, output, fn _, hex ->
+      {codepoint, ""} = Integer.parse(hex, 16)
+      <<codepoint::utf8>>
+    end)
   end
 end
