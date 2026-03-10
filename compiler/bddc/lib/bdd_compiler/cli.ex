@@ -136,7 +136,7 @@ defmodule BDDCompiler.CLI do
       [
         docs_root: docs_root,
         target: target,
-        runtime_module: Keyword.get(opts, :runtime_module, "BDD.Instructions.V1"),
+        runtime_module: resolve_runtime_module(opts, project_root),
         test_case: Keyword.get(opts, :test_case, "ExUnit.Case"),
         module_prefix: module_prefix
       ]
@@ -192,7 +192,7 @@ defmodule BDDCompiler.CLI do
     in_dir = opts |> Keyword.get(:in, "docs/bdd") |> expand_path(project_root)
     out_dir = opts |> Keyword.get(:out, "test/bdd_generated") |> expand_path(project_root)
     docs_root = opts |> Keyword.get(:docs_root) |> expand_optional_path(project_root)
-    runtime_module = Keyword.get(opts, :runtime_module, "BDD.Instructions.V1")
+    runtime_module = resolve_runtime_module(opts, project_root)
     runtime_caps_file = opts |> Keyword.get(:runtime_caps_file) |> expand_optional_path(project_root)
     fail_on_warn? = Keyword.get(opts, :fail_on_warn, true)
     fail_tags = Keyword.get(opts, :fail_tags)
@@ -1619,7 +1619,7 @@ defmodule BDDCompiler.CLI do
 
     project_root = Keyword.get(opts, :project_root, File.cwd!())
     opts = apply_runtime_caps_sync_config(opts, project_root)
-    runtime_module = Keyword.get(opts, :runtime_module, "BDD.Instructions.V1")
+    runtime_module = resolve_runtime_module(opts, project_root)
     suffix = runtime_module_suffix(runtime_module)
 
     runtime_sources =
@@ -1762,7 +1762,7 @@ defmodule BDDCompiler.CLI do
     end
 
     if sync_runtime_caps? do
-      runtime_module = Keyword.get(opts, :runtime_module, "Shop.BDD.Instructions.V1")
+      runtime_module = resolve_runtime_module(opts, project_root, "Shop.BDD.Instructions.V1")
 
       IO.puts("[autowire] step=runtime.caps.sync")
 
@@ -1815,6 +1815,46 @@ defmodule BDDCompiler.CLI do
   defp default_runtime_caps_path(project_root, _runtime_module, path) when is_binary(path) do
     expand_path(path, project_root)
   end
+
+  # 中文注释：优先尊重显式 runtime_module；未显式提供时，尽量从 registry/project namespace 推导。
+  defp resolve_runtime_module(opts, project_root, fallback \\ "BDD.Instructions.V1") do
+    case Keyword.get(opts, :runtime_module) do
+      runtime_module when is_binary(runtime_module) and runtime_module != "" ->
+        runtime_module
+
+      _ ->
+        Keyword.get(opts, :registry_module)
+        |> derive_runtime_module_from_registry()
+        |> case do
+          nil ->
+            case guess_namespace(project_root) do
+              namespace when is_binary(namespace) and namespace != "" ->
+                "#{namespace}.BDD.Instructions.V1"
+
+              _ ->
+                fallback
+            end
+
+          runtime_module ->
+            runtime_module
+        end
+    end
+  end
+
+  defp derive_runtime_module_from_registry(registry_module)
+       when is_binary(registry_module) and registry_module != "" do
+    if String.ends_with?(registry_module, ".BDD.InstructionRegistry") do
+      String.replace_suffix(
+        registry_module,
+        ".BDD.InstructionRegistry",
+        ".BDD.Instructions.V1"
+      )
+    else
+      nil
+    end
+  end
+
+  defp derive_runtime_module_from_registry(_), do: nil
 
   defp maybe_put_fail_on_warn(args, opts, strict?) do
     case Keyword.fetch(opts, :fail_on_warn) do
@@ -2339,7 +2379,7 @@ defmodule BDDCompiler.CLI do
       --registry-module MOD       指令注册表模块（未传 --instructions 时自动装载）
       --in DIR                    BDD 文档目录（默认 docs/bdd）
       --out DIR                   生成测试目录（默认 test/bdd_generated）
-      --runtime-module MOD        运行期指令执行模块（默认 BDD.Instructions.V1）
+      --runtime-module MOD        运行期指令执行模块（默认按 registry/project namespace 推导，兜底 BDD.Instructions.V1）
       --test-case MOD             测试基类（默认 ExUnit.Case）
       --module-prefix MOD         生成模块前缀（默认 BDD.Generated）
       --docs-root DIR             docs 根目录（用于更友好的 path/模块名推导）

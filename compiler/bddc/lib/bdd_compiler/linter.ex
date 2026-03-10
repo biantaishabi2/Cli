@@ -16,11 +16,7 @@ defmodule BDDCompiler.Linter do
 
   @spec lint_dir(String.t(), InstructionSet.t()) :: [warning()]
   def lint_dir(dir, %InstructionSet{} = instruction_set) when is_binary(dir) do
-    dsl_paths =
-      dir
-      |> Path.join("**/*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    dsl_paths = discover_dsl_paths(dir)
 
     # 默认仅在目录结构为 docs/bdd 时，lint 同级 docs_root 下的 Markdown 内嵌 DSL（文档即测试）。
     docs_root =
@@ -42,6 +38,26 @@ defmodule BDDCompiler.Linter do
 
     {warnings, scenarios} = lint_sources_with_scenarios(dsl_paths, md_paths, instruction_set)
     warnings ++ lint_negative_coverage(dir, scenarios)
+  end
+
+  # 中文注释：lint 与 compile 保持同一套 DSL 发现规则，避免 features/scenarios 双扫。
+  defp discover_dsl_paths(dir) do
+    feature_paths =
+      dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+
+    case feature_paths do
+      [] ->
+        dir
+        |> Path.join("*.dsl")
+        |> Path.wildcard()
+        |> Enum.sort()
+
+      paths ->
+        paths
+    end
   end
 
   @spec lint_paths([String.t()], InstructionSet.t()) :: [warning()]
@@ -548,4 +564,3 @@ defmodule BDDCompiler.Linter do
     end
   end
 end
-
