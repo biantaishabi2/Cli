@@ -11,6 +11,16 @@ struct SeedContext {
     source_file: String,
     #[serde(default)]
     source_summary: String,
+    #[serde(default)]
+    expected_facts: Vec<String>,
+    #[serde(default)]
+    action_path: Vec<String>,
+    #[serde(default)]
+    branch_hints: Vec<String>,
+    #[serde(default)]
+    declared_error_codes: Vec<String>,
+    #[serde(default)]
+    business_post_conditions: Vec<String>,
 }
 
 fn sanitize_id(s: &str) -> String {
@@ -86,6 +96,17 @@ fn extract_module_from_source(path: &Path, content: &str) -> String {
         .and_then(|x| x.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown_module".to_string())
+}
+
+fn extract_string_list_from_yaml(val: &serde_yaml::Value, key: &str) -> Vec<String> {
+    val.get(key)
+        .and_then(|x| x.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
@@ -221,6 +242,14 @@ fn run_context(
             edge_class: file_edge_class,
             source_file: rel,
             source_summary: summary,
+            expected_facts: extract_string_list_from_yaml(&yaml_val, "expected_facts"),
+            action_path: extract_string_list_from_yaml(&yaml_val, "action_path"),
+            branch_hints: extract_string_list_from_yaml(&yaml_val, "branch_hints"),
+            declared_error_codes: extract_string_list_from_yaml(&yaml_val, "declared_error_codes"),
+            business_post_conditions: extract_string_list_from_yaml(
+                &yaml_val,
+                "business_post_conditions",
+            ),
         };
 
         let out_file = context_dir.join(format!("{}.json", id));
@@ -567,6 +596,9 @@ mod tests {
 contract: create account
 edge_class: action_contract
 source_summary: "GIVEN 实体 ACCOUNT 的动作 create 可执行 / WHEN 执行动作 create / THEN 账户应被创建"
+expected_facts:
+  - record_persisted
+  - state_change
 "#,
         );
         write(
@@ -575,6 +607,13 @@ source_summary: "GIVEN 实体 ACCOUNT 的动作 create 可执行 / WHEN 执行�
 contract: issue invoice
 edge_class: integration_contract
 source_summary: "GIVEN 实体 BILLING 声明 integration invoice / WHEN 触发外部调用 / THEN 应返回发票编号"
+expected_facts:
+  - integration_invoked
+  - post_conditions_checked
+declared_error_codes:
+  - invoice_timeout
+business_post_conditions:
+  - invoice_id
 "#,
         );
         write(
@@ -611,8 +650,27 @@ THEN then_seed_contract_should_hold module="{MODULE}"
         assert!(!account_ctx.source_summary.starts_with("module:"));
         // 验证 edge_class 从 YAML 字段提取，非 CLI 参数
         assert_eq!(account_ctx.edge_class, "action_contract");
+        assert_eq!(
+            account_ctx.expected_facts,
+            vec!["record_persisted".to_string(), "state_change".to_string()]
+        );
         let billing_ctx = contexts.iter().find(|c| c.module == "BILLING").unwrap();
         assert_eq!(billing_ctx.edge_class, "integration_contract");
+        assert_eq!(
+            billing_ctx.expected_facts,
+            vec![
+                "integration_invoked".to_string(),
+                "post_conditions_checked".to_string()
+            ]
+        );
+        assert_eq!(
+            billing_ctx.declared_error_codes,
+            vec!["invoice_timeout".to_string()]
+        );
+        assert_eq!(
+            billing_ctx.business_post_conditions,
+            vec!["invoice_id".to_string()]
+        );
 
         run_generate(
             &output.to_string_lossy(),

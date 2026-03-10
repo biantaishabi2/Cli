@@ -5,22 +5,30 @@ defmodule BDDCompiler.Linter do
   目标：先以 warning 形式暴露反模式，成熟后可逐步升级为编译期 hard fail。
   """
 
-  alias BDDCompiler.{DslParser, InstructionSet, MarkdownExtractor}
+  alias BDDCompiler.{DslParser, InstructionSet, JsonParser, MarkdownExtractor}
 
   defmodule Warning do
     @moduledoc false
     defstruct [:rule, :message, :file, :line, :raw, :scenario_id, :tags]
   end
 
+  defmodule SeedContract do
+    @moduledoc false
+    defstruct edge_class: nil,
+              expected_facts: [],
+              action_path: [],
+              branch_hints: [],
+              declared_error_codes: [],
+              business_post_conditions: []
+  end
+
   @type warning :: %Warning{}
 
   @spec lint_dir(String.t(), InstructionSet.t()) :: [warning()]
   def lint_dir(dir, %InstructionSet{} = instruction_set) when is_binary(dir) do
-    dsl_paths =
-      dir
-      |> Path.join("**/*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    seed_contracts = load_seed_contracts(dir)
+
+    dsl_paths = discover_dsl_paths(dir)
 
     # 默认仅在目录结构为 docs/bdd 时，lint 同级 docs_root 下的 Markdown 内嵌 DSL（文档即测试）。
     docs_root =
@@ -40,7 +48,9 @@ defmodule BDDCompiler.Linter do
         []
       end
 
-    {warnings, scenarios} = lint_sources_with_scenarios(dsl_paths, md_paths, instruction_set)
+    {warnings, scenarios} =
+      lint_sources_with_scenarios(dsl_paths, md_paths, instruction_set, seed_contracts)
+
     warnings ++ lint_negative_coverage(dir, scenarios)
   end
 
@@ -49,11 +59,12 @@ defmodule BDDCompiler.Linter do
     paths
     |> Enum.flat_map(fn path ->
       scenarios = DslParser.parse_file!(path)
-      Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set))
+      seed_contracts = load_seed_contracts(Path.dirname(path))
+      Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set, seed_contracts))
     end)
   end
 
-  defp lint_sources_with_scenarios(dsl_paths, md_paths, instruction_set) do
+  defp lint_sources_with_scenarios(dsl_paths, md_paths, instruction_set, seed_contracts) do
     from_dsl_scenarios =
       dsl_paths
       |> Enum.flat_map(&DslParser.parse_file!/1)
@@ -68,19 +79,20 @@ defmodule BDDCompiler.Linter do
       end)
 
     scenarios = from_dsl_scenarios ++ from_md_scenarios
-    warnings = Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set))
+    warnings = Enum.flat_map(scenarios, &lint_scenario(&1, instruction_set, seed_contracts))
     {warnings, scenarios}
   end
 
-  defp lint_scenario(%{id: id, steps: steps, tags: tags}, instruction_set) do
+  defp lint_scenario(%{id: id, steps: steps, tags: tags}, instruction_set, seed_contracts) do
     version =
       cond do
         :bdd_v2 in tags -> :v2
         true -> :v1
       end
 
+    seed_contract = lookup_seed_contract(seed_contracts, id)
     warns = []
-    warns = warns ++ lint_weak_assertions(id, tags, steps, version, instruction_set)
+    warns = warns ++ lint_weak_assertions(id, tags, steps, version, instruction_set, seed_contract)
     warns = warns ++ lint_strict_evidence(id, tags, steps, version, instruction_set)
     warns = warns ++ lint_over_interaction_assertion(id, tags, steps, version, instruction_set)
     warns = warns ++ lint_sleep_anti_pattern(id, tags, steps)
@@ -136,7 +148,7 @@ defmodule BDDCompiler.Linter do
   end
 
   # 规则：如果一个场景的 THEN 全是“弱断言”（或只有 assert_noop），提示补齐关键业务事实断言。
-  defp lint_weak_assertions(scenario_id, tags, steps, version, instruction_set) do
+  defp lint_weak_assertions(scenario_id, tags, steps, version, instruction_set, seed_contract) do
     then_steps =
       Enum.filter(steps, fn
         {:then, _name, _args, _meta} -> true
@@ -153,7 +165,8 @@ defmodule BDDCompiler.Linter do
 
     weak? = fn spec -> spec.assert_class in [:weak, nil] end
 
-    if then_steps != [] and Enum.all?(then_specs, weak?) do
+    if then_steps != [] and Enum.all?(then_specs, weak?) and
+         not strong_seed_contract_assertion?(then_steps, seed_contract) do
       meta = elem(List.first(then_steps), 3)
 
       [
@@ -170,6 +183,112 @@ defmodule BDDCompiler.Linter do
     else
       []
     end
+  end
+
+  defp load_seed_contracts(dir) when is_binary(dir) do
+    context_dir = discover_context_dir(dir)
+
+    if is_binary(context_dir) and File.dir?(context_dir) do
+      context_dir
+      |> Path.join("*.json")
+      |> Path.wildcard()
+      |> Enum.reduce(%{}, fn path, acc ->
+        case load_seed_contract(path) do
+          {id, %SeedContract{} = contract} -> Map.put(acc, id, contract)
+          _ -> acc
+        end
+      end)
+    else
+      %{}
+    end
+  end
+
+  defp discover_dsl_paths(dir) when is_binary(dir) do
+    root_paths =
+      dir
+      |> Path.join("*.dsl")
+      |> Path.wildcard()
+
+    feature_paths =
+      dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+
+    (root_paths ++ feature_paths)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp discover_context_dir(dir) when is_binary(dir) do
+    direct = Path.join(dir, "contexts")
+
+    cond do
+      File.dir?(direct) ->
+        direct
+
+      Path.basename(dir) in ["features", "scenarios"] ->
+        sibling = Path.join(Path.dirname(dir), "contexts")
+        if File.dir?(sibling), do: sibling, else: nil
+
+      true ->
+        nil
+    end
+  end
+
+  defp load_seed_contract(path) when is_binary(path) do
+    with {:ok, raw} <- File.read(path),
+         data when is_map(data) <- JsonParser.parse!(raw),
+         id when is_binary(id) and id != "" <- Map.get(data, "id") do
+      {id,
+       %SeedContract{
+         edge_class: Map.get(data, "edge_class"),
+         expected_facts: string_list(Map.get(data, "expected_facts")),
+         action_path: string_list(Map.get(data, "action_path")),
+         branch_hints: string_list(Map.get(data, "branch_hints")),
+         declared_error_codes: string_list(Map.get(data, "declared_error_codes")),
+         business_post_conditions: string_list(Map.get(data, "business_post_conditions"))
+       }}
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp string_list(values) when is_list(values) do
+    Enum.filter(values, &is_binary/1)
+  end
+
+  defp string_list(_), do: []
+
+  defp strong_seed_contract_assertion?(then_steps, %SeedContract{} = seed_contract) do
+    has_seed_then? =
+      Enum.any?(then_steps, fn
+        {:then, :then_seed_contract_should_hold, _args, _meta} -> true
+        _ -> false
+      end)
+
+    has_seed_then? and seed_contract_sufficient?(seed_contract)
+  end
+
+  defp strong_seed_contract_assertion?(_then_steps, _), do: false
+
+  defp seed_contract_sufficient?(%SeedContract{edge_class: "workflow_contract"} = contract) do
+    length(contract.action_path) >= 2 or contract.branch_hints != []
+  end
+
+  defp seed_contract_sufficient?(%SeedContract{} = contract) do
+    contract.expected_facts != [] or contract.action_path != [] or contract.branch_hints != [] or
+      contract.declared_error_codes != [] or contract.business_post_conditions != []
+  end
+
+  defp lookup_seed_contract(seed_contracts, scenario_id)
+       when is_map(seed_contracts) and is_binary(scenario_id) do
+    Map.get(seed_contracts, scenario_id) ||
+      case String.split(scenario_id, "-SEED-", parts: 2) do
+        [_prefix, bare_id] -> Map.get(seed_contracts, bare_id)
+        _ -> nil
+      end
   end
 
   # 规则（可选严格模式）：避免在非 e2e 场景使用“交互断言”（mock/spy/called 等），这类断言更容易锁死内部协作细节。
@@ -548,4 +667,3 @@ defmodule BDDCompiler.Linter do
     end
   end
 end
-

@@ -443,9 +443,17 @@ defmodule BDDCompiler.CLI do
       end
 
     dsl_paths =
-      in_dir
-      |> Path.join("*.dsl")
-      |> Path.wildcard()
+      (
+        in_dir
+        |> Path.join("*.dsl")
+        |> Path.wildcard()
+      ) ++
+        (
+          in_dir
+          |> Path.join("features/**/*.dsl")
+          |> Path.wildcard()
+        )
+      |> Enum.uniq()
       |> Enum.sort()
 
     dsl_items =

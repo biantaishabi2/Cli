@@ -31,6 +31,33 @@ defmodule BDDCompiler.CLIPipelineTest do
     )
   end
 
+  defp write_seed_root_fixture!(root) do
+    root_dir = Path.join(root, "seed")
+    features_dir = Path.join(root, "seed/features")
+    scenarios_dir = Path.join(root, "seed/scenarios")
+    File.mkdir_p!(root_dir)
+    File.mkdir_p!(features_dir)
+    File.mkdir_p!(scenarios_dir)
+
+    root_dsl = """
+    [SCENARIO: FX-SEED-ROOT-001] TITLE: root copy TAGS: smoke
+    GIVEN given_seed id="seed-root"
+    WHEN when_do id=$id
+    THEN assert_done id=$id
+    """
+
+    feature_dsl = """
+    [SCENARIO: FX-SEED-001] TITLE: feature copy TAGS: smoke
+    GIVEN given_seed id="seed-feature"
+    WHEN when_do id=$id
+    THEN assert_done id=$id
+    """
+
+    File.write!(Path.join(root_dir, "root.dsl"), root_dsl)
+    File.write!(Path.join(features_dir, "feature.dsl"), feature_dsl)
+    File.write!(Path.join(scenarios_dir, "scenario.dsl"), feature_dsl)
+  end
+
   test "缺少指令来源时 compile 失败" do
     {out, status} =
       System.cmd(@escript, ["compile", "--in", "docs/bdd", "--out", "/tmp/bdd_compiler_missing_src"],
@@ -39,7 +66,8 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 1
-    assert out =~ "必须提供指令来源"
+    assert out =~ "--instructions"
+    assert out =~ "--registry-module"
   end
 
   test "可通过 --registry-module 自动装载指令并 compile 成功" do
@@ -66,7 +94,7 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
   end
 
@@ -97,9 +125,42 @@ defmodule BDDCompiler.CLIPipelineTest do
       )
 
     assert status == 0
-    assert out =~ "BDD 编译完成"
+    assert out =~ out_dir
     assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
     assert File.exists?(Path.join(out_dir, "nested_generated_test.exs"))
+  end
+
+  test "compile 对 seed 根目录优先使用 features 以避免与 scenarios 重复撞 ID" do
+    root = tmp_dir!("seed_root_compile_project")
+    File.cp_r!(@fixture_project, root)
+    write_seed_root_fixture!(root)
+    out_dir = Path.join(root, "tmp_seed_out")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          root,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          "seed",
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ "tmp_seed_out"
+    assert File.exists?(Path.join(out_dir, "root_generated_test.exs"))
+    assert File.exists?(Path.join(out_dir, "feature_generated_test.exs"))
+    refute File.exists?(Path.join(out_dir, "scenario_generated_test.exs"))
   end
 
   test "check 在 runtime 不实现 capabilities/0 时失败" do
