@@ -166,7 +166,8 @@ defmodule BDDCompiler.Linter do
     weak? = fn spec -> spec.assert_class in [:weak, nil] end
 
     if then_steps != [] and Enum.all?(then_specs, weak?) and
-         not strong_seed_contract_assertion?(then_steps, seed_contract) do
+         not strong_seed_contract_assertion?(then_steps, seed_contract) and
+         not exempt_seed_contract_weak_assertion?(then_steps, seed_contract) do
       meta = elem(List.first(then_steps), 3)
 
       [
@@ -272,6 +273,24 @@ defmodule BDDCompiler.Linter do
   end
 
   defp strong_seed_contract_assertion?(_then_steps, _), do: false
+
+  defp exempt_seed_contract_weak_assertion?(then_steps, %SeedContract{} = seed_contract) do
+    has_seed_then? =
+      Enum.any?(then_steps, fn
+        {:then, :then_seed_contract_should_hold, _args, _meta} -> true
+        _ -> false
+      end)
+
+    has_seed_then? and seed_contract_expected_weak?(seed_contract)
+  end
+
+  defp exempt_seed_contract_weak_assertion?(_then_steps, _), do: false
+
+  defp seed_contract_expected_weak?(%SeedContract{edge_class: "workflow_contract"} = contract) do
+    length(contract.action_path) == 1 and contract.branch_hints == []
+  end
+
+  defp seed_contract_expected_weak?(%SeedContract{}), do: false
 
   defp seed_contract_sufficient?(%SeedContract{edge_class: "workflow_contract"} = contract) do
     length(contract.action_path) >= 2 or contract.branch_hints != []
