@@ -218,4 +218,172 @@ defmodule BDDCompiler.CLIPipelineTest do
 
     assert status2 == 0
   end
+
+  test "compile/check 支持递归扫描 features 子目录下的 DSL" do
+    in_dir = tmp_dir!("nested_bdd")
+    features_dir = Path.join(in_dir, "features")
+    File.mkdir_p!(features_dir)
+
+    File.write!(
+      Path.join(features_dir, "nested.dsl"),
+      """
+      [SCENARIO: FX-NESTED-001] TITLE: nested dsl TAGS: integration
+      GIVEN given_seed id="seed-1"
+      WHEN when_do id=$id
+      THEN assert_done id=$id
+      """
+    )
+
+    out_dir = tmp_dir!("nested_bdd_out")
+
+    {out_compile, status_compile} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          @fixture_project,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          in_dir,
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_compile == 0
+    assert out_compile =~ "BDD 编译完成"
+    assert File.exists?(Path.join(out_dir, "nested_generated_test.exs"))
+
+    {out_check, status_check} =
+      System.cmd(
+        @escript,
+        [
+          "check",
+          "--project-root",
+          @fixture_project,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          in_dir,
+          "--out",
+          out_dir,
+          "--skip-annotations-check",
+          "--skip-bdd-test",
+          "--no-fail-on-warn"
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_check == 0
+    assert out_check =~ "compiled_out="
+    assert out_check =~ "count=1"
+  end
+
+  test "check 在 organize 输出同时包含 features/scenarios 时优先消费 features" do
+    in_dir = tmp_dir!("organized_bdd")
+    features_dir = Path.join(in_dir, "features")
+    scenarios_dir = Path.join(in_dir, "scenarios")
+    File.mkdir_p!(features_dir)
+    File.mkdir_p!(scenarios_dir)
+
+    feature_dsl = """
+    [SCENARIO: FX-ORG-001] TITLE: organized feature TAGS: integration
+    GIVEN given_seed id="seed-1"
+    WHEN when_do id=$id
+    THEN assert_done id=$id
+    """
+
+    File.write!(Path.join(features_dir, "organized.dsl"), feature_dsl)
+    File.write!(Path.join(scenarios_dir, "organized.dsl"), feature_dsl)
+
+    out_dir = tmp_dir!("organized_bdd_out")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "check",
+          "--project-root",
+          @fixture_project,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          in_dir,
+          "--out",
+          out_dir,
+          "--skip-annotations-check",
+          "--skip-bdd-test",
+          "--no-fail-on-warn"
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ "compiled_out="
+    assert out =~ "count=1"
+  end
+
+  test "显式 --registry-module 优先于 .bddc.toml 中的 instructions" do
+    config_path = Path.join(@fixture_project, ".bddc.toml")
+    stale_path = Path.join(@fixture_project, "tmp/stale_instructions.exs")
+
+    original_config =
+      if File.exists?(config_path) do
+        File.read!(config_path)
+      else
+        nil
+      end
+
+    on_exit(fn ->
+      if original_config do
+        File.write!(config_path, original_config)
+      else
+        File.rm(config_path)
+      end
+
+      File.rm(stale_path)
+    end)
+
+    File.mkdir_p!(Path.dirname(stale_path))
+    File.write!(stale_path, "%{noop: %{kind: :when, args: %{}, outputs: %{}, rules: [], scopes: [:integration], boundary: :test_runtime, async?: false, eventually?: false, assert_class: nil}}\n")
+    File.write!(config_path, "[global]\ninstructions = [\"tmp/stale_instructions.exs\"]\n")
+
+    out_dir = tmp_dir!("registry_priority_out")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "compile",
+          "--project-root",
+          @fixture_project,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--in",
+          "docs/bdd",
+          "--out",
+          out_dir
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    assert out =~ "BDD 编译完成"
+    assert File.exists?(Path.join(out_dir, "simple_generated_test.exs"))
+  end
 end

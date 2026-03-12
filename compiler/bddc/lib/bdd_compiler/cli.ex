@@ -442,11 +442,7 @@ defmodule BDDCompiler.CLI do
         true -> nil
       end
 
-    dsl_paths =
-      in_dir
-      |> Path.join("*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    dsl_paths = collect_dsl_paths(in_dir)
 
     dsl_items =
       Enum.flat_map(dsl_paths, fn path ->
@@ -494,6 +490,24 @@ defmodule BDDCompiler.CLI do
           []
       end)
     end)
+  end
+
+  # organize 目录下优先读 features 聚合 DSL，避免 scenarios 明细导致重复场景。
+  defp collect_dsl_paths(in_dir) do
+    feature_paths =
+      in_dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+
+    if feature_paths != [] do
+      feature_paths
+    else
+      in_dir
+      |> Path.join("**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+    end
   end
 
   defp load_runtime_capabilities!(_project_root, _runtime_module, runtime_caps_file)
@@ -707,8 +721,13 @@ defmodule BDDCompiler.CLI do
   end
 
   defp maybe_put_instructions_from_cfg(opts, cfg, section, project_root) do
+    skip_cfg_instructions? =
+      Keyword.has_key?(opts, :registry_module) or Keyword.get_values(opts, :instructions) != []
+
     opts =
-      if Keyword.get_values(opts, :instructions) == [] do
+      if skip_cfg_instructions? do
+        opts
+      else
         cfg_v1 = Config.get(cfg, section, "instructions")
 
         v1_list =
@@ -718,11 +737,11 @@ defmodule BDDCompiler.CLI do
           |> Enum.map(&expand_path(&1, project_root))
 
         Enum.reduce(v1_list, opts, fn path, acc -> Keyword.put(acc, :instructions, path) end)
-      else
-        opts
       end
 
-    if Keyword.get_values(opts, :instructions_v2) == [] do
+    if skip_cfg_instructions? or Keyword.get_values(opts, :instructions_v2) != [] do
+      opts
+    else
       cfg_v2 = Config.get(cfg, section, "instructions_v2")
 
       v2_list =
@@ -730,10 +749,7 @@ defmodule BDDCompiler.CLI do
         |> List.wrap()
         |> Enum.reject(&is_nil/1)
         |> Enum.map(&expand_path(&1, project_root))
-
       Enum.reduce(v2_list, opts, fn path, acc -> Keyword.put(acc, :instructions_v2, path) end)
-    else
-      opts
     end
   end
 

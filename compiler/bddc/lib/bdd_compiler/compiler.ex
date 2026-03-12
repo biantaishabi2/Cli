@@ -38,11 +38,7 @@ defmodule BDDCompiler.Compiler do
         :error -> default_docs_root(in_dir)
       end
 
-    dsl_paths =
-      in_dir
-      |> Path.join("*.dsl")
-      |> Path.wildcard()
-      |> Enum.sort()
+    dsl_paths = collect_dsl_paths(in_dir)
 
     md_paths =
       if is_binary(docs_root) do
@@ -112,6 +108,24 @@ defmodule BDDCompiler.Compiler do
     end
   end
 
+  # 优先消费 organize 产出的 features 聚合文件，避免与 scenarios 明细文件重复编译。
+  defp collect_dsl_paths(in_dir) do
+    feature_paths =
+      in_dir
+      |> Path.join("features/**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+
+    if feature_paths != [] do
+      feature_paths
+    else
+      in_dir
+      |> Path.join("**/*.dsl")
+      |> Path.wildcard()
+      |> Enum.sort()
+    end
+  end
+
   defp assert_unique_scenario_ids!(parsed) when is_list(parsed) do
     parsed
     |> Enum.flat_map(fn {_source_id, _validate_path, _module_base, scenarios} -> scenarios end)
@@ -136,4 +150,3 @@ defmodule BDDCompiler.Compiler do
     :ok
   end
 end
-

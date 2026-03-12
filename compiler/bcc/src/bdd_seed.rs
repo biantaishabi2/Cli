@@ -3,6 +3,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct BddAuthContext {
+    strategy: String,
+    #[serde(default)]
+    actor: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct SeedContext {
     id: String,
@@ -11,6 +18,8 @@ struct SeedContext {
     source_file: String,
     #[serde(default)]
     source_summary: String,
+    #[serde(default)]
+    auth_context: Option<BddAuthContext>,
 }
 
 fn sanitize_id(s: &str) -> String {
@@ -80,6 +89,13 @@ fn extract_module_from_source(path: &Path, content: &str) -> String {
         .and_then(|x| x.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown_module".to_string())
+}
+
+fn extract_auth_context_from_yaml(yaml_val: &serde_yaml::Value) -> Option<BddAuthContext> {
+    yaml_val
+        .get("auth_context")
+        .cloned()
+        .and_then(|value| serde_yaml::from_value::<BddAuthContext>(value).ok())
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
@@ -203,6 +219,7 @@ fn run_context(
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string();
+        let auth_context = extract_auth_context_from_yaml(&yaml_val);
         let file_edge_class = yaml_val
             .get("edge_class")
             .and_then(|x| x.as_str())
@@ -215,6 +232,7 @@ fn run_context(
             edge_class: file_edge_class,
             source_file: rel,
             source_summary: summary,
+            auth_context,
         };
 
         let out_file = context_dir.join(format!("{}.json", id));
@@ -245,10 +263,10 @@ fn run_generate(output: &str, prompt_template: Option<&str>, force: bool) -> Res
 
     let template = if let Some(path) = prompt_template {
         fs::read_to_string(path).unwrap_or_else(|_| {
-            "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+            "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\n{GIVEN_SEED_CONTEXT_LINE}\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
         })
     } else {
-        "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+        "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\n{GIVEN_SEED_CONTEXT_LINE}\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
     };
 
     for ctx in contexts.values() {
@@ -261,11 +279,41 @@ fn run_generate(output: &str, prompt_template: Option<&str>, force: bool) -> Res
 }
 
 fn render_scenario_template(template: &str, ctx: &SeedContext) -> String {
-    template
+    let given_line = render_given_seed_context_line(ctx);
+    let module = ctx.module.to_ascii_uppercase();
+    let has_given_placeholder = template.contains("{GIVEN_SEED_CONTEXT_LINE}");
+    let rendered = template
+        .replace("{GIVEN_SEED_CONTEXT_LINE}", &given_line)
         .replace("{ID}", &ctx.id)
-        .replace("{MODULE}", &ctx.module.to_ascii_uppercase())
+        .replace("{MODULE}", &module)
         .replace("{EDGE_CLASS}", &ctx.edge_class)
-        .replace("{TITLE}", &format!("{} contract seed scenario", ctx.module))
+        .replace("{TITLE}", &format!("{} contract seed scenario", ctx.module));
+    let legacy_given_line = format!(
+        "GIVEN given_seed_context id=\"{}\" module=\"{}\"",
+        ctx.id, module
+    );
+
+    if !has_given_placeholder && rendered.contains(&legacy_given_line) {
+        rendered.replace(&legacy_given_line, &given_line)
+    } else {
+        rendered
+    }
+}
+
+fn render_given_seed_context_line(ctx: &SeedContext) -> String {
+    let parts = vec![
+        format!("id=\"{}\"", escape_dsl_value(&ctx.id)),
+        format!(
+            "module=\"{}\"",
+            escape_dsl_value(&ctx.module.to_ascii_uppercase())
+        ),
+    ];
+
+    format!("GIVEN given_seed_context {}", parts.join(" "))
+}
+
+fn escape_dsl_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn scenario_quality_reasons(raw: &str) -> Vec<String> {
@@ -346,10 +394,10 @@ fn run_fix(output: &str, prompt_template: Option<&str>, force: bool) -> Result<(
 
     let template = if let Some(path) = prompt_template {
         fs::read_to_string(path).unwrap_or_else(|_| {
-            "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+            "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\n{GIVEN_SEED_CONTEXT_LINE}\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
         })
     } else {
-        "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\nGIVEN given_seed_context id=\"{ID}\" module=\"{MODULE}\"\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
+        "[SCENARIO: BDD-{MODULE}-SEED-{ID}] TITLE: {TITLE} TAGS: seed {EDGE_CLASS}\n{GIVEN_SEED_CONTEXT_LINE}\nWHEN when_execute_seed_contract module=\"{MODULE}\"\nTHEN then_seed_contract_should_hold module=\"{MODULE}\"\n".to_string()
     };
 
     let first_check = run_check(output)?;
@@ -789,6 +837,58 @@ contract: legacy contract
         assert_eq!(contexts[0].source_summary, "");
         // 缺少 edge_class 时降级为 CLI 参数值
         assert_eq!(contexts[0].edge_class, "all");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bdd_seed_context_extracts_auth_context_and_keeps_given_line_stable() {
+        let root = temp_dir("bcc_bdd_auth_context");
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir_all(&source).expect("create source");
+
+        write(
+            &source.join("protected_read.yaml"),
+            r#"module: ACCOUNT
+contract: account read contract
+edge_class: action_contract
+source_summary: "GIVEN account / WHEN read / THEN ok"
+auth_context:
+  strategy: admin_actor
+  actor:
+    role: admin
+    party_id: party-1
+"#,
+        );
+
+        let contexts = run_context(
+            &source.to_string_lossy(),
+            &output.to_string_lossy(),
+            None,
+            "all",
+            None,
+            true,
+        )
+        .expect("context");
+
+        assert_eq!(contexts.len(), 1);
+        let auth = contexts[0].auth_context.as_ref().expect("auth context");
+        assert_eq!(auth.strategy, "admin_actor");
+        assert_eq!(auth.actor.get("role").map(String::as_str), Some("admin"));
+        assert_eq!(
+            auth.actor.get("party_id").map(String::as_str),
+            Some("party-1")
+        );
+
+        run_generate(&output.to_string_lossy(), None, true).expect("generate");
+        let scenario = fs::read_to_string(output.join("scenarios/account_protected_read.dsl"))
+            .expect("read scenario");
+        assert!(scenario.contains("GIVEN given_seed_context"));
+        assert!(scenario.contains("id=\"account_protected_read\""));
+        assert!(scenario.contains("module=\"ACCOUNT\""));
+        assert!(!scenario.contains("auth_strategy="));
+        assert!(!scenario.contains("actor_role="));
 
         let _ = fs::remove_dir_all(&root);
     }
