@@ -190,11 +190,13 @@ defmodule BDDCompiler.Linter do
     context_dir = discover_context_dir(dir)
 
     if is_binary(context_dir) and File.dir?(context_dir) do
+      source_roots = discover_seed_source_roots(context_dir)
+
       context_dir
       |> Path.join("*.json")
       |> Path.wildcard()
       |> Enum.reduce(%{}, fn path, acc ->
-        case load_seed_contract(path) do
+        case load_seed_contract(path, source_roots) do
           {id, %SeedContract{} = contract} -> Map.put(acc, id, contract)
           _ -> acc
         end
@@ -236,24 +238,125 @@ defmodule BDDCompiler.Linter do
     end
   end
 
-  defp load_seed_contract(path) when is_binary(path) do
+  defp discover_seed_source_roots(context_dir) when is_binary(context_dir) do
+    base = Path.expand(context_dir)
+
+    [base, Path.dirname(base), Path.dirname(Path.dirname(base)), Path.dirname(Path.dirname(Path.dirname(base)))]
+    |> Enum.uniq()
+    |> Enum.map(&Path.join([&1, "priv", "bdd", "sources"]))
+    |> Enum.filter(&File.dir?/1)
+  end
+
+  defp load_seed_contract(path, source_roots) when is_binary(path) and is_list(source_roots) do
     with {:ok, raw} <- File.read(path),
          data when is_map(data) <- JsonParser.parse!(raw),
          id when is_binary(id) and id != "" <- Map.get(data, "id") do
+      source_overrides =
+        data
+        |> Map.get("source_file")
+        |> load_seed_contract_source_fields(source_roots)
+
       {id,
        %SeedContract{
          edge_class: Map.get(data, "edge_class"),
-         expected_facts: string_list(Map.get(data, "expected_facts")),
-         action_path: string_list(Map.get(data, "action_path")),
-         branch_hints: string_list(Map.get(data, "branch_hints")),
-         declared_error_codes: string_list(Map.get(data, "declared_error_codes")),
-         business_post_conditions: string_list(Map.get(data, "business_post_conditions"))
+         expected_facts:
+           pick_seed_list(Map.get(data, "expected_facts"), Map.get(source_overrides, :expected_facts, [])),
+         action_path:
+           pick_seed_list(Map.get(data, "action_path"), Map.get(source_overrides, :action_path, [])),
+         branch_hints:
+           pick_seed_list(Map.get(data, "branch_hints"), Map.get(source_overrides, :branch_hints, [])),
+         declared_error_codes:
+           pick_seed_list(
+             Map.get(data, "declared_error_codes"),
+             Map.get(source_overrides, :declared_error_codes, [])
+           ),
+         business_post_conditions:
+           pick_seed_list(
+             Map.get(data, "business_post_conditions"),
+             Map.get(source_overrides, :business_post_conditions, [])
+           )
        }}
     else
       _ -> nil
     end
   rescue
     _ -> nil
+  end
+
+  defp pick_seed_list(primary, fallback) do
+    case string_list(primary) do
+      [] -> fallback
+      values -> values
+    end
+  end
+
+  defp load_seed_contract_source_fields(nil, _source_roots), do: %{}
+  defp load_seed_contract_source_fields("", _source_roots), do: %{}
+
+  defp load_seed_contract_source_fields(source_file, source_roots) when is_binary(source_file) do
+    source_file = String.trim(source_file)
+
+    source_roots
+    |> Enum.find_value(%{}, fn root ->
+      path = Path.join(root, source_file)
+
+      if File.regular?(path) do
+        parse_seed_source_fields(File.read!(path))
+      else
+        nil
+      end
+    end)
+  end
+
+  defp parse_seed_source_fields(raw) when is_binary(raw) do
+    keys = [
+      "expected_facts",
+      "action_path",
+      "branch_hints",
+      "declared_error_codes",
+      "business_post_conditions"
+    ]
+
+    {result, _active} =
+      raw
+      |> String.split("\n")
+      |> Enum.reduce({%{}, nil}, fn line, {acc, active_key} ->
+        trimmed = String.trim_trailing(line)
+        compact = String.trim(trimmed)
+
+        cond do
+          compact == "" ->
+            {acc, active_key}
+
+          compact == "---" ->
+            {acc, nil}
+
+          Enum.any?(keys, &(compact == &1 <> ":")) ->
+            key = String.trim_trailing(compact, ":")
+            {Map.put_new(acc, key, []), key}
+
+          String.starts_with?(compact, "- ") and is_binary(active_key) ->
+            value = compact |> String.replace_prefix("- ", "") |> String.trim()
+            {Map.update(acc, active_key, [value], &(&1 ++ [value])), active_key}
+
+          top_level_key_line?(trimmed) ->
+            {acc, nil}
+
+          true ->
+            {acc, active_key}
+        end
+      end)
+
+    Enum.into(result, %{}, fn {key, values} -> {String.to_atom(key), values} end)
+  end
+
+  defp top_level_key_line?(line) when is_binary(line) do
+    compact = String.trim(line)
+
+    compact != "" and
+      not String.starts_with?(compact, "- ") and
+      String.contains?(compact, ":") and
+      String.length(line) == String.length(String.trim_leading(line))
   end
 
   defp string_list(values) when is_list(values) do

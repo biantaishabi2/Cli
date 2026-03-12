@@ -639,12 +639,12 @@ defmodule BDDCompiler.CLI do
       json_path != nil ->
         InstructionSet.load_json!(expand_path(json_path, project_root))
 
-      v1_paths != [] ->
-        InstructionSet.load!(v1_paths, v2_paths)
-
       is_binary(registry_module) and registry_module != "" ->
         {auto_v1_paths, auto_v2_paths} = export_registry_to_temp_files!(project_root, registry_module)
         InstructionSet.load!(auto_v1_paths, auto_v2_paths)
+
+      v1_paths != [] ->
+        InstructionSet.load!(v1_paths, v2_paths)
 
       true ->
         cfg = Config.load(project_root)

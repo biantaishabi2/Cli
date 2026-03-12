@@ -101,4 +101,91 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     _ = out
     assert File.exists?(Path.join(out_dir, "a_generated_test.exs"))
   end
+
+  test "显式 --registry-module 会覆盖 .bddc.toml 中陈旧的 instructions" do
+    root = Path.join(System.tmp_dir!(), "bddc_cfg_registry_" <> Integer.to_string(System.unique_integer([:positive])))
+    File.mkdir_p!(Path.join(root, "docs/bdd"))
+    File.mkdir_p!(Path.join(root, "docs/bdd/_generated"))
+    File.mkdir_p!(Path.join(root, "priv/bdd"))
+    File.mkdir_p!(Path.join(root, "lib/fixture/bdd"))
+
+    File.write!(Path.join(root, "mix.exs"), """
+    defmodule Fixture.MixProject do
+      use Mix.Project
+
+      def project do
+        [app: :fixture, version: "0.1.0", elixir: "~> 1.15", deps: []]
+      end
+
+      def application, do: [extra_applications: [:logger]]
+    end
+    """)
+
+    File.write!(Path.join(root, "docs/bdd/a.dsl"), """
+    [SCENARIO: CFG-REG-001] TITLE: cfg registry TAGS: integration
+    GIVEN given_seed_context id="seed-1" module="TRAVEL_ORDER"
+    WHEN when_do
+    THEN assert_done
+    """)
+
+    File.write!(Path.join(root, "priv/bdd/instructions_v1.exs"), """
+    %{
+      when_do: %{kind: :when, args: %{}, outputs: %{}, rules: [], scopes: [:integration, :e2e], boundary: :service, async?: false, eventually?: false, assert_class: nil},
+      assert_done: %{kind: :then, args: %{}, outputs: %{}, rules: [], scopes: [:integration, :e2e], boundary: :service, async?: false, eventually?: false, assert_class: :weak}
+    }
+    """)
+
+    File.write!(Path.join(root, "docs/bdd/_generated/runtime_caps_v1.exs"), "[:given_seed_context, :when_do, :assert_done]\n")
+
+    File.write!(Path.join(root, ".bddc.toml"), """
+    [global]
+    instructions = [\"priv/bdd/instructions_v1.exs\"]
+    in = \"docs/bdd\"
+    out = \"test/bdd_generated\"
+    runtime_module = \"Fixture.BDD.Instructions.V1\"
+    runtime_caps_file = \"docs/bdd/_generated/runtime_caps_v1.exs\"
+    test_case = \"ExUnit.Case\"
+    module_prefix = \"Fixture.BDD.Generated\"
+    registry_module = \"Fixture.BDD.InstructionRegistry\"
+    """)
+
+    File.write!(Path.join(root, "lib/fixture/bdd/instruction_registry.ex"), """
+    defmodule Fixture.BDD.InstructionRegistry do
+      def all(_version \\\\ :v1) do
+        [
+          %{name: :given_seed_context, kind: :given, args: %{id: %{type: :string, required?: true, allowed: nil}, module: %{type: :string, required?: true, allowed: nil}}, outputs: %{}, rules: [], scopes: [:integration, :e2e], boundary: :service, async?: false, eventually?: false, assert_class: nil},
+          %{name: :when_do, kind: :when, args: %{}, outputs: %{}, rules: [], scopes: [:integration, :e2e], boundary: :service, async?: false, eventually?: false, assert_class: nil},
+          %{name: :assert_done, kind: :then, args: %{}, outputs: %{}, rules: [], scopes: [:integration, :e2e], boundary: :service, async?: false, eventually?: false, assert_class: :weak}
+        ]
+      end
+    end
+    """)
+
+    out_dir = Path.join(root, "test/bdd_generated")
+
+    {out, status} =
+      System.cmd(
+        @escript,
+        [
+          "check",
+          "--project-root",
+          root,
+          "--registry-module",
+          "Fixture.BDD.InstructionRegistry",
+          "--runtime-module",
+          "Fixture.BDD.Instructions.V1",
+          "--runtime-caps-file",
+          "docs/bdd/_generated/runtime_caps_v1.exs",
+          "--skip-annotations-check",
+          "--skip-bdd-test",
+          "--no-fail-on-warn"
+        ],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status == 0
+    refute out =~ "未知指令：:given_seed_context"
+    assert File.exists?(Path.join(out_dir, "a_generated_test.exs"))
+  end
 end

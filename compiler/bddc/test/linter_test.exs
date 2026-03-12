@@ -169,4 +169,47 @@ defmodule BDDCompiler.LinterTest do
 
     refute Enum.any?(warnings, &(&1.rule == :weak_assertion))
   end
+
+  test "stale context falls back to priv/bdd/sources structured fields" do
+    root = temp_dir("bddc_linter_seed_source_fallback")
+    features_dir = Path.join(root, "docs/bdd/features")
+    contexts_dir = Path.join(root, "docs/bdd/contexts")
+    sources_dir = Path.join(root, "priv/bdd/sources/travel")
+
+    write(
+      Path.join(features_dir, "travel_order.dsl"),
+      """
+      [SCENARIO: BDD-TRAVEL_TRAVEL_ORDER-SEED-travel_order_submit] TITLE: submit TAGS: seed action_contract
+      GIVEN given_seed_context id="travel_order_submit" module="TRAVEL_TRAVEL_ORDER"
+      WHEN when_execute_seed_contract module="TRAVEL_TRAVEL_ORDER"
+      THEN then_seed_contract_should_hold module="TRAVEL_TRAVEL_ORDER"
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "travel_order_submit.json"),
+      ~s|{
+        "id": "travel_order_submit",
+        "module": "TRAVEL_TRAVEL_ORDER",
+        "edge_class": "action_contract",
+        "source_file": "travel/action_travel_order_submit.yaml",
+        "source_summary": "GIVEN ..."
+      }|
+    )
+
+    write(
+      Path.join(sources_dir, "action_travel_order_submit.yaml"),
+      """
+      module: TRAVEL_TRAVEL_ORDER
+      edge_class: action_contract
+      source_summary: "GIVEN 订单可提交 / WHEN 执行 submit / THEN 应落库"
+      expected_facts:
+        - record_persisted
+        - state_change
+      """
+    )
+
+    warnings = Linter.lint_dir(Path.join(root, "docs/bdd"), instruction_set())
+    refute Enum.any?(warnings, &(&1.rule == :weak_assertion))
+  end
 end
