@@ -4,13 +4,20 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
   @escript Path.expand("../bdd_compiler", __DIR__)
 
   setup_all do
-    {out, 0} = System.cmd("mix", ["escript.build"], cd: Path.expand("..", __DIR__), stderr_to_stdout: true)
+    {out, 0} =
+      System.cmd("mix", ["escript.build"], cd: Path.expand("..", __DIR__), stderr_to_stdout: true)
+
     _ = out
     :ok
   end
 
   test "init 生成最小脚手架 + runtime.caps.sync + check 可跑通（纯文件项目，无 mix）" do
-    root = Path.join(System.tmp_dir!(), "bddc_init_" <> Integer.to_string(System.unique_integer([:positive])))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "bddc_init_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
     File.mkdir_p!(root)
 
     {out_init, status_init} =
@@ -25,8 +32,84 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     assert out_init =~ "[init] done"
     assert File.exists?(Path.join(root, ".bddc.toml"))
     assert File.exists?(Path.join(root, "priv/bdd/instructions_v1.exs"))
+    assert File.exists?(Path.join(root, "test/support/bdd/common_instructions.ex"))
+    assert File.exists?(Path.join(root, "test/support/bdd/bddc_runtime.ex"))
     assert File.exists?(Path.join(root, "test/support/bdd/instructions_v1.ex"))
     assert File.exists?(Path.join(root, "docs/bdd/hello.dsl"))
+
+    instructions_spec = File.read!(Path.join(root, "priv/bdd/instructions_v1.exs"))
+    common_instructions = File.read!(Path.join(root, "test/support/bdd/common_instructions.ex"))
+    runtime_macro = File.read!(Path.join(root, "test/support/bdd/bddc_runtime.ex"))
+    runtime_dispatcher = File.read!(Path.join(root, "test/support/bdd/instructions_v1.ex"))
+
+    Enum.each(
+      ["given_seed_context", "when_execute_seed_contract", "then_seed_contract_should_hold"],
+      fn instruction ->
+        assert instructions_spec =~ instruction
+        assert common_instructions =~ instruction
+        assert runtime_macro =~ instruction
+        assert runtime_dispatcher =~ instruction
+      end
+    )
+
+    {out_caps, status_caps} =
+      System.cmd(
+        @escript,
+        ["runtime.caps.sync", "--project-root", root],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_caps == 0
+    assert out_caps =~ "runtime_caps_v1.exs"
+
+    caps_file = Path.join(root, "docs/bdd/_generated/runtime_caps_v1.exs")
+    {caps, _binding} = Code.eval_file(caps_file)
+
+    Enum.each(
+      [:given_seed_context, :when_execute_seed_contract, :then_seed_contract_should_hold],
+      fn cap -> assert cap in caps end
+    )
+
+    {out_check, status_check} =
+      System.cmd(
+        @escript,
+        ["check", "--project-root", root, "--no-fail-on-warn"],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_check == 0
+    assert out_check =~ "BDD lint:"
+    assert File.exists?(Path.join(root, "test/bdd_generated/hello_generated_test.exs"))
+  end
+
+  test "init 默认模板支持最小 seed DSL smoke" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "bddc_init_seed_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
+    File.mkdir_p!(root)
+
+    {out_init, status_init} =
+      System.cmd(
+        @escript,
+        ["init", "--project-root", root, "--namespace", "Demo", "--force"],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_init == 0
+    assert out_init =~ "[init] done"
+
+    File.write!(Path.join(root, "docs/bdd/seed.dsl"), """
+    [SCENARIO: SEED-001] TITLE: seed smoke TAGS: integration seed
+    GIVEN given_seed_context id="seed-1" module="TRAVEL_ORDER"
+    WHEN when_execute_seed_contract module="TRAVEL_ORDER"
+    THEN then_seed_contract_should_hold module="TRAVEL_ORDER"
+    """)
 
     {out_caps, status_caps} =
       System.cmd(
@@ -48,12 +131,17 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
       )
 
     assert status_check == 0
-    assert out_check =~ "BDD lint:"
-    assert File.exists?(Path.join(root, "test/bdd_generated/hello_generated_test.exs"))
+    refute out_check =~ "未知指令：:given_seed_context"
+    assert File.exists?(Path.join(root, "test/bdd_generated/seed_generated_test.exs"))
   end
 
   test ".bddc.toml 支持覆盖默认 in/out/instructions 等参数（命令行可 override）" do
-    root = Path.join(System.tmp_dir!(), "bddc_cfg_" <> Integer.to_string(System.unique_integer([:positive])))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "bddc_cfg_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
     File.mkdir_p!(Path.join(root, "docs/bdd"))
     File.mkdir_p!(Path.join(root, "docs/bdd/_generated"))
     File.mkdir_p!(Path.join(root, "priv/bdd"))
@@ -103,7 +191,12 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
   end
 
   test "显式 --registry-module 会覆盖 .bddc.toml 中陈旧的 instructions" do
-    root = Path.join(System.tmp_dir!(), "bddc_cfg_registry_" <> Integer.to_string(System.unique_integer([:positive])))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "bddc_cfg_registry_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
     File.mkdir_p!(Path.join(root, "docs/bdd"))
     File.mkdir_p!(Path.join(root, "docs/bdd/_generated"))
     File.mkdir_p!(Path.join(root, "priv/bdd"))
@@ -135,7 +228,10 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     }
     """)
 
-    File.write!(Path.join(root, "docs/bdd/_generated/runtime_caps_v1.exs"), "[:given_seed_context, :when_do, :assert_done]\n")
+    File.write!(
+      Path.join(root, "docs/bdd/_generated/runtime_caps_v1.exs"),
+      "[:given_seed_context, :when_do, :assert_done]\n"
+    )
 
     File.write!(Path.join(root, ".bddc.toml"), """
     [global]
