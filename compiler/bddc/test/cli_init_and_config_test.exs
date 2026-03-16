@@ -35,12 +35,14 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     assert File.exists?(Path.join(root, "test/support/bdd/common_instructions.ex"))
     assert File.exists?(Path.join(root, "test/support/bdd/bddc_runtime.ex"))
     assert File.exists?(Path.join(root, "test/support/bdd/instructions_v1.ex"))
+    assert File.exists?(Path.join(root, "test/test_helper.exs"))
     assert File.exists?(Path.join(root, "docs/bdd/hello.dsl"))
 
     instructions_spec = File.read!(Path.join(root, "priv/bdd/instructions_v1.exs"))
     common_instructions = File.read!(Path.join(root, "test/support/bdd/common_instructions.ex"))
     runtime_macro = File.read!(Path.join(root, "test/support/bdd/bddc_runtime.ex"))
     runtime_dispatcher = File.read!(Path.join(root, "test/support/bdd/instructions_v1.ex"))
+    test_helper = File.read!(Path.join(root, "test/test_helper.exs"))
 
     Enum.each(
       ["given_seed_context", "when_execute_seed_contract", "then_seed_contract_should_hold"],
@@ -51,6 +53,11 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
         assert runtime_dispatcher =~ instruction
       end
     )
+
+    assert test_helper =~ "# BEGIN BDDC INIT"
+    assert test_helper =~ "support/bdd/bddc_runtime.ex"
+    assert test_helper =~ "support/bdd/common_instructions.ex"
+    assert test_helper =~ "support/bdd/instructions_v1.ex"
 
     {out_caps, status_caps} =
       System.cmd(
@@ -132,6 +139,70 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
 
     assert status_check == 0
     refute out_check =~ "未知指令：:given_seed_context"
+    assert File.exists?(Path.join(root, "test/bdd_generated/seed_generated_test.exs"))
+  end
+
+  test "init 在最小 Mix 项目中会接好 test_helper 并跑通生成测试" do
+    parent =
+      Path.join(
+        System.tmp_dir!(),
+        "bddc_init_mix_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
+    File.mkdir_p!(parent)
+    root = Path.join(parent, "demo")
+
+    {out_new, status_new} =
+      System.cmd("mix", ["new", root, "--module", "Demo"], stderr_to_stdout: true)
+
+    assert status_new == 0
+    assert out_new =~ "Your Mix project was created successfully"
+
+    {out_init, status_init} =
+      System.cmd(
+        @escript,
+        ["init", "--project-root", root, "--namespace", "Demo", "--force"],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_init == 0
+    assert out_init =~ "[init] ensure_test_helper path="
+
+    test_helper = File.read!(Path.join(root, "test/test_helper.exs"))
+    assert test_helper =~ "# BEGIN BDDC INIT"
+
+    File.write!(Path.join(root, "docs/bdd/seed.dsl"), """
+    [SCENARIO: SEED-001] TITLE: seed smoke TAGS: integration seed
+    GIVEN given_seed_context id="seed-1" module="TRAVEL_ORDER"
+    WHEN when_execute_seed_contract module="TRAVEL_ORDER"
+    THEN then_seed_contract_should_hold module="TRAVEL_ORDER"
+    """)
+
+    {out_caps, status_caps} =
+      System.cmd(
+        @escript,
+        ["runtime.caps.sync", "--project-root", root],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_caps == 0
+    assert out_caps =~ "runtime_caps_v1.exs"
+
+    {out_check, status_check} =
+      System.cmd(
+        @escript,
+        ["check", "--project-root", root, "--no-fail-on-warn"],
+        cd: Path.expand("..", __DIR__),
+        stderr_to_stdout: true
+      )
+
+    assert status_check == 0
+    refute out_check =~ "UndefinedFunctionError"
+    refute out_check =~ "is undefined"
+    refute out_check =~ "__caps_sync_fixture__/1 cannot match"
+    assert out_check =~ "2 tests, 0 failures"
     assert File.exists?(Path.join(root, "test/bdd_generated/seed_generated_test.exs"))
   end
 

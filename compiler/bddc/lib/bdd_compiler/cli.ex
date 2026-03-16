@@ -1037,6 +1037,10 @@ defmodule BDDCompiler.CLI do
 
     Enum.each(plan, fn %{path: path, content: content, action: action} ->
       cond do
+        action == "ensure_test_helper" ->
+          ensure_test_helper!(path, content)
+          IO.puts("[init] #{action} path=#{path}")
+
         File.exists?(path) and not force? ->
           IO.puts(:stderr, "[init] skip_existing path=#{path} (use --force to overwrite)")
 
@@ -1052,6 +1056,23 @@ defmodule BDDCompiler.CLI do
     e ->
       IO.puts(:stderr, "[init] failed: #{Exception.message(e)}")
       System.halt(1)
+  end
+
+  defp ensure_test_helper!(path, snippet) when is_binary(path) and is_binary(snippet) do
+    File.mkdir_p!(Path.dirname(path))
+
+    if File.exists?(path) do
+      current = File.read!(path)
+
+      if String.contains?(current, "# BEGIN BDDC INIT") do
+        :ok
+      else
+        separator = if String.ends_with?(current, "\n"), do: "", else: "\n"
+        File.write!(path, current <> separator <> "\n" <> snippet)
+      end
+    else
+      File.write!(path, "ExUnit.start()\n\n" <> snippet)
+    end
   end
 
   defp guess_namespace(project_root) do
@@ -1109,6 +1130,11 @@ defmodule BDDCompiler.CLI do
         action: "write",
         path: Path.join([project_root, "scripts", "bdd_gate.sh"]),
         content: init_bdd_gate_sh(runtime_module)
+      },
+      %{
+        action: "ensure_test_helper",
+        path: Path.join([project_root, "test", "test_helper.exs"]),
+        content: init_test_helper_ex()
       }
     ]
   end
@@ -1264,6 +1290,8 @@ defmodule BDDCompiler.CLI do
             end
           end
 
+          defoverridable __caps_sync_fixture__: 1
+
           def new_run_id do
             Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
           end
@@ -1396,6 +1424,17 @@ defmodule BDDCompiler.CLI do
       --project-root . \\
       --runtime-module #{runtime_module} \\
       --runtime-caps-file docs/bdd/_generated/runtime_caps_v1.exs
+    """
+  end
+
+  defp init_test_helper_ex do
+    """
+    # BEGIN BDDC INIT
+    # 让 init 生成的 BDD runtime/support 文件在 mix test 时可用。
+    Code.require_file(Path.expand("support/bdd/bddc_runtime.ex", __DIR__))
+    Code.require_file(Path.expand("support/bdd/common_instructions.ex", __DIR__))
+    Code.require_file(Path.expand("support/bdd/instructions_v1.ex", __DIR__))
+    # END BDDC INIT
     """
   end
 
