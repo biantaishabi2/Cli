@@ -1,7 +1,15 @@
 defmodule BDDCompiler.CLI do
   @moduledoc false
 
-  alias BDDCompiler.{Compiler, CompileError, Config, DslParser, InstructionSet, Linter, MarkdownExtractor}
+  alias BDDCompiler.{
+    Compiler,
+    CompileError,
+    Config,
+    DslParser,
+    InstructionSet,
+    Linter,
+    MarkdownExtractor
+  }
 
   def main(argv) when is_list(argv) do
     case argv do
@@ -47,7 +55,8 @@ defmodule BDDCompiler.CLI do
         prev == nil ->
           {acc, item}
 
-        item in ["true", "false"] and is_binary(prev) and String.starts_with?(prev, "--") and prev not in ["--help"] ->
+        item in ["true", "false"] and is_binary(prev) and String.starts_with?(prev, "--") and
+            prev not in ["--help"] ->
           {acc ++ normalize_one_bool_pair(prev, item), nil}
 
         true ->
@@ -122,8 +131,12 @@ defmodule BDDCompiler.CLI do
         fallback = Keyword.get(opts, :module_prefix)
 
         cond do
-          is_binary(go_mod) and go_mod != "" -> go_mod
-          is_binary(fallback) and fallback != "" -> fallback
+          is_binary(go_mod) and go_mod != "" ->
+            go_mod
+
+          is_binary(fallback) and fallback != "" ->
+            fallback
+
           true ->
             IO.puts(:stderr, "[warn] --target go 未指定 --go-module，将使用 GoEmitter 默认值")
             nil
@@ -151,7 +164,8 @@ defmodule BDDCompiler.CLI do
   end
 
   defp cmd_lint(args) do
-    {opts, _rest, invalid} = parse_common_args(args, [:in, :fail_on_warn, :docs_root, :instructions_v2])
+    {opts, _rest, invalid} =
+      parse_common_args(args, [:in, :fail_on_warn, :docs_root, :instructions_v2])
 
     if invalid != [] do
       IO.puts(:stderr, "参数解析失败: #{inspect(invalid)}")
@@ -179,7 +193,8 @@ defmodule BDDCompiler.CLI do
   end
 
   defp cmd_check(args) do
-    {opts, _rest, invalid} = parse_common_args(args, [:in, :out, :fail_on_warn, :docs_root, :instructions_v2])
+    {opts, _rest, invalid} =
+      parse_common_args(args, [:in, :out, :fail_on_warn, :docs_root, :instructions_v2])
 
     if invalid != [] do
       IO.puts(:stderr, "参数解析失败: #{inspect(invalid)}")
@@ -193,7 +208,10 @@ defmodule BDDCompiler.CLI do
     out_dir = opts |> Keyword.get(:out, "test/bdd_generated") |> expand_path(project_root)
     docs_root = opts |> Keyword.get(:docs_root) |> expand_optional_path(project_root)
     runtime_module = Keyword.get(opts, :runtime_module, "BDD.Instructions.V1")
-    runtime_caps_file = opts |> Keyword.get(:runtime_caps_file) |> expand_optional_path(project_root)
+
+    runtime_caps_file =
+      opts |> Keyword.get(:runtime_caps_file) |> expand_optional_path(project_root)
+
     fail_on_warn? = Keyword.get(opts, :fail_on_warn, true)
     fail_tags = Keyword.get(opts, :fail_tags)
     fail_globs = Keyword.get(opts, :fail_globs)
@@ -206,7 +224,14 @@ defmodule BDDCompiler.CLI do
       run_mix_task_if_exists!("bdd.annotations.check", [], project_root)
     end
 
-    :ok = validate_runtime_coverage!(project_root, in_dir, docs_root, runtime_module, runtime_caps_file)
+    :ok =
+      validate_runtime_coverage!(
+        project_root,
+        in_dir,
+        docs_root,
+        runtime_module,
+        runtime_caps_file
+      )
 
     compile_opts =
       [
@@ -228,9 +253,14 @@ defmodule BDDCompiler.CLI do
 
     unless skip_bdd_test? do
       if File.regular?(Path.join(project_root, "mix.exs")) do
-        run_generated_tests!(project_root, out_dir, exclude_flaky?: exclude_flaky?, rerun_failures: rerun_failures)
+        run_generated_tests!(project_root, out_dir,
+          exclude_flaky?: exclude_flaky?,
+          rerun_failures: rerun_failures
+        )
       else
-        IO.puts("[check] skip mix test: mix.exs not found (use in a Mix project to run generated tests)")
+        IO.puts(
+          "[check] skip mix test: mix.exs not found (use in a Mix project to run generated tests)"
+        )
       end
     end
   rescue
@@ -332,7 +362,10 @@ defmodule BDDCompiler.CLI do
       :ok
     else
       if String.contains?(out, "could not be found") do
-        IO.puts("[check] skip #{task}: mix task not found (use --skip-annotations-check to silence)")
+        IO.puts(
+          "[check] skip #{task}: mix task not found (use --skip-annotations-check to silence)"
+        )
+
         :ok
       else
         IO.write(out)
@@ -382,7 +415,8 @@ defmodule BDDCompiler.CLI do
     end
   end
 
-  defp run_mix_cmd(project_root, args, env) when is_binary(project_root) and is_list(args) and is_list(env) do
+  defp run_mix_cmd(project_root, args, env)
+       when is_binary(project_root) and is_list(args) and is_list(env) do
     {_out, status} =
       System.cmd("mix", args,
         cd: project_root,
@@ -437,22 +471,23 @@ defmodule BDDCompiler.CLI do
   defp collect_used_instructions!(in_dir, docs_root_opt) do
     docs_root =
       cond do
-        is_binary(docs_root_opt) and docs_root_opt != "" -> docs_root_opt
-        Path.basename(in_dir) == "bdd" and Path.basename(Path.dirname(in_dir)) == "docs" -> Path.dirname(in_dir)
-        true -> nil
+        is_binary(docs_root_opt) and docs_root_opt != "" ->
+          docs_root_opt
+
+        Path.basename(in_dir) == "bdd" and Path.basename(Path.dirname(in_dir)) == "docs" ->
+          Path.dirname(in_dir)
+
+        true ->
+          nil
       end
 
     dsl_paths =
-      (
-        in_dir
+      ((in_dir
         |> Path.join("*.dsl")
-        |> Path.wildcard()
-      ) ++
-        (
-          in_dir
+        |> Path.wildcard()) ++
+         (in_dir
           |> Path.join("features/**/*.dsl")
-          |> Path.wildcard()
-        )
+          |> Path.wildcard()))
       |> Enum.uniq()
       |> Enum.sort()
 
@@ -624,7 +659,9 @@ defmodule BDDCompiler.CLI do
     registry_module = Keyword.get(opts, :registry_module)
     json_path = Keyword.get(opts, :instructions_json)
     v1_paths = Keyword.get_values(opts, :instructions) |> Enum.map(&expand_path(&1, project_root))
-    v2_paths = Keyword.get_values(opts, :instructions_v2) |> Enum.map(&expand_path(&1, project_root))
+
+    v2_paths =
+      Keyword.get_values(opts, :instructions_v2) |> Enum.map(&expand_path(&1, project_root))
 
     # --instructions-json 和 --instructions 互斥
     if json_path != nil and v1_paths != [] do
@@ -640,7 +677,9 @@ defmodule BDDCompiler.CLI do
         InstructionSet.load_json!(expand_path(json_path, project_root))
 
       is_binary(registry_module) and registry_module != "" ->
-        {auto_v1_paths, auto_v2_paths} = export_registry_to_temp_files!(project_root, registry_module)
+        {auto_v1_paths, auto_v2_paths} =
+          export_registry_to_temp_files!(project_root, registry_module)
+
         InstructionSet.load!(auto_v1_paths, auto_v2_paths)
 
       v1_paths != [] ->
@@ -670,7 +709,9 @@ defmodule BDDCompiler.CLI do
             InstructionSet.load!(cfg_v1, cfg_v2)
 
           is_binary(cfg_registry) and cfg_registry != "" ->
-            {auto_v1_paths, auto_v2_paths} = export_registry_to_temp_files!(project_root, cfg_registry)
+            {auto_v1_paths, auto_v2_paths} =
+              export_registry_to_temp_files!(project_root, cfg_registry)
+
             InstructionSet.load!(auto_v1_paths, auto_v2_paths)
 
           true ->
@@ -684,7 +725,8 @@ defmodule BDDCompiler.CLI do
     end
   end
 
-  defp apply_config_defaults(opts, section, project_root) when is_list(opts) and is_binary(section) do
+  defp apply_config_defaults(opts, section, project_root)
+       when is_list(opts) and is_binary(section) do
     cfg = Config.load(project_root)
 
     maybe_put_from_cfg(opts, cfg, section, :registry_module, "registry_module")
@@ -995,6 +1037,10 @@ defmodule BDDCompiler.CLI do
 
     Enum.each(plan, fn %{path: path, content: content, action: action} ->
       cond do
+        action == "ensure_test_helper" ->
+          ensure_test_helper!(path, content)
+          IO.puts("[init] #{action} path=#{path}")
+
         File.exists?(path) and not force? ->
           IO.puts(:stderr, "[init] skip_existing path=#{path} (use --force to overwrite)")
 
@@ -1010,6 +1056,23 @@ defmodule BDDCompiler.CLI do
     e ->
       IO.puts(:stderr, "[init] failed: #{Exception.message(e)}")
       System.halt(1)
+  end
+
+  defp ensure_test_helper!(path, snippet) when is_binary(path) and is_binary(snippet) do
+    File.mkdir_p!(Path.dirname(path))
+
+    if File.exists?(path) do
+      current = File.read!(path)
+
+      if String.contains?(current, "# BEGIN BDDC INIT") do
+        :ok
+      else
+        separator = if String.ends_with?(current, "\n"), do: "", else: "\n"
+        File.write!(path, current <> separator <> "\n" <> snippet)
+      end
+    else
+      File.write!(path, "ExUnit.start()\n\n" <> snippet)
+    end
   end
 
   defp guess_namespace(project_root) do
@@ -1067,6 +1130,11 @@ defmodule BDDCompiler.CLI do
         action: "write",
         path: Path.join([project_root, "scripts", "bdd_gate.sh"]),
         content: init_bdd_gate_sh(runtime_module)
+      },
+      %{
+        action: "ensure_test_helper",
+        path: Path.join([project_root, "test", "test_helper.exs"]),
+        content: init_test_helper_ex()
       }
     ]
   end
@@ -1127,6 +1195,17 @@ defmodule BDDCompiler.CLI do
         eventually?: false,
         assert_class: nil
       },
+      assert_path_exists: %{
+        kind: :then,
+        args: %{path: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: :B
+      },
       noop: %{
         kind: :when,
         args: %{},
@@ -1148,6 +1227,68 @@ defmodule BDDCompiler.CLI do
         async?: false,
         eventually?: false,
         assert_class: :weak
+      },
+      try_raise: %{
+        kind: :when,
+        args: %{message: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: nil
+      },
+      assert_last_error: %{
+        kind: :then,
+        args: %{expected_error: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: :error
+      },
+      given_seed_context: %{
+        kind: :given,
+        args: %{
+          id: %{type: :string, required?: true, allowed: nil},
+          module: %{type: :string, required?: true, allowed: nil}
+        },
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :service,
+        async?: false,
+        eventually?: false,
+        assert_class: nil
+      },
+      when_execute_seed_contract: %{
+        kind: :when,
+        args: %{
+          module: %{type: :string, required?: true, allowed: nil}
+        },
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :service,
+        async?: false,
+        eventually?: false,
+        assert_class: nil
+      },
+      then_seed_contract_should_hold: %{
+        kind: :then,
+        args: %{
+          module: %{type: :string, required?: true, allowed: nil}
+        },
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :service,
+        async?: false,
+        eventually?: false,
+        assert_class: nil
       }
     }
     """
@@ -1174,10 +1315,18 @@ defmodule BDDCompiler.CLI do
             case tuple do
               {:given, :create_temp_dir} -> :ok
               {:given, :create_temp_file} -> :ok
+              {:given, :given_seed_context} -> :ok
+              {:when, :try_raise} -> :ok
               {:when, :noop} -> :ok
+              {:when, :when_execute_seed_contract} -> :ok
+              {:then, :assert_path_exists} -> :ok
               {:then, :assert_noop} -> :ok
+              {:then, :assert_last_error} -> :ok
+              {:then, :then_seed_contract_should_hold} -> :ok
             end
           end
+
+          defoverridable __caps_sync_fixture__: 1
 
           def new_run_id do
             Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
@@ -1205,7 +1354,18 @@ defmodule BDDCompiler.CLI do
     defmodule #{namespace}.BDD.CommonInstructions do
       @moduledoc false
 
-      @caps MapSet.new([:create_temp_dir, :create_temp_file, :noop, :assert_noop])
+      @caps MapSet.new([
+        :create_temp_dir,
+        :create_temp_file,
+        :assert_path_exists,
+        :noop,
+        :assert_noop,
+        :try_raise,
+        :assert_last_error,
+        :given_seed_context,
+        :when_execute_seed_contract,
+        :then_seed_contract_should_hold
+      ])
       def capabilities, do: @caps
 
       def run!(ctx, :given, :create_temp_dir, %{key: key}, _meta) when is_binary(key) do
@@ -1228,8 +1388,50 @@ defmodule BDDCompiler.CLI do
         ctx
       end
 
+      def run!(ctx, :then, :assert_path_exists, %{path: path}, _meta) when is_binary(path) do
+        if File.exists?(path) do
+          ctx
+        else
+          raise \"expected path to exist: \#{inspect(path)}\"
+        end
+      end
+
+      def run!(ctx, :given, :given_seed_context, %{id: id, module: module}, _meta)
+          when is_binary(id) and is_binary(module) do
+        Map.merge(ctx, %{seed_id: id, seed_module: module})
+      end
+
       def run!(ctx, :when, :noop, %{}, _meta) do
         ctx
+      end
+
+      def run!(ctx, :when, :try_raise, %{message: message}, _meta) when is_binary(message) do
+        try do
+          raise message
+        rescue
+          e ->
+            Map.put(ctx, :last_error, Exception.message(e))
+        end
+      end
+
+      def run!(ctx, :when, :when_execute_seed_contract, %{module: module}, _meta)
+          when is_binary(module) do
+        Map.put(ctx, :seed_contract_module, module)
+      end
+
+      def run!(ctx, :then, :assert_last_error, %{expected_error: expected_error}, _meta)
+          when is_binary(expected_error) do
+        case Map.get(ctx, :last_error) do
+          ^expected_error -> ctx
+          other -> raise \"expected last_error=\#{inspect(expected_error)}, got \#{inspect(other)}\"
+        end
+      end
+
+      def run!(ctx, :then, :then_seed_contract_should_hold, %{module: module}, _meta)
+          when is_binary(module) do
+        ctx
+        |> Map.put_new(:seed_module, module)
+        |> Map.put(:seed_contract_verified, true)
       end
 
       def run!(_ctx, kind, name, _args, meta) do
@@ -1252,8 +1454,14 @@ defmodule BDDCompiler.CLI do
         case tuple do
           {:given, :create_temp_dir} -> :ok
           {:given, :create_temp_file} -> :ok
+          {:given, :given_seed_context} -> :ok
+          {:when, :try_raise} -> :ok
           {:when, :noop} -> :ok
+          {:when, :when_execute_seed_contract} -> :ok
+          {:then, :assert_path_exists} -> :ok
           {:then, :assert_noop} -> :ok
+          {:then, :assert_last_error} -> :ok
+          {:then, :then_seed_contract_should_hold} -> :ok
         end
       end
     end
@@ -1264,8 +1472,12 @@ defmodule BDDCompiler.CLI do
     """
     [SCENARIO: HELLO-001] TITLE: hello world TAGS: integration
     GIVEN create_temp_dir key=\"hello\"
-    WHEN noop
-    THEN assert_noop
+    GIVEN create_temp_file dir=$path filename=\"hello.txt\" content=\"hello world\"
+    THEN assert_path_exists path=$path
+
+    [SCENARIO: HELLO-NEG-001] TITLE: hello negative example TAGS: integration negative
+    WHEN try_raise message=\"expected init error\"
+    THEN assert_last_error expected_error=\"expected init error\"
     """
   end
 
@@ -1283,6 +1495,17 @@ defmodule BDDCompiler.CLI do
       --project-root . \\
       --runtime-module #{runtime_module} \\
       --runtime-caps-file docs/bdd/_generated/runtime_caps_v1.exs
+    """
+  end
+
+  defp init_test_helper_ex do
+    """
+    # BEGIN BDDC INIT
+    # 让 init 生成的 BDD runtime/support 文件在 mix test 时可用。
+    Code.require_file(Path.expand("support/bdd/bddc_runtime.ex", __DIR__))
+    Code.require_file(Path.expand("support/bdd/common_instructions.ex", __DIR__))
+    Code.require_file(Path.expand("support/bdd/instructions_v1.ex", __DIR__))
+    # END BDDC INIT
     """
   end
 
@@ -1336,7 +1559,10 @@ defmodule BDDCompiler.CLI do
 
     out_path =
       opts
-      |> Keyword.get(:out, Path.join(["priv", "bdd", "_generated", "instructions_v1_scaffold.exs"]))
+      |> Keyword.get(
+        :out,
+        Path.join(["priv", "bdd", "_generated", "instructions_v1_scaffold.exs"])
+      )
       |> expand_path(project_root)
 
     specs =
@@ -1365,8 +1591,11 @@ defmodule BDDCompiler.CLI do
 
     {:ok, ast} =
       case Code.string_to_quoted(src, file: path) do
-        {:ok, quoted} -> {:ok, quoted}
-        {:error, {line, error, token}} -> raise ArgumentError, "#{path}:#{line} #{error} #{inspect(token)}"
+        {:ok, quoted} ->
+          {:ok, quoted}
+
+        {:error, {line, error, token}} ->
+          raise ArgumentError, "#{path}:#{line} #{error} #{inspect(token)}"
       end
 
     {_ast, specs} =
@@ -1398,7 +1627,9 @@ defmodule BDDCompiler.CLI do
 
   defp literal_to_term!(ast) do
     case ast do
-      x when is_atom(x) or is_binary(x) or is_integer(x) or is_float(x) or is_boolean(x) or is_nil(x) ->
+      x
+      when is_atom(x) or is_binary(x) or is_integer(x) or is_float(x) or is_boolean(x) or
+             is_nil(x) ->
         x
 
       {:%{}, _m, kvs} ->
@@ -1411,7 +1642,8 @@ defmodule BDDCompiler.CLI do
         Enum.map(list, &literal_to_term!/1)
 
       _ ->
-        raise ArgumentError, "仅支持字面量注解（atom/string/number/bool/nil/list/map/tuple），收到: #{Macro.to_string(ast)}"
+        raise ArgumentError,
+              "仅支持字面量注解（atom/string/number/bool/nil/list/map/tuple），收到: #{Macro.to_string(ast)}"
     end
   end
 
@@ -1462,7 +1694,10 @@ defmodule BDDCompiler.CLI do
   defp cmd_registry_upsert_standalone(project_root, opts) do
     scaffold_path =
       opts
-      |> Keyword.get(:scaffold, Path.join(["priv", "bdd", "_generated", "instructions_v1_scaffold.exs"]))
+      |> Keyword.get(
+        :scaffold,
+        Path.join(["priv", "bdd", "_generated", "instructions_v1_scaffold.exs"])
+      )
       |> expand_path(project_root)
 
     target_path =
@@ -1655,14 +1890,17 @@ defmodule BDDCompiler.CLI do
       File.write!(out_meta_path, inspect(meta, pretty: true, limit: :infinity))
     end
 
-    IO.puts("generated=#{out_path} count=#{length(caps)} sources=#{inspect(runtime_sources)} out_meta=#{inspect(out_meta_path)}")
+    IO.puts(
+      "generated=#{out_path} count=#{length(caps)} sources=#{inspect(runtime_sources)} out_meta=#{inspect(out_meta_path)}"
+    )
   rescue
     e in [CompileError, ArgumentError] ->
       IO.puts(:stderr, Exception.message(e))
       System.halt(1)
   end
 
-  defp apply_runtime_caps_sync_config(opts, project_root) when is_list(opts) and is_binary(project_root) do
+  defp apply_runtime_caps_sync_config(opts, project_root)
+       when is_list(opts) and is_binary(project_root) do
     cfg = Config.load(project_root)
     section = "runtime.caps.sync"
 
@@ -1780,7 +2018,11 @@ defmodule BDDCompiler.CLI do
         "--runtime-module",
         runtime_module,
         "--out",
-        default_runtime_caps_path(project_root, runtime_module, Keyword.get(opts, :runtime_caps_file))
+        default_runtime_caps_path(
+          project_root,
+          runtime_module,
+          Keyword.get(opts, :runtime_caps_file)
+        )
       ])
     end
 
@@ -1817,7 +2059,11 @@ defmodule BDDCompiler.CLI do
 
   defp default_runtime_caps_path(project_root, runtime_module, nil) do
     suffix = runtime_module_suffix(runtime_module)
-    Path.expand(Path.join(["docs", "bdd", "_generated", "runtime_caps_#{suffix}.exs"]), project_root)
+
+    Path.expand(
+      Path.join(["docs", "bdd", "_generated", "runtime_caps_#{suffix}.exs"]),
+      project_root
+    )
   end
 
   defp default_runtime_caps_path(project_root, _runtime_module, path) when is_binary(path) do
@@ -1826,37 +2072,52 @@ defmodule BDDCompiler.CLI do
 
   defp maybe_put_fail_on_warn(args, opts, strict?) do
     case Keyword.fetch(opts, :fail_on_warn) do
-      {:ok, "true"} -> args ++ ["--fail-on-warn"]
-      {:ok, "false"} -> args ++ ["--no-fail-on-warn"]
+      {:ok, "true"} ->
+        args ++ ["--fail-on-warn"]
+
+      {:ok, "false"} ->
+        args ++ ["--no-fail-on-warn"]
+
       {:ok, value} ->
         IO.puts(:stderr, "参数解析失败: --fail-on-warn 仅支持 true/false，收到 #{inspect(value)}")
         System.halt(1)
 
-      :error -> if(strict?, do: args ++ ["--fail-on-warn"], else: args ++ ["--no-fail-on-warn"])
+      :error ->
+        if(strict?, do: args ++ ["--fail-on-warn"], else: args ++ ["--no-fail-on-warn"])
     end
   end
 
   defp resolve_strict!(opts) do
     case Keyword.fetch(opts, :strict) do
-      {:ok, "true"} -> true
-      {:ok, "false"} -> false
+      {:ok, "true"} ->
+        true
+
+      {:ok, "false"} ->
+        false
+
       {:ok, value} ->
         IO.puts(:stderr, "参数解析失败: --strict 仅支持 true/false，收到 #{inspect(value)}")
         System.halt(1)
 
-      :error -> true
+      :error ->
+        true
     end
   end
 
   defp resolve_strict_factories!(opts) do
     case Keyword.fetch(opts, :strict_factories) do
-      {:ok, "true"} -> true
-      {:ok, "false"} -> false
+      {:ok, "true"} ->
+        true
+
+      {:ok, "false"} ->
+        false
+
       {:ok, value} ->
         IO.puts(:stderr, "参数解析失败: --strict-factories 仅支持 true/false，收到 #{inspect(value)}")
         System.halt(1)
 
-      :error -> false
+      :error ->
+        false
     end
   end
 
@@ -1877,11 +2138,14 @@ defmodule BDDCompiler.CLI do
     |> Macro.underscore()
   end
 
-  defp find_runtime_source_files!(project_root, suffix) when is_binary(project_root) and is_binary(suffix) do
+  defp find_runtime_source_files!(project_root, suffix)
+       when is_binary(project_root) and is_binary(suffix) do
     explicit = Path.join([project_root, "test", "support", "bdd", "instructions_#{suffix}.ex"])
 
     wildcard =
-      Path.wildcard(Path.join([project_root, "test", "support", "**", "*instructions*#{suffix}.ex"]))
+      Path.wildcard(
+        Path.join([project_root, "test", "support", "**", "*instructions*#{suffix}.ex"])
+      )
 
     candidates =
       ([explicit] ++ wildcard)
@@ -1945,7 +2209,8 @@ defmodule BDDCompiler.CLI do
   defp runtime_caps_entries_from_ast(ast) do
     {_ast, entries} =
       Macro.prewalk(ast, [], fn
-        {:def, meta, [{name, _m2, args_ast}, _body]} = node, acc when name in [:run!, :run_step!] ->
+        {:def, meta, [{name, _m2, args_ast}, _body]} = node, acc
+        when name in [:run!, :run_step!] ->
           line = meta[:line] || 0
           extracted = runtime_entries_from_fun_args(args_ast, line)
           {node, extracted ++ acc}
@@ -2025,7 +2290,9 @@ defmodule BDDCompiler.CLI do
 
     conflict =
       entries
-      |> Enum.group_by(fn {_kind, name, _file, _line} -> name end, fn {kind, _name, _file, _line} -> kind end)
+      |> Enum.group_by(fn {_kind, name, _file, _line} -> name end, fn {kind, _name, _file, _line} ->
+        kind
+      end)
       |> Enum.find(fn {_name, kinds} -> kinds |> Enum.uniq() |> length() > 1 end)
 
     if conflict do
@@ -2109,7 +2376,8 @@ defmodule BDDCompiler.CLI do
   defp put_opt(args, _flag, ""), do: args
   defp put_opt(args, flag, value), do: args ++ [flag, to_string(value)]
 
-  defp run_mix_eval!(project_root, eval_code) when is_binary(project_root) and is_binary(eval_code) do
+  defp run_mix_eval!(project_root, eval_code)
+       when is_binary(project_root) and is_binary(eval_code) do
     {_out, status} =
       System.cmd("mix", ["run", "--no-start", "-e", eval_code],
         cd: project_root,
@@ -2193,7 +2461,12 @@ defmodule BDDCompiler.CLI do
   end
 
   defp check_factory_paths!(paths) when is_list(paths) do
-    forbidden = ["NaiveDateTime.utc_now", "DateTime.utc_now", ":rand.uniform", "System.unique_integer"]
+    forbidden = [
+      "NaiveDateTime.utc_now",
+      "DateTime.utc_now",
+      ":rand.uniform",
+      "System.unique_integer"
+    ]
 
     paths
     |> Enum.flat_map(&expand_factory_files!/1)
