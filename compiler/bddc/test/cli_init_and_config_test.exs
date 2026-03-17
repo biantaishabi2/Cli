@@ -88,6 +88,8 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
 
     assert status_check == 0
     assert out_check =~ "BDD lint:"
+    refute out_check =~ "[weak_assertion]"
+    refute out_check =~ "[insufficient_negative_cases]"
     assert File.exists?(Path.join(root, "test/bdd_generated/hello_generated_test.exs"))
   end
 
@@ -112,11 +114,20 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     assert out_init =~ "[init] done"
 
     File.write!(Path.join(root, "docs/bdd/seed.dsl"), """
-    [SCENARIO: SEED-001] TITLE: seed smoke TAGS: integration seed
+    [SCENARIO: seed-1] TITLE: seed smoke TAGS: integration seed
     GIVEN given_seed_context id="seed-1" module="TRAVEL_ORDER"
     WHEN when_execute_seed_contract module="TRAVEL_ORDER"
     THEN then_seed_contract_should_hold module="TRAVEL_ORDER"
     """)
+
+    File.mkdir_p!(Path.join(root, "docs/bdd/contexts"))
+
+    File.write!(Path.join(root, "docs/bdd/contexts/seed-1.json"), ~s|{
+      "id": "seed-1",
+      "module": "TRAVEL_ORDER",
+      "edge_class": "action_contract",
+      "expected_facts": ["record_persisted"]
+    }|)
 
     {out_caps, status_caps} =
       System.cmd(
@@ -139,6 +150,7 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
 
     assert status_check == 0
     refute out_check =~ "未知指令：:given_seed_context"
+    refute out_check =~ "[weak_assertion]"
     assert File.exists?(Path.join(root, "test/bdd_generated/seed_generated_test.exs"))
   end
 
@@ -173,11 +185,20 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     assert test_helper =~ "# BEGIN BDDC INIT"
 
     File.write!(Path.join(root, "docs/bdd/seed.dsl"), """
-    [SCENARIO: SEED-001] TITLE: seed smoke TAGS: integration seed
+    [SCENARIO: seed-1] TITLE: seed smoke TAGS: integration seed
     GIVEN given_seed_context id="seed-1" module="TRAVEL_ORDER"
     WHEN when_execute_seed_contract module="TRAVEL_ORDER"
     THEN then_seed_contract_should_hold module="TRAVEL_ORDER"
     """)
+
+    File.mkdir_p!(Path.join(root, "docs/bdd/contexts"))
+
+    File.write!(Path.join(root, "docs/bdd/contexts/seed-1.json"), ~s|{
+      "id": "seed-1",
+      "module": "TRAVEL_ORDER",
+      "edge_class": "action_contract",
+      "expected_facts": ["record_persisted"]
+    }|)
 
     {out_caps, status_caps} =
       System.cmd(
@@ -202,7 +223,9 @@ defmodule BDDCompiler.CLIInitAndConfigTest do
     refute out_check =~ "UndefinedFunctionError"
     refute out_check =~ "is undefined"
     refute out_check =~ "__caps_sync_fixture__/1 cannot match"
-    assert out_check =~ "2 tests, 0 failures"
+    refute out_check =~ "[weak_assertion]"
+    refute out_check =~ "[insufficient_negative_cases]"
+    assert out_check =~ "3 tests, 0 failures"
     assert File.exists?(Path.join(root, "test/bdd_generated/seed_generated_test.exs"))
   end
 

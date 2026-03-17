@@ -1195,6 +1195,17 @@ defmodule BDDCompiler.CLI do
         eventually?: false,
         assert_class: nil
       },
+      assert_path_exists: %{
+        kind: :then,
+        args: %{path: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: :B
+      },
       noop: %{
         kind: :when,
         args: %{},
@@ -1216,6 +1227,28 @@ defmodule BDDCompiler.CLI do
         async?: false,
         eventually?: false,
         assert_class: :weak
+      },
+      try_raise: %{
+        kind: :when,
+        args: %{message: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: nil
+      },
+      assert_last_error: %{
+        kind: :then,
+        args: %{expected_error: %{type: :string, required?: true, allowed: nil}},
+        outputs: %{},
+        rules: [],
+        scopes: [:integration, :e2e],
+        boundary: :test_runtime,
+        async?: false,
+        eventually?: false,
+        assert_class: :error
       },
       given_seed_context: %{
         kind: :given,
@@ -1283,9 +1316,12 @@ defmodule BDDCompiler.CLI do
               {:given, :create_temp_dir} -> :ok
               {:given, :create_temp_file} -> :ok
               {:given, :given_seed_context} -> :ok
+              {:when, :try_raise} -> :ok
               {:when, :noop} -> :ok
               {:when, :when_execute_seed_contract} -> :ok
+              {:then, :assert_path_exists} -> :ok
               {:then, :assert_noop} -> :ok
+              {:then, :assert_last_error} -> :ok
               {:then, :then_seed_contract_should_hold} -> :ok
             end
           end
@@ -1321,8 +1357,11 @@ defmodule BDDCompiler.CLI do
       @caps MapSet.new([
         :create_temp_dir,
         :create_temp_file,
+        :assert_path_exists,
         :noop,
         :assert_noop,
+        :try_raise,
+        :assert_last_error,
         :given_seed_context,
         :when_execute_seed_contract,
         :then_seed_contract_should_hold
@@ -1349,6 +1388,14 @@ defmodule BDDCompiler.CLI do
         ctx
       end
 
+      def run!(ctx, :then, :assert_path_exists, %{path: path}, _meta) when is_binary(path) do
+        if File.exists?(path) do
+          ctx
+        else
+          raise \"expected path to exist: \#{inspect(path)}\"
+        end
+      end
+
       def run!(ctx, :given, :given_seed_context, %{id: id, module: module}, _meta)
           when is_binary(id) and is_binary(module) do
         Map.merge(ctx, %{seed_id: id, seed_module: module})
@@ -1358,9 +1405,26 @@ defmodule BDDCompiler.CLI do
         ctx
       end
 
+      def run!(ctx, :when, :try_raise, %{message: message}, _meta) when is_binary(message) do
+        try do
+          raise message
+        rescue
+          e ->
+            Map.put(ctx, :last_error, Exception.message(e))
+        end
+      end
+
       def run!(ctx, :when, :when_execute_seed_contract, %{module: module}, _meta)
           when is_binary(module) do
         Map.put(ctx, :seed_contract_module, module)
+      end
+
+      def run!(ctx, :then, :assert_last_error, %{expected_error: expected_error}, _meta)
+          when is_binary(expected_error) do
+        case Map.get(ctx, :last_error) do
+          ^expected_error -> ctx
+          other -> raise \"expected last_error=\#{inspect(expected_error)}, got \#{inspect(other)}\"
+        end
       end
 
       def run!(ctx, :then, :then_seed_contract_should_hold, %{module: module}, _meta)
@@ -1391,9 +1455,12 @@ defmodule BDDCompiler.CLI do
           {:given, :create_temp_dir} -> :ok
           {:given, :create_temp_file} -> :ok
           {:given, :given_seed_context} -> :ok
+          {:when, :try_raise} -> :ok
           {:when, :noop} -> :ok
           {:when, :when_execute_seed_contract} -> :ok
+          {:then, :assert_path_exists} -> :ok
           {:then, :assert_noop} -> :ok
+          {:then, :assert_last_error} -> :ok
           {:then, :then_seed_contract_should_hold} -> :ok
         end
       end
@@ -1405,8 +1472,12 @@ defmodule BDDCompiler.CLI do
     """
     [SCENARIO: HELLO-001] TITLE: hello world TAGS: integration
     GIVEN create_temp_dir key=\"hello\"
-    WHEN noop
-    THEN assert_noop
+    GIVEN create_temp_file dir=$path filename=\"hello.txt\" content=\"hello world\"
+    THEN assert_path_exists path=$path
+
+    [SCENARIO: HELLO-NEG-001] TITLE: hello negative example TAGS: integration negative
+    WHEN try_raise message=\"expected init error\"
+    THEN assert_last_error expected_error=\"expected init error\"
     """
   end
 
