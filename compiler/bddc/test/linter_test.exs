@@ -170,6 +170,156 @@ defmodule BDDCompiler.LinterTest do
     refute Enum.any?(warnings, &(&1.rule == :weak_assertion))
   end
 
+  test "determination_contract seed 场景触发 determination_degraded_pass 告警" do
+    root = temp_dir("bddc_linter_determination_degraded")
+    features_dir = Path.join(root, "features")
+    contexts_dir = Path.join(root, "contexts")
+
+    write(
+      Path.join(features_dir, "order_determination.dsl"),
+      """
+      [SCENARIO: BDD-ORDER_DETERMINATION-SEED-order_det_check] TITLE: check TAGS: seed determination_contract
+      GIVEN given_seed_context id="order_det_check" module="ORDER_DETERMINATION"
+      WHEN when_execute_seed_contract module="ORDER_DETERMINATION"
+      THEN then_seed_contract_should_hold module="ORDER_DETERMINATION"
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "order_det_check.json"),
+      ~s|{
+        "id": "order_det_check",
+        "module": "ORDER_DETERMINATION",
+        "edge_class": "determination_contract",
+        "expected_facts": ["rule_matched"],
+        "action_path": [],
+        "branch_hints": [],
+        "declared_error_codes": [],
+        "business_post_conditions": []
+      }|
+    )
+
+    warnings = Linter.lint_dir(root, instruction_set())
+
+    assert Enum.any?(
+             warnings,
+             &(&1.rule == :determination_degraded_pass and
+                 &1.scenario_id == "BDD-ORDER_DETERMINATION-SEED-order_det_check")
+           )
+  end
+
+  test "reactor_contract seed 场景触发 reactor_degraded_pass 告警" do
+    root = temp_dir("bddc_linter_reactor_degraded")
+    features_dir = Path.join(root, "features")
+    contexts_dir = Path.join(root, "contexts")
+
+    write(
+      Path.join(features_dir, "payment_reactor.dsl"),
+      """
+      [SCENARIO: BDD-PAYMENT_REACTOR-SEED-payment_react_handle] TITLE: handle TAGS: seed reactor_contract
+      GIVEN given_seed_context id="payment_react_handle" module="PAYMENT_REACTOR"
+      WHEN when_execute_seed_contract module="PAYMENT_REACTOR"
+      THEN then_seed_contract_should_hold module="PAYMENT_REACTOR"
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "payment_react_handle.json"),
+      ~s|{
+        "id": "payment_react_handle",
+        "module": "PAYMENT_REACTOR",
+        "edge_class": "reactor_contract",
+        "expected_facts": ["event_handled"],
+        "action_path": [],
+        "branch_hints": [],
+        "declared_error_codes": [],
+        "business_post_conditions": []
+      }|
+    )
+
+    warnings = Linter.lint_dir(root, instruction_set())
+
+    assert Enum.any?(
+             warnings,
+             &(&1.rule == :reactor_degraded_pass and
+                 &1.scenario_id == "BDD-PAYMENT_REACTOR-SEED-payment_react_handle")
+           )
+  end
+
+  test "action_contract 场景不触发 degraded 告警" do
+    root = temp_dir("bddc_linter_no_degraded_for_action")
+    features_dir = Path.join(root, "features")
+    contexts_dir = Path.join(root, "contexts")
+
+    write(
+      Path.join(features_dir, "order_submit.dsl"),
+      """
+      [SCENARIO: BDD-ORDER_ORDER-SEED-order_submit] TITLE: submit TAGS: seed action_contract
+      GIVEN given_seed_context id="order_submit" module="ORDER_ORDER"
+      WHEN when_execute_seed_contract module="ORDER_ORDER"
+      THEN then_seed_contract_should_hold module="ORDER_ORDER"
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "order_submit.json"),
+      ~s|{
+        "id": "order_submit",
+        "module": "ORDER_ORDER",
+        "edge_class": "action_contract",
+        "expected_facts": ["record_persisted"],
+        "action_path": [],
+        "branch_hints": [],
+        "declared_error_codes": [],
+        "business_post_conditions": []
+      }|
+    )
+
+    warnings = Linter.lint_dir(root, instruction_set())
+
+    refute Enum.any?(
+             warnings,
+             &(&1.rule in [:determination_degraded_pass, :reactor_degraded_pass])
+           )
+  end
+
+  test "determination_contract 无 then_seed_contract_should_hold 时不触发 degraded 告警" do
+    root = temp_dir("bddc_linter_no_seed_then_no_degraded")
+    features_dir = Path.join(root, "features")
+    contexts_dir = Path.join(root, "contexts")
+
+    write(
+      Path.join(features_dir, "det_no_hold.dsl"),
+      """
+      [SCENARIO: BDD-ORDER_DETERMINATION-MANUAL-order_det_manual] TITLE: manual TAGS: integration determination_contract
+      GIVEN given_seed_context id="order_det_manual" module="ORDER_DETERMINATION"
+      WHEN when_execute_seed_contract module="ORDER_DETERMINATION"
+      THEN assert_noop
+      """
+    )
+
+    write(
+      Path.join(contexts_dir, "order_det_manual.json"),
+      ~s|{
+        "id": "order_det_manual",
+        "module": "ORDER_DETERMINATION",
+        "edge_class": "determination_contract",
+        "expected_facts": [],
+        "action_path": [],
+        "branch_hints": [],
+        "declared_error_codes": [],
+        "business_post_conditions": []
+      }|
+    )
+
+    warnings = Linter.lint_dir(root, instruction_set())
+
+    refute Enum.any?(
+             warnings,
+             &(&1.rule in [:determination_degraded_pass, :reactor_degraded_pass])
+           )
+  end
+
   test "stale context falls back to priv/bdd/sources structured fields" do
     root = temp_dir("bddc_linter_seed_source_fallback")
     features_dir = Path.join(root, "docs/bdd/features")
