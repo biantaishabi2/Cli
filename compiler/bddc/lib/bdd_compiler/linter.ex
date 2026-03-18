@@ -100,6 +100,7 @@ defmodule BDDCompiler.Linter do
     warns = warns ++ lint_impl_detail_reference(id, tags, steps)
     warns = warns ++ lint_unique_risk(id, tags, steps)
     warns = warns ++ lint_pure_snapshot(id, tags, steps)
+    warns = warns ++ lint_degraded_contract(id, tags, steps, seed_contract)
     warns ++ lint_async_without_eventually(id, tags, steps, version, instruction_set)
   end
 
@@ -729,6 +730,55 @@ defmodule BDDCompiler.Linter do
       end
     end
   end
+
+  # 规则：determination_contract / reactor_contract 潜在降级通过告警。
+  #
+  # BDD runtime 在这两类合约降级通过时会在 facts 中打 :degraded 标记（PR #1362）。
+  # lint 阶段无法执行测试，但可以静态标记：凡是 edge_class 为这两类的 seed contract 场景，
+  # 提示用户确认 compile-project 已重跑，以免降级路径被忽略。
+  #
+  # 只在场景使用了 then_seed_contract_should_hold 时触发（否则不涉及合约断言）。
+  @degraded_edge_classes ~w[determination_contract reactor_contract]
+
+  defp lint_degraded_contract(scenario_id, tags, steps, %SeedContract{edge_class: edge_class})
+       when edge_class in @degraded_edge_classes do
+    has_seed_then? =
+      Enum.any?(steps, fn
+        {:then, :then_seed_contract_should_hold, _args, _meta} -> true
+        _ -> false
+      end)
+
+    if has_seed_then? do
+      rule =
+        if edge_class == "determination_contract",
+          do: :determination_degraded_pass,
+          else: :reactor_degraded_pass
+
+      meta =
+        Enum.find_value(steps, fn
+          {:then, :then_seed_contract_should_hold, _args, meta} -> meta
+          _ -> nil
+        end) || %{}
+
+      [
+        %Warning{
+          rule: rule,
+          scenario_id: scenario_id,
+          tags: tags,
+          file: meta[:file],
+          line: meta[:line],
+          raw: meta[:raw],
+          message:
+            "此场景的 edge_class 为 #{edge_class}，BDD runtime 可能以降级模式通过（facts 含 :degraded）。" <>
+              "请确认 compile-project 已重跑，并检查实际 facts 不含 :degraded 标记。"
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp lint_degraded_contract(_scenario_id, _tags, _steps, _seed_contract), do: []
 
   # 规则：唯一性风险提示（默认仅在 TAGS 含 strict_unique 时启用）。
   # 仅做最小启发式：对可能触发唯一约束的 string 字段（如 product_id）如果是纯常量且未包含 run_id 痕迹，提示改用 run_id() 拼接。
